@@ -513,8 +513,8 @@ func TestStreamReportsUnparsableOncePerConnectionAndEveryOverfill(t *testing.T) 
 	}
 	assertClosed(t, c, events)
 	_, diagnostics := reports.snapshot()
-	frame := *alpacaUnparsable(health.DiagWarn, alpacaFrameUnreadable, alpacaSkipped)
-	header := *alpacaUnparsable(health.DiagError, alpacaHeaderUnreadable, alpacaDropped)
+	frame := *venueStreamUnparsable(health.DiagWarn, alpacaFrameUnreadable, venueStreamSkipped)
+	header := *venueStreamUnparsable(health.DiagError, alpacaHeaderUnreadable, venueStreamDropped)
 	connection := []health.Diagnostic{frame, header, alpacaOverfill, alpacaOverfill, alpacaOverfill}
 	if want := slices.Repeat(connection, 2); !reflect.DeepEqual(diagnostics, want) {
 		t.Fatalf("diagnostics = %+v, want each unparsable site once per connection and every overfill", diagnostics)
@@ -548,7 +548,7 @@ func assertStreamLogsNothing(t *testing.T, logs *lockedLogBuffer) {
 var alpacaOverfill = health.Diagnostic{
 	Level: health.DiagError, Code: health.CodeInconsistentData,
 	Kind: health.DiagKindProvider, Title: alpacaInconsistentTitle,
-	Detail: alpacaFillOverfilled, Remediation: alpacaNotBooked,
+	Detail: alpacaFillOverfilled, Remediation: venueStreamNotBooked,
 }
 
 func TestStreamFailureReports(t *testing.T) {
@@ -634,16 +634,16 @@ func TestStreamFailureReports(t *testing.T) {
 	assertClosed(t, c, events)
 	statuses, diagnostics := reports.snapshot()
 	want := []health.Diagnostic{
-		*alpacaUnparsable(health.DiagWarn, alpacaAuthUnreadable, alpacaSkipped),
-		*alpacaUnparsable(health.DiagWarn, alpacaListenUnreadable, alpacaSkipped),
-		*alpacaUnparsable(health.DiagWarn, alpacaFrameUnreadable, alpacaSkipped),
-		*alpacaUnparsable(health.DiagError, alpacaHeaderUnreadable, alpacaDropped),
-		*alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped),
-		*alpacaUnparsable(health.DiagWarn, alpacaFillUnreadable, alpacaReconciled),
-		*alpacaUnparsable(health.DiagWarn, alpacaFillUntimed, alpacaReconciled),
-		*alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled),
+		*venueStreamUnparsable(health.DiagWarn, alpacaAuthUnreadable, venueStreamSkipped),
+		*venueStreamUnparsable(health.DiagWarn, alpacaListenUnreadable, venueStreamSkipped),
+		*venueStreamUnparsable(health.DiagWarn, alpacaFrameUnreadable, venueStreamSkipped),
+		*venueStreamUnparsable(health.DiagError, alpacaHeaderUnreadable, venueStreamDropped),
+		*venueStreamUnparsable(health.DiagError, alpacaRefUnreadable, venueStreamDropped),
+		*venueStreamUnparsable(health.DiagWarn, alpacaFillUnreadable, venueStreamReconciled),
+		*venueStreamUnparsable(health.DiagWarn, alpacaFillUntimed, venueStreamReconciled),
+		*venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled),
 		alpacaOverfill,
-		*alpacaUnparsable(health.DiagWarn, alpacaVenueIDUnusable, alpacaReconciled),
+		*venueStreamUnparsable(health.DiagWarn, alpacaVenueIDUnusable, venueStreamReconciled),
 	}
 	if len(diagnostics) != len(want) {
 		t.Fatalf("diagnostics = %+v, want %d", diagnostics, len(want))
@@ -1064,28 +1064,28 @@ func TestStreamTradeUpdateProblems(t *testing.T) {
 		problem   *health.Diagnostic
 	}
 	cases := []testCase{
-		{"null", `null`, "", fwtrading.OrderRef{}, alpacaUnparsable(health.DiagError, alpacaHeaderUnreadable, alpacaDropped)},
-		{"no event", `{"order":{"id":"venue"}}`, "", fwtrading.OrderRef{}, alpacaUnparsable(health.DiagError, alpacaHeaderUnreadable, alpacaDropped)},
-		{"numeric event", `{"event":42,"order":{"id":"venue"}}`, "", fwtrading.OrderRef{}, alpacaUnparsable(health.DiagError, alpacaHeaderUnreadable, alpacaDropped)},
-		{"order not an object", `{"event":"fill","order":7}`, "", fwtrading.OrderRef{}, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)},
-		{"no order ids", `{"event":"canceled","order":{"id":"","client_order_id":""}}`, "", fwtrading.OrderRef{}, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)},
-		{"unreadable body", data(strings.Replace(good, timestamp, `"timestamp":"bad",`, 1)), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillUnreadable, alpacaReconciled)},
-		{"no timestamp", data(strings.Replace(good, timestamp, "", 1)), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillUntimed, alpacaReconciled)},
-		{"bad decimals", data(updateFrame("fill", "bad", "1", "1")), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
+		{"null", `null`, "", fwtrading.OrderRef{}, venueStreamUnparsable(health.DiagError, alpacaHeaderUnreadable, venueStreamDropped)},
+		{"no event", `{"order":{"id":"venue"}}`, "", fwtrading.OrderRef{}, venueStreamUnparsable(health.DiagError, alpacaHeaderUnreadable, venueStreamDropped)},
+		{"numeric event", `{"event":42,"order":{"id":"venue"}}`, "", fwtrading.OrderRef{}, venueStreamUnparsable(health.DiagError, alpacaHeaderUnreadable, venueStreamDropped)},
+		{"order not an object", `{"event":"fill","order":7}`, "", fwtrading.OrderRef{}, venueStreamUnparsable(health.DiagError, alpacaRefUnreadable, venueStreamDropped)},
+		{"no order ids", `{"event":"canceled","order":{"id":"","client_order_id":""}}`, "", fwtrading.OrderRef{}, venueStreamUnparsable(health.DiagError, alpacaRefUnreadable, venueStreamDropped)},
+		{"unreadable body", data(strings.Replace(good, timestamp, `"timestamp":"bad",`, 1)), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillUnreadable, venueStreamReconciled)},
+		{"no timestamp", data(strings.Replace(good, timestamp, "", 1)), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillUntimed, venueStreamReconciled)},
+		{"bad decimals", data(updateFrame("fill", "bad", "1", "1")), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
 		{"overfill", data(updateFrame("fill", "1", "3.000000000000000002", "1")), fwtrading.EventOrder, both, &alpacaOverfill},
 		{"partial overfill", data(updateFrame("partial_fill", "1", "3.000000000000000002", "1")), fwtrading.EventOrder, both, &alpacaOverfill},
 		{"notional order", notionalFill, fwtrading.EventOrder, both, nil},
 		{"notional order without qty", notional(`"notional":"100",`), fwtrading.EventOrder, both, nil},
-		{"null qty without notional", notional(`"qty":null,`), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
-		{"empty notional", notional(`"qty":null,"notional":"",`), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
-		{"notional with bad qty", notional(`"qty":"bad","notional":"100",`), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
-		{"unreadable notional", notional(`"qty":null,"notional":"bad",`), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
-		{"zero notional", notional(`"qty":null,"notional":"0",`), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
-		{"notional with bad price", strings.Replace(notionalFill, `"price":"200"`, `"price":"bad"`, 1), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
-		{"notional with bad fill qty", strings.Replace(notionalFill, `"qty":"0.5"`, `"qty":"bad"`, 1), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
-		{"notional with bad filled qty", strings.Replace(notionalFill, `"filled_qty":"0.5"`, `"filled_qty":"bad"`, 1), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)},
-		{"notional without timestamp", strings.Replace(notionalFill, timestamp, "", 1), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillUntimed, alpacaReconciled)},
-		{"notional with unreadable body", strings.Replace(notionalFill, timestamp, `"timestamp":"bad",`, 1), fwtrading.EventOrder, both, alpacaUnparsable(health.DiagWarn, alpacaFillUnreadable, alpacaReconciled)},
+		{"null qty without notional", notional(`"qty":null,`), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
+		{"empty notional", notional(`"qty":null,"notional":"",`), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
+		{"notional with bad qty", notional(`"qty":"bad","notional":"100",`), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
+		{"unreadable notional", notional(`"qty":null,"notional":"bad",`), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
+		{"zero notional", notional(`"qty":null,"notional":"0",`), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
+		{"notional with bad price", strings.Replace(notionalFill, `"price":"200"`, `"price":"bad"`, 1), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
+		{"notional with bad fill qty", strings.Replace(notionalFill, `"qty":"0.5"`, `"qty":"bad"`, 1), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
+		{"notional with bad filled qty", strings.Replace(notionalFill, `"filled_qty":"0.5"`, `"filled_qty":"bad"`, 1), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)},
+		{"notional without timestamp", strings.Replace(notionalFill, timestamp, "", 1), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillUntimed, venueStreamReconciled)},
+		{"notional with unreadable body", strings.Replace(notionalFill, timestamp, `"timestamp":"bad",`, 1), fwtrading.EventOrder, both, venueStreamUnparsable(health.DiagWarn, alpacaFillUnreadable, venueStreamReconciled)},
 		{"good fill", data(good), fwtrading.EventFill, both, nil},
 		{"terminal", data(updateFrame("canceled", "", "", "")), fwtrading.EventOrder, both, nil},
 		{"unknown event", `{"event":"new","order":{"id":"venue"}}`, "", fwtrading.OrderRef{}, nil},
@@ -1105,7 +1105,7 @@ func TestStreamTradeUpdateProblems(t *testing.T) {
 		} {
 			cases = append(cases, testCase{event + "/" + venue.name, strings.Replace(frame, ids, venue.ids, 1),
 				fwtrading.EventOrder, fwtrading.OrderRef{ClientOrderID: "client"},
-				alpacaUnparsable(health.DiagWarn, alpacaVenueIDUnusable, alpacaReconciled)})
+				venueStreamUnparsable(health.DiagWarn, alpacaVenueIDUnusable, venueStreamReconciled)})
 		}
 		for _, client := range []struct{ name, ids string }{
 			{"object client id", `"id":"venue","client_order_id":{}`},
@@ -1114,7 +1114,7 @@ func TestStreamTradeUpdateProblems(t *testing.T) {
 			{"empty client id", `"id":"venue","client_order_id":""`},
 		} {
 			cases = append(cases, testCase{event + "/" + client.name, strings.Replace(frame, ids, client.ids, 1),
-				"", fwtrading.OrderRef{}, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)})
+				"", fwtrading.OrderRef{}, venueStreamUnparsable(health.DiagError, alpacaRefUnreadable, venueStreamDropped)})
 		}
 	}
 	for _, tc := range cases {

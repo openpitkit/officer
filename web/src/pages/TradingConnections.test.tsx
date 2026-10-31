@@ -524,7 +524,6 @@ describe("Trading connections", () => {
       }
       await user.type(form.getByPlaceholderText("External symbol"), "AAPL");
       await user.type(form.getByPlaceholderText("Base"), "AAPL");
-      await user.type(form.getByPlaceholderText("Quote"), "USD");
       await user.click(form.getByRole("button", { name: "Add instrument" }));
       expect(
         await table.findByText("AAPL", { exact: true }),
@@ -607,8 +606,13 @@ describe("Trading connections", () => {
         }),
       }),
     );
-    for (const badge of ["Alpaca", "Paper", "Unavailable", "Disabled"])
+    for (const badge of ["Alpaca", "Paper", "Disabled"])
       expect(scope.getByText(badge, { exact: true })).toBeInTheDocument();
+    // As a feed's header: a disabled connection reads as disabled, not as its
+    // worker's runtime state; the worker's error still shows.
+    expect(
+      scope.queryByText("Unavailable", { exact: true }),
+    ).not.toBeInTheDocument();
     expect(scope.getByText("Venue is offline")).toBeInTheDocument();
     expect(scope.getByRole("link", { name: "Provider site" })).toHaveAttribute(
       "href",
@@ -749,6 +753,7 @@ describe("Trading connections", () => {
       connection({
         id: "alpaca-3",
         label: "Alpaca unavailable",
+        enabled: true,
         state: "unavailable",
         error: "Venue is offline",
       }),
@@ -788,7 +793,9 @@ describe("Trading connections", () => {
       paper.queryByRole("heading", { name: "Add instrument" }),
     ).not.toBeInTheDocument();
     expect(paper.getByText("Paper", { exact: true })).toBeInTheDocument();
-    expect(paper.getByText("Stopped", { exact: true })).toBeInTheDocument();
+    expect(
+      paper.queryByText("Stopped", { exact: true }),
+    ).not.toBeInTheDocument();
     expect(paper.getByText("Disabled", { exact: true })).toBeInTheDocument();
     expect(
       paper.getByText("Venue account", { exact: true }),
@@ -1345,7 +1352,7 @@ describe("Trading connections", () => {
     );
   });
 
-  it("wires the instrument blocks in MD order without a draft enabled control", async () => {
+  it("wires the instrument blocks in MD order with the feed's draft enabled control", async () => {
     renderTrading();
     const scope = await card();
     const section = scope.getByRole("region", { name: "Instruments" });
@@ -1376,14 +1383,18 @@ describe("Trading connections", () => {
     expect(props.getSearchText(match)).toBe("aapl apple nasdaq us_equity");
     expect(venueWiring.draft).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        draft: { externalSymbol: "", baseAsset: "", quoteAsset: "" },
+        draft: {
+          externalSymbol: "",
+          baseAsset: "",
+          quoteAsset: "USD",
+          enabled: true,
+        },
         valid: false,
         busy: false,
         baseSuggestions: [],
-        quoteSuggestions: [],
+        enabled: expect.objectContaining({ value: true }),
       }),
     );
-    expect(venueWiring.draft.mock.lastCall![0]).not.toHaveProperty("enabled");
     expect(venueWiring.verdict).toHaveBeenLastCalledWith({
       result: null,
       unsupportedLabel: "Verification unavailable",
@@ -1537,7 +1548,7 @@ describe("Trading connections", () => {
   );
 
   it.each([false, true])(
-    "saves a trimmed symbol with existing=%s, preserving its state or enabling it as new",
+    "saves a trimmed symbol with existing=%s in the add row's enabled state, as a feed does",
     async (existing) => {
       const user = userEvent.setup();
       if (existing)
@@ -1562,6 +1573,7 @@ describe("Trading connections", () => {
       const quote = section.getByPlaceholderText("Quote");
       await user.type(symbol, "  BTC/USD  ");
       await user.type(base, "  BTC  ");
+      await user.clear(quote);
       await user.type(quote, "  ");
       expect(
         section.getByRole("button", { name: "Add instrument" }),
@@ -1574,12 +1586,12 @@ describe("Trading connections", () => {
           externalSymbol: "BTC/USD",
           baseAsset: "BTC",
           quoteAsset: "USD",
-          enabled: !existing,
+          enabled: true,
         },
       );
       await waitFor(() => expect(symbol).toHaveValue(""));
       expect(base).toHaveValue("");
-      expect(quote).toHaveValue("");
+      expect(quote).toHaveValue("USD");
     },
   );
 
@@ -1674,7 +1686,6 @@ describe("Trading connections", () => {
     );
     await user.type(form.getByPlaceholderText("External symbol"), "AAPL");
     await user.type(form.getByPlaceholderText("Base"), "AAPL");
-    await user.type(form.getByPlaceholderText("Quote"), "USD");
     await user.click(form.getByRole("button", { name: "Add instrument" }));
     expect(await table.findByText("AAPL", { exact: true })).toBeInTheDocument();
     expect(form.queryByRole("alert")).not.toBeInTheDocument();
@@ -1895,30 +1906,6 @@ describe("Trading connections", () => {
     ).toEqual(["BTC/USD: First venue refusal", "AAPL: Second venue refusal"]);
   });
 
-  it("shows a save refusal naming an unrelated asset as the server message", async () => {
-    const user = userEvent.setup();
-    api.upsertTradingInstrument.mockRejectedValue(
-      new ApiError(
-        "Asset EUR is missing",
-        "asset_missing",
-        404,
-        undefined,
-        undefined,
-        "EUR",
-      ),
-    );
-    renderTrading();
-    const scope = await card();
-    await user.type(scope.getByPlaceholderText("External symbol"), "BTC/USD");
-    await user.type(scope.getByPlaceholderText("Base"), "BTC");
-    await user.type(scope.getByPlaceholderText("Quote"), "USD");
-    await user.click(scope.getByRole("button", { name: "Add instrument" }));
-    expect(await scope.findByText("Asset EUR is missing")).toBeInTheDocument();
-    expect(
-      scope.queryByRole("button", { name: "Create asset EUR and save" }),
-    ).not.toBeInTheDocument();
-  });
-
   it("keeps row A disabled while row B verifies and finishes", async () => {
     const user = userEvent.setup();
     snapshot.connections = [
@@ -2004,30 +1991,6 @@ describe("Trading connections", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("offers to create the missing draft base asset BTC and save", async () => {
-    const user = userEvent.setup();
-    api.upsertTradingInstrument.mockRejectedValue(
-      new ApiError(
-        "BTC missing",
-        "asset_missing",
-        404,
-        undefined,
-        undefined,
-        "BTC",
-      ),
-    );
-    renderTrading();
-    const scope = await card();
-    await user.type(scope.getByPlaceholderText("External symbol"), "BTC/USD");
-    await user.type(scope.getByPlaceholderText("Base"), "BTC");
-    await user.type(scope.getByPlaceholderText("Quote"), "USD");
-    await user.click(scope.getByRole("button", { name: "Add instrument" }));
-    expect(
-      await scope.findByRole("button", { name: "Create asset BTC and save" }),
-    ).toBeInTheDocument();
-    expect(api.createAsset).not.toHaveBeenCalled();
-  });
-
   it.each(["Base", "Quote"])(
     "clears the %s asset with the shared row control",
     async (field) => {
@@ -2037,6 +2000,8 @@ describe("Trading connections", () => {
         (await card()).getByRole("region", { name: "Instruments" }),
       );
       const input = section.getByPlaceholderText(field);
+      // The add row starts quoted in USD; empty it so one field is clearable.
+      await user.clear(section.getByPlaceholderText("Quote"));
       await user.type(input, "USD");
       await user.click(section.getByRole("button", { name: "Clear field" }));
       expect(input).toHaveValue("");
@@ -2057,7 +2022,6 @@ describe("Trading connections", () => {
     const scope = await card();
     await user.type(scope.getByPlaceholderText("External symbol"), "BTC/USD");
     await user.type(scope.getByPlaceholderText("Base"), "BTC");
-    await user.type(scope.getByPlaceholderText("Quote"), "USD");
     await user.click(scope.getByRole("button", { name: "Add instrument" }));
     for (const block of [
       venueWiring.search,
@@ -2140,40 +2104,6 @@ describe("Trading connections", () => {
       ["alpaca-1", "BTC/USD"],
       ["alpaca-2", "AAPL"],
     ]);
-  });
-
-  it("hides the missing-asset offer when the draft no longer uses that asset", async () => {
-    const user = userEvent.setup();
-    api.upsertTradingInstrument.mockRejectedValue(
-      new ApiError(
-        "USDT missing",
-        "asset_missing",
-        404,
-        undefined,
-        undefined,
-        "USDT",
-      ),
-    );
-    renderTrading();
-    const scope = await card();
-    await user.type(scope.getByPlaceholderText("External symbol"), "BTC/USDT");
-    await user.type(scope.getByPlaceholderText("Base"), "BTC");
-    const quote = scope.getByPlaceholderText("Quote");
-    await user.type(quote, "USDT");
-    await user.click(scope.getByRole("button", { name: "Add instrument" }));
-    expect(
-      await scope.findByRole("button", { name: "Create asset USDT and save" }),
-    ).toBeInTheDocument();
-    await user.type(quote, " ");
-    expect(
-      scope.getByRole("button", { name: "Create asset USDT and save" }),
-    ).toBeInTheDocument();
-    await user.clear(quote);
-    await user.type(quote, "USD");
-    expect(
-      scope.queryByRole("button", { name: "Create asset USDT and save" }),
-    ).not.toBeInTheDocument();
-    expect(api.createAsset).not.toHaveBeenCalled();
   });
 
   it("searches symbols, splits BASE/QUOTE and leaves all instrument fields editable", async () => {
@@ -2311,7 +2241,6 @@ describe("Trading connections", () => {
     const form = within(scope.getByRole("region", { name: "Instruments" }));
     await user.type(form.getByPlaceholderText("External symbol"), "BTC/USD");
     await user.type(form.getByPlaceholderText("Base"), "BTC");
-    await user.type(form.getByPlaceholderText("Quote"), "USD");
     expect(form.getByRole("button", { name: "Add instrument" })).toBeEnabled();
     await user.type(
       form.getByRole("textbox", { name: "Resolve symbol at this venue" }),
@@ -2508,7 +2437,6 @@ describe("Trading connections", () => {
     const form = within(scope.getByRole("region", { name: "Instruments" }));
     await user.type(form.getByPlaceholderText("External symbol"), "AAPL");
     await user.type(form.getByPlaceholderText("Base"), "AAPL");
-    await user.type(form.getByPlaceholderText("Quote"), "USD");
     const callsBeforeSave = api.fetchTrading.mock.calls.length;
     await user.click(form.getByRole("button", { name: "Add instrument" }));
     expect(
@@ -2527,64 +2455,80 @@ describe("Trading connections", () => {
     expect(api.fetchTrading.mock.calls.length).toBe(callsBeforeSave);
   });
 
-  it("offers to create a missing asset by its code and repeats the save", async () => {
+  // As on a market-data feed, the server creates an asset Officer does not
+  // know yet, so the panel saves once and creates nothing itself.
+  it("adds an instrument with an unknown asset in one save, as a feed does", async () => {
     const user = userEvent.setup();
-    api.upsertTradingInstrument
-      .mockRejectedValueOnce(
-        new ApiError(
-          'upsert trading instrument: asset "USDT" does not exist',
-          "asset_missing",
-          404,
-          undefined,
-          undefined,
-          "USDT",
-        ),
-      )
-      .mockResolvedValueOnce(snapshot);
-    api.createAsset.mockResolvedValue({
-      code: "USDT",
-      title: "",
-      assetClass: "",
-    });
     renderTrading();
     const scope = await card();
     const form = within(scope.getByRole("region", { name: "Instruments" }));
+    const quote = form.getByPlaceholderText("Quote");
+    expect(quote).toHaveValue("USD");
     await user.type(form.getByPlaceholderText("External symbol"), "BTC/USDT");
     await user.type(form.getByPlaceholderText("Base"), "BTC");
-    await user.type(form.getByPlaceholderText("Quote"), "USDT");
+    await user.clear(quote);
+    await user.type(quote, "USDT");
     await user.click(form.getByRole("button", { name: "Add instrument" }));
-    const notice = await form.findByRole("alert");
-    expect(notice).toHaveTextContent("Asset USDT does not exist in Officer.");
-    expect(
-      scope.queryByText(/upsert trading instrument/),
-    ).not.toBeInTheDocument();
-    expect(api.createAsset).not.toHaveBeenCalled();
-    const symbol = form.getByPlaceholderText("External symbol");
-    const createAndSave = within(notice).getByRole("button", {
-      name: "Create asset USDT and save",
-    });
-    await user.clear(symbol);
-    expect(createAndSave).toBeDisabled();
-    await user.type(symbol, "BTC/USDT");
-    await user.click(createAndSave);
     await waitFor(() =>
       expect(form.getByPlaceholderText("External symbol")).toHaveValue(""),
     );
-    expect(api.createAsset).toHaveBeenCalledExactlyOnceWith("USDT", "", "");
-    expect(api.upsertTradingInstrument).toHaveBeenCalledTimes(2);
-    expect(api.upsertTradingInstrument).toHaveBeenLastCalledWith("alpaca-1", {
-      externalSymbol: "BTC/USDT",
-      baseAsset: "BTC",
-      quoteAsset: "USDT",
-      enabled: true,
-    });
-    expect(api.createAsset.mock.invocationCallOrder[0]).toBeLessThan(
-      api.upsertTradingInstrument.mock.invocationCallOrder[1],
+    expect(api.upsertTradingInstrument).toHaveBeenCalledExactlyOnceWith(
+      "alpaca-1",
+      {
+        externalSymbol: "BTC/USDT",
+        baseAsset: "BTC",
+        quoteAsset: "USDT",
+        enabled: true,
+      },
     );
+    expect(api.createAsset).not.toHaveBeenCalled();
+    expect(quote).toHaveValue("USD");
     expect(form.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("shows a missing asset refused outside the draft as the server message", async () => {
+  it("keeps the add button disabled for an asset code Officer cannot accept, as a feed does", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const scope = await card();
+    const form = within(scope.getByRole("region", { name: "Instruments" }));
+    await user.type(form.getByPlaceholderText("External symbol"), "BAD");
+    await user.type(form.getByPlaceholderText("Base"), "BAD ASSET");
+    const add = form.getByRole("button", { name: "Add instrument" });
+    expect(add).toBeDisabled();
+    await user.clear(form.getByPlaceholderText("Base"));
+    await user.type(form.getByPlaceholderText("Base"), "B".repeat(33));
+    expect(add).toBeDisabled();
+    await user.clear(form.getByPlaceholderText("Base"));
+    await user.type(form.getByPlaceholderText("Base"), "BAD");
+    expect(add).toBeEnabled();
+    expect(api.upsertTradingInstrument).not.toHaveBeenCalled();
+  });
+
+  it("adds a disabled instrument when the add row is switched off, as a feed does", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const scope = await card();
+    const form = within(scope.getByRole("region", { name: "Instruments" }));
+    await user.type(form.getByPlaceholderText("External symbol"), "AAPL");
+    await user.type(form.getByPlaceholderText("Base"), "AAPL");
+    await user.click(form.getByRole("button", { name: "Enabled" }));
+    expect(form.getByRole("button", { name: "Disabled" })).toBeInTheDocument();
+    await user.click(form.getByRole("button", { name: "Add instrument" }));
+    expect(api.upsertTradingInstrument).toHaveBeenCalledExactlyOnceWith(
+      "alpaca-1",
+      {
+        externalSymbol: "AAPL",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        enabled: false,
+      },
+    );
+    await waitFor(() =>
+      expect(form.getByRole("button", { name: "Enabled" })).toBeInTheDocument(),
+    );
+  });
+
+  it("shows a refused instrument toggle as the server message", async () => {
     const user = userEvent.setup();
     snapshot = {
       ...snapshot,
@@ -2602,22 +2546,12 @@ describe("Trading connections", () => {
       ],
     };
     api.upsertTradingInstrument.mockRejectedValue(
-      new ApiError(
-        'asset "USDT" does not exist',
-        "asset_missing",
-        404,
-        undefined,
-        undefined,
-        "USDT",
-      ),
+      new ApiError("Connection is busy", "conflict", 409),
     );
     renderTrading();
     const scope = await card();
     await user.click(scope.getByRole("button", { name: "Disable" }));
-    expect(
-      await scope.findByText('asset "USDT" does not exist'),
-    ).toBeInTheDocument();
-    expect(api.createAsset).not.toHaveBeenCalled();
+    expect(await scope.findByText("Connection is busy")).toBeInTheDocument();
   });
 
   it("toggles an instrument with the same mapping and confirms deletion", async () => {
@@ -2821,6 +2755,7 @@ describe("Trading connections", () => {
     expect(
       await scope.findByRole("option", { name: "USD" }),
     ).toBeInTheDocument();
+    await user.clear(quote);
     await user.type(quote, "US");
     expect(
       await scope.findByRole("option", { name: "USDT" }),
@@ -2851,6 +2786,8 @@ describe("Trading connections", () => {
         renderTrading();
         const scope = await card();
         const input = scope.getByPlaceholderText(field);
+        // The add row starts quoted in USD; empty it so one field looks up.
+        await user.clear(scope.getByPlaceholderText("Quote"));
         await user.type(input, "BT");
         await waitFor(() =>
           expect(venueWiring.draft.mock.lastCall![0]).toEqual(
@@ -3790,176 +3727,482 @@ describe("Trading connections while accounts are hidden", () => {
   };
   const inheritedNote =
     "Inherited from the account's group. Group access is managed in multi-account mode.";
+  const venueAccounts = { ...provider, venueAccounts: true };
 
-  function accessOf(scope: ReturnType<typeof within>) {
-    return within(scope.getByRole("region", { name: "Account access" }));
+  function venueAccountOf(scope: ReturnType<typeof within>) {
+    return within(scope.getByRole("region", { name: "Venue account" }));
   }
 
-  function accessStepOf(scope: ReturnType<typeof within>) {
-    return within(
-      within(scope.getByRole("list", { name: "Setup checklist" })).getAllByRole(
-        "listitem",
-      )[2],
-    );
+  function checklistOf(scope: ReturnType<typeof within>) {
+    return within(scope.getByRole("list", { name: "Setup checklist" }))
+      .getAllByRole("listitem")
+      .map((item) => item.querySelector("button")?.textContent);
   }
-
-  const venueAccountLine = /^Venue account:/;
 
   beforeEach(() => {
     setAccountScope({ accounts: false, account: "main" });
   });
 
-  it("replaces grants, the grant form and the fee section with the default account's access and grants it", async () => {
+  it.each([[], [ownGrant], [deskGrant]])(
+    "shows no access section, grant or revoke and no access step: the server grants the default account (%j)",
+    async (...access) => {
+      snapshot.connections = [connection({ access })];
+      renderTrading();
+      const scope = await card();
+      expect(
+        scope.queryByRole("region", { name: "Account access" }),
+      ).not.toBeInTheDocument();
+      expect(
+        scope.queryByRole("region", { name: "Venue account" }),
+      ).not.toBeInTheDocument();
+      expect(
+        scope.queryByRole("button", { name: "Grant access" }),
+      ).not.toBeInTheDocument();
+      expect(
+        scope.queryByRole("button", { name: "Revoke access" }),
+      ).not.toBeInTheDocument();
+      expect(checklistOf(scope)).toEqual([
+        "Check connection",
+        "Instruments",
+        "Enable",
+      ]);
+      expect(venueWiring.access).not.toHaveBeenCalled();
+      expect(
+        scope.queryByRole("heading", { name: "Fee account" }),
+      ).not.toBeInTheDocument();
+      expect(api.fetchAccounts).not.toHaveBeenCalled();
+      expect(api.fetchGroups).not.toHaveBeenCalled();
+      expect(api.fetchAccountState).not.toHaveBeenCalled();
+    },
+  );
+
+  it("enables and disables the connection without any access setup", async () => {
     const user = userEvent.setup();
-    api.grantTradingAccess.mockImplementation(async () =>
-      updateConnection("alpaca-1", { access: [ownGrant] }),
+    api.setTradingConnectionEnabled.mockImplementation(
+      async (id: string, enabled: boolean) => {
+        updateConnection(id, { enabled });
+        return enabled;
+      },
     );
     renderTrading();
     const scope = await card();
-    const access = accessOf(scope);
-    expect(access.getByText("No access", { exact: true })).toBeInTheDocument();
-    expect(
-      accessStepOf(scope).getByText("Not done", { exact: true }),
-    ).toBeInTheDocument();
-    expect(venueWiring.access).not.toHaveBeenCalled();
-    expect(
-      access.queryByRole("table", { name: "Access grants" }),
-    ).not.toBeInTheDocument();
-    expect(access.queryByRole("combobox")).not.toBeInTheDocument();
-    expect(
-      access.queryByRole("button", { name: "Account" }),
-    ).not.toBeInTheDocument();
-    expect(
-      access.queryByRole("button", { name: "Group" }),
-    ).not.toBeInTheDocument();
-    expect(
-      access.queryByRole("textbox", { name: "Venue account" }),
-    ).not.toBeInTheDocument();
-    expect(
-      scope.queryByRole("heading", { name: "Fee account" }),
-    ).not.toBeInTheDocument();
-    expect(
-      scope.queryByRole("combobox", { name: "Fee account" }),
-    ).not.toBeInTheDocument();
-    const callsBeforeGrant = api.fetchTrading.mock.calls.length;
-    await user.click(access.getByRole("button", { name: "Grant access" }));
-    expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
-      account: "main",
-    });
-    expect(await access.findByText("Granted", { exact: true })).toBeVisible();
-    expect(api.fetchTrading.mock.calls.length).toBeGreaterThan(
-      callsBeforeGrant,
+    await user.click(scope.getByRole("button", { name: "Enable" }));
+    expect(api.setTradingConnectionEnabled).toHaveBeenLastCalledWith(
+      "alpaca-1",
+      true,
     );
-    expect(api.fetchAccounts).not.toHaveBeenCalled();
-    expect(api.fetchGroups).not.toHaveBeenCalled();
-    expect(api.fetchAccountState).not.toHaveBeenCalled();
-    expect(api.setTradingFeeAccount).not.toHaveBeenCalled();
-    expect(api.clearTradingFeeAccount).not.toHaveBeenCalled();
-    expect(api.createAccount).not.toHaveBeenCalled();
+    await user.click(await scope.findByRole("button", { name: "Disable" }));
+    expect(api.setTradingConnectionEnabled).toHaveBeenLastCalledWith(
+      "alpaca-1",
+      false,
+    );
+    expect(await scope.findByRole("button", { name: "Enable" })).toBeVisible();
+    expect(api.grantTradingAccess).not.toHaveBeenCalled();
   });
 
-  it("binds the trimmed venue account the provider supports to the default account's grant and shows it", async () => {
+  it("shows a fee_account_required refusal of the server's grant without a fee-account action", async () => {
     const user = userEvent.setup();
-    snapshot.providers = [{ ...provider, venueAccounts: true }];
+    api.setTradingConnectionEnabled.mockRejectedValue(
+      new ApiError("Choose a fee ledger", "fee_account_required", 409),
+    );
+    renderTrading();
+    const scope = await card();
+    await user.click(scope.getByRole("button", { name: "Enable" }));
+    expect(await scope.findByText("Choose a fee ledger")).toBeInTheDocument();
+    expect(
+      scope.queryByRole("button", { name: "Set fee account" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("saves the trimmed venue account the provider binds as the default account's grant and shows it", async () => {
+    const user = userEvent.setup();
+    snapshot.providers = [venueAccounts];
     api.grantTradingAccess.mockImplementation(async () =>
       updateConnection("alpaca-1", {
         access: [{ ...ownGrant, venueAccount: "venue-target" }],
       }),
     );
     renderTrading();
-    const access = accessOf(await card());
-    expect(access.queryByText(venueAccountLine)).not.toBeInTheDocument();
+    const scope = await card();
+    const section = venueAccountOf(scope);
+    expect(checklistOf(scope)).toEqual([
+      "Check connection",
+      "Instruments",
+      "Venue account",
+      "Enable",
+    ]);
+    expect(
+      scope.queryByRole("button", { name: "Grant access" }),
+    ).not.toBeInTheDocument();
+    const save = section.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
     await user.type(
-      access.getByRole("textbox", { name: "Venue account" }),
+      section.getByRole("textbox", { name: "Venue account" }),
       " venue-target ",
     );
-    await user.click(access.getByRole("button", { name: "Grant access" }));
+    await user.click(save);
     expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
       account: "main",
       venueAccount: "venue-target",
     });
     expect(
-      await access.findByText("Venue account: venue-target"),
+      await section.findByText("Venue account: venue-target"),
     ).toBeInTheDocument();
+    expect(
+      scope.queryByRole("button", { name: "Revoke access" }),
+    ).not.toBeInTheDocument();
   });
 
-  it("revokes the default account's own grant, which wins over its group's, only after confirmation", async () => {
+  it("replaces the saved venue account of the default account's own grant, which wins over its group's", async () => {
     const user = userEvent.setup();
-    snapshot.providers = [{ ...provider, venueAccounts: true }];
+    snapshot.providers = [venueAccounts];
     snapshot.connections = [
       connection({
-        access: [{ ...deskGrant, venueAccount: "venue-77" }, ownGrant],
+        access: [
+          { ...deskGrant, venueAccount: "venue-77" },
+          { ...ownGrant, venueAccount: "venue-1" },
+        ],
       }),
     ];
     renderTrading();
-    const scope = await card();
-    const access = accessOf(scope);
-    expect(access.getByText("Granted", { exact: true })).toBeInTheDocument();
-    expect(
-      accessStepOf(scope).getByText("Done", { exact: true }),
-    ).toBeInTheDocument();
-    expect(
-      access.queryByRole("form", { name: "Grant access" }),
-    ).not.toBeInTheDocument();
-    expect(access.queryByText(inheritedNote)).not.toBeInTheDocument();
-    expect(access.queryByText(venueAccountLine)).not.toBeInTheDocument();
-    await user.click(access.getByRole("button", { name: "Revoke access" }));
-    expect(api.revokeTradingAccess).not.toHaveBeenCalled();
-    const dialog = within(
-      screen.getByRole("alertdialog", { name: "Revoke account access?" }),
+    const section = venueAccountOf(await card());
+    expect(section.getByText("Venue account: venue-1")).toBeInTheDocument();
+    expect(section.queryByText(inheritedNote)).not.toBeInTheDocument();
+    await user.type(
+      section.getByRole("textbox", { name: "Venue account" }),
+      "venue-2",
     );
-    const callsBeforeRevoke = api.fetchTrading.mock.calls.length;
-    await user.click(dialog.getByRole("button", { name: "Revoke access" }));
-    expect(api.revokeTradingAccess).toHaveBeenCalledExactlyOnceWith(
-      "alpaca-1",
-      { account: "main" },
-    );
-    await waitFor(() =>
-      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
-    );
-    expect(api.fetchTrading.mock.calls.length).toBeGreaterThan(
-      callsBeforeRevoke,
-    );
+    await user.click(section.getByRole("button", { name: "Save" }));
+    expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
+      account: "main",
+      venueAccount: "venue-2",
+    });
   });
 
-  it("shows a listed group grant as read-only access with its venue account", async () => {
-    snapshot.providers = [{ ...provider, venueAccounts: true }];
+  it.each([
+    ["no venue account", [ownGrant], "Not done"],
+    ["a group grant without one", [deskGrant], "Not done"],
+    [
+      "the venue account named",
+      [{ ...ownGrant, venueAccount: "venue-1" }],
+      "Done",
+    ],
+  ])(
+    "marks the venue-account step by the default account's grant: %s",
+    async (_name, access, state) => {
+      snapshot.providers = [venueAccounts];
+      snapshot.connections = [connection({ access })];
+      renderTrading();
+      const scope = await card();
+      const step = within(scope.getByRole("list", { name: "Setup checklist" }))
+        .getAllByRole("listitem")
+        .find(
+          (item) =>
+            item.querySelector("button")?.textContent === "Venue account",
+        );
+      expect(step).toBeDefined();
+      expect(
+        within(step!).getByText(state, { exact: true }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  const missingAccess =
+    "The account has no access to this connection, so orders through it are refused. Disable and enable the connection to restore access.";
+
+  it.each([
+    ["enabled without a grant", true, [], true],
+    ["enabled with its own grant", true, [ownGrant], false],
+    ["enabled with its group's grant", true, [deskGrant], false],
+    ["disabled without a grant", false, [], false],
+  ])(
+    "warns of missing access only on an enabled connection without one: %s",
+    async (_name, enabled, access, warned) => {
+      snapshot.connections = [connection({ enabled, access })];
+      renderTrading();
+      const scope = await card();
+      if (warned) {
+        expect(scope.getByRole("alert")).toHaveTextContent(missingAccess);
+      } else {
+        expect(scope.queryByText(missingAccess)).not.toBeInTheDocument();
+      }
+      expect(
+        scope.queryByRole("button", { name: "Grant access" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("shows a listed group grant's venue account read-only", async () => {
+    snapshot.providers = [venueAccounts];
     snapshot.connections = [
       connection({ access: [{ ...deskGrant, venueAccount: "venue-77" }] }),
     ];
     renderTrading();
-    const scope = await card();
-    const access = accessOf(scope);
-    expect(access.getByText(inheritedNote)).toBeInTheDocument();
-    expect(access.getByText("Granted", { exact: true })).toBeInTheDocument();
-    expect(access.getByText("Venue account: venue-77")).toBeInTheDocument();
-    expect(access.queryByRole("button")).not.toBeInTheDocument();
-    expect(access.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(access.queryByText(/desk/)).not.toBeInTheDocument();
-    expect(
-      accessStepOf(scope).getByText("Done", { exact: true }),
-    ).toBeInTheDocument();
+    const section = venueAccountOf(await card());
+    expect(section.getByText(inheritedNote)).toBeInTheDocument();
+    expect(section.getByText("Venue account: venue-77")).toBeInTheDocument();
+    expect(section.queryByRole("button")).not.toBeInTheDocument();
+    expect(section.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(section.queryByText(/desk/)).not.toBeInTheDocument();
     expect(api.fetchAccountState).not.toHaveBeenCalled();
   });
+});
 
-  it("shows a fee_account_required refusal without a fee-account action", async () => {
-    const user = userEvent.setup();
-    api.grantTradingAccess.mockRejectedValue(
-      new ApiError("Choose a fee ledger", "fee_account_required", 409),
-    );
-    renderTrading();
-    const scope = await card();
-    await user.click(
-      accessOf(scope).getByRole("button", { name: "Grant access" }),
-    );
-    expect(await scope.findByText("Choose a fee ledger")).toBeInTheDocument();
-    expect(
-      scope.queryByRole("button", { name: "Set fee account" }),
-    ).not.toBeInTheDocument();
-    expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("alpaca-1", {
-      account: "main",
-    });
+describe("IB trading connections", () => {
+  const ibProvider: TradingProvider = {
+    ...provider,
+    type: "ib",
+    title: "Interactive Brokers",
+    venueAccounts: true,
+    unlinkedFees: false,
+  };
+
+  beforeEach(() => {
+    snapshot = {
+      providers: [ibProvider],
+      connections: [
+        connection({
+          id: "ib-1",
+          provider: "ib",
+          label: "IB paper",
+          settings: { host: "gateway.local", port: 7497, clientId: 12 },
+        }),
+      ],
+    };
   });
+
+  async function openIBCreate(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(
+      await screen.findByRole("button", { name: /^Add trading connection/ }),
+    );
+    const picker = within(
+      screen.getByRole("dialog", { name: "Add trading connection" }),
+    );
+    await user.click(
+      picker.getByRole("button", { name: "Interactive Brokers" }),
+    );
+    return within(
+      await screen.findByRole("dialog", {
+        name: "Add Interactive Brokers connection",
+      }),
+    );
+  }
+
+  it.each(["", "0", "27"])(
+    "creates IB with numeric credentials and optional client ID %s",
+    async (clientId) => {
+      const user = userEvent.setup();
+      renderTrading();
+      const dialog = await openIBCreate(user);
+      expect(dialog.getByLabelText("Host")).toHaveValue("127.0.0.1");
+      expect(dialog.getByLabelText("Port")).toHaveValue(4002);
+      expect(dialog.getByLabelText("Client ID")).toHaveAttribute(
+        "placeholder",
+        i18n.t("marketData:settings.autoClientId"),
+      );
+      expect(dialog.queryByLabelText("API key")).not.toBeInTheDocument();
+      expect(dialog.queryByLabelText("API secret")).not.toBeInTheDocument();
+      expect(dialog.getAllByRole("listitem")).toHaveLength(4);
+      expect(
+        dialog.getByRole("link", { name: "Download IB Gateway" }),
+      ).toHaveAttribute(
+        "href",
+        "https://www.interactivebrokers.com/en/trading/ibgateway-stable.php",
+      );
+      expect(
+        dialog.getByRole("link", { name: "TWS API documentation" }),
+      ).toHaveAttribute(
+        "href",
+        "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
+      );
+      if (clientId !== "")
+        await user.type(dialog.getByLabelText("Client ID"), clientId);
+      await user.click(dialog.getByRole("button", { name: "Create" }));
+      expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+        provider: "ib",
+        label: "Interactive Brokers",
+        mode: "paper",
+        enabled: false,
+        credentials: {
+          host: "127.0.0.1",
+          port: 4002,
+          ...(clientId === "" ? {} : { clientId: Number(clientId) }),
+        },
+      });
+    },
+  );
+
+  it("creates IB with an edited host and port", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const dialog = await openIBCreate(user);
+    await user.clear(dialog.getByLabelText("Host"));
+    await user.type(dialog.getByLabelText("Host"), " tws.local ");
+    await user.clear(dialog.getByLabelText("Port"));
+    await user.type(dialog.getByLabelText("Port"), "7497");
+    await user.click(dialog.getByRole("button", { name: "Create" }));
+    expect(api.createTradingConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credentials: { host: "tws.local", port: 7497 },
+      }),
+    );
+  });
+
+  it.each([
+    ["Port", ""],
+    ["Port", "0"],
+    ["Port", "65536"],
+    ["Port", "1.5"],
+    ["Client ID", "-1"],
+    ["Client ID", "1.5"],
+    ["Client ID", "9007199254740992"],
+    ["Host", "   "],
+    ["Label", ""],
+  ])("holds IB creation for invalid %s %s", async (field, value) => {
+    const user = userEvent.setup();
+    renderTrading();
+    const dialog = await openIBCreate(user);
+    fireEvent.change(dialog.getByLabelText(field), { target: { value } });
+    expect(dialog.getByRole("button", { name: "Create" })).toBeDisabled();
+    fireEvent.submit(
+      dialog.getByRole("button", { name: "Create" }).closest("form")!,
+    );
+    expect(api.createTradingConnection).not.toHaveBeenCalled();
+  });
+
+  it("shows Auto for an IB connection without a stored client ID", async () => {
+    updateConnection("ib-1", {
+      settings: { host: "gateway.local", port: 7497 },
+    });
+    renderTrading();
+    const scope = await card("IB paper");
+    expect(scope.getByText("Client ID: Auto")).toBeInTheDocument();
+  });
+
+  it("shows non-secret IB details and prefills settings without API-key fields", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const scope = await card("IB paper");
+    expect(scope.getByText("gateway.local:7497")).toBeInTheDocument();
+    expect(scope.getByText("Client ID: 12")).toBeInTheDocument();
+    expect(scope.queryByText(/API key:/)).not.toBeInTheDocument();
+    expect(scope.queryByText(/API secret:/)).not.toBeInTheDocument();
+    await user.click(scope.getByRole("button", { name: "Edit settings" }));
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Edit settings" }),
+    );
+    expect(dialog.getByLabelText("Host")).toHaveValue("gateway.local");
+    expect(dialog.getByLabelText("Port")).toHaveValue(7497);
+    expect(dialog.getByLabelText("Client ID")).toHaveValue(12);
+    expect(dialog.queryByLabelText("API key")).not.toBeInTheDocument();
+    expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.change(dialog.getByLabelText("Port"), {
+      target: { value: "4002" },
+    });
+    fireEvent.change(dialog.getByLabelText("Label"), {
+      target: { value: "IB renamed" },
+    });
+    await user.click(dialog.getByRole("button", { name: "Save" }));
+    expect(api.updateTradingConnectionSettings).toHaveBeenCalledExactlyOnceWith(
+      "ib-1",
+      { label: "IB renamed", credentials: { port: 4002 } },
+    );
+  });
+
+  it.each([
+    ["Host", "new.local", { host: "new.local" }],
+    ["Client ID", "15", { clientId: 15 }],
+    ["Client ID", "", undefined],
+    ["Label", "IB renamed", undefined],
+  ])(
+    "sends only changed IB keys for %s %s",
+    async (field, value, credentials) => {
+      const user = userEvent.setup();
+      renderTrading();
+      await user.click(
+        (await card("IB paper")).getByRole("button", { name: "Edit settings" }),
+      );
+      const dialog = within(
+        screen.getByRole("dialog", { name: "Edit settings" }),
+      );
+      fireEvent.change(dialog.getByLabelText(field), { target: { value } });
+      expect(dialog.getByRole("button", { name: "Save" })).toBeEnabled();
+      await user.click(dialog.getByRole("button", { name: "Save" }));
+      expect(
+        api.updateTradingConnectionSettings,
+      ).toHaveBeenCalledExactlyOnceWith("ib-1", {
+        ...(field === "Label" ? { label: value } : {}),
+        ...(credentials === undefined ? {} : { credentials }),
+      });
+    },
+  );
+
+  it.each([
+    ["Host", ""],
+    ["Port", "65536"],
+    ["Client ID", "-1"],
+    ["Label", ""],
+  ])("holds invalid IB settings %s", async (field, value) => {
+    const user = userEvent.setup();
+    renderTrading();
+    await user.click(
+      (await card("IB paper")).getByRole("button", { name: "Edit settings" }),
+    );
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Edit settings" }),
+    );
+    fireEvent.change(dialog.getByLabelText(field), { target: { value } });
+    expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.submit(
+      dialog.getByRole("button", { name: "Save" }).closest("form")!,
+    );
+    expect(api.updateTradingConnectionSettings).not.toHaveBeenCalled();
+  });
+
+  it.each(["single-account", "multi-account"])(
+    "guides IB's venue account in %s mode without naming a grant only when accounts are hidden",
+    async (mode) => {
+      if (mode === "single-account")
+        setAccountScope({ accounts: false, account: "main" });
+      const user = userEvent.setup();
+      renderTrading();
+      const dialog = await openIBCreate(user);
+      const step = dialog.getAllByRole("listitem")[3];
+      expect(step).toHaveTextContent(
+        mode === "single-account"
+          ? "After creating the connection, enter your IB account ID (starts with DU for paper trading) as its venue account."
+          : "After creating the connection, grant access with your IB account ID (starts with DU for paper trading) as the venue account.",
+      );
+    },
+  );
+
+  it.each(["account", "group"])(
+    "requires the typed venue account for an IB %s grant and focuses it",
+    async (kind) => {
+      const user = userEvent.setup();
+      renderTrading();
+      const scope = await card("IB paper");
+      const form = within(scope.getByRole("form", { name: "Grant access" }));
+      if (kind === "group")
+        await user.click(form.getByRole("button", { name: "Group" }));
+      await user.type(
+        form.getByLabelText(kind === "group" ? "Group" : "Account"),
+        kind === "group" ? "desk" : "alpha",
+      );
+      expect(form.getByRole("button", { name: "Grant access" })).toBeDisabled();
+      await user.click(form.getByRole("button", { name: "Set venue account" }));
+      expect(form.getByLabelText("Venue account")).toHaveFocus();
+      await user.type(form.getByLabelText("Venue account"), "  ");
+      expect(form.getByRole("button", { name: "Grant access" })).toBeDisabled();
+      await user.type(form.getByLabelText("Venue account"), "DU123 ");
+      expect(form.getByRole("button", { name: "Grant access" })).toBeEnabled();
+      await user.click(form.getByRole("button", { name: "Grant access" }));
+      expect(api.grantTradingAccess).toHaveBeenCalledExactlyOnceWith("ib-1", {
+        ...(kind === "group" ? { accountGroup: "desk" } : { account: "alpha" }),
+        venueAccount: "DU123",
+      });
+    },
+  );
 });
 
 describe("Add trading connection dialog", () => {
@@ -4090,6 +4333,47 @@ describe("Add trading connection dialog", () => {
       );
     }
     expect(api.createTradingConnection).not.toHaveBeenCalled();
+  });
+
+  it("shows the three Binance setup steps and the Spot Testnet link", async () => {
+    const user = userEvent.setup();
+    snapshot.providers.push({ ...provider, type: "binance", title: "Binance" });
+    renderTrading();
+    await user.click(
+      await screen.findByRole("button", { name: /^Add trading connection/ }),
+    );
+    const picker = within(
+      screen.getByRole("dialog", { name: "Add trading connection" }),
+    );
+    const binanceTile = picker.getByRole("button", { name: "Binance" });
+    const tile = within(binanceTile.parentElement!);
+    expect(tile.getByRole("link", { name: "Site" })).toHaveAttribute(
+      "href",
+      "https://www.binance.com",
+    );
+    expect(tile.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://testnet.binance.vision/",
+    );
+    await user.click(binanceTile);
+    const dialog = within(
+      await screen.findByRole("dialog", { name: "Add Binance connection" }),
+    );
+    expect(
+      dialog.getByRole("heading", { name: "Prepare your Binance account" }),
+    ).toBeInTheDocument();
+    expect(dialog.getAllByRole("listitem")).toHaveLength(3);
+    for (const text of [
+      "Open the Binance Spot Testnet and log in with a GitHub account.",
+      "Generate an HMAC-SHA256 API key there and copy the API key and the secret key. Paper connections use the Spot Testnet; testnet keys work only there.",
+      "Keep the page open - the fields below ask for both values.",
+    ]) {
+      expect(dialog.getByText(text, { exact: true })).toBeInTheDocument();
+    }
+    const link = dialog.getByRole("link", { name: "Open Spot Testnet" });
+    expect(link).toHaveAttribute("href", "https://testnet.binance.vision/");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("shows a provider without instructions or external links", async () => {
@@ -4389,6 +4673,291 @@ describe("Add trading connection dialog", () => {
       expect(dialog.getByLabelText("Label")).toHaveValue("Alpaca");
       expect(dialog.getByLabelText("API key")).toHaveValue("");
       expect(dialog.getByLabelText("API secret")).toHaveValue("");
+    },
+  );
+});
+
+describe("Trading provider credential fields", () => {
+  const etoro: TradingProvider = { ...provider, type: "etoro", title: "eToro" };
+  const unknownCredentials =
+    "This panel does not know the credential fields of this provider.";
+
+  async function openProviderCreate(
+    user: ReturnType<typeof userEvent.setup>,
+    title: string,
+  ) {
+    await user.click(
+      await screen.findByRole("button", { name: /^Add trading connection/ }),
+    );
+    await user.click(
+      within(
+        screen.getByRole("dialog", { name: "Add trading connection" }),
+      ).getByRole("button", { name: title }),
+    );
+    return within(
+      screen.getByRole("dialog", { name: `Add ${title} connection` }),
+    );
+  }
+
+  it.each([
+    {
+      venue: etoro,
+      labels: ["Public API key", "User key"],
+      credentials: { apiKey: "public-key", userKey: "user-key" },
+    },
+    {
+      venue: provider,
+      labels: ["API key", "API secret"],
+      credentials: { apiKey: "public-key", apiSecret: "user-key" },
+    },
+  ])(
+    "requires every $venue.title credential and the label, then creates with exactly its trimmed fields",
+    async ({ venue, labels, credentials }) => {
+      const user = userEvent.setup();
+      snapshot = { providers: [venue], connections: [] };
+      renderTrading();
+      const dialog = await openProviderCreate(user, venue.title);
+      const create = dialog.getByRole("button", { name: "Create" });
+      const label = dialog.getByLabelText("Label");
+      expect(create).toBeDisabled();
+      expect(label).toBeRequired();
+      if (venue.type === "etoro") {
+        expect(dialog.queryByLabelText("API secret")).not.toBeInTheDocument();
+      }
+      for (const name of labels) {
+        const input = dialog.getByLabelText(name, { exact: true });
+        expect(input).toBeRequired();
+        expect(input).toHaveAttribute("type", "password");
+        expect(input).toHaveAttribute("autocomplete", "new-password");
+      }
+      await user.type(dialog.getByLabelText(labels[0]), "  public-key  ");
+      expect(create).toBeDisabled();
+      await user.type(dialog.getByLabelText(labels[1]), "   ");
+      expect(create).toBeDisabled();
+      await user.type(dialog.getByLabelText(labels[1]), "user-key  ");
+      expect(create).toBeEnabled();
+      await user.clear(label);
+      await user.type(label, "   ");
+      expect(create).toBeDisabled();
+      await user.type(label, "Desk paper  ");
+      expect(create).toBeEnabled();
+      await user.clear(dialog.getByLabelText(labels[0]));
+      expect(create).toBeDisabled();
+      await user.type(dialog.getByLabelText(labels[0]), "  public-key  ");
+      expect(dialog.queryByText("public-key")).not.toBeInTheDocument();
+      expect(dialog.queryByText("user-key")).not.toBeInTheDocument();
+      await user.click(create);
+      expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+        provider: venue.type,
+        label: "Desk paper",
+        mode: "paper",
+        credentials,
+        enabled: false,
+      });
+    },
+  );
+
+  it.each([
+    {
+      field: "Public API key",
+      key: "apiKey",
+      secrets: { apiKey: true, userKey: true },
+    },
+    {
+      field: "User key",
+      key: "userKey",
+      secrets: { apiKey: false, userKey: true },
+    },
+    {
+      field: "User key",
+      key: "userKey",
+      secrets: { apiKey: true, userKey: false },
+    },
+  ])(
+    "edits only the filled eToro $field with stored flags $secrets",
+    async ({ field, key, secrets }) => {
+      const user = userEvent.setup();
+      snapshot = {
+        providers: [etoro],
+        connections: [
+          connection({
+            id: "etoro-1",
+            provider: "etoro",
+            label: "eToro paper",
+            secrets,
+          }),
+        ],
+      };
+      renderTrading();
+      const scope = await card("eToro paper");
+      await user.click(scope.getByRole("button", { name: "Edit settings" }));
+      const dialog = within(screen.getByRole("dialog"));
+      const save = dialog.getByRole("button", { name: "Save" });
+      expect(save).toBeDisabled();
+      expect(dialog.queryByLabelText("API secret")).not.toBeInTheDocument();
+      for (const [name, stored] of [
+        ["Public API key", secrets.apiKey],
+        ["User key", secrets.userKey],
+      ] as const) {
+        const input = dialog.getByLabelText(name);
+        expect(input).toHaveValue("");
+        expect(input).toHaveAttribute("type", "password");
+        expect(input).toHaveAttribute("autocomplete", "new-password");
+        expect(input).toHaveAttribute(
+          "placeholder",
+          stored ? "Keep stored secret" : "",
+        );
+        await user.type(input, "   ");
+      }
+      expect(save).toBeDisabled();
+      await user.type(dialog.getByLabelText(field), "replacement-key  ");
+      await user.click(save);
+      expect(
+        api.updateTradingConnectionSettings,
+      ).toHaveBeenCalledExactlyOnceWith("etoro-1", {
+        credentials: { [key]: "replacement-key" },
+      });
+      await user.click(scope.getByRole("button", { name: "Edit settings" }));
+      const reopened = within(screen.getByRole("dialog"));
+      expect(reopened.getByLabelText("Public API key")).toHaveValue("");
+      expect(reopened.getByLabelText("User key")).toHaveValue("");
+      expect(screen.queryByText("replacement-key")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    { apiKey: true, userKey: false },
+    { apiKey: false, userKey: true },
+  ])("shows only eToro credential presence with flags %j", async (secrets) => {
+    snapshot = {
+      providers: [etoro],
+      connections: [
+        connection({
+          provider: "etoro",
+          label: "eToro paper",
+          secrets: { ...secrets, apiSecret: true },
+        }),
+      ],
+    };
+    renderTrading();
+    const scope = await card("eToro paper");
+    expect(
+      scope.getByText(
+        `Public API key: ${secrets.apiKey ? "stored" : "not set"}`,
+        { exact: true },
+      ),
+    ).toBeInTheDocument();
+    expect(
+      scope.getByText(`User key: ${secrets.userKey ? "stored" : "not set"}`, {
+        exact: true,
+      }),
+    ).toBeInTheDocument();
+    expect(scope.queryByText(/^API (key|secret):/)).not.toBeInTheDocument();
+  });
+
+  it("shows the eToro mark, setup steps and authentication links", async () => {
+    const user = userEvent.setup();
+    snapshot = { providers: [etoro], connections: [] };
+    renderTrading();
+    await user.click(
+      await screen.findByRole("button", { name: /^Add trading connection/ }),
+    );
+    const picker = within(screen.getByRole("dialog"));
+    const tile = picker.getByRole("button", { name: "eToro" });
+    const icon = tile.querySelector("svg");
+    expect(icon).toHaveAttribute("viewBox", "0 0 24 24");
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icon?.querySelector("rect")).toHaveAttribute("fill", "#13C636");
+    expect(icon?.querySelector("path")).toHaveAttribute("fill", "#fff");
+    expect(picker.getByRole("link", { name: "Site" })).toHaveAttribute(
+      "href",
+      "https://www.etoro.com",
+    );
+    expect(picker.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://api-portal.etoro.com/core/getting-started/authentication",
+    );
+    await user.click(tile);
+    const dialog = within(screen.getByRole("dialog"));
+    const steps = dialog.getAllByRole("listitem");
+    const texts = [
+      "Log in to your eToro account.",
+      "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Demo environment - each key works for one environment only, and Officer connects the demo account in paper mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone.",
+      "Copy the new key from the Generated Keys list into the User key field.",
+      "The Public API key identifies the application. eToro's Authentication guide explains how it is issued.",
+      "Keep this dialog open - the fields below ask for both values.",
+    ];
+    expect(steps).toHaveLength(texts.length);
+    texts.forEach((text, index) => {
+      expect(within(steps[index]).getByText(text)).toBeInTheDocument();
+    });
+    for (const [name, href] of [
+      ["Log in at eToro", "https://www.etoro.com/login"],
+      [
+        "eToro authentication guide",
+        "https://api-portal.etoro.com/core/getting-started/authentication",
+      ],
+    ]) {
+      const link = dialog.getByRole("link", { name });
+      expect(link).toHaveAttribute("href", href);
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    }
+    expect(api.createTradingConnection).not.toHaveBeenCalled();
+  });
+
+  it.each(["other", "toString"])(
+    "blocks creation for unknown provider %s without guessing credential fields",
+    async (type) => {
+      const user = userEvent.setup();
+      snapshot = {
+        providers: [{ ...provider, type, title: "Other venue" }],
+        connections: [],
+      };
+      renderTrading();
+      const dialog = await openProviderCreate(user, "Other venue");
+      expect(dialog.getByRole("alert")).toHaveTextContent(unknownCredentials);
+      expect(dialog.queryByLabelText(/key|secret/i)).not.toBeInTheDocument();
+      const label = dialog.getByLabelText("Label");
+      await user.type(label, " renamed");
+      const create = dialog.getByRole("button", { name: "Create" });
+      expect(create).toBeDisabled();
+      await user.click(create);
+      fireEvent.submit(label.closest("form")!);
+      expect(api.createTradingConnection).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["other", "toString"])(
+    "omits credential card lines and blocks settings for unknown provider %s",
+    async (type) => {
+      const user = userEvent.setup();
+      snapshot = {
+        providers: [{ ...provider, type, title: "Other venue" }],
+        connections: [
+          connection({
+            provider: type,
+            label: "Other paper",
+            secrets: { apiKey: true, apiSecret: true, userKey: true },
+          }),
+        ],
+      };
+      renderTrading();
+      const scope = await card("Other paper");
+      expect(
+        scope.queryByText(/^(Public API key|API key|API secret|User key):/),
+      ).not.toBeInTheDocument();
+      await user.click(scope.getByRole("button", { name: "Edit settings" }));
+      const dialog = within(screen.getByRole("dialog"));
+      expect(dialog.getByRole("alert")).toHaveTextContent(unknownCredentials);
+      expect(dialog.queryByLabelText(/key|secret/i)).not.toBeInTheDocument();
+      const label = dialog.getByLabelText("Label");
+      await user.type(label, " renamed");
+      const save = dialog.getByRole("button", { name: "Save" });
+      expect(save).toBeDisabled();
+      await user.click(save);
+      fireEvent.submit(label.closest("form")!);
+      expect(api.updateTradingConnectionSettings).not.toHaveBeenCalled();
     },
   );
 });

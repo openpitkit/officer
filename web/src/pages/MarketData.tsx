@@ -16,6 +16,14 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import {
+  settingString,
+  isOptionalInt64,
+  isOptionalJSONInt64,
+  putIfFilled,
+  putNumberIfFilled,
+} from "@/components/venues/providerSettings";
+
+import {
   ExternalLink,
   Plus,
   RefreshCw,
@@ -38,7 +46,6 @@ import type {
 import { useCredentialStorage } from "@/api/useCredentialStorage";
 import { useMarketData } from "@/api/useMarketData";
 import type { LoadState } from "@/api/usePolling";
-import { validateAsset } from "@/api/validate";
 import { Page } from "@/components/Page";
 import {
   ErrorBanner,
@@ -68,6 +75,8 @@ import {
   type SymbolPair,
   UnsealedKeysWarning,
   VenueCardHeader,
+  emptyInstrumentDraft,
+  isInstrumentDraftFieldsValid,
 } from "@/components/venues";
 import {
   Dialog,
@@ -123,11 +132,8 @@ interface DeleteInstrumentTarget {
 }
 
 const emptyInstrument: InstrumentDraft = {
-  externalSymbol: "",
-  baseAsset: "",
-  quoteAsset: "USD",
+  ...emptyInstrumentDraft,
   manualPrice: "",
-  enabled: true,
 };
 
 function hasNonZeroDecimal(value?: string): boolean {
@@ -139,37 +145,12 @@ function isOptionalDecimal(value?: string): boolean {
   return isDecimalString(value ?? "");
 }
 
-function isOptionalInt64(value?: string): boolean {
-  const trimmed = value?.trim() ?? "";
-  if (trimmed === "") {
-    return true;
-  }
-  if (!/^[+-]?\d+$/u.test(trimmed)) {
-    return false;
-  }
-  const parsed = BigInt(trimmed);
-  return parsed >= -9223372036854775808n && parsed <= 9223372036854775807n;
-}
-
-function isOptionalJSONInt64(value?: string): boolean {
-  const trimmed = value?.trim() ?? "";
-  if (trimmed === "") {
-    return true;
-  }
-  if (!/^\+?\d+$/u.test(trimmed) || !isOptionalInt64(trimmed)) {
-    return false;
-  }
-  return Number.isSafeInteger(Number(trimmed));
-}
-
 function isInstrumentDraftValid(
   draft: InstrumentDraft,
   isManual: boolean,
 ): boolean {
   return (
-    draft.externalSymbol.trim() !== "" &&
-    validateAsset(draft.baseAsset.trim()) === null &&
-    validateAsset(draft.quoteAsset.trim()) === null &&
+    isInstrumentDraftFieldsValid(draft) &&
     (!isManual || isOptionalDecimal(draft.manualPrice))
   );
 }
@@ -385,21 +366,6 @@ function providerUsesCustomInstrumentDialog(type: string): boolean {
   return PROVIDERS_WITH_CUSTOM_INSTRUMENT_DIALOG.has(type);
 }
 
-function settingString(
-  settings: Record<string, unknown> | undefined,
-  key: string,
-  fallback = "",
-): string {
-  const value = settings?.[key];
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  return fallback;
-}
-
 function ibMarketDataTypeString(
   settings: Record<string, unknown> | undefined,
 ): string {
@@ -483,31 +449,6 @@ function providerSettingsReady(
     return draft.token?.trim() !== "" || hasSecret(instance, "token");
   }
   return true;
-}
-
-function putIfFilled(
-  target: Record<string, unknown>,
-  key: string,
-  value: string | undefined,
-) {
-  const trimmed = value?.trim() ?? "";
-  if (trimmed !== "") {
-    target[key] = trimmed;
-  }
-}
-
-function putNumberIfFilled(
-  target: Record<string, unknown>,
-  key: string,
-  value: string | undefined,
-) {
-  const trimmed = value?.trim() ?? "";
-  if (trimmed !== "") {
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      target[key] = numeric;
-    }
-  }
 }
 
 // Reads the persisted per-instrument contracts map from instance settings.

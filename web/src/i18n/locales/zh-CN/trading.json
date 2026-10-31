@@ -20,18 +20,35 @@
     "stopped": "已停止"
   },
   "connection": {
+    "ibEndpoint": "{{host}}:{{port}}",
+    "ibClientId": "Client ID: {{clientId}}",
     "enabled": "已启用",
     "disabled": "已停用",
     "apiKeyStored": "API key: 已保存",
     "apiKeyNotSet": "API key: 未设置",
     "apiSecretStored": "API secret: 已保存",
-    "apiSecretNotSet": "API secret: 未设置"
+    "apiSecretNotSet": "API secret: 未设置",
+    "etoro": {
+      "apiKeyStored": "Public API key: 已保存",
+      "apiKeyNotSet": "Public API key: 未设置",
+      "userKeyStored": "User key: 已保存",
+      "userKeyNotSet": "User key: 未设置"
+    }
   },
   "actions": {
     "addConnection": "添加交易连接",
     "check": "检查连接"
   },
   "create": {
+    "ib": {
+      "install": "安装 IB Gateway（或 TWS），并使用您的模拟交易用户名登录。",
+      "download": "下载 IB Gateway",
+      "enableApi": "在 {{settingsPath}} 中启用套接字客户端（TWS：\"{{socketClients}}\"），取消勾选 \"{{readOnlyApi}}\" 以接受订单，并记下套接字端口（IB Gateway 模拟交易：4002；TWS 模拟交易：7497）。在 {{trustedIPs}} 中允许 127.0.0.1，或接受连接提示。",
+      "documentation": "TWS API 文档",
+      "keepRunning": "保持 IB Gateway 运行并处于登录状态。在下方输入其主机和端口；客户端标识可选。",
+      "grantAccess": "创建连接后，请将您的 IB 账户标识（模拟交易以 {{paperAccountPrefix}} 开头）设为交易场所账户并授予访问权限。订单仅能通过绑定该账户的授权发送至 IB。",
+      "setVenueAccount": "创建连接后，请将您的 IB 账户标识（模拟交易以 {{paperAccountPrefix}} 开头）填写为该连接的交易场所账户。订单仅能通过该账户发送至 IB。"
+    },
     "title": "添加 {{provider}} 连接",
     "chooseVenue": "选择交易场所",
     "prepareAccount": "准备您的 {{provider}} 账户",
@@ -46,6 +63,21 @@
       "aboutPaperTrading": "关于模拟交易",
       "generateKeys": "生成模拟交易 API 密钥：选择 Paper Trading 后，在控制面板中找到 API Keys 面板，然后点击 Generate New Key。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。模拟交易密钥仅适用于模拟交易账户。",
       "keepDashboardOpen": "请保持控制面板打开 - 下方字段需要填写这两个值。"
+    },
+    "binance": {
+      "openTestnet": "请打开 Binance 现货测试网，并使用 GitHub 账户登录。",
+      "openSpotTestnet": "打开现货测试网",
+      "generateKeys": "请在该页面生成使用 HMAC-SHA256 算法的 API 密钥，并复制 API key 和 API secret。模拟交易连接使用现货测试网；测试网密钥仅适用于该测试网。",
+      "keepPageOpen": "请保持页面打开 - 下方字段需要填写这两个值。"
+    },
+    "etoro": {
+      "logInAccount": "请登录您的 eToro 账户。",
+      "logIn": "登录 eToro",
+      "createUserKey": "创建用户密钥：在 eToro 中打开设置，然后进入交易，向下滚动至 API Key Management 并点击 Create New Key。请选择模拟环境 - 每个密钥仅适用于一个环境，Officer 在模拟交易模式下连接模拟账户。请选择写入权限 - 只读权限仅可查看投资组合数据，无法下单。点击 Generate Key，并输入 eToro 发送到您手机的验证码。",
+      "copyUserKey": "请从 Generated Keys 列表中复制新密钥，并填入 User key 字段。",
+      "publicApiKey": "Public API key 用于标识应用程序。eToro 身份验证指南说明了该密钥的签发方式。",
+      "authenticationGuide": "eToro 身份验证指南",
+      "keepDialogOpen": "请保持此对话框打开 - 下方字段需要填写这两个值。"
     }
   },
   "setup": {
@@ -58,13 +90,16 @@
     "result": "交易场所账户 {{id}} · 状态 {{status}}"
   },
   "settings": {
-    "description": "将字段留空以保留已保存的值。"
+    "description": "将字段留空以保留已保存的值。",
+    "unknownProviderCredentials": "此面板无法识别此提供方的凭据字段。",
+    "etoro": {
+      "apiKey": "Public API key",
+      "userKey": "User key"
+    }
   },
   "instruments": {
     "title": "工具",
     "deleteDescription": "{{symbol}} 将从 {{label}} 中删除。",
-    "assetMissing": "Officer 中不存在资产 {{asset}}。Officer 不会隐式创建资产；请先创建该资产，再保存工具。",
-    "createAssetAndSave": "创建资产 {{asset}} 并保存",
     "connectionDisabled": "连接已停用"
   },
   "search": {
@@ -80,7 +115,8 @@
   "access": {
     "title": "账户访问权限",
     "grantTo": "授权给",
-    "inherited": "继承自该账户所属的账户组。账户组的访问权限在多账户模式下管理。"
+    "inherited": "继承自该账户所属的账户组。账户组的访问权限在多账户模式下管理。",
+    "missing": "该账户无权访问此连接，因此通过此连接的订单会被拒绝。请停用后重新启用该连接以恢复访问权限。"
   },
   "fee": {
     "title": "手续费账户",

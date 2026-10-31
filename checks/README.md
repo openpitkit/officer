@@ -40,8 +40,8 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 `testdata/` holds rule fixtures: deliberate violations and non-violations
 annotated for `semgrep --test`, one file per rule, named after it:
 `default-domain-status.go`, `locale-latin-words.txt`,
-`locale-english-words.txt`, `file-header-site-link.txt` and
-`panel-code-label.tsx`. A fixture runs only
+`locale-english-words.txt`, `file-header-site-link.txt`,
+`panel-code-label.tsx` and `venue-connector-reuse.go`. A fixture runs only
 through its own `--test` line in `check-semgrep`, after the tree scan, so a new
 fixture adds its own line there. A rule with a fixture keeps its fixture out of
 its `paths`, so the tree scan does not report the fixture. The directory is
@@ -191,6 +191,21 @@ or an `earlier (Officer )?build` phrase, all case-insensitive, in non-test Go un
 application migration records disagree, either because it was created before the
 application tables existed or because its first start was interrupted. That
 database must be recreated. Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker.
+
+### Venue connector reuse
+
+`checks/semgrep/venue-connector-reuse.yml` keeps trading stream reconnects in
+`streamLifecycle` in `internal/trading/stream_lifecycle.go` and vendor credential
+parsing in `internal/apikey`. Rule 1 matches the identifier `backoff`, not the
+package import, elsewhere under `internal/trading/`. Rule 2 matches map reads,
+comparisons and switch arms on `"apiKey"`/`"apiSecret"` outside
+`internal/apikey/`, and JSON decoding inside a function named `ParseCredentials`
+outside that package, in Go files under `internal/`, excluding Go tests.
+Deliberate limit: decoding credentials into a struct tagged `json:"apiKey"` /
+`json:"apiSecret"` outside a `ParseCredentials` passes; review catches it.
+Its fixture runs through `check-semgrep`.
 
 This rule has no approval marker.
 

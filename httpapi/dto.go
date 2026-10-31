@@ -22,7 +22,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.openpit.dev/officer/framework/backend"
@@ -487,63 +486,7 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 }
 
 func marketDataSafeSettings(instance domain.MarketDataInstance) map[string]any {
-	credentials := marketDataCredentialsObject(instance.Credentials)
-	if len(credentials) == 0 {
-		return nil
-	}
-	settings := make(map[string]any)
-	switch instance.Provider {
-	case domain.MarketDataProviderIB:
-		copyStringSetting(settings, credentials, "host")
-		copyNumberSetting(settings, credentials, "port")
-		copyNumberSetting(settings, credentials, "clientId")
-		copyStringSetting(settings, credentials, "marketDataType")
-		copyObjectSetting(settings, credentials, "contracts")
-	case domain.MarketDataProviderBybit:
-		copyStringSetting(settings, credentials, "category")
-	case domain.MarketDataProviderOANDA:
-		copyStringSetting(settings, credentials, "accountID")
-		copyStringSetting(settings, credentials, "environment")
-	}
-	if len(settings) == 0 {
-		return nil
-	}
-	return settings
-}
-
-func marketDataCredentialsObject(raw string) map[string]any {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	var credentials map[string]any
-	if err := json.Unmarshal([]byte(raw), &credentials); err != nil {
-		return nil
-	}
-	return credentials
-}
-
-func copyStringSetting(dst, src map[string]any, key string) {
-	value, ok := src[key].(string)
-	if ok && strings.TrimSpace(value) != "" {
-		dst[key] = value
-	}
-}
-
-func copyNumberSetting(dst, src map[string]any, key string) {
-	value, ok := src[key].(float64)
-	if ok {
-		dst[key] = value
-	}
-}
-
-// copyObjectSetting copies a non-empty nested object/map value verbatim. It is
-// used for non-secret structured settings (the IB contract overrides), which
-// carry no credentials.
-func copyObjectSetting(dst, src map[string]any, key string) {
-	if v, ok := src[key].(map[string]any); ok && len(v) > 0 {
-		dst[key] = v
-	}
+	return backend.MarketDataSettings(instance)
 }
 
 func toMarketDataSymbolVerificationDTO(

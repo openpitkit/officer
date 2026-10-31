@@ -98,6 +98,25 @@ function CoinbaseIcon({ className }: { className?: string }) {
   );
 }
 
+function EtoroIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+    >
+      <rect width="24" height="24" rx="4" fill="#13C636" />
+      <path
+        d="M18 12.5H8.6c.2 1.9 1.6 3 3.5 3 1.4 0 2.6-.5 3.6-1.3l1.6 1.9c-1.4 1.2-3.1 1.9-5.3 1.9-3.9 0-6.5-2.6-6.5-6s2.6-6 6.3-6c3.6 0 6.2 2.5 6.2 6v.5ZM8.7 10h6.1c-.4-1.2-1.5-1.9-3-1.9S9.1 8.8 8.7 10Z"
+        fill="#fff"
+        fillRule="evenodd"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 function AlpacaIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -250,6 +269,9 @@ export function ProviderIcon({ type, className }: ProviderIconProps) {
   }
   if (type === "alpaca") {
     return <AlpacaIcon className={className} />;
+  }
+  if (type === "etoro") {
+    return <EtoroIcon className={className} />;
   }
   if (type === "okx") {
     return <OKXIcon className={className} />;

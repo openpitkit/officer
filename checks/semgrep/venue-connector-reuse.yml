@@ -1,0 +1,67 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+rules:
+  - id: shared-venue-stream-lifecycle
+    message: Run the stream through streamLifecycle in stream_lifecycle.go for reconnects.
+    severity: ERROR
+    languages: [go]
+    pattern: backoff.$F
+    paths:
+      include:
+        - "/internal/trading/**"
+      exclude:
+        - "/internal/trading/stream_lifecycle.go"
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+
+  - id: shared-vendor-credentials
+    message: Delegate credential parsing to internal/apikey.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - pattern: '$M["apiKey"]'
+      - pattern: '$M["apiSecret"]'
+      - pattern: '$X == "apiKey"'
+      - pattern: '$X != "apiKey"'
+      - pattern: '$X == "apiSecret"'
+      - pattern: '$X != "apiSecret"'
+      - patterns:
+          - pattern: |
+              switch $X {
+                case $KEY:
+                  ...
+              }
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: '^"(apiKey|apiSecret)"$'
+          - focus-metavariable: $KEY
+      - patterns:
+          - pattern-inside: |
+              func ParseCredentials(...) {
+                ...
+              }
+          - pattern-either:
+              - pattern: json.Unmarshal(...)
+              - pattern: json.NewDecoder(...)
+    paths:
+      include:
+        - "/internal/**"
+      exclude:
+        - "/internal/apikey/**"
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

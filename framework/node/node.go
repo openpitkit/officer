@@ -693,8 +693,9 @@ type Node interface {
 		ctx context.Context, id domain.ExternalID, enabled bool, caller domain.Caller,
 	) error
 
-	// UpsertTradingInstrument inserts or replaces one instrument mapping.
-	// It audits the action after the store write succeeds.
+	// UpsertTradingInstrument inserts or replaces one instrument mapping,
+	// creating a missing base or quote asset as UpsertMarketDataInstrument
+	// does. It audits the action after the store write succeeds.
 	UpsertTradingInstrument(
 		ctx context.Context, instrument domain.TradingInstrument, caller domain.Caller,
 	) error

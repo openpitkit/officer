@@ -24,6 +24,7 @@
     "keepStoredSecret": "Manter o segredo armazenado"
   },
   "actions": {
+    "setVenueAccount": "Definir conta na plataforma",
     "addInstrument": "Adicionar instrumento",
     "enable": "Ativar",
     "disable": "Desativar",
@@ -69,6 +70,7 @@
     "groupDescription": "Revogar o acesso do grupo {{group}} a {{label}}? As contas do grupo mantêm o acesso somente se ele tiver sido concedido diretamente a elas."
   },
   "accessBlocked": {
+    "needsVenueAccount": "Informe primeiro a conta da {{provider}}. As ordens chegam à {{provider}} somente por uma permissão vinculada a uma conta na plataforma.",
     "groupNeedsFeeAccount": "Defina primeiro uma conta de taxas. Um grupo pode conter várias contas, e a {{provider}} cobra taxas que não estão vinculadas a ordens; o Officer precisa de uma conta para lançá-las.",
     "secondAccountNeedsFeeAccount": "Defina primeiro uma conta de taxas. A {{provider}} cobra taxas que não estão vinculadas a ordens; com várias contas em uma mesma conexão, o Officer precisa de uma conta para lançá-las."
   },

@@ -30,6 +30,41 @@ import (
 	"go.openpit.dev/officer/framework/trading"
 )
 
+func TestConnectorReceivesInstrumentMappingAssets(t *testing.T) {
+	f := newFixture(t)
+	must(t, f.st.DeleteTradingInstrument(testCtx, f.dest.Connection, "AAPL"))
+	must(t, f.st.UpsertTradingInstrument(testCtx, domain.TradingInstrument{
+		Connection: f.dest.Connection, ExternalSymbol: "AAPL.STK",
+		BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
+	}))
+	assertAssets := func(phase string, mapped trading.Order) {
+		t.Helper()
+		if mapped.Symbol != "AAPL.STK" {
+			t.Errorf("%s Symbol = %q, want %q", phase, mapped.Symbol, "AAPL.STK")
+		}
+		if mapped.BaseAsset != "AAPL" {
+			t.Errorf("%s BaseAsset = %q, want %q", phase, mapped.BaseAsset, "AAPL")
+		}
+		if mapped.QuoteAsset != "USD" {
+			t.Errorf("%s QuoteAsset = %q, want %q", phase, mapped.QuoteAsset, "USD")
+		}
+	}
+	f.venue.onPreCheck = func(_ context.Context, mapped trading.Order) error {
+		assertAssets("PreCheck", mapped)
+		return nil
+	}
+	f.start()
+	order := f.submit("10")
+	must(t, f.runtime.PreCheck(testCtx, order, f.dest))
+	f.send(order)
+	f.venue.mu.Lock()
+	defer f.venue.mu.Unlock()
+	if len(f.venue.sends) != 1 {
+		t.Fatalf("Send calls = %d, want 1", len(f.venue.sends))
+	}
+	assertAssets("Send", f.venue.sends[0])
+}
+
 func TestSendFillsAndCoreBalances(t *testing.T) {
 	f := newFixture(t)
 	f.start()

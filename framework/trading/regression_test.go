@@ -232,6 +232,191 @@ func TestInvalidVenueDecimals(t *testing.T) {
 	}
 }
 
+func TestLookupUsesCurrentInstrument(t *testing.T) {
+	for _, mapping := range []string{"mapped", "disabled", "removed"} {
+		t.Run(mapping, func(t *testing.T) {
+			f := newFixture(t)
+			f.start()
+			order := f.submit("10")
+			link := f.send(order)
+			must(t, f.st.DeleteTradingInstrument(testCtx, f.connection.ExternalID, "AAPL"))
+			wantSymbol := ""
+			if mapping != "removed" {
+				wantSymbol = "ETHUSDT"
+				must(t, f.st.UpsertTradingInstrument(testCtx, domain.TradingInstrument{
+					Connection: f.connection.ExternalID, ExternalSymbol: wantSymbol,
+					BaseAsset: order.BaseAsset, QuoteAsset: order.QuoteAsset, Enabled: mapping == "mapped",
+				}))
+			}
+			fill := makeFill("3", "3", "7", false)
+			f.venue.setSnapshot(link, trading.VenueStatusOpen, "3", fill)
+			f.orderEvent(link)
+			f.flush()
+			f.venue.mu.Lock()
+			refs := append([]trading.OrderRef(nil), f.venue.lookupRefs...)
+			f.venue.mu.Unlock()
+			if len(refs) == 0 {
+				t.Fatal("mapping lookup never reached connector")
+			}
+			for _, ref := range refs {
+				if ref.Symbol != wantSymbol || ref.ClientOrderID != link.ClientOrderID || ref.VenueOrderID != link.VenueOrderID {
+					t.Fatalf("lookup ref = %+v, want symbol %q and order ids %+v", ref, wantSymbol, link)
+				}
+			}
+			assertTrades(t, f.detail(order), []trading.Fill{fill})
+		})
+	}
+}
+
+func TestLookupInstrumentStoreError(t *testing.T) {
+	f := newFixture(t)
+	f.start()
+	order := f.submit("10")
+	link := f.send(order)
+	f.runtime.Stop()
+	_, before := f.venue.counts()
+	storeErr := errors.New("instrument mapping read failed")
+	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, instrumentErr: storeErr},
+		f.sink, f.adjustmentSink, f.feeSkipSink,
+		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	must(t, err)
+	f.runtime = r
+	t.Cleanup(r.Stop)
+	must(t, r.Start(testCtx))
+	fill := makeFill("3", "3", "7", false)
+	f.venue.setSnapshot(link, trading.VenueStatusOpen, "3", fill)
+	f.orderEvent(link)
+	f.flush()
+	if _, after := f.venue.counts(); after != before {
+		t.Fatalf("instrument store error called Lookup: before=%d after=%d", before, after)
+	}
+	detail := f.detail(order)
+	if len(detail.Trades) != 0 || detail.Order.Status != domain.OrderStatusCommitted {
+		t.Fatalf("instrument store error changed pending order: status=%s trades=%d", detail.Order.Status, len(detail.Trades))
+	}
+	if logs := f.logs.text(); !strings.Contains(logs, "venue order remains pending") || !strings.Contains(logs, storeErr.Error()) {
+		t.Fatalf("instrument store error did not remain pending with its cause: %s", logs)
+	}
+	f.runtime.Stop()
+	f.start()
+	f.orderEvent(link)
+	f.flush()
+	assertTrades(t, f.detail(order), []trading.Fill{fill})
+}
+
+func TestCommissionLegBooking(t *testing.T) {
+	for _, source := range []string{"event", "snapshot"} {
+		for _, tc := range []struct {
+			name     string
+			leg      trading.CommissionLeg
+			currency string
+			booked   string
+		}{
+			{"base", trading.CommissionLegBase, "ETH", "AAPL"},
+			{"quote", trading.CommissionLegQuote, "USDT", "USD"},
+			{"third-asset", "", "BNB", "BNB"},
+		} {
+			t.Run(source+"/"+tc.name, func(t *testing.T) {
+				f := newFixture(t)
+				for _, asset := range []string{"ETH", "USDT", "BNB"} {
+					_, err := f.n.CreateAsset(testCtx, domain.Asset{Code: asset}, testCaller)
+					must(t, err)
+				}
+				f.start()
+				order := f.submit("10")
+				link := f.send(order)
+				fill := makeFill("3", "3", "7", false)
+				fill.Commission = &domain.Commission{Amount: "0.0012500", Currency: tc.currency}
+				fill.CommissionLeg = tc.leg
+				f.venue.setSnapshot(link, trading.VenueStatusOpen, "3", fill)
+				if source == "event" {
+					f.fill(link, fill)
+				} else {
+					f.orderEvent(link)
+				}
+				f.flush()
+				for attempt := 0; attempt < 2; attempt++ {
+					detail := f.detail(order)
+					assertTrades(t, detail, []trading.Fill{fill})
+					commission := detail.Trades[0].Commission
+					if commission == nil || commission.Currency != tc.booked {
+						t.Fatalf("booked commission = %+v, want asset %s", commission, tc.booked)
+					}
+					assertDecimal(t, commission.Amount, fill.Commission.Amount)
+					if *fill.Commission != (domain.Commission{Amount: "0.0012500", Currency: tc.currency}) {
+						t.Fatalf("connector commission mutated: %+v", fill.Commission)
+					}
+					if attempt == 0 {
+						f.fill(link, fill)
+						f.orderEvent(link)
+						f.flush()
+						f.runtime.Stop()
+						f.start()
+						f.flush()
+					}
+				}
+				f.venue.mu.Lock()
+				var commissions []domain.Commission
+				for _, report := range f.venue.reports {
+					if report.Commission != nil {
+						commissions = append(commissions, *report.Commission)
+					}
+				}
+				f.venue.mu.Unlock()
+				if len(commissions) != 1 || commissions[0].Currency != tc.booked {
+					t.Fatalf("commission reports = %+v, want one in %s", commissions, tc.booked)
+				}
+			})
+		}
+	}
+}
+
+func TestCommissionLegValidation(t *testing.T) {
+	for _, source := range []string{"event", "snapshot"} {
+		for _, invalid := range []string{"unknown", "missing-base-commission", "missing-quote-commission"} {
+			t.Run(source+"/"+invalid, func(t *testing.T) {
+				f := newFixture(t)
+				f.start()
+				order := f.submit("10")
+				link := f.send(order)
+				fill := makeFill("3", "3", "7", false)
+				switch invalid {
+				case "unknown":
+					fill.CommissionLeg = "third"
+					fill.Commission = &domain.Commission{Amount: "0.5", Currency: "USD"}
+				case "missing-base-commission":
+					fill.CommissionLeg = trading.CommissionLegBase
+				case "missing-quote-commission":
+					fill.CommissionLeg = trading.CommissionLegQuote
+				}
+				if source == "event" {
+					f.fill(link, fill)
+				} else {
+					fill.CumQuantity, fill.LeavesQuantity = "5", "5"
+					f.venue.setSnapshot(link, trading.VenueStatusOpen, "5",
+						makeFill("2", "2", "8", false), fill)
+					f.orderEvent(link)
+				}
+				f.flush()
+				detail := f.detail(order)
+				if len(detail.Trades) != 0 || detail.Order.Status != domain.OrderStatusCommitted {
+					t.Fatalf("invalid CommissionLeg was booked: status=%s trades=%d", detail.Order.Status, len(detail.Trades))
+				}
+				logs := f.logs.text()
+				if !strings.Contains(logs, "CommissionLeg") || !strings.Contains(logs, domain.ErrInvalid.Error()) {
+					t.Fatalf("invalid CommissionLeg did not name its field and ErrInvalid: %s", logs)
+				}
+				f.venue.mu.Lock()
+				reports := len(f.venue.reports)
+				f.venue.mu.Unlock()
+				if reports != 1 {
+					t.Fatalf("invalid CommissionLeg reached sink: %d reports, want only claim", reports)
+				}
+			})
+		}
+	}
+}
+
 func TestVenueCommissionValidation(t *testing.T) {
 	for _, source := range []string{"event", "snapshot"} {
 		for _, tc := range []struct {

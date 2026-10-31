@@ -1490,16 +1490,16 @@ type tradingConnectionInput struct {
 }
 type createTradingConnectionInput struct {
 	ID          string             `json:"id,omitempty" jsonschema:"Optional connection id; omitted lets the store assign one"`
-	Provider    string             `json:"provider" jsonschema:"Trading provider type; e.g. alpaca"`
+	Provider    string             `json:"provider" jsonschema:"Trading provider type; e.g. alpaca, binance, ib or etoro"`
 	Label       string             `json:"label" jsonschema:"Display label for the trading connection"`
 	Mode        domain.TradingMode `json:"mode" jsonschema:"paper or live"`
-	Credentials map[string]any     `json:"credentials" jsonschema:"Write-only provider credential object; Alpaca uses {apiKey, apiSecret}"`
+	Credentials map[string]any     `json:"credentials" jsonschema:"Write-only provider credential object; Alpaca and Binance both use {apiKey, apiSecret} (Binance: an HMAC key pair); IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}"`
 	Enabled     *bool              `json:"enabled" jsonschema:"Required: whether the trading connection is enabled"`
 }
 type updateTradingConnectionInput struct {
 	Connection  string         `json:"connection" jsonschema:"Trading connection id"`
 	Label       *string        `json:"label,omitempty" jsonschema:"Optional display label; omitted keeps the stored value"`
-	Credentials map[string]any `json:"credentials,omitempty" jsonschema:"Optional write-only provider credential object; Alpaca uses {apiKey, apiSecret}; omitted keeps the stored value"`
+	Credentials map[string]any `json:"credentials,omitempty" jsonschema:"Optional write-only provider credential object; Alpaca and Binance both use {apiKey, apiSecret} (Binance: an HMAC key pair); IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}; omitted keeps the stored value"`
 }
 
 func (in *updateTradingConnectionInput) UnmarshalJSON(data []byte) error {
@@ -1921,7 +1921,7 @@ type sendPaperOrderInput struct {
 type sendDestinationInput struct {
 	Connection   string         `json:"connection,omitempty" jsonschema:"Connection id; omit only when one enabled paper destination exists"`
 	VenueAccount string         `json:"venueAccount,omitempty" jsonschema:"Venue account; omitted uses the binding, supplied must match it"`
-	Route        map[string]any `json:"route" jsonschema:"Required venue route JSON object; Alpaca requires timeInForce"`
+	Route        map[string]any `json:"route" jsonschema:"Required venue route JSON object; Alpaca and IB require timeInForce (IB: day, gtc or ioc); Binance requires timeInForce GTC, IOC or FOK for a limit order and an empty object for a market order; eToro uses {} for market or {\"timeInForce\":\"ioc\"} for an IOC limit buy"`
 }
 
 type sendPaperOrderOutput struct {

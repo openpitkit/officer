@@ -34,6 +34,15 @@ type failingStore struct {
 	trading.Store
 	markErr error
 	listErr error
+
+	instrumentErr error
+}
+
+func (s failingStore) FindTradingInstrument(ctx context.Context, connection domain.ExternalID, base, quote string) (domain.TradingInstrument, bool, error) {
+	if s.instrumentErr != nil {
+		return domain.TradingInstrument{}, false, s.instrumentErr
+	}
+	return s.Store.FindTradingInstrument(ctx, connection, base, quote)
 }
 
 type postClaimStore struct {

@@ -22,38 +22,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"math"
-	"net"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/scmhub/ibapi"
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/internal/backoff"
+	"go.openpit.dev/officer/internal/ib"
 )
 
 const (
-	defaultIBHost                   = "127.0.0.1"
-	defaultIBPort                   = 7496
-	defaultIBSecType                = "STK"
-	defaultIBExchange               = "SMART"
-	defaultIBReconnectMin           = 500 * time.Millisecond
-	defaultIBReconnectMax           = 10 * time.Second
-	defaultIBReadyTimeout           = 10 * time.Second
-	defaultIBConnectTimeout         = 10 * time.Second
-	defaultIBConnectDrainTimeout    = time.Second
-	defaultIBForceDisconnectTimeout = 5 * time.Second
+	defaultIBHost           = "127.0.0.1"
+	defaultIBPort           = 7496
+	defaultIBSecType        = "STK"
+	defaultIBExchange       = "SMART"
+	defaultIBReconnectMin   = 500 * time.Millisecond
+	defaultIBReconnectMax   = 10 * time.Second
+	defaultIBReadyTimeout   = 10 * time.Second
+	defaultIBConnectTimeout = 10 * time.Second
 	// Hashed instance IDs start above this value to avoid fallback collisions.
-	defaultIBFallbackClientID       = 1000
-	ibapiDisabledLogLevel           = 7
+	defaultIBFallbackClientID       = ib.DefaultFallbackClientID
 	defaultIBMarketDataType   int64 = int64(ibapi.REALTIME)
 	// Symbol search runs on a short-lived connection whose clientId is offset far
 	// above any feed clientId (feed ids stay <= ~900_999) so the two never
@@ -99,43 +93,6 @@ type ibClient interface {
 	CancelMktData(reqID ibapi.TickerID)
 	ReqMarketDataType(marketDataType int64)
 	ReqContractDetails(reqID int64, contract *ibapi.Contract)
-}
-
-// IB partial-connect teardown via reflect+unsafe is a deliberate, documented
-// workaround for scmhub/ibapi v0.10.44, not a pattern to copy.
-//
-// Why no public path exists: EClient.Connect starts the EReader
-// scanner/decoder and the requester goroutines and opens the TCP socket BEFORE
-// startAPI(). On a handshake/startAPI failure Connect returns an error with
-// connState left at CONNECTING. The public Disconnect() early-returns on
-// !IsConnected() (which requires CONNECTED), so it is a no-op in that state,
-// and the scanner goroutine stays blocked in scanner.Scan() - only a physical
-// socket close unblocks it. Nothing needed for teardown is exported: the cancel
-// func, *Connection, connState, the tcpConn pointer, the isConnected flag and
-// the WaitGroup are all unexported; NewEClient takes only an EWrapper (no
-// net.Conn/dialer injection); neither Connect nor
-// ConnectWithGracefulShutdown accepts a context. Confirmed absent in v0.10.44
-// through v0.10.46. So we drive the library's own cancel -> close socket ->
-// wg.Wait sequence by reaching the private fields.
-//
-// What this is bound to: the exact unexported field/method names of
-// EClient/Connection in v0.10.44 - cancel, conn, connState, tcpConn,
-// isConnected, wg. If any is renamed or removed in a newer ibapi, these helpers
-// degrade to a logged errors.Join error instead of tearing down: the socket and
-// goroutines then leak again, silently. Treat the ibapi version as effectively
-// pinned to this hack; an upgrade is not safe without re-validating the fields.
-//
-// On every ibapi upgrade, re-check and switch to the clean path if it appears -
-// any one of these removes the need for reflect/unsafe and lets this whole
-// block be deleted in favor of a plain Disconnect():
-//   - Connect cleans up after itself on partial failure (cancels goroutines and
-//     closes the socket before returning the error);
-//   - an exported ForceDisconnect()/Close(), or a Disconnect() that works
-//     regardless of connState;
-//   - a context-aware Connect, or a constructor/option that accepts a
-//     net.Conn/dialer so officer owns and can close the socket itself.
-type ibForceDisconnecter interface {
-	ForceDisconnect() error
 }
 
 type liveIBClient struct {
@@ -200,7 +157,7 @@ type ibWrapper struct {
 	reportDiag   func(health.Diagnostic)
 	now          func() time.Time
 
-	readyOnce sync.Once
+	readiness *ib.Readiness
 	lostOnce  sync.Once
 	// delivered records whether ≥1 quote reached out, so run can reset backoff.
 	delivered atomic.Bool
@@ -208,14 +165,9 @@ type ibWrapper struct {
 	quotes    map[ibapi.TickerID]ibPartialQuote
 	subs      map[ibapi.TickerID]ibSubscription
 	noData    map[string]struct{}
-	ready     chan struct{}
 	lost      chan error
 	ctx       context.Context
 	out       chan<- fwmarketdata.QuoteUpdate
-}
-
-func init() {
-	ibapi.SetLogLevel(ibapiDisabledLogLevel)
 }
 
 // NewIBConnector creates an Interactive Brokers TWS/Gateway market-data connector.
@@ -246,7 +198,7 @@ func (c liveIBClient) Disconnect() error {
 }
 
 func (c liveIBClient) ForceDisconnect() error {
-	return forceDisconnectIBClient(c.client)
+	return ib.ForceDisconnect(c.client)
 }
 
 func (c liveIBClient) ReqMktData(
@@ -277,116 +229,6 @@ func (c liveIBClient) ReqMarketDataType(marketDataType int64) {
 
 func (c liveIBClient) ReqContractDetails(reqID int64, contract *ibapi.Contract) {
 	c.client.ReqContractDetails(reqID, contract)
-}
-
-func disconnectIBClient(client ibClient) error {
-	if force, ok := client.(ibForceDisconnecter); ok {
-		return force.ForceDisconnect()
-	}
-	return client.Disconnect()
-}
-
-func forceDisconnectIBClient(client *ibapi.EClient) error {
-	if client == nil {
-		return nil
-	}
-	value := reflect.ValueOf(client)
-	if value.Kind() != reflect.Pointer || value.IsNil() {
-		return nil
-	}
-	elem := value.Elem()
-	return errors.Join(
-		cancelIBClient(elem),
-		closeIBClientSocket(elem),
-		waitIBClientShutdown(elem),
-	)
-}
-
-// Touches EClient.cancel (context.CancelFunc).
-func cancelIBClient(client reflect.Value) error {
-	cancelField := client.FieldByName("cancel")
-	if !cancelField.IsValid() {
-		return errors.New("ib: ibapi EClient.cancel field not found")
-	}
-	if cancelField.IsNil() {
-		return nil
-	}
-	unsafeReflectValue(cancelField).Call(nil)
-	return nil
-}
-
-// Touches EClient.conn, Connection.tcpConn, and Connection.isConnected.
-func closeIBClientSocket(client reflect.Value) error {
-	setIBInt32Field(client, "connState", int32(ibapi.DISCONNECTED))
-
-	connField := client.FieldByName("conn")
-	if !connField.IsValid() {
-		return errors.New("ib: ibapi EClient.conn field not found")
-	}
-	if connField.IsNil() {
-		return nil
-	}
-	conn := unsafeReflectValue(connField)
-	connElem := conn.Elem()
-	setIBInt32Field(connElem, "isConnected", 0)
-
-	tcpField := connElem.FieldByName("tcpConn")
-	if !tcpField.IsValid() {
-		return errors.New("ib: ibapi Connection.tcpConn field not found")
-	}
-	swap := unsafeReflectValue(tcpField).Addr().MethodByName("Swap")
-	if !swap.IsValid() {
-		return errors.New("ib: ibapi Connection.tcpConn swap method not found")
-	}
-	result := swap.Call([]reflect.Value{
-		reflect.Zero(reflect.TypeOf((*net.TCPConn)(nil))),
-	})
-	if len(result) != 1 || result[0].IsNil() {
-		return nil
-	}
-	tcpConn, ok := result[0].Interface().(*net.TCPConn)
-	if !ok {
-		return errors.New("ib: ibapi Connection.tcpConn has unexpected type")
-	}
-	return tcpConn.Close()
-}
-
-// Touches EClient.wg, bounded by defaultIBForceDisconnectTimeout.
-func waitIBClientShutdown(client reflect.Value) error {
-	wgField := client.FieldByName("wg")
-	if !wgField.IsValid() {
-		return errors.New("ib: ibapi EClient.wg field not found")
-	}
-	wg := unsafeReflectValue(wgField)
-	wait := wg.Addr().MethodByName("Wait")
-	if !wait.IsValid() {
-		return errors.New("ib: ibapi EClient.wg wait method not found")
-	}
-	done := make(chan struct{})
-	go func() {
-		wait.Call(nil)
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-time.After(defaultIBForceDisconnectTimeout):
-		return errors.New("ib: timed out waiting for ibapi shutdown")
-	}
-}
-
-// Generic private int32 access used for connState and isConnected.
-func setIBInt32Field(value reflect.Value, name string, next int32) {
-	field := value.FieldByName(name)
-	if !field.IsValid() {
-		return
-	}
-	atomic.StoreInt32((*int32)(unsafe.Pointer(field.UnsafeAddr())), next)
-}
-
-// Generic addressable access used for connState and isConnected.
-func unsafeReflectValue(value reflect.Value) reflect.Value {
-	return reflect.NewAt(value.Type(), unsafe.Pointer(value.UnsafeAddr())).Elem()
 }
 
 // SetStatusReporter installs the runtime connection status callback.
@@ -496,7 +338,7 @@ func (c *ibConnector) SearchSymbols(
 	wrapper := newIBSearchWrapper(results, errs)
 	client := c.newClient(wrapper)
 	defer func() {
-		if disconnectErr := disconnectIBClient(client); disconnectErr != nil {
+		if disconnectErr := ib.Disconnect(client); disconnectErr != nil {
 			disconnectErr = fmt.Errorf(
 				"ib: disconnect symbol search client: %w", disconnectErr,
 			)
@@ -517,7 +359,7 @@ func (c *ibConnector) SearchSymbols(
 
 	clientID := c.cfg.ClientID + ibSearchClientIDOffset
 	if err := c.connectClient(ctx, client, clientID); err != nil {
-		return nil, ibConnectError(c.cfg, err)
+		return nil, ib.ConnectError(c.cfg.Host, c.cfg.Port, err)
 	}
 	if err := wrapper.waitReady(ctx, c.readyTimeout); err != nil {
 		return nil, err
@@ -642,7 +484,7 @@ func (c *ibConnector) stream(
 		for _, sub := range subs {
 			client.CancelMktData(sub.reqID)
 		}
-		if disconnectErr := disconnectIBClient(client); disconnectErr != nil {
+		if disconnectErr := ib.Disconnect(client); disconnectErr != nil {
 			disconnectErr = fmt.Errorf(
 				"ib: disconnect market data client: %w", disconnectErr,
 			)
@@ -661,7 +503,7 @@ func (c *ibConnector) stream(
 		}
 	}()
 	if err := c.connect(ctx, client); err != nil {
-		return wrapper.delivered.Load(), ibConnectError(c.cfg, err)
+		return wrapper.delivered.Load(), ib.ConnectError(c.cfg.Host, c.cfg.Port, err)
 	}
 
 	if err := wrapper.waitReady(ctx, c.readyTimeout); err != nil {
@@ -690,36 +532,7 @@ func (c *ibConnector) connect(ctx context.Context, client ibClient) error {
 func (c *ibConnector) connectClient(
 	ctx context.Context, client ibClient, clientID int64,
 ) error {
-	if c.connectTimeout <= 0 {
-		return client.Connect(c.cfg.Host, c.cfg.Port, clientID)
-	}
-
-	connectCtx, cancel := context.WithTimeout(ctx, c.connectTimeout)
-	defer cancel()
-
-	result := make(chan error, 1)
-	go func() {
-		result <- client.Connect(c.cfg.Host, c.cfg.Port, clientID)
-	}()
-
-	select {
-	case err := <-result:
-		return err
-	case <-connectCtx.Done():
-		disconnectErr := disconnectIBClient(client)
-		select {
-		//nolint:staticcheck // S1005: drain; return cancellation below.
-		case _ = <-result:
-		case <-time.After(defaultIBConnectDrainTimeout):
-		}
-		if disconnectErr != nil {
-			return errors.Join(
-				connectCtx.Err(),
-				fmt.Errorf("ib: disconnect timed-out client: %w", disconnectErr),
-			)
-		}
-		return connectCtx.Err()
-	}
+	return ib.Connect(ctx, client, c.cfg.Host, c.cfg.Port, clientID, c.connectTimeout)
 }
 
 // Close stops the subscription stream and waits for cleanup to finish.
@@ -756,7 +569,7 @@ func newIBWrapper(
 		quotes:       quotes,
 		subs:         subMap,
 		noData:       make(map[string]struct{}),
-		ready:        make(chan struct{}),
+		readiness:    ib.NewReadiness(),
 		lost:         make(chan error, 1),
 		ctx:          ctx,
 		out:          out,
@@ -764,20 +577,11 @@ func newIBWrapper(
 }
 
 func (w *ibWrapper) waitReady(ctx context.Context, timeout time.Duration) error {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-w.ready:
-		return nil
-	case <-timer.C:
-		return errors.New("ib: timed out waiting for TWS/Gateway API readiness")
-	}
+	return w.readiness.Wait(ctx, timeout)
 }
 
 func (w *ibWrapper) NextValidID(int64) {
-	w.readyOnce.Do(func() { close(w.ready) })
+	w.readiness.Confirm()
 }
 
 func (w *ibWrapper) ConnectAck() {}
@@ -793,7 +597,7 @@ func (w *ibWrapper) Error(
 	if detail == "" {
 		detail = fmt.Sprintf("IB API error %d", code)
 	}
-	if ibFatalError(code) {
+	if ib.FatalError(code) {
 		w.signalLost(fmt.Errorf("ib: %s", detail))
 		return
 	}
@@ -808,13 +612,13 @@ func (w *ibWrapper) Error(
 		Actions:     []health.DiagnosticAction{{Type: health.ActionRestart}, {Type: health.ActionOpenDocs}},
 	}
 	switch {
-	case ibInformationalError(code):
+	case ib.InformationalError(code):
 		diag.Level = health.DiagInfo
 		diag.Routine = true
 		diag.Title = "IB connection status"
 		diag.Remediation = ""
 		diag.Actions = nil
-	case ibRecoverableConnectionError(code):
+	case ib.RecoverableConnectionError(code):
 		diag.Level = health.DiagWarn
 		diag.Title = "IB connection interrupted"
 		diag.Remediation = "Wait for TWS/Gateway connectivity to recover, or Restart feeds if the status does not clear."
@@ -1069,20 +873,17 @@ type ibSearchResult struct {
 }
 
 // ibSearchWrapper is the minimal EWrapper backing the stateless symbol resolve:
-// it closes ready on NextValidID, accumulates ContractDetails under mu and
-// flushes the slice per request on ContractDetailsEnd, maps IB code 200 ("no
+// it confirms ib.Readiness on NextValidID, collects contract details with
+// ib.ContractDetailsCollector until ContractDetailsEnd, maps IB code 200 ("no
 // security definition") to an empty result for that request, and routes a fatal/
 // duplicate-clientId/server-too-old error onto errs. It never subscribes or
 // emits quotes.
 type ibSearchWrapper struct {
 	ibapi.Wrapper
 
-	mu        sync.Mutex
-	acc       map[int64][]fwmarketdata.SymbolMatch
-	done      map[int64]struct{}
-	readyOnce sync.Once
+	collector ib.ContractDetailsCollector
+	readiness *ib.Readiness
 	errOnce   sync.Once
-	ready     chan struct{}
 	results   chan ibSearchResult
 	errs      chan error
 }
@@ -1091,29 +892,18 @@ func newIBSearchWrapper(
 	results chan ibSearchResult, errs chan error,
 ) *ibSearchWrapper {
 	return &ibSearchWrapper{
-		acc:     make(map[int64][]fwmarketdata.SymbolMatch),
-		done:    make(map[int64]struct{}),
-		ready:   make(chan struct{}),
-		results: results,
-		errs:    errs,
+		readiness: ib.NewReadiness(),
+		results:   results,
+		errs:      errs,
 	}
 }
 
 func (w *ibSearchWrapper) waitReady(ctx context.Context, timeout time.Duration) error {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-w.ready:
-		return nil
-	case <-timer.C:
-		return errors.New("ib: timed out waiting for TWS/Gateway API readiness")
-	}
+	return w.readiness.Wait(ctx, timeout)
 }
 
 func (w *ibSearchWrapper) NextValidID(int64) {
-	w.readyOnce.Do(func() { close(w.ready) })
+	w.readiness.Confirm()
 }
 
 func (w *ibSearchWrapper) ConnectAck() {}
@@ -1140,9 +930,7 @@ func (w *ibSearchWrapper) waitResult(
 }
 
 func (w *ibSearchWrapper) ContractDetails(reqID int64, cd *ibapi.ContractDetails) {
-	w.mu.Lock()
-	w.acc[reqID] = append(w.acc[reqID], symbolMatchFromDetails(cd))
-	w.mu.Unlock()
+	w.collector.Add(reqID, cd)
 }
 
 func (w *ibSearchWrapper) ContractDetailsEnd(reqID int64) {
@@ -1150,17 +938,15 @@ func (w *ibSearchWrapper) ContractDetailsEnd(reqID int64) {
 }
 
 func (w *ibSearchWrapper) finish(reqID int64, matches []fwmarketdata.SymbolMatch) {
-	w.mu.Lock()
-	if _, ok := w.done[reqID]; ok {
-		w.mu.Unlock()
+	details, first := w.collector.Finish(reqID)
+	if !first {
 		return
 	}
-	w.done[reqID] = struct{}{}
 	if matches == nil {
-		matches = w.acc[reqID]
+		for _, detail := range details {
+			matches = append(matches, symbolMatchFromDetails(detail))
+		}
 	}
-	delete(w.acc, reqID)
-	w.mu.Unlock()
 	select {
 	case w.results <- ibSearchResult{reqID: reqID, matches: matches}:
 	default:
@@ -1176,7 +962,7 @@ func (w *ibSearchWrapper) Error(
 		w.finish(int64(reqID), nil)
 		return
 	}
-	if !ibFatalError(code) && code != 326 && code != 503 {
+	if !ib.FatalError(code) && code != 326 && code != 503 {
 		return
 	}
 	detail := strings.TrimSpace(message)
@@ -1293,13 +1079,7 @@ func parseIBConfig(instanceID, raw string) (ibConfig, error) {
 }
 
 func defaultIBClientID(instanceID string) int64 {
-	trimmed := strings.TrimSpace(instanceID)
-	if trimmed == "" {
-		return defaultIBFallbackClientID
-	}
-	hash := fnv.New32a()
-	_, _ = hash.Write([]byte(trimmed))
-	return defaultIBFallbackClientID + 1 + int64(hash.Sum32()%899999)
+	return ib.ClientID(instanceID)
 }
 
 func parseIBMarketDataType(raw any) (int64, error) {
@@ -1474,33 +1254,6 @@ func ibTickField(tickType ibapi.TickType) (string, bool) {
 	}
 }
 
-func ibFatalError(code int64) bool {
-	switch code {
-	case 502, 504, 1300:
-		return true
-	default:
-		return false
-	}
-}
-
-func ibInformationalError(code int64) bool {
-	switch code {
-	case 1102, 2104, 2106, 2107, 2108, 2158:
-		return true
-	default:
-		return false
-	}
-}
-
-func ibRecoverableConnectionError(code int64) bool {
-	switch code {
-	case 1100, 1101, 2103, 2105, 2110:
-		return true
-	default:
-		return false
-	}
-}
-
 func ibMarketDataUnavailableError(code int64) bool {
 	switch code {
 	case 354, 10167, 10168:
@@ -1523,11 +1276,4 @@ func ibMarketDataTypeName(typ int64) string {
 	default:
 		return ""
 	}
-}
-
-func ibConnectError(cfg ibConfig, err error) error {
-	return fmt.Errorf(
-		"ib: connect to TWS/Gateway at %s:%d failed: %w; ensure the API socket is enabled, trusted for localhost, and listening on the configured paper/live port",
-		cfg.Host, cfg.Port, err,
-	)
 }

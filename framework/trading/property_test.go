@@ -31,6 +31,10 @@ import (
 // Random streams omit and reorder fills; Lookup always returns venue truth.
 func TestRandomizedFillConvergence(t *testing.T) {
 	f := newFixture(t)
+	for _, asset := range []string{"ETH", "USDT", "BNB"} {
+		_, err := f.n.CreateAsset(testCtx, domain.Asset{Code: asset}, testCaller)
+		must(t, err)
+	}
 	f.start()
 	for seed := int64(0); seed < 30; seed++ {
 		t.Run(fmt.Sprintf("seed-%d", seed), func(t *testing.T) {
@@ -44,6 +48,20 @@ func TestRandomizedFillConvergence(t *testing.T) {
 				cumulative = cumulative.Add(qty)
 				fills[i] = makeFill(qty.String(), cumulative.String(), "0", false)
 				fills[i].Price = decimal.NewFromInt(int64(100 + rng.Intn(100))).Shift(-2).String()
+				commission := &domain.Commission{
+					Amount: decimal.NewFromInt(int64(1 + rng.Intn(1000))).Shift(-6).String(),
+				}
+				switch rng.Intn(4) {
+				case 0:
+					fills[i].CommissionLeg, commission.Currency = trading.CommissionLegBase, "ETH"
+				case 1:
+					fills[i].CommissionLeg, commission.Currency = trading.CommissionLegQuote, "USDT"
+				case 2:
+					commission.Currency = "BNB"
+				case 3:
+					commission = nil
+				}
+				fills[i].Commission = commission
 			}
 			requested := cumulative
 			if cancelled {
@@ -101,7 +119,26 @@ func TestRandomizedFillConvergence(t *testing.T) {
 				t.Fatalf("venue=%s Officer=%s", status, detail.Order.Status)
 			}
 			assertTrades(t, detail, fills)
-			for _, fill := range fills {
+			for i, fill := range fills {
+				wantCurrency := "BNB"
+				switch fill.CommissionLeg {
+				case trading.CommissionLegBase:
+					wantCurrency = order.BaseAsset
+				case trading.CommissionLegQuote:
+					wantCurrency = order.QuoteAsset
+				}
+				commission := detail.Trades[i].Commission
+				if fill.Commission == nil {
+					if commission != nil {
+						t.Fatalf("fill %d commission = %+v, want nil", i, commission)
+					}
+				} else {
+					if commission == nil || commission.Currency != wantCurrency {
+						t.Fatalf("fill %d commission = %+v, want asset %s",
+							i, commission, wantCurrency)
+					}
+					assertDecimal(t, commission.Amount, fill.Commission.Amount)
+				}
 				cum, err := decimal.NewFromString(fill.CumQuantity)
 				must(t, err)
 				id := domain.ExternalID("trading:" + link.ClientOrderID + ":fill:" + cum.String())
@@ -115,6 +152,19 @@ func TestRandomizedFillConvergence(t *testing.T) {
 					if event.Payload.ExecutionReport != nil &&
 						event.Payload.ExecutionReport.ExternalID == id {
 						reports++
+						commission := event.Payload.ExecutionReport.Commission
+						if fill.Commission == nil {
+							if commission != nil {
+								t.Fatalf("fill report %s commission = %+v, want nil",
+									id, commission)
+							}
+						} else {
+							if commission == nil || commission.Currency != wantCurrency {
+								t.Fatalf("fill report %s commission = %+v, want asset %s",
+									id, commission, wantCurrency)
+							}
+							assertDecimal(t, commission.Amount, fill.Commission.Amount)
+						}
 					}
 				}
 				if reports != 1 {

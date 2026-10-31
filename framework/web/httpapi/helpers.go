@@ -656,6 +656,7 @@ type TradingConnectionDTO struct {
 	Error         string                 `json:"error,omitempty"`
 	Diagnostics   []DiagnosticDTO        `json:"diagnostics"`
 	Secrets       map[string]bool        `json:"secrets"`
+	Settings      map[string]any         `json:"settings,omitempty"`
 	Instruments   []TradingInstrumentDTO `json:"instruments"`
 	Access        []TradingAccessDTO     `json:"access"`
 }
@@ -707,6 +708,7 @@ func ToTradingConnectionDTO(c backend.TradingConnectionStatus) TradingConnection
 		FeeAccount: c.FeeAccount.String(), State: c.State, Error: c.Error,
 		Diagnostics: ToDiagnosticDTOs(c.Diagnostics),
 		Secrets:     make(map[string]bool, len(c.Secrets)),
+		Settings:    c.Settings,
 		Instruments: make([]TradingInstrumentDTO, 0, len(c.Instruments)),
 		Access:      make([]TradingAccessDTO, 0, len(c.Access)),
 	}

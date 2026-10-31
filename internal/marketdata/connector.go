@@ -34,9 +34,8 @@ import (
 
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/symbolsearch"
 )
-
-const symbolSearchLimit = 50
 
 func verifySymbolFromSet[V any](
 	known map[string]V, external string,
@@ -55,11 +54,6 @@ func verifySymbolFromSet[V any](
 		}
 	}
 	return fwmarketdata.SymbolVerification{}
-}
-
-type setSymbolMatch struct {
-	symbol string
-	score  int
 }
 
 type symbolSuggestionCandidate struct {
@@ -127,36 +121,11 @@ func sharedSymbolPrefixLength(left, right string) int {
 func searchSymbolsFromSet[V any](
 	known map[string]V, query fwmarketdata.SymbolSearchQuery, secType string,
 ) []fwmarketdata.SymbolMatch {
-	q := strings.TrimSpace(query.Query)
-	if q == "" {
-		return []fwmarketdata.SymbolMatch{}
-	}
-	normQuery := normalizedSymbolSearchKey(q)
-	if normQuery == "" {
-		return []fwmarketdata.SymbolMatch{}
-	}
-	base, quote, hasPair := splitSymbolPair(q)
-	scored := make([]setSymbolMatch, 0)
-	for symbol := range known {
-		score := symbolSearchScore(symbol, q, normQuery, base, quote, hasPair)
-		if score == 0 {
-			continue
-		}
-		scored = append(scored, setSymbolMatch{symbol: symbol, score: score})
-	}
-	sort.Slice(scored, func(i, j int) bool {
-		if scored[i].score == scored[j].score {
-			return scored[i].symbol < scored[j].symbol
-		}
-		return scored[i].score > scored[j].score
-	})
-	if len(scored) > symbolSearchLimit {
-		scored = scored[:symbolSearchLimit]
-	}
-	matches := make([]fwmarketdata.SymbolMatch, 0, len(scored))
-	for _, item := range scored {
+	symbols := symbolsearch.Rank(known, query.Query)
+	matches := make([]fwmarketdata.SymbolMatch, 0, len(symbols))
+	for _, symbol := range symbols {
 		matches = append(matches, fwmarketdata.SymbolMatch{
-			Symbol:  item.symbol,
+			Symbol:  symbol,
 			SecType: secType,
 		})
 	}
@@ -194,74 +163,12 @@ func withSymbolAssets(
 	return matches
 }
 
-func symbolSearchScore(
-	symbol, query, normQuery, base, quote string, hasPair bool,
-) int {
-	trimmed := strings.TrimSpace(symbol)
-	if trimmed == "" {
-		return 0
-	}
-	if trimmed == query {
-		return 1000
-	}
-	if strings.EqualFold(trimmed, query) {
-		return 950
-	}
-	normSymbol := normalizedSymbolSearchKey(trimmed)
-	if normSymbol == "" {
-		return 0
-	}
-	if hasPair && normSymbol == base+quote {
-		return 900
-	}
-	if normSymbol == normQuery {
-		return 850
-	}
-	if strings.HasPrefix(normSymbol, normQuery) {
-		return 650
-	}
-	if strings.Contains(normSymbol, normQuery) {
-		return 400
-	}
-	upperQuery := strings.ToUpper(query)
-	upperSymbol := strings.ToUpper(trimmed)
-	if strings.Contains(upperSymbol, upperQuery) {
-		return 350
-	}
-	return 0
-}
-
 func normalizedSymbolSearchKey(value string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(strings.TrimSpace(value)) {
-		switch r {
-		case '/', '\\', '_', '-', ' ', '\t', '\n', '\r':
-			continue
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return symbolsearch.NormalizedKey(value)
 }
 
 func splitSymbolPair(value string) (base, quote string, ok bool) {
-	parts := strings.FieldsFunc(value, func(r rune) bool {
-		switch r {
-		case '/', '\\', '_', '-', ' ', '\t', '\n', '\r':
-			return true
-		default:
-			return false
-		}
-	})
-	if len(parts) != 2 {
-		return "", "", false
-	}
-	base = normalizedSymbolSearchKey(parts[0])
-	quote = normalizedSymbolSearchKey(parts[1])
-	if base == "" || quote == "" {
-		return "", "", false
-	}
-	return base, quote, true
+	return symbolsearch.SplitPair(value)
 }
 
 func providerUnknownSymbolDiag(provider, external string) health.Diagnostic {

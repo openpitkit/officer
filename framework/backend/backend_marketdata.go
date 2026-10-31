@@ -901,6 +901,70 @@ func decodeCredentialsJSON(raw string, out *map[string]any) error {
 	return nil
 }
 
+// MarketDataSettings reports non-secret settings safe to display in edit
+// forms: IB host, port, clientId, marketDataType and contracts, Bybit category,
+// and OANDA accountID and environment. It is nil for any other provider and
+// when the stored credentials are not a JSON object or hold no such settings.
+func MarketDataSettings(instance domain.MarketDataInstance) map[string]any {
+	credentials := credentialsObject(instance.Credentials)
+	if len(credentials) == 0 {
+		return nil
+	}
+	settings := make(map[string]any)
+	switch instance.Provider {
+	case domain.MarketDataProviderIB:
+		copyStringSetting(settings, credentials, "host")
+		copyNumberSetting(settings, credentials, "port")
+		copyNumberSetting(settings, credentials, "clientId")
+		copyStringSetting(settings, credentials, "marketDataType")
+		copyObjectSetting(settings, credentials, "contracts")
+	case domain.MarketDataProviderBybit:
+		copyStringSetting(settings, credentials, "category")
+	case domain.MarketDataProviderOANDA:
+		copyStringSetting(settings, credentials, "accountID")
+		copyStringSetting(settings, credentials, "environment")
+	}
+	if len(settings) == 0 {
+		return nil
+	}
+	return settings
+}
+
+func credentialsObject(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var credentials map[string]any
+	if err := json.Unmarshal([]byte(raw), &credentials); err != nil {
+		return nil
+	}
+	return credentials
+}
+
+func copyStringSetting(dst, src map[string]any, key string) {
+	value, ok := src[key].(string)
+	if ok && strings.TrimSpace(value) != "" {
+		dst[key] = value
+	}
+}
+
+func copyNumberSetting(dst, src map[string]any, key string) {
+	value, ok := src[key].(float64)
+	if ok {
+		dst[key] = value
+	}
+}
+
+// copyObjectSetting copies a non-empty nested object/map value verbatim. It is
+// used for non-secret structured settings (the IB contract overrides), which
+// carry no credentials.
+func copyObjectSetting(dst, src map[string]any, key string) {
+	if v, ok := src[key].(map[string]any); ok && len(v) > 0 {
+		dst[key] = v
+	}
+}
+
 // MarketDataSecrets reports which secret credentials a market-data source
 // stores, by name and never by value: the Alpaca apiKey and apiSecret, and the
 // OANDA and Finnhub token. It is nil for any other provider, whose credentials

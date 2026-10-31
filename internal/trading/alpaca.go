@@ -19,7 +19,6 @@ package trading
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -50,10 +49,7 @@ type alpacaConnector struct {
 	credentials alpaca.Credentials
 	streamURL   string
 	externalID  domain.ExternalID
-	mu          sync.Mutex
-	closed      bool
-	cancel      context.CancelFunc
-	done        chan struct{}
+	lifecycle   streamLifecycle
 	feeMu       sync.Mutex
 	feeSymbols  map[string]string
 	// reportStatus and reportDiag are the owner's reporters, set before
@@ -111,28 +107,6 @@ func newAlpacaConnector(connection domain.TradingConnection, restURL, streamURL 
 	}, nil
 }
 
-func parseAlpacaRoute(raw string) (string, error) {
-	var route map[string]string
-	if err := json.Unmarshal([]byte(raw), &route); err != nil {
-		return "", fmt.Errorf("%w: invalid Alpaca route JSON", fwtrading.ErrRejected)
-	}
-	for field := range route {
-		if field != "timeInForce" {
-			return "", fmt.Errorf("%w: unknown Alpaca route field", fwtrading.ErrRejected)
-		}
-	}
-	tif := route["timeInForce"]
-	if tif == "" {
-		return "", fmt.Errorf("%w: timeInForce is required", fwtrading.ErrRejected)
-	}
-	switch tif {
-	case "day", "gtc", "opg", "cls", "ioc", "fok":
-		return tif, nil
-	default:
-		return "", fmt.Errorf("%w: unsupported timeInForce", fwtrading.ErrRejected)
-	}
-}
-
 func positiveDecimal(raw, field string) (decimal.Decimal, error) {
 	if len(raw) > alpacaDecimalMaxLength {
 		return decimal.Decimal{}, fmt.Errorf("%w: %s decimal exceeds %d characters",
@@ -174,7 +148,7 @@ func parseAlpacaDecimal(raw, field string, positive bool) (decimal.Decimal, erro
 }
 
 func (c *alpacaConnector) PreCheck(ctx context.Context, order fwtrading.Order) error {
-	tif, err := parseAlpacaRoute(order.Route)
+	tif, err := parseTimeInForceRoute(order.Route, "Alpaca", "day", "gtc", "opg", "cls", "ioc", "fok")
 	if err != nil {
 		return err
 	}
@@ -263,7 +237,7 @@ type alpacaOrder struct {
 }
 
 func (c *alpacaConnector) Send(ctx context.Context, order fwtrading.Order) (fwtrading.Ack, error) {
-	tif, err := parseAlpacaRoute(order.Route)
+	tif, err := parseTimeInForceRoute(order.Route, "Alpaca", "day", "gtc", "opg", "cls", "ioc", "fok")
 	if err != nil {
 		return fwtrading.Ack{}, err
 	}
@@ -329,21 +303,6 @@ type alpacaActivity struct {
 	At             time.Time `json:"transaction_time"`
 }
 
-// alpacaLookupUnparsable builds the unparsable_data diagnostic of an order
-// lookup site that read a value Officer does not know. The detail is fixed per
-// site and never embeds the value.
-func alpacaLookupUnparsable(detail string) health.Diagnostic {
-	return health.Diagnostic{
-		Level: health.DiagError, Code: health.CodeUnparsableData,
-		Kind: health.DiagKindProvider, Title: "Unknown order data from the venue",
-		Detail: detail,
-		Remediation: "Officer keeps the order pending and retries the " +
-			"lookup; the order is not reconciled until the venue reports " +
-			"data Officer knows. This is a venue or Officer issue, not your " +
-			"configuration - please report it.",
-	}
-}
-
 // Lookup requires the diagnostic reporter, as Subscribe does: it reports an
 // order status or a fill type Officer does not know through it and fails the
 // lookup with an upstream error instead of mapping that value.
@@ -372,7 +331,7 @@ func (c *alpacaConnector) Lookup(ctx context.Context, ref fwtrading.OrderRef) (f
 	}
 	status, known := alpacaVenueStatus(order.Status)
 	if !known {
-		c.reportDiag(alpacaLookupUnparsable("An order lookup returned an order status Officer does not know."))
+		c.reportDiag(venueLookupUnparsable("An order lookup returned an order status Officer does not know."))
 		return fwtrading.Snapshot{}, false, fmt.Errorf("alpaca: unknown venue order status %q: %w",
 			c.redact.Replace(order.Status), domain.ErrUpstream)
 	}
@@ -391,7 +350,7 @@ func (c *alpacaConnector) Lookup(ctx context.Context, ref fwtrading.OrderRef) (f
 				final = true
 			case "partial_fill":
 			default:
-				c.reportDiag(alpacaLookupUnparsable("An order lookup returned a fill of a type Officer does not know."))
+				c.reportDiag(venueLookupUnparsable("An order lookup returned a fill of a type Officer does not know."))
 				return fwtrading.Snapshot{}, false, fmt.Errorf("alpaca: unknown venue fill type %q: %w",
 					c.redact.Replace(activity.Type), domain.ErrUpstream)
 			}

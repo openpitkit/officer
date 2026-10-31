@@ -21,7 +21,7 @@ import type { AccessGrantBlock } from "./accessGrantBlock";
 import { WarnHint } from "./WarnHint";
 
 /** Reason a grant is refused, plus exactly one way to fix it: a button when
- *  the caller can reach the fee account field itself, a router link when it
+ *  the caller can reach the field named by the reason, a router link when it
  *  can only point to the page that has it. `feeAccountHref` is an in-app
  *  router path (e.g. "/trading-connections"), followed client-side, so the
  *  link variant needs a router above it. */
@@ -34,19 +34,24 @@ export type AccessBlockedHintProps = {
   | { feeAccountHref: string; onSetFeeAccount?: never }
 );
 
-/** States why a grant is blocked and offers the "Set fee account" action. */
+/** States why a grant is blocked and offers an action to reach its field. */
 export function AccessBlockedHint(props: AccessBlockedHintProps) {
   const { t } = useTranslation("venues");
   const reason = t(`accessBlocked.${props.reason}`, {
     provider: props.providerTitle,
   });
+  const action = t(
+    props.reason === "needsVenueAccount"
+      ? "actions.setVenueAccount"
+      : "actions.setFeeAccount",
+  );
   return props.feeAccountHref !== undefined ? (
     <WarnHint reason={reason} to={props.feeAccountHref}>
-      {t("actions.setFeeAccount")}
+      {action}
     </WarnHint>
   ) : (
     <WarnHint reason={reason} onClick={props.onSetFeeAccount}>
-      {t("actions.setFeeAccount")}
+      {action}
     </WarnHint>
   );
 }

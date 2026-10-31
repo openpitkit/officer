@@ -46,6 +46,8 @@ var ErrAdjustmentRejected = errors.New("trading: adjustment rejected")
 type Order struct {
 	ClientOrderID string // Runtime-generated; unique per connection.
 	Symbol        string // Venue symbol from the instrument mapping.
+	BaseAsset     string // Officer base asset of the instrument mapping.
+	QuoteAsset    string // Officer quote asset of the instrument mapping.
 	Side          domain.OrderSide
 	AmountKind    domain.OrderAmountKind
 	Quantity      string // Exact decimal Officer order amount.
@@ -58,7 +60,26 @@ type Order struct {
 type Ack struct{ VenueOrderID string }
 
 // OrderRef identifies an order even before its venue id is known.
-type OrderRef struct{ ClientOrderID, VenueOrderID string }
+type OrderRef struct {
+	ClientOrderID string
+	VenueOrderID  string
+	// Symbol is the venue symbol of the order's instrument mapping on this
+	// connection at lookup time; empty when its base/quote has no mapping.
+	// If Lookup needs a symbol, it must return an error for an empty Symbol,
+	// never found=false: reconciliation would mark the Officer order cancelled
+	// and release its reservation while the venue order may still be live.
+	Symbol string
+	// Side is the side of Officer's order on Lookup; empty in stream events.
+	Side domain.OrderSide
+}
+
+// CommissionLeg identifies the order's venue leg used to pay a commission.
+type CommissionLeg string
+
+const (
+	CommissionLegBase  CommissionLeg = "base"
+	CommissionLegQuote CommissionLeg = "quote"
+)
 
 // Fill is one execution, preserving venue quantities and commission currency.
 type Fill struct {
@@ -69,6 +90,13 @@ type Fill struct {
 	Final          bool   // The venue reports fully filled with this execution.
 	Commission     *domain.Commission
 	At             time.Time
+
+	// CommissionLeg is set when commission is paid in the order's venue base
+	// or quote asset; empty means Commission.Currency is the asset to book.
+	// When set, Commission.Currency must be the venue's non-empty asset code
+	// as reported; the runtime books it in the order's Officer base or quote
+	// asset instead.
+	CommissionLeg CommissionLeg
 }
 
 // VenueStatus is the venue's current lifecycle state.

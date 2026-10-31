@@ -132,6 +132,91 @@ func TestUpsertMarketDataInstrumentCreatesAssets(t *testing.T) {
 	}
 }
 
+// TestUpsertInstrumentUnknownTargetCreatesNoAsset refuses a market-data or
+// trading instrument naming an unknown instance or connection before any of
+// its missing assets is created.
+func TestUpsertInstrumentUnknownTargetCreatesNoAsset(t *testing.T) {
+	t.Parallel()
+	n, realm := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	unknown, err := domain.NewExternalID()
+	if err != nil {
+		t.Fatalf("NewExternalID: %v", err)
+	}
+
+	err = n.UpsertMarketDataInstrument(ctx, domain.MarketDataInstrument{
+		Instance: unknown, ExternalSymbol: "BTCUSDT",
+		BaseAsset: "BTC", QuoteAsset: "USDT", Enabled: true,
+	}, testCaller)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("UpsertMarketDataInstrument(unknown instance) = %v, want ErrNotFound", err)
+	}
+	err = n.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+		Connection: unknown, ExternalSymbol: "ETHUSDT",
+		BaseAsset: "ETH", QuoteAsset: "USDT", Enabled: true,
+	}, testCaller)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("UpsertTradingInstrument(unknown connection) = %v, want ErrNotFound", err)
+	}
+	for _, code := range []string{"BTC", "ETH", "USDT"} {
+		if _, ok, err := realm.GetAsset(ctx, code); err != nil || ok {
+			t.Fatalf("GetAsset(%s) = ok %v, err %v; want not created", code, ok, err)
+		}
+	}
+}
+
+// TestUpsertTradingInstrumentCreatesAssets creates a trading mapping's missing
+// base and quote assets and audits each, as a market-data instrument upsert
+// does, then stores the mapping.
+func TestUpsertTradingInstrumentCreatesAssets(t *testing.T) {
+	t.Parallel()
+	n, realm, connection := newTradingFeeAccountNode(t)
+	ctx := context.Background()
+
+	instrument := domain.TradingInstrument{
+		Connection: connection.ExternalID, ExternalSymbol: "BTCUSDT",
+		BaseAsset: "BTC", QuoteAsset: "USDT", Enabled: true,
+	}
+	if err := n.UpsertTradingInstrument(ctx, instrument, testCaller); err != nil {
+		t.Fatalf("UpsertTradingInstrument: %v", err)
+	}
+	for _, code := range []string{"BTC", "USDT"} {
+		asset, ok, err := realm.GetAsset(ctx, code)
+		if err != nil || !ok {
+			t.Fatalf("GetAsset(%s) = ok %v, err %v; want created", code, ok, err)
+		}
+		if asset.AssetClass != autoCreatedAssetClassCode {
+			t.Fatalf("asset %s class = %q", code, asset.AssetClass)
+		}
+	}
+	stored, err := realm.ListTradingInstruments(ctx, connection.ExternalID)
+	if err != nil {
+		t.Fatalf("ListTradingInstruments: %v", err)
+	}
+	if len(stored) != 1 || stored[0].ExternalSymbol != "BTCUSDT" {
+		t.Fatalf("stored instruments = %+v, want BTCUSDT", stored)
+	}
+	rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionCreateAsset},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered(create asset): %v", err)
+	}
+	for _, code := range []string{"BTC", "USDT"} {
+		found := false
+		for _, row := range rows {
+			if row.Asset == code && strings.Contains(
+				row.Detail.Text, "by trading instrument upsert",
+			) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("create-asset audit rows = %+v, want %s", rows, code)
+		}
+	}
+}
+
 func TestSnapshotAdjustmentRequestReplaysAuthoritativePnlState(t *testing.T) {
 	t.Parallel()
 	numeric := snapshotAdjustmentRequest(domain.Balance{

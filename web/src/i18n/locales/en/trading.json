@@ -20,18 +20,35 @@
     "stopped": "Stopped"
   },
   "connection": {
+    "ibEndpoint": "{{host}}:{{port}}",
+    "ibClientId": "Client ID: {{clientId}}",
     "enabled": "Enabled",
     "disabled": "Disabled",
     "apiKeyStored": "API key: stored",
     "apiKeyNotSet": "API key: not set",
     "apiSecretStored": "API secret: stored",
-    "apiSecretNotSet": "API secret: not set"
+    "apiSecretNotSet": "API secret: not set",
+    "etoro": {
+      "apiKeyStored": "Public API key: stored",
+      "apiKeyNotSet": "Public API key: not set",
+      "userKeyStored": "User key: stored",
+      "userKeyNotSet": "User key: not set"
+    }
   },
   "actions": {
     "addConnection": "Add trading connection",
     "check": "Check connection"
   },
   "create": {
+    "ib": {
+      "install": "Install IB Gateway (or TWS) and log in with your paper trading username.",
+      "download": "Download IB Gateway",
+      "enableApi": "In {{settingsPath}}, enable socket clients (TWS: \"{{socketClients}}\"), clear \"{{readOnlyApi}}\" so orders are accepted, and note the socket port (IB Gateway paper: 4002; TWS paper: 7497). Allow 127.0.0.1 in {{trustedIPs}}, or accept the connection prompt.",
+      "documentation": "TWS API documentation",
+      "keepRunning": "Keep IB Gateway running and logged in. Enter its host and port below; the client ID is optional.",
+      "grantAccess": "After creating the connection, grant access with your IB account ID (starts with {{paperAccountPrefix}} for paper trading) as the venue account. Orders reach IB only through a grant bound to that account.",
+      "setVenueAccount": "After creating the connection, enter your IB account ID (starts with {{paperAccountPrefix}} for paper trading) as its venue account. Orders reach IB only through that account."
+    },
     "title": "Add {{provider}} connection",
     "chooseVenue": "Choose venue",
     "prepareAccount": "Prepare your {{provider}} account",
@@ -46,6 +63,21 @@
       "aboutPaperTrading": "About paper trading",
       "generateKeys": "Generate paper API keys: with Paper Trading selected, find the API Keys panel on the dashboard and click Generate New Key. Copy the API key and the secret - Alpaca shows the secret only once. Paper keys work only for the paper account.",
       "keepDashboardOpen": "Keep the dashboard open - the fields below ask for both values."
+    },
+    "binance": {
+      "openTestnet": "Open the Binance Spot Testnet and log in with a GitHub account.",
+      "openSpotTestnet": "Open Spot Testnet",
+      "generateKeys": "Generate an HMAC-SHA256 API key there and copy the API key and the secret key. Paper connections use the Spot Testnet; testnet keys work only there.",
+      "keepPageOpen": "Keep the page open - the fields below ask for both values."
+    },
+    "etoro": {
+      "logInAccount": "Log in to your eToro account.",
+      "logIn": "Log in at eToro",
+      "createUserKey": "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Demo environment - each key works for one environment only, and Officer connects the demo account in paper mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone.",
+      "copyUserKey": "Copy the new key from the Generated Keys list into the User key field.",
+      "publicApiKey": "The Public API key identifies the application. eToro's Authentication guide explains how it is issued.",
+      "authenticationGuide": "eToro authentication guide",
+      "keepDialogOpen": "Keep this dialog open - the fields below ask for both values."
     }
   },
   "setup": {
@@ -58,13 +90,16 @@
     "result": "Venue account {{id}} · status {{status}}"
   },
   "settings": {
-    "description": "Leave fields blank to keep the stored values."
+    "description": "Leave fields blank to keep the stored values.",
+    "unknownProviderCredentials": "This panel does not know the credential fields of this provider.",
+    "etoro": {
+      "apiKey": "Public API key",
+      "userKey": "User key"
+    }
   },
   "instruments": {
     "title": "Instruments",
     "deleteDescription": "{{symbol}} will be removed from {{label}}.",
-    "assetMissing": "Asset {{asset}} does not exist in Officer. Officer does not create assets implicitly; create it to save the instrument.",
-    "createAssetAndSave": "Create asset {{asset}} and save",
     "connectionDisabled": "Connection disabled"
   },
   "search": {
@@ -80,7 +115,8 @@
   "access": {
     "title": "Account access",
     "grantTo": "Grant to",
-    "inherited": "Inherited from the account's group. Group access is managed in multi-account mode."
+    "inherited": "Inherited from the account's group. Group access is managed in multi-account mode.",
+    "missing": "The account has no access to this connection, so orders through it are refused. Disable and enable the connection to restore access."
   },
   "fee": {
     "title": "Fee account",

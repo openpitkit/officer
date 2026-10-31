@@ -21,14 +21,18 @@ import type {
   TradingProvider,
 } from "@/api/types";
 
-/** Why a grant would be refused. Each value is also the key of its sentence
+/** Why a grant is blocked in the panel. Each value is also its sentence key
  *  under `accessBlocked` in the `venues` namespace. */
 export type AccessGrantBlock =
+  | "needsVenueAccount"
   | "groupNeedsFeeAccount"
   | "secondAccountNeedsFeeAccount";
 
 /** Reports why granting `subject` access to `connection` would be refused for
- *  a missing fee account, or null when nothing blocks the grant.
+ *  a missing venue or fee account, or null when nothing blocks the grant.
+ *
+ *  The venue-account reason mirrors the runtime send rule: PutTradingAccess
+ *  accepts an unbound grant, but it cannot carry an order for such a provider.
  *
  *  Mirrors the server rule (PutTradingAccess): only a provider with unlinked
  *  fees needs a fee account, and only while the connection has none. Then a
@@ -39,10 +43,13 @@ export type AccessGrantBlock =
  *  An account subject carries a non-empty code; a group subject's code is not
  *  read, so a caller may ask before the group is named. */
 export function accessGrantBlock(
-  provider: Pick<TradingProvider, "unlinkedFees">,
+  provider: Pick<TradingProvider, "unlinkedFees" | "venueAccounts">,
   connection: Pick<TradingConnection, "feeAccount" | "access">,
-  subject: TradingAccessSubject,
+  subject: TradingAccessSubject & { venueAccount?: string },
 ): AccessGrantBlock | null {
+  if (provider.venueAccounts && !subject.venueAccount?.trim()) {
+    return "needsVenueAccount";
+  }
   if (!provider.unlinkedFees || connection.feeAccount !== "") {
     return null;
   }

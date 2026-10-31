@@ -198,6 +198,47 @@ const VENUE_MODE_PREFERENCE = "pit-officer-orders-venue-mode";
 
 const ALPACA_TIME_IN_FORCE = ["day", "gtc", "opg", "cls", "ioc", "fok"];
 
+const IB_TIME_IN_FORCE = ["day", "gtc", "ioc"];
+
+const VENUE_ORDER_OPTIONS: Record<
+  string,
+  {
+    timeInForce: Record<"limit" | "market", string[]>;
+    docsUrl: string;
+  }
+> = {
+  alpaca: {
+    timeInForce: {
+      limit: ALPACA_TIME_IN_FORCE,
+      market: ALPACA_TIME_IN_FORCE,
+    },
+    docsUrl:
+      "https://docs.alpaca.markets/us/docs/orders-at-alpaca#time-in-force",
+  },
+  binance: {
+    timeInForce: {
+      limit: ["GTC", "IOC", "FOK"],
+      market: [],
+    },
+    docsUrl: "https://developers.binance.com/docs/binance-spot-api-docs/enums",
+  },
+  etoro: {
+    timeInForce: {
+      limit: ["ioc"],
+      market: [],
+    },
+    docsUrl: "https://api-portal.etoro.com/core/guides/market-orders",
+  },
+  ib: {
+    timeInForce: {
+      limit: IB_TIME_IN_FORCE,
+      market: IB_TIME_IN_FORCE,
+    },
+    docsUrl:
+      "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
+  },
+};
+
 type DetailBannerTone = "ok" | "warn" | "danger";
 
 interface DetailBanner {
@@ -536,6 +577,18 @@ function SubmitOrderDialog({
     selectedDestination !== undefined &&
     selectedDestination.enabled &&
     selectedDestination.state !== "unavailable";
+  // A provider named like an Object.prototype key has no venue options.
+  const selectedVenueOptions =
+    selectedDestination !== undefined &&
+    Object.hasOwn(VENUE_ORDER_OPTIONS, selectedDestination.provider)
+      ? VENUE_ORDER_OPTIONS[selectedDestination.provider]
+      : undefined;
+  const timeInForceOptions =
+    selectedVenueOptions?.timeInForce[price.trim() ? "limit" : "market"];
+  const timeInForceValid =
+    timeInForceOptions !== undefined &&
+    (timeInForceOptions.length === 0 ||
+      timeInForceOptions.includes(timeInForce));
   const selectedProviderTitle = selectedDestination
     ? (tradingSnapshot?.providers.find(
         (provider) => provider.type === selectedDestination.provider,
@@ -810,7 +863,8 @@ function SubmitOrderDialog({
       venueMode !== "paper" ||
       selectedDestination === undefined ||
       !selectedDestinationIsSelectable ||
-      timeInForce === ""
+      timeInForceOptions === undefined ||
+      !timeInForceValid
     ) {
       return;
     }
@@ -834,7 +888,7 @@ function SubmitOrderDialog({
           destination: {
             connection: selectedDestination.connection,
             venueAccount: selectedDestination.venueAccount,
-            route: { timeInForce },
+            route: timeInForceOptions.length > 0 ? { timeInForce } : {},
           },
         },
         controller.signal,
@@ -1038,8 +1092,7 @@ function SubmitOrderDialog({
         amountKind === "quantity" &&
         venueMode === "paper" &&
         selectedDestinationIsSelectable &&
-        selectedDestination?.provider === "alpaca" &&
-        timeInForce !== ""
+        timeInForceValid
       : commonFieldsValid && amountKind !== "" && tab !== "";
 
   const fields = (
@@ -1238,13 +1291,15 @@ function SubmitOrderDialog({
             )}
 
           {selectedDestinationIsSelectable &&
-            selectedDestination.provider === "alpaca" && (
+            selectedVenueOptions !== undefined &&
+            timeInForceOptions !== undefined &&
+            timeInForceOptions.length > 0 && (
               <div className="flex flex-col gap-y-1.5">
                 <Label htmlFor="so-time-in-force">
                   {t("addOrder.dialog.venue.timeInForce")}
                 </Label>
                 <Select
-                  value={timeInForce}
+                  value={timeInForceValid ? timeInForce : ""}
                   onValueChange={setTimeInForce}
                   required
                   disabled={busy}
@@ -1258,15 +1313,17 @@ function SubmitOrderDialog({
                     />
                   </SelectTrigger>
                   <SelectContent>
-                    {ALPACA_TIME_IN_FORCE.map((value) => (
+                    {timeInForceOptions.map((value) => (
                       <SelectItem key={value} value={value}>
-                        {t(`addOrder.dialog.venue.timeInForceOptions.${value}`)}
+                        {t(
+                          `addOrder.dialog.venue.timeInForceOptions.${value.toLowerCase()}`,
+                        )}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <a
-                  href="https://docs.alpaca.markets/us/docs/orders-at-alpaca#time-in-force"
+                  href={selectedVenueOptions.docsUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
@@ -1278,7 +1335,7 @@ function SubmitOrderDialog({
             )}
 
           {selectedDestinationIsSelectable &&
-            selectedDestination?.provider !== "alpaca" && (
+            selectedVenueOptions === undefined && (
               <p className="text-xs text-[var(--danger)]">
                 {t("addOrder.dialog.venue.unsupportedProvider", {
                   provider: selectedDestination?.provider,
@@ -2745,14 +2802,16 @@ function OrderDetailDialog({
                       </span>
                       <div className="mt-0.5 text-text">{venueStatus}</div>
                     </div>
-                    <div>
-                      <span className="text-muted-lt">
-                        {t("detail.dialog.venue.timeInForce")}
-                      </span>
-                      <div className="nums mt-0.5 text-text">
-                        {venueOrder.route.timeInForce.toUpperCase()}
+                    {venueOrder.route.timeInForce && (
+                      <div>
+                        <span className="text-muted-lt">
+                          {t("detail.dialog.venue.timeInForce")}
+                        </span>
+                        <div className="nums mt-0.5 text-text">
+                          {venueOrder.route.timeInForce.toUpperCase()}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     <div>
                       <span className="text-muted-lt">
                         {t("detail.dialog.venue.linkedAt")}

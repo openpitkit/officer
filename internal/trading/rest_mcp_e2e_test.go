@@ -637,6 +637,100 @@ func TestTradingRESTEndToEnd(t *testing.T) {
 	}
 }
 
+func TestEtoroRegistrationRESTAndMCPEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, true)
+	var mu sync.Mutex
+	missingCID := false
+	expectedAPIKey, expectedUserKey := "test-key-marker", "test-secret-marker"
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/me" || r.URL.RawQuery != "" {
+			t.Errorf("unexpected eToro registration request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		mu.Lock()
+		apiKey, userKey, missing := expectedAPIKey, expectedUserKey, missingCID
+		mu.Unlock()
+		if r.Header.Get("x-api-key") != apiKey || r.Header.Get("x-user-key") != userKey {
+			t.Error("eToro registration credential headers do not match the expected key pair")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("x-request-id") == "" {
+			t.Error("eToro registration request is missing request id")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if missing {
+			_, _ = fmt.Fprint(w, `{"gcid":7,"realCid":99,"username":"operator"}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"gcid":7,"realCid":99,"demoCid":12345,"username":"operator"}`)
+	}))
+	t.Cleanup(venue.Close)
+	p := EtoroProvider()
+	p.Build = func(c domain.TradingConnection) (fwtrading.Connector, error) {
+		return newEtoroConnector(c, venue.URL)
+	}
+	tradingE2EMust(t, f.app.Close())
+	tradingE2EMust(t, f.builder.RegisterTradingProvider(p))
+	f.start()
+	input := map[string]any{
+		"provider": "etoro", "label": "eToro demo", "mode": "paper", "enabled": false,
+		"credentials": map[string]string{"apiKey": "test-key-marker", "userKey": "test-secret-marker"},
+	}
+	created := tradingE2EDecode[tradingE2ECreated](t,
+		f.rest(http.MethodPost, "/trading/connections", input, http.StatusCreated)).Connection
+	if created.Provider != "etoro" || created.Mode != "paper" || created.VenueIdentity != "12345" || created.Enabled {
+		t.Fatalf("eToro REST registration = %+v", created)
+	}
+	path := "/trading/connections/" + created.ID
+	mu.Lock()
+	expectedAPIKey, expectedUserKey = "second-key-marker", "second-secret-marker"
+	mu.Unlock()
+	f.rest(http.MethodPut, path+"/settings", map[string]any{
+		"credentials": map[string]string{"apiKey": "second-key-marker", "userKey": "second-secret-marker"},
+	}, http.StatusOK)
+	check := tradingE2EDecode[struct {
+		Check struct{ VenueIdentity, VenueStatus string }
+	}](t, f.rest(http.MethodPost, path+"/check", map[string]any{}, http.StatusOK)).Check
+	if check.VenueIdentity != "12345" || check.VenueStatus != "" {
+		t.Fatalf("eToro REST identity after key rotation = %+v", check)
+	}
+	f.rest(http.MethodPut, "/mcp-access/check_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
+	mcpCheck := tradingE2EStructured[struct{ VenueIdentity, VenueStatus string }](t,
+		f.mcp("check_trading_connection", map[string]any{"connection": created.ID}, false))
+	if mcpCheck != check {
+		t.Fatalf("eToro MCP account = %+v, want %+v", mcpCheck, check)
+	}
+	assertCatalogue := func(snapshot tradingE2ESnapshot) {
+		t.Helper()
+		var got []backend.TradingProvider
+		for _, raw := range snapshot.Providers {
+			got = append(got, tradingE2EDecode[backend.TradingProvider](t, raw))
+		}
+		want := []backend.TradingProvider{
+			{Type: "alpaca", Title: "Alpaca", VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true},
+			{Type: "etoro", Title: "eToro", VerifiesSymbols: true, SearchesSymbols: true},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("eToro registration catalogue = %+v, want %+v", got, want)
+		}
+		if len(snapshot.Connections) != 1 || snapshot.Connections[0].VenueIdentity != "12345" {
+			t.Fatalf("eToro catalogue connections = %+v", snapshot.Connections)
+		}
+	}
+	assertCatalogue(tradingE2EDecode[tradingE2ETrading](t,
+		f.rest(http.MethodGet, "/trading", nil, http.StatusOK)).Trading)
+	assertCatalogue(tradingE2EStructured[tradingE2ESnapshot](t, f.mcp("get_trading", map[string]any{}, false)))
+	mu.Lock()
+	missingCID = true
+	mu.Unlock()
+	f.rest(http.MethodPost, path+"/check", map[string]any{}, http.StatusBadGateway)
+	f.mcp("check_trading_connection", map[string]any{"connection": created.ID}, true)
+}
+
 func TestTradingMCPEndToEnd(t *testing.T) {
 	f := newTradingE2E(t, true)
 	result := f.mcp("create_trading_connection", tradingE2ECreateInput("Paper", "paper"), true)
@@ -738,28 +832,39 @@ func TestTradingMissingAssetEndToEnd(t *testing.T) {
 	id := f.createREST()
 	f.rest(http.MethodPost, "/assets", map[string]any{"code": "BTC"}, http.StatusCreated)
 	path := "/trading/connections/" + id + "/instruments"
-	instrument := map[string]any{"externalSymbol": "BTC/USDT", "baseAsset": "BTC", "quoteAsset": "USDT", "enabled": true}
-	missing := tradingE2EDecode[struct {
-		Error struct {
-			Code  string `json:"code"`
-			Asset string `json:"asset"`
-		} `json:"error"`
-	}](t, f.rest(http.MethodPut, path, instrument, http.StatusNotFound))
-	if missing.Error.Code != "asset_missing" || missing.Error.Asset != "USDT" {
-		t.Fatalf("missing asset error = %+v", missing.Error)
+	hasAsset := func(code string) bool {
+		assets, err := f.realm.ListAssets(f.ctx)
+		tradingE2EMust(t, err)
+		for _, asset := range assets {
+			if asset.Code == code {
+				return true
+			}
+		}
+		return false
 	}
 	f.rest(http.MethodPut, "/mcp-access/set_trading_instrument", map[string]any{"enabled": true}, http.StatusOK)
 	// The agent is refused before its assets are looked up.
 	f.mcpLoosening("set_trading_instrument", map[string]any{"connection": id, "externalSymbol": "BTC/USDT", "baseAsset": "BTC", "quoteAsset": "USDT", "enabled": true})
-	assets, err := f.realm.ListAssets(f.ctx)
-	tradingE2EMust(t, err)
-	for _, asset := range assets {
-		if asset.Code == "USDT" {
-			t.Fatal("refused instrument created its missing asset")
-		}
+	if hasAsset("USDT") {
+		t.Fatal("refused instrument created its missing asset")
 	}
-	f.rest(http.MethodPost, "/assets", map[string]any{"code": "USDT"}, http.StatusCreated)
+	// An asset code Officer cannot accept is refused, and nothing is created:
+	// not even the request's other, acceptable missing asset.
+	unusable := map[string]any{"externalSymbol": "ETHUSDT", "baseAsset": "ETH", "quoteAsset": "US DT", "enabled": true}
+	refused := tradingE2EDecode[struct {
+		Errors []struct {
+			Code string `json:"code"`
+		} `json:"errors"`
+	}](t, f.rest(http.MethodPut, path, unusable, http.StatusUnprocessableEntity))
+	if len(refused.Errors) == 0 || refused.Errors[0].Code != "validation" || hasAsset("ETH") {
+		t.Fatalf("unusable asset error = %+v", refused.Errors)
+	}
+	// As a market-data instrument does, the operator's mapping creates USDT.
+	instrument := map[string]any{"externalSymbol": "BTC/USDT", "baseAsset": "BTC", "quoteAsset": "USDT", "enabled": true}
 	f.rest(http.MethodPut, path, instrument, http.StatusOK)
+	if !hasAsset("USDT") {
+		t.Fatal("instrument did not create its missing asset")
+	}
 }
 
 func (f *tradingE2E) wait(what string, check func() bool) {
@@ -1742,7 +1847,7 @@ func TestTradingUnparsableUpdateEndToEnd(t *testing.T) {
 		t.Fatalf("connection after a broken update = %+v", got)
 	}
 	if diag := got.Diagnostics[0]; diag.Code != "unparsable_data" || diag.Level != "error" ||
-		diag.Kind != "provider" || diag.Title != alpacaUnparsableTitle || diag.Detail != alpacaHeaderUnreadable {
+		diag.Kind != "provider" || diag.Title != venueStreamUnparsableTitle || diag.Detail != alpacaHeaderUnreadable {
 		t.Fatalf("broken update diagnostic = %+v", diag)
 	}
 }

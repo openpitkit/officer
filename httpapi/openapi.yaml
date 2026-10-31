@@ -4475,9 +4475,10 @@ paths:
       summary: Create or replace a venue symbol mapping
       tags: [trading]
       description: >
-        Base and quote must be assets Officer already knows. An unknown one is
-        refused with `asset_missing` naming it; the asset is never created
-        implicitly.
+        A base or quote asset Officer does not know is created, as a
+        market-data instrument mapping does, and audited as `create_asset`. An
+        asset code Officer cannot accept is refused with `validation`, and an
+        unknown connection with `not_found`; neither creates an asset.
       requestBody:
         required: true
         content:
@@ -8296,7 +8297,10 @@ components:
     TradingCredentials:
       type: object
       additionalProperties: true
-      description: Provider credentials, accepted only on input. Never returned.
+      description: >
+        Provider credentials, accepted only on input. Never returned.
+        Alpaca uses {apiKey, apiSecret}; IB uses {host, port, clientId?};
+        eToro uses {apiKey, userKey}.
 
     TradingProvider:
       type: object
@@ -8401,6 +8405,12 @@ components:
           additionalProperties:
             type: boolean
           description: Key presence only; credential values are never returned.
+        settings:
+          type: object
+          additionalProperties: true
+          description: >
+            Non-secret provider settings safe to display in edit forms.
+            IB exposes host, port and clientId.
         instruments:
           type: array
           items:
@@ -9335,7 +9345,12 @@ components:
                   description: Omitted uses the binding; supplied must match it.
                 route:
                   type: object
-                  description: Explicit venue route; Alpaca requires timeInForce.
+                  description: >
+                    Explicit venue route; Alpaca and IB require timeInForce
+                    (IB accepts day, gtc or ioc); Binance requires timeInForce
+                    GTC, IOC or FOK for a limit order and an empty object for a
+                    market order; eToro uses {} for market or {"timeInForce":"ioc"}
+                    for an IOC limit buy.
                   additionalProperties: true
               additionalProperties: false
       unevaluatedProperties: false

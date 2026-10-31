@@ -283,6 +283,26 @@ describe("trading client", () => {
     await expect(result).rejects.toMatchObject({ code: "internal" });
   });
 
+  it.each([undefined, { host: "127.0.0.1", port: 4002, clientId: 23 }])(
+    "preserves non-secret trading settings %j without inventing absent settings",
+    async (settings) => {
+      const ib = {
+        ...connection,
+        provider: "ib",
+        ...(settings === undefined ? {} : { settings }),
+      };
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ trading: { ...trading, connections: [ib] } }),
+      );
+      const result = (await api().fetchTrading()).connections[0];
+      if (settings === undefined) {
+        expect(result).not.toHaveProperty("settings");
+      } else {
+        expect(result.settings).toEqual(settings);
+      }
+    },
+  );
+
   describe.each(["providers", "connections"] as const)(
     "snapshot %s",
     (field) => {
@@ -900,6 +920,23 @@ describe("trading client", () => {
     expect(await api().fetchTrading()).toEqual({
       providers: [],
       connections: [unavailable, stopped],
+    });
+  });
+
+  it("keeps every provider credential presence flag", async () => {
+    const etoro = {
+      ...connection,
+      provider: "etoro",
+      secrets: { apiKey: true, userKey: false, malformed: "yes" },
+    };
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ trading: { providers: [], connections: [etoro] } }),
+    );
+
+    expect((await api().fetchTrading()).connections[0].secrets).toEqual({
+      apiKey: true,
+      userKey: false,
+      malformed: false,
     });
   });
 

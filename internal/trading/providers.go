@@ -25,7 +25,26 @@ import (
 
 // FirstPartyProviders returns the built-in trading factories.
 func FirstPartyProviders() []fwtrading.Provider {
-	return []fwtrading.Provider{AlpacaProvider()}
+	return []fwtrading.Provider{AlpacaProvider(), BinanceProvider(), IBProvider(), EtoroProvider()}
+}
+
+// IBProvider trades stocks, spot FX and crypto through TWS/IB Gateway.
+// Settings require host and port, with an optional clientId. Route JSON is
+// {"timeInForce":"day"|"gtc"|"ioc"}. Symbols are plain SMART stock symbols or
+// BASE.QUOTE on IDEALPRO/PAXOS. Account checks read managed accounts and reject
+// a paper/live mismatch. Each order selects a managed VenueAccount. Pre-check
+// resolves exactly one contract using the mapping's assets and refuses volume
+// orders and crypto market buys by quantity. Executions wait for their
+// commission-and-fees reports and carry the reported fee currency. Lookup
+// reads open/completed orders and executions, which IB limits to since local
+// midnight; missing acknowledged orders or earlier executions stay pending
+// with a diagnostic. Fees travel on fills, never through a separate FeeReader.
+func IBProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderIB, Title: "Interactive Brokers",
+		VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false, Build: NewIBConnector,
+	}
 }
 
 // AlpacaProvider trades one account per key pair and verifies venue symbols.
@@ -56,5 +75,81 @@ func AlpacaProvider() fwtrading.Provider {
 		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
 		UnlinkedFees: true,
 		Build:        NewAlpacaConnector,
+	}
+}
+
+// BinanceProvider trades one account per HMAC key pair and verifies symbols.
+//
+// One HMAC API key pair identifies one account; VenueAccount is empty. Paper
+// mode selects the Spot Testnet REST and WebSocket API hosts; live mode uses
+// api.binance.com and ws-api.binance.com. Route JSON for a limit order is
+// {"timeInForce": "GTC"|"IOC"|"FOK"}; a market order requires {}. Only quantity
+// orders are supported. Symbols are Binance names such as ETHUSDT, verified
+// through GET /api/v3/exchangeInfo?symbol=. Symbol search uses exchangeInfo
+// from the connection's host, includes spot-allowed symbols, and takes their
+// base and quote assets from exchangeInfo. Account check reads GET
+// /api/v3/account for uid (identity), account type and trading availability.
+//
+// Pre-check requires a TRADING, spot-allowed symbol supporting the order type,
+// positive quantity and, for a limit order, a positive price. Limit orders
+// apply PRICE_FILTER, LOT_SIZE, MIN_NOTIONAL and NOTIONAL bounds and increments
+// where applicable; market orders apply MARKET_LOT_SIZE when its step is
+// nonzero. The venue's own refusal is definitive for all other restrictions.
+// Fills are identified by cumulative filled quantity. Commission is retained
+// in the reported asset and booked in the order's base or quote when it is
+// one of them.
+//
+// User data uses the WebSocket API userDataStream.subscribe.signature;
+// Binance removed listenKey REST on 2026-02-20. Reconciliation reads GET
+// /api/v3/order and GET /api/v3/myTrades, both requiring the order's symbol.
+// There are no unlinked fees.
+func BinanceProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderBinance, Title: "Binance",
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false,
+		Build:        NewBinanceConnector,
+	}
+}
+
+// EtoroProvider trades one account per key pair and verifies venue instruments.
+//
+// Credentials are {apiKey, userKey}; one pair identifies one account, so
+// VenueAccounts is false and VenueAccount is empty. Paper mode selects demo
+// trading paths and live mode selects real paths; unknown modes are refused.
+// The backend still refuses live trading. Route JSON is {} for market orders
+// or {"timeInForce":"ioc"} for an IOC limit buy. Symbols are positive decimal
+// instrument ids. Pre-check requires an available real, long, leverage-1
+// configuration for buys; sells close an existing eligible long position.
+//
+// Account check reads GET /api/v1/me. Identity is demoCid for paper or realCid
+// for live as a decimal string, stable across key rotation; a missing or
+// non-positive CID is an upstream error. eToro reports no account status;
+// Status is empty.
+//
+// VerifiesSymbols and SearchesSymbols are true. Verification reads
+// GET /api/v2/market-data/instruments?instrumentsIds= and reports existence,
+// tradability and "<type> <symbol> <displayName>". Search reads
+// GET /api/v2/market-data/instruments/search with the trimmed query and limit=50,
+// preserving venue order. Empty queries return an empty non-nil slice without
+// a request; queries over 100 characters are refused rather than truncated.
+// Matches use the instrument id as Symbol, "<symbol> - <displayName>" as Name
+// and type as Class. Exchange is empty because eToro supplies only exchangeId;
+// BaseAsset and QuoteAsset are empty because its catalogue states neither.
+// Both operations derive Tradable from allowOpenPosition, an available real,
+// long, leverage-1 configuration with isPotential=false, and an allowed
+// quantity type of unitsOnly or all. Search makes one eligibility request for
+// all result ids; an id eToro lists as not found is untradable (demo probe P10),
+// while other eligibility failures fail the search.
+// Market-data paths have no demo variant.
+//
+// UnlinkedFees is false: open-side fees arrive on fills, while close-side fees
+// are not reported by eToro (demo probe P7).
+func EtoroProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderEtoro, Title: "eToro",
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false,
+		Build:        NewEtoroConnector,
 	}
 }

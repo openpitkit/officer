@@ -615,6 +615,7 @@ func (w *worker) checkDestination(ctx context.Context, order domain.Order, dest 
 	}
 	mapped := Order{
 		Symbol: instrument.ExternalSymbol, Side: order.Side,
+		BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 		AmountKind: order.AmountKind, Quantity: order.AmountValue,
 		LimitPrice: order.Price, VenueAccount: dest.VenueAccount, Route: dest.Route,
 	}

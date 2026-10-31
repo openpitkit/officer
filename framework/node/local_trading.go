@@ -124,7 +124,9 @@ func (n *localNode) SetTradingConnectionEnabled(
 // changes, whatever the upsert would do - add, enable, remap or disable a
 // mapping: a mapping decides what can be sent and which Officer asset a venue
 // fee is booked in, and a fee whose venue asset maps to no asset or to several
-// is skipped (see the trading runtime's fee booking).
+// is skipped (see the trading runtime's fee booking). A base or quote asset
+// Officer does not know yet is then created and audited, as a market-data
+// instrument upsert does.
 func (n *localNode) UpsertTradingInstrument(
 	ctx context.Context, instrument domain.TradingInstrument, caller domain.Caller,
 ) error {
@@ -134,6 +136,19 @@ func (n *localNode) UpsertTradingInstrument(
 				"and which asset a venue fee is booked in: %w",
 			instrument.Connection, instrument.ExternalSymbol, domain.ErrLoosening,
 		)
+	}
+	// An unknown connection is refused before its assets are created, so a
+	// refused upsert leaves no asset behind.
+	if _, ok, err := n.realm.GetTradingConnection(ctx, instrument.Connection); err != nil {
+		return fmt.Errorf("read trading connection: %w", err)
+	} else if !ok {
+		return fmt.Errorf("trading connection %s: %w", instrument.Connection, domain.ErrNotFound)
+	}
+	if err := n.ensureInstrumentAssetsRegisteredExclusive(
+		ctx, instrument.BaseAsset, instrument.QuoteAsset,
+		"trading instrument upsert", caller,
+	); err != nil {
+		return err
 	}
 	if err := n.beginMutation(); err != nil {
 		return err

@@ -52,6 +52,33 @@ import (
 	"go.openpit.dev/officer/signing"
 )
 
+func waitForTrading(t *testing.T, what string, check func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if check() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func assertDecimal(t *testing.T, got, want string) {
+	t.Helper()
+	value, err := decimal.NewFromString(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := decimal.NewFromString(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.Equal(expected) {
+		t.Fatalf("decimal = %s, want %s", got, want)
+	}
+}
+
 func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -60,27 +87,6 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		t.Helper()
 		if err != nil {
 			t.Fatal(err)
-		}
-	}
-	wait := func(what string, check func() bool) {
-		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			if check() {
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-		t.Fatalf("timed out waiting for %s", what)
-	}
-	assertDecimal := func(got, want string) {
-		t.Helper()
-		value, err := decimal.NewFromString(got)
-		must(err)
-		expected, err := decimal.NewFromString(want)
-		must(err)
-		if !value.Equal(expected) {
-			t.Fatalf("decimal = %s, want %s", got, want)
 		}
 	}
 
@@ -262,8 +268,8 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 			if !found {
 				t.Fatalf("%s balance missing", asset)
 			}
-			assertDecimal(balance.Available, want)
-			assertDecimal(balance.Held, "0")
+			assertDecimal(t, balance.Available, want)
+			assertDecimal(t, balance.Held, "0")
 		}
 	}
 
@@ -301,16 +307,16 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		}
 	}
 	push("partial_fill", "3", "3", "1.5")
-	wait("partial fill", func() bool { return detail(first).Order.Status == domain.OrderStatusPartiallyFilled })
+	waitForTrading(t, "partial fill", func() bool { return detail(first).Order.Status == domain.OrderStatusPartiallyFilled })
 	push("fill", "7", "10", "2")
-	wait("final fill", func() bool { return detail(first).Order.Status == domain.OrderStatusFilled })
+	waitForTrading(t, "final fill", func() bool { return detail(first).Order.Status == domain.OrderStatusFilled })
 	firstDetail := detail(first)
 	if len(firstDetail.Trades) != 2 {
 		t.Fatalf("trade count = %d, want 2", len(firstDetail.Trades))
 	}
 	for i, want := range []struct{ quantity, price string }{{"3", "1.5"}, {"7", "2"}} {
-		assertDecimal(firstDetail.Trades[i].Quantity, want.quantity)
-		assertDecimal(firstDetail.Trades[i].Price, want.price)
+		assertDecimal(t, firstDetail.Trades[i].Quantity, want.quantity)
+		assertDecimal(t, firstDetail.Trades[i].Price, want.price)
 	}
 	for _, event := range firstDetail.Events {
 		if event.Payload.ExecutionReport != nil && (event.Source != domain.SourceSystem || event.Principal != "") {
@@ -394,20 +400,20 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		return built
 	}
 	built := startApp()
-	wait("reconciled fill", func() bool { return detail(second).Order.Status == domain.OrderStatusFilled })
+	waitForTrading(t, "reconciled fill", func() bool { return detail(second).Order.Status == domain.OrderStatusFilled })
 	secondDetail := detail(second)
 	if trades := secondDetail.Trades; len(trades) != 1 {
 		t.Fatalf("reconciled trades = %d, want 1", len(trades))
 	} else {
-		assertDecimal(trades[0].Quantity, "2")
-		assertDecimal(trades[0].Price, "2")
+		assertDecimal(t, trades[0].Quantity, "2")
+		assertDecimal(t, trades[0].Price, "2")
 	}
 	for _, event := range secondDetail.Events {
 		if event.Payload.ExecutionReport != nil && (event.Source != domain.SourceSystem || event.Principal != "") {
 			t.Fatalf("reconciled report caller was not system: %+v", event)
 		}
 	}
-	wait("app fee adjustment", func() bool {
+	waitForTrading(t, "app fee adjustment", func() bool {
 		records, err := realm.ListAdjustments(ctx, "desk", domain.SourceSystem, 10)
 		must(err)
 		return len(records) == 1
@@ -423,12 +429,12 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	})
 	venueMu.Unlock()
 	built = startApp()
-	wait("core-rejected app fee", func() bool {
+	waitForTrading(t, "core-rejected app fee", func() bool {
 		records, err := realm.ListAdjustments(ctx, "desk", domain.SourceSystem, 10)
 		must(err)
 		return len(records) == 2
 	})
-	wait("app skipped-fee audit", func() bool {
+	waitForTrading(t, "app skipped-fee audit", func() bool {
 		rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 		must(err)
 		return len(rows) == 1
@@ -457,7 +463,7 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 			if record.Accepted == nil || record.Rejected != nil {
 				t.Fatalf("venue fee was not accepted: %+v", record)
 			}
-			assertDecimal(record.Request.Balance.Value, "-0.25")
+			assertDecimal(t, record.Request.Balance.Value, "-0.25")
 		case domain.ExternalID("trading:" + connection.ExternalID.String() + ":fee:rejected-fee"):
 			if record.Rejected == nil || record.Accepted != nil {
 				t.Fatalf("venue fee was not core-rejected: %+v", record)
@@ -465,7 +471,7 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 			if !strings.Contains(record.Rejected.Reason, "overflow") {
 				t.Fatalf("unexpected core fee rejection: %+v", record.Rejected)
 			}
-			assertDecimal(record.Request.Balance.Value, "79228162514264337593543950335")
+			assertDecimal(t, record.Request.Balance.Value, "79228162514264337593543950335")
 		default:
 			t.Fatalf("unexpected system adjustment: %+v", record)
 		}

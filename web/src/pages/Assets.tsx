@@ -205,7 +205,7 @@ function CreateAssetDialog({
               value={code}
               autoFocus
               spellCheck={false}
-              placeholder="BTC"
+              placeholder="USD"
               onChange={(e) => setCode(e.target.value)}
               onClear={() => setCode("")}
               clearLabel={t("filters.clearField")}
@@ -239,7 +239,7 @@ function CreateAssetDialog({
               value={assetClass}
               onChange={setAssetClass}
               suggestions={classSuggestions}
-              placeholder="crypto"
+              placeholder="fiat"
               spellCheck={false}
               disabled={busy}
               onClear={() => setAssetClass("")}
@@ -339,7 +339,7 @@ function CreateClassDialog({ onCreated }: { onCreated: () => void }) {
               value={code}
               autoFocus
               spellCheck={false}
-              placeholder="crypto"
+              placeholder="fiat"
               onChange={(e) => setCode(e.target.value)}
               onClear={() => setCode("")}
               clearLabel={t("filters.clearField")}
@@ -517,7 +517,7 @@ function EditAssetDialog({
               value={assetClass}
               onChange={setAssetClass}
               suggestions={classSuggestions}
-              placeholder="crypto"
+              placeholder="fiat"
               spellCheck={false}
               disabled={busy}
               onClear={() => setAssetClass("")}

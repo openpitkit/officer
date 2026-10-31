@@ -62,8 +62,12 @@ func testOrder() fwtrading.Order {
 
 func TestProvidersAndEndpoints(t *testing.T) {
 	providers := FirstPartyProviders()
-	if len(providers) != 1 {
-		t.Fatal("expected one provider")
+	if len(providers) != 4 || providers[3].Type != domain.TradingProviderEtoro {
+		t.Fatal("expected Alpaca, Binance, IB and eToro providers")
+	}
+	ib := providers[2]
+	if ib.Type != domain.TradingProviderIB || ib.Title != "Interactive Brokers" || !ib.VenueAccounts || !ib.VerifiesSymbols || !ib.SearchesSymbols || ib.UnlinkedFees || ib.Build == nil {
+		t.Fatal("IB provider contract differs")
 	}
 	p := providers[0]
 	if p.Type != domain.TradingProviderAlpaca || p.Title != "Alpaca" || p.VenueAccounts || !p.VerifiesSymbols || !p.SearchesSymbols || !p.UnlinkedFees || p.Build == nil {

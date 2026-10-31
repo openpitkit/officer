@@ -109,6 +109,37 @@ beforeEach(async () => {
 });
 
 describe("VenueAccessDialog", () => {
+  it.each([ACCOUNT, GROUP])(
+    "leaves an IB grant without a venue account to trading connections for %j",
+    async (subject) => {
+      const user = userEvent.setup();
+      const handlers = renderDialog({
+        ...subject,
+        connections: [
+          row("ib", {
+            providerType: "ib",
+            providerTitle: "Interactive Brokers",
+            grantBlock: "needsVenueAccount",
+          }),
+        ],
+      });
+      const ib = connectionRow("ib label");
+      const grant = ib.getByRole("button", { name: "Grant access" });
+      expect(grant).toBeDisabled();
+      await user.click(grant);
+      expect(handlers.onGrant).not.toHaveBeenCalled();
+      expect(
+        ib.getByText(
+          "Enter the Interactive Brokers account first. Orders reach Interactive Brokers only through a grant bound to a venue account.",
+        ),
+      ).toBeInTheDocument();
+      const link = ib.getByRole("link", { name: "Set venue account" });
+      expect(link).toHaveAttribute("href", "/trading-connections");
+      await user.click(link);
+      expect(screen.getByText("connections page")).toBeInTheDocument();
+    },
+  );
+
   it("names the account and tells its own, group and missing access apart", () => {
     renderDialog({
       ...ACCOUNT,

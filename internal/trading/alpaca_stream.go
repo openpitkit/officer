@@ -29,7 +29,6 @@ import (
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/alpaca"
-	"go.openpit.dev/officer/internal/backoff"
 )
 
 const (
@@ -41,9 +40,8 @@ const (
 var errAlpacaUnauthorized = errors.New("alpaca: stream authorization refused")
 
 // The stream's diagnostics carry a fixed detail per site and never embed
-// frame content; the unparsable_data ones share one title.
+// frame content.
 const (
-	alpacaUnparsableTitle   = "Unreadable data on the venue stream"
 	alpacaInconsistentTitle = "Inconsistent data on the venue stream"
 
 	alpacaFrameUnreadable  = "A stream message could not be decoded."
@@ -56,31 +54,7 @@ const (
 	alpacaFillUntimed      = "A fill update had no timestamp."
 	alpacaFillDecimals     = "A fill update had an unreadable quantity or price."
 	alpacaFillOverfilled   = "A fill update reported more filled than the order quantity."
-
-	alpacaSkipped = "Officer skipped the message and kept reading the " +
-		"stream. This is a venue or Officer issue, not your configuration " +
-		"- please report it if it repeats."
-	alpacaDropped = "Officer dropped the update; a fill it carried is not " +
-		"reconciled until the next stream reconnect. This is a venue or " +
-		"Officer issue, not your configuration - please report it."
-	alpacaReconciled = "Officer reconciles the order from the venue's " +
-		"order and fill history instead. This is a venue or Officer issue, " +
-		"not your configuration - please report it if it repeats."
-	alpacaNotBooked = "Officer did not book the update. An order Officer " +
-		"still has open is reconciled from the venue's order and fill " +
-		"history; an excess on an order Officer has already finished is " +
-		"not booked anywhere. Compare the account's position at the venue " +
-		"with Officer's. This is a venue issue, not your configuration."
 )
-
-// alpacaUnparsable builds the unparsable_data diagnostic of one stream site.
-func alpacaUnparsable(level, detail, remediation string) *health.Diagnostic {
-	return &health.Diagnostic{
-		Level: level, Code: health.CodeUnparsableData,
-		Kind: health.DiagKindProvider, Title: alpacaUnparsableTitle,
-		Detail: detail, Remediation: remediation,
-	}
-}
 
 // SetStatusReporter installs the owner's stream status reporter. It must be
 // called before Subscribe.
@@ -97,69 +71,12 @@ func (c *alpacaConnector) SetDiagnosticReporter(report health.DiagnosticReporter
 // Subscribe requires both reporters: the stream reports its state and the
 // venue data it cannot read through them instead of logging.
 func (c *alpacaConnector) Subscribe(ctx context.Context) (<-chan fwtrading.Event, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return nil, errors.New("alpaca: connector is closed")
-	}
-	if c.done != nil {
-		return nil, errors.New("alpaca: stream already subscribed")
-	}
-	if c.reportStatus == nil || c.reportDiag == nil {
-		return nil, errors.New("alpaca: stream requires a status and a diagnostic reporter")
-	}
-	ctx, c.cancel = context.WithCancel(ctx)
-	c.done = make(chan struct{})
-	out := make(chan fwtrading.Event)
-	go func() {
-		defer close(c.done)
-		defer close(out)
-		defer c.cancel()
-		c.run(ctx, out)
-	}()
-	return out, nil
+	return c.lifecycle.subscribe(ctx, "alpaca", alpacaReconnectMin, alpacaReconnectMax,
+		errAlpacaUnauthorized, c.stream, c.reportStatus, c.reportDiag, c.redactStreamMessage)
 }
 
 func (c *alpacaConnector) Close() {
-	c.mu.Lock()
-	c.closed = true
-	if c.cancel != nil {
-		c.cancel()
-	}
-	done := c.done
-	c.mu.Unlock()
-	if done != nil {
-		<-done
-	}
-}
-
-func (c *alpacaConnector) run(ctx context.Context, out chan<- fwtrading.Event) {
-	attempt := 0
-	refused := false
-	for ctx.Err() == nil {
-		healthy, err := c.stream(ctx, out)
-		if ctx.Err() != nil {
-			return
-		}
-		if healthy {
-			attempt = 0
-			refused = false
-		}
-		if errors.Is(err, errAlpacaUnauthorized) {
-			refused = true
-		}
-		attempt++
-		delay := backoff.Delay(attempt, alpacaReconnectMin, alpacaReconnectMax)
-		if refused {
-			// A refused authorization holds the longest wait until a
-			// healthy stream proves the credentials work again.
-			delay = alpacaReconnectMax
-		}
-		c.reportStatus(false, c.redactStreamMessage(err.Error()))
-		if err := backoff.Sleep(ctx, delay); err != nil {
-			return
-		}
-	}
+	c.lifecycle.close()
 }
 
 type alpacaFrame struct {
@@ -176,7 +93,7 @@ func (c *alpacaConnector) readAlpacaFrame(ctx context.Context, conn *websocket.C
 		}
 		var frame alpacaFrame
 		if json.Unmarshal(payload, &frame) != nil || (frame.Stream == "" && frame.Action == "") {
-			report(alpacaUnparsable(health.DiagWarn, alpacaFrameUnreadable, alpacaSkipped))
+			report(venueStreamUnparsable(health.DiagWarn, alpacaFrameUnreadable, venueStreamSkipped))
 			continue
 		}
 		if frame.Action == "error" {
@@ -192,23 +109,8 @@ func (c *alpacaConnector) readAlpacaFrame(ctx context.Context, conn *websocket.C
 	}
 }
 
-func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event) (healthy bool, err error) {
-	// An unparsable_data site reports once per connection, so a venue
-	// sending malformed frames cannot turn every frame into a report; a
-	// site's detail is fixed and identifies it. An inconsistent_data
-	// diagnostic reports every time: each one is a fill the venue reports
-	// beyond the order quantity, and one on an order Officer has already
-	// finished leaves no other trace.
-	reported := make(map[string]bool)
-	report := func(diag *health.Diagnostic) {
-		if diag.Code == health.CodeUnparsableData {
-			if reported[diag.Detail] {
-				return
-			}
-			reported[diag.Detail] = true
-		}
-		c.reportDiag(*diag)
-	}
+func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event) (bool, error) {
+	report := venueStreamReporter(c.reportDiag)
 	handshakeCtx, cancel := context.WithTimeout(ctx, alpacaHandshakeTimeout)
 	defer cancel()
 	conn, err := alpaca.DialStream(handshakeCtx, c.streamURL)
@@ -235,7 +137,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 			Status string `json:"status"`
 		}
 		if json.Unmarshal(frame.Data, &data) != nil {
-			report(alpacaUnparsable(health.DiagWarn, alpacaAuthUnreadable, alpacaSkipped))
+			report(venueStreamUnparsable(health.DiagWarn, alpacaAuthUnreadable, venueStreamSkipped))
 			continue
 		}
 		if data.Status == "unauthorized" {
@@ -267,7 +169,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 			Streams []string `json:"streams"`
 		}
 		if json.Unmarshal(frame.Data, &data) != nil {
-			report(alpacaUnparsable(health.DiagWarn, alpacaListenUnreadable, alpacaSkipped))
+			report(venueStreamUnparsable(health.DiagWarn, alpacaListenUnreadable, venueStreamSkipped))
 			continue
 		}
 		listening := false
@@ -281,20 +183,14 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 		}
 	}
 	cancel()
-	c.reportStatus(true, "")
-	select {
-	case <-ctx.Done():
-		return healthy, ctx.Err()
-	case out <- fwtrading.Event{Kind: fwtrading.EventConnected}:
+	session, err := connectStream(ctx, out, alpacaReconnectMax, c.reportStatus)
+	if err != nil {
+		return false, err
 	}
-	connectedAt := time.Now()
-	defer func() {
-		healthy = healthy || time.Since(connectedAt) > alpacaReconnectMax
-	}()
 	for {
 		frame, err := c.readAlpacaFrame(ctx, conn, report)
 		if err != nil {
-			return healthy, err
+			return session.healthy(), err
 		}
 		if frame.Stream != "trade_updates" {
 			continue
@@ -306,11 +202,8 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 		if !ok {
 			continue
 		}
-		select {
-		case <-ctx.Done():
-			return healthy, ctx.Err()
-		case out <- event:
-			healthy = true
+		if err := session.deliver(event); err != nil {
+			return session.healthy(), err
 		}
 	}
 }
@@ -337,7 +230,7 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		Order json.RawMessage `json:"order"`
 	}
 	if json.Unmarshal(raw, &header) != nil || header.Event == nil {
-		return fwtrading.Event{}, false, alpacaUnparsable(health.DiagError, alpacaHeaderUnreadable, alpacaDropped)
+		return fwtrading.Event{}, false, venueStreamUnparsable(health.DiagError, alpacaHeaderUnreadable, venueStreamDropped)
 	}
 	terminal := false
 	switch *header.Event {
@@ -349,18 +242,18 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 	}
 	var reference map[string]json.RawMessage
 	if json.Unmarshal(header.Order, &reference) != nil {
-		return fwtrading.Event{}, false, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)
+		return fwtrading.Event{}, false, venueStreamUnparsable(health.DiagError, alpacaRefUnreadable, venueStreamDropped)
 	}
 	// The runtime routes an event by its client order id alone, so there is
 	// nothing to emit without one.
 	clientID, ok := alpacaOrderID(reference["client_order_id"])
 	if !ok {
-		return fwtrading.Event{}, false, alpacaUnparsable(health.DiagError, alpacaRefUnreadable, alpacaDropped)
+		return fwtrading.Event{}, false, venueStreamUnparsable(health.DiagError, alpacaRefUnreadable, venueStreamDropped)
 	}
 	event := fwtrading.Event{Kind: fwtrading.EventOrder, Ref: fwtrading.OrderRef{ClientOrderID: clientID}}
 	venueID, ok := alpacaOrderID(reference["id"])
 	if !ok {
-		return event, true, alpacaUnparsable(health.DiagWarn, alpacaVenueIDUnusable, alpacaReconciled)
+		return event, true, venueStreamUnparsable(health.DiagWarn, alpacaVenueIDUnusable, venueStreamReconciled)
 	}
 	event.Ref.VenueOrderID = venueID
 	if terminal {
@@ -373,10 +266,10 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		Quantity  string      `json:"qty"`
 	}
 	if json.Unmarshal(raw, &update) != nil {
-		return event, true, alpacaUnparsable(health.DiagWarn, alpacaFillUnreadable, alpacaReconciled)
+		return event, true, venueStreamUnparsable(health.DiagWarn, alpacaFillUnreadable, venueStreamReconciled)
 	}
 	if update.Timestamp.IsZero() {
-		return event, true, alpacaUnparsable(health.DiagWarn, alpacaFillUntimed, alpacaReconciled)
+		return event, true, venueStreamUnparsable(health.DiagWarn, alpacaFillUntimed, venueStreamReconciled)
 	}
 	qty, err := parseAlpacaDecimal(update.Order.Quantity, "order.qty", true)
 	cum, cumErr := parseAlpacaDecimal(update.Order.FilledQuantity, "order.filled_qty", false)
@@ -393,7 +286,7 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		_, err = parseAlpacaDecimal(notional, "order.notional", true)
 	}
 	if err != nil || cumErr != nil || fillErr != nil || priceErr != nil {
-		return event, true, alpacaUnparsable(health.DiagWarn, alpacaFillDecimals, alpacaReconciled)
+		return event, true, venueStreamUnparsable(health.DiagWarn, alpacaFillDecimals, venueStreamReconciled)
 	}
 	// Without the order quantity a notional order's fill cannot be mapped,
 	// so it is reconciled; the shape is documented, not unreadable.
@@ -405,7 +298,7 @@ func (c *alpacaConnector) parseAlpacaTradeUpdate(raw json.RawMessage) (fwtrading
 		return event, true, &health.Diagnostic{
 			Level: health.DiagError, Code: health.CodeInconsistentData,
 			Kind: health.DiagKindProvider, Title: alpacaInconsistentTitle,
-			Detail: alpacaFillOverfilled, Remediation: alpacaNotBooked,
+			Detail: alpacaFillOverfilled, Remediation: venueStreamNotBooked,
 		}
 	}
 	event.Kind = fwtrading.EventFill

@@ -23,6 +23,7 @@
     "keepStoredSecret": "Keep stored secret"
   },
   "actions": {
+    "setVenueAccount": "Set venue account",
     "addInstrument": "Add instrument",
     "enable": "Enable",
     "disable": "Disable",
@@ -68,6 +69,7 @@
     "groupDescription": "Revoke access of group {{group}} to {{label}}? Accounts in the group keep access only if it is granted to them directly."
   },
   "accessBlocked": {
+    "needsVenueAccount": "Enter the {{provider}} account first. Orders reach {{provider}} only through a grant bound to a venue account.",
     "groupNeedsFeeAccount": "Set a fee account first. A group can hold several accounts, and {{provider}} charges fees that are not tied to orders; Officer needs one account to book them on.",
     "secondAccountNeedsFeeAccount": "Set a fee account first. {{provider}} charges fees that are not tied to orders; with several accounts on one connection Officer needs one account to book them on."
   },

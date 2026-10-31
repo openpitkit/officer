@@ -853,6 +853,77 @@ func TestTradingStatus(t *testing.T) {
 	}
 }
 
+func TestTradingConnectionSettings(t *testing.T) {
+	t.Parallel()
+
+	const credentials = `{"host":"127.0.0.1","port":7497,"clientId":12,"apiKey":"test-key","apiSecret":"test-secret","token":"test-token","marketDataType":"live","contracts":{"AAPL":{"conId":123}}}`
+	tests := []struct {
+		name        string
+		provider    string
+		credentials string
+		want        map[string]any
+	}{
+		{
+			name: "ib allowlist", provider: domain.TradingProviderIB,
+			credentials: credentials,
+			want: map[string]any{
+				"host": "127.0.0.1", "port": float64(7497), "clientId": float64(12),
+			},
+		},
+		{
+			name: "ib optional client id", provider: domain.TradingProviderIB,
+			credentials: `{"host":"gateway","port":4002}`,
+			want:        map[string]any{"host": "gateway", "port": float64(4002)},
+		},
+		{name: "alpaca", provider: domain.TradingProviderAlpaca, credentials: credentials},
+		{name: "other provider", provider: "other", credentials: credentials},
+		{name: "empty", provider: domain.TradingProviderIB},
+		{name: "null", provider: domain.TradingProviderIB, credentials: `null`},
+		{name: "array", provider: domain.TradingProviderIB, credentials: `[{"host":"gateway"}]`},
+		{name: "string", provider: domain.TradingProviderIB, credentials: `"gateway"`},
+		{name: "number", provider: domain.TradingProviderIB, credentials: `7497`},
+		{name: "boolean", provider: domain.TradingProviderIB, credentials: `true`},
+		{name: "invalid json", provider: domain.TradingProviderIB, credentials: `{"host":`},
+		{name: "empty object", provider: domain.TradingProviderIB, credentials: `{}`},
+		{name: "secrets only", provider: domain.TradingProviderIB, credentials: `{"apiKey":"test-key","apiSecret":"test-secret","token":"test-token"}`},
+		{name: "wrong types", provider: domain.TradingProviderIB, credentials: `{"host":1,"port":"7497","clientId":true}`},
+		{name: "blank host", provider: domain.TradingProviderIB, credentials: `{"host":"  "}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TradingConnectionSettings(domain.TradingConnection{
+				Provider: tt.provider, Credentials: tt.credentials,
+			})
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("settings = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTradingStatusSettings(t *testing.T) {
+	for _, provider := range []string{domain.TradingProviderIB, domain.TradingProviderAlpaca} {
+		t.Run(provider, func(t *testing.T) {
+			s, n, _ := newTradingTestService(t)
+			c := tradingTestConnection()
+			c.Provider = provider
+			c.Credentials = `{"host":"gateway","port":4002,"clientId":7,"apiKey":"test-key","apiSecret":"test-secret"}`
+			n.connections = []domain.TradingConnection{c}
+			got, err := s.GetTrading(systemCtx())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]any
+			if provider == domain.TradingProviderIB {
+				want = map[string]any{"host": "gateway", "port": float64(4002), "clientId": float64(7)}
+			}
+			if len(got.Connections) != 1 || !reflect.DeepEqual(got.Connections[0].Settings, want) {
+				t.Fatalf("status = %#v, want settings %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestTradingStatusRuntimeHealth(t *testing.T) {
 	first := health.Diagnostic{
 		At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Level: health.DiagWarn,
@@ -1427,4 +1498,204 @@ func TestTradingAgentCredentialIntegerChangeRefused(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTradingScopeAccountGrant covers single-account mode's own grant: a
+// create and an enable write the scope account's grant as the system when the
+// account holds none to the connection, its own or its group's, passing the
+// provider's fee policy; a provider binding venue accounts, a disable and
+// multi-account mode write none, and a refused grant fails the call.
+func TestTradingScopeAccountGrant(t *testing.T) {
+	const account = domain.AccountID("acct-1")
+	panel := auth.ContextWithCaller(context.Background(), tradingTestOperators["panel"])
+	single := fixedAccountScope{account: account}
+	newService := func(t *testing.T, n node.Node, scope AccountScope, venueAccounts bool) (*Service, *tradingTestRuntime) {
+		t.Helper()
+		rt := &tradingTestRuntime{identity: "venue-1", providers: []trading.Provider{{
+			Type: "venue", Title: "Venue", VenueAccounts: venueAccounts, UnlinkedFees: true,
+		}}}
+		s, err := New(n, nil, nil, testLockSettlementPrice, WithTradingRuntime(rt), WithAccountScope(scope))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s, rt
+	}
+	scopeGrant := func(connection domain.ExternalID) domain.TradingAccess {
+		return domain.TradingAccess{Account: account, Connection: connection}
+	}
+
+	t.Run("create", func(t *testing.T) {
+		n := &tradingTestNode{}
+		s, _ := newService(t, n, single, false)
+		created, err := s.CreateTradingConnection(panel, tradingTestConnection(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(n.access, []domain.TradingAccess{scopeGrant(created.ExternalID)}) {
+			t.Fatalf("access after create = %+v, want the scope account's grant", n.access)
+		}
+		if !reflect.DeepEqual(n.writes, []string{"create", "access"}) ||
+			n.callers[1] != auth.SystemCaller() || !n.requireFees {
+			t.Fatalf("writes %v, callers %v, fee policy %t, want a system grant under the fee policy",
+				n.writes, n.callers, n.requireFees)
+		}
+	})
+
+	t.Run("enable stored connection once", func(t *testing.T) {
+		stored := tradingTestConnection()
+		stored.Enabled = false
+		n := &tradingTestNode{connections: []domain.TradingConnection{stored}}
+		s, rt := newService(t, n, single, false)
+		for range 2 {
+			if err := s.SetTradingConnectionEnabled(panel, stored.ExternalID.String(), true, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !reflect.DeepEqual(n.access, []domain.TradingAccess{scopeGrant(stored.ExternalID)}) || rt.restarts != 2 {
+			t.Fatalf("access %+v after %d restarts, want one scope grant after two", n.access, rt.restarts)
+		}
+		if !reflect.DeepEqual(n.writes, []string{"enable", "access", "enable"}) || n.callers[1] != auth.SystemCaller() {
+			t.Fatalf("writes %v, callers %v, want one system grant", n.writes, n.callers)
+		}
+	})
+
+	t.Run("group grant suffices", func(t *testing.T) {
+		stored := tradingTestConnection()
+		n := &tradingTestNode{
+			connections: []domain.TradingConnection{stored},
+			groups:      map[domain.AccountID]string{account: "desk"},
+			access:      []domain.TradingAccess{{AccountGroup: "desk", Connection: stored.ExternalID}},
+		}
+		s, _ := newService(t, n, single, false)
+		if err := s.SetTradingConnectionEnabled(panel, stored.ExternalID.String(), true, false); err != nil {
+			t.Fatal(err)
+		}
+		if len(n.access) != 1 || !reflect.DeepEqual(n.writes, []string{"enable"}) {
+			t.Fatalf("access %+v, writes %v, want the group grant alone", n.access, n.writes)
+		}
+	})
+
+	t.Run("refused grant fails the enable", func(t *testing.T) {
+		stored := tradingTestConnection()
+		n := &refusingGrantNode{
+			tradingTestNode: &tradingTestNode{connections: []domain.TradingConnection{stored}},
+			err:             domain.ErrFeeAccountRequired,
+		}
+		s, rt := newService(t, n, single, false)
+		err := s.SetTradingConnectionEnabled(panel, stored.ExternalID.String(), true, false)
+		if !errors.Is(err, domain.ErrFeeAccountRequired) || !strings.Contains(err.Error(), string(account)) {
+			t.Fatalf("enable = %v, want the grant refusal naming %s", err, account)
+		}
+		if rt.restarts != 1 {
+			t.Fatalf("restarts = %d, want the stored enable started", rt.restarts)
+		}
+	})
+
+	t.Run("failed restart keeps the grant", func(t *testing.T) {
+		restartErr := errors.New("restart failed")
+		n := &tradingTestNode{}
+		s, rt := newService(t, n, single, false)
+		rt.restartErr = restartErr
+		_, err := s.CreateTradingConnection(panel, tradingTestConnection(), false)
+		if !errors.Is(err, restartErr) || len(n.connections) != 1 {
+			t.Fatalf("create = %v, want the restart failure after the store", err)
+		}
+		if !reflect.DeepEqual(n.access, []domain.TradingAccess{scopeGrant(n.connections[0].ExternalID)}) {
+			t.Fatalf("access after a failed restart of the create = %+v, want the scope grant", n.access)
+		}
+
+		stored := tradingTestConnection()
+		stored.Enabled = false
+		n = &tradingTestNode{connections: []domain.TradingConnection{stored}}
+		s, rt = newService(t, n, single, false)
+		rt.restartErr = restartErr
+		if err := s.SetTradingConnectionEnabled(panel, stored.ExternalID.String(), true, false); !errors.Is(err, restartErr) {
+			t.Fatalf("enable = %v, want the restart failure", err)
+		}
+		if !reflect.DeepEqual(n.access, []domain.TradingAccess{scopeGrant(stored.ExternalID)}) {
+			t.Fatalf("access after a failed restart of the enable = %+v, want the scope grant", n.access)
+		}
+	})
+
+	t.Run("tighten-only caller writes no grant", func(t *testing.T) {
+		agent := auth.ContextWithCaller(context.Background(), tradingTestAgent)
+		n := &tradingTestNode{}
+		s, _ := newService(t, n, single, false)
+		if _, err := s.CreateTradingConnection(agent, tradingTestConnection(), false); !errors.Is(err, domain.ErrLoosening) {
+			t.Fatalf("agent create = %v, want ErrLoosening", err)
+		}
+
+		stored := tradingTestConnection()
+		stored.Enabled = false
+		refusing := &refusingTightenOnlyEnableNode{
+			tradingTestNode: &tradingTestNode{connections: []domain.TradingConnection{stored}},
+		}
+		s, rt := newService(t, refusing, single, false)
+		if err := s.SetTradingConnectionEnabled(agent, stored.ExternalID.String(), true, false); !errors.Is(err, domain.ErrLoosening) {
+			t.Fatalf("agent enable = %v, want ErrLoosening", err)
+		}
+		if len(n.writes) != 0 || len(refusing.writes) != 0 || len(refusing.access) != 0 || rt.restarts != 0 {
+			t.Fatalf("writes %v and %v, access %+v, restarts %d, want none",
+				n.writes, refusing.writes, refusing.access, rt.restarts)
+		}
+	})
+
+	for _, tc := range []struct {
+		name          string
+		scope         AccountScope
+		venueAccounts bool
+	}{
+		{name: "multi-account mode", scope: EveryAccount{}},
+		{name: "venue accounts", scope: single, venueAccounts: true},
+	} {
+		t.Run(tc.name+" writes no grant", func(t *testing.T) {
+			n := &tradingTestNode{}
+			s, _ := newService(t, n, tc.scope, tc.venueAccounts)
+			created, err := s.CreateTradingConnection(panel, tradingTestConnection(), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetTradingConnectionEnabled(panel, created.ExternalID.String(), true, false); err != nil {
+				t.Fatal(err)
+			}
+			if len(n.access) != 0 {
+				t.Fatalf("access = %+v, want none", n.access)
+			}
+		})
+	}
+
+	t.Run("disable writes no grant", func(t *testing.T) {
+		n := &tradingTestNode{connections: []domain.TradingConnection{tradingTestConnection()}}
+		s, _ := newService(t, n, single, false)
+		if err := s.SetTradingConnectionEnabled(panel, "connection-1", false, false); err != nil {
+			t.Fatal(err)
+		}
+		if len(n.access) != 0 {
+			t.Fatalf("access = %+v, want none", n.access)
+		}
+	})
+}
+
+// refusingGrantNode refuses every grant with err, as the node's fee policy
+// refuses one.
+type refusingGrantNode struct {
+	*tradingTestNode
+	err error
+}
+
+func (n *refusingGrantNode) PutTradingAccess(context.Context, domain.TradingAccess, bool, domain.Caller) error {
+	return n.err
+}
+
+// refusingTightenOnlyEnableNode refuses a tighten-only enable before writing
+// anything, as the local node does.
+type refusingTightenOnlyEnableNode struct {
+	*tradingTestNode
+}
+
+func (n *refusingTightenOnlyEnableNode) SetTradingConnectionEnabled(ctx context.Context, id domain.ExternalID, enabled bool, caller domain.Caller) error {
+	if enabled && caller.TightenOnly() {
+		return domain.ErrLoosening
+	}
+	return n.tradingTestNode.SetTradingConnectionEnabled(ctx, id, enabled, caller)
 }

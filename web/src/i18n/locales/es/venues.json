@@ -24,6 +24,7 @@
     "keepStoredSecret": "Conservar el secreto guardado"
   },
   "actions": {
+    "setVenueAccount": "Establecer cuenta en la plataforma",
     "addInstrument": "Añadir instrumento",
     "enable": "Habilitar",
     "disable": "Deshabilitar",
@@ -69,6 +70,7 @@
     "groupDescription": "¿Revocar el acceso del grupo {{group}} a {{label}}? Las cuentas del grupo conservan el acceso solo si se les concedió directamente."
   },
   "accessBlocked": {
+    "needsVenueAccount": "Introduzca primero la cuenta de {{provider}}. Las órdenes llegan a {{provider}} solo mediante un permiso vinculado a una cuenta en la plataforma.",
     "groupNeedsFeeAccount": "Defina primero una cuenta de comisiones. Un grupo puede contener varias cuentas, y {{provider}} cobra comisiones que no están vinculadas a órdenes; Officer necesita una cuenta en la que registrarlas.",
     "secondAccountNeedsFeeAccount": "Defina primero una cuenta de comisiones. {{provider}} cobra comisiones que no están vinculadas a órdenes; con varias cuentas en una misma conexión, Officer necesita una cuenta en la que registrarlas."
   },

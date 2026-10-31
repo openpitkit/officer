@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -32,6 +33,63 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 )
+
+func TestToTradingConnectionDTOSettings(t *testing.T) {
+	t.Parallel()
+
+	for _, provider := range []string{domain.TradingProviderIB, domain.TradingProviderAlpaca} {
+		t.Run(provider, func(t *testing.T) {
+			connection := domain.TradingConnection{
+				Provider: provider,
+				Credentials: `{"host":"gateway","port":4002,"clientId":7,` +
+					`"apiKey":"test-key","apiSecret":"test-secret","token":"test-token"}`,
+			}
+			status := backend.TradingConnectionStatus{
+				Provider: provider,
+				Settings: backend.TradingConnectionSettings(connection),
+				Secrets:  map[string]bool{"apiKey": true, "apiSecret": true},
+			}
+			var want map[string]any
+			if provider == domain.TradingProviderIB {
+				want = map[string]any{"host": "gateway", "port": float64(4002), "clientId": float64(7)}
+			}
+			dto := ToTradingConnectionDTO(status)
+			if !reflect.DeepEqual(dto.Settings, want) {
+				t.Fatalf("DTO settings = %#v, want %#v", dto.Settings, want)
+			}
+			list := ToTradingDTO(backend.TradingStatus{Connections: []backend.TradingConnectionStatus{status}})
+			if len(list.Connections) != 1 || !reflect.DeepEqual(list.Connections[0].Settings, want) {
+				t.Fatalf("list DTO lost settings: %#v", list)
+			}
+			body, err := json.Marshal(dto)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, secret := range []string{"test-key", "test-secret", "test-token", `"credentials"`} {
+				if bytes.Contains(body, []byte(secret)) {
+					t.Fatalf("DTO leaked %q: %s", secret, body)
+				}
+			}
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(body, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if provider == domain.TradingProviderAlpaca {
+				if _, ok := wire["settings"]; ok {
+					t.Fatalf("Alpaca settings must be omitted: %s", body)
+				}
+			} else {
+				var settings map[string]any
+				if err := json.Unmarshal(wire["settings"], &settings); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(settings, want) {
+					t.Fatalf("wire settings = %#v, want %#v", settings, want)
+				}
+			}
+		})
+	}
+}
 
 func TestDecodeBodyRequiresOneNonNullValue(t *testing.T) {
 	t.Parallel()

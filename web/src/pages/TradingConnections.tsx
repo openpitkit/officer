@@ -55,9 +55,16 @@ import {
   UnsealedKeysWarning,
   VenueAccessList,
   venueSymbolPair,
+  emptyInstrumentDraft,
+  isInstrumentDraftFieldsValid,
   type AccessGrantBlock,
-  type InstrumentDraftFields,
 } from "@/components/venues";
+import {
+  isOptionalJSONInt64,
+  putIfFilled,
+  putNumberIfFilled,
+  settingString,
+} from "@/components/venues/providerSettings";
 import { Page } from "@/components/Page";
 import {
   EmptyState,
@@ -120,10 +127,51 @@ const TRADING_PROVIDER_GUIDES: Record<
     docsUrl?: string;
     steps?: Array<{
       textKey: string;
+      /** The step's text while accounts are hidden, when it differs. */
+      singleAccountTextKey?: string;
+      values?: Record<string, string>;
       links: Array<{ labelKey: string; href: string }>;
     }>;
   }
 > = {
+  ib: {
+    siteUrl: "https://www.interactivebrokers.com",
+    docsUrl:
+      "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
+    steps: [
+      {
+        textKey: "create.ib.install",
+        links: [
+          {
+            labelKey: "create.ib.download",
+            href: "https://www.interactivebrokers.com/en/trading/ibgateway-stable.php",
+          },
+        ],
+      },
+      {
+        textKey: "create.ib.enableApi",
+        values: {
+          settingsPath: "Configure > Settings > API > Settings",
+          socketClients: "Enable ActiveX and Socket Clients",
+          readOnlyApi: "Read-Only API",
+          trustedIPs: "Trusted IPs",
+        },
+        links: [
+          {
+            labelKey: "create.ib.documentation",
+            href: "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
+          },
+        ],
+      },
+      { textKey: "create.ib.keepRunning", links: [] },
+      {
+        textKey: "create.ib.grantAccess",
+        singleAccountTextKey: "create.ib.setVenueAccount",
+        values: { paperAccountPrefix: "DU" },
+        links: [],
+      },
+    ],
+  },
   alpaca: {
     siteUrl: "https://alpaca.markets",
     docsUrl: "https://docs.alpaca.markets/us/docs/paper-trading",
@@ -164,7 +212,107 @@ const TRADING_PROVIDER_GUIDES: Record<
       },
     ],
   },
+  binance: {
+    siteUrl: "https://www.binance.com",
+    docsUrl: "https://testnet.binance.vision/",
+    steps: [
+      {
+        textKey: "create.binance.openTestnet",
+        links: [
+          {
+            labelKey: "create.binance.openSpotTestnet",
+            href: "https://testnet.binance.vision/",
+          },
+        ],
+      },
+      {
+        textKey: "create.binance.generateKeys",
+        links: [],
+      },
+      {
+        textKey: "create.binance.keepPageOpen",
+        links: [],
+      },
+    ],
+  },
+  etoro: {
+    siteUrl: "https://www.etoro.com",
+    docsUrl: "https://api-portal.etoro.com/core/getting-started/authentication",
+    steps: [
+      {
+        textKey: "create.etoro.logInAccount",
+        links: [
+          {
+            labelKey: "create.etoro.logIn",
+            href: "https://www.etoro.com/login",
+          },
+        ],
+      },
+      { textKey: "create.etoro.createUserKey", links: [] },
+      { textKey: "create.etoro.copyUserKey", links: [] },
+      {
+        textKey: "create.etoro.publicApiKey",
+        links: [
+          {
+            labelKey: "create.etoro.authenticationGuide",
+            href: "https://api-portal.etoro.com/core/getting-started/authentication",
+          },
+        ],
+      },
+      { textKey: "create.etoro.keepDialogOpen", links: [] },
+    ],
+  },
 };
+
+type TradingCredentialField = {
+  key: string;
+  labelKey: string;
+  storedKey: string;
+  notSetKey: string;
+};
+
+// Alpaca and Binance both take an {apiKey, apiSecret} pair.
+const API_KEY_SECRET_FIELDS: TradingCredentialField[] = [
+  {
+    key: "apiKey",
+    labelKey: "venues:settings.apiKey",
+    storedKey: "connection.apiKeyStored",
+    notSetKey: "connection.apiKeyNotSet",
+  },
+  {
+    key: "apiSecret",
+    labelKey: "venues:settings.apiSecret",
+    storedKey: "connection.apiSecretStored",
+    notSetKey: "connection.apiSecretNotSet",
+  },
+];
+
+// IB takes connection settings instead; any other provider without an entry
+// must be blocked: guessing fields could send the wrong credentials.
+const TRADING_PROVIDER_CREDENTIAL_FIELDS = new Map<
+  string,
+  TradingCredentialField[]
+>([
+  ["alpaca", API_KEY_SECRET_FIELDS],
+  ["binance", API_KEY_SECRET_FIELDS],
+  [
+    "etoro",
+    [
+      {
+        key: "apiKey",
+        labelKey: "settings.etoro.apiKey",
+        storedKey: "connection.etoro.apiKeyStored",
+        notSetKey: "connection.etoro.apiKeyNotSet",
+      },
+      {
+        key: "userKey",
+        labelKey: "settings.etoro.userKey",
+        storedKey: "connection.etoro.userKeyStored",
+        notSetKey: "connection.etoro.userKeyNotSet",
+      },
+    ],
+  ],
+]);
 
 type AccountSuggestionLookup = {
   code: string;
@@ -173,6 +321,71 @@ type AccountSuggestionLookup = {
 };
 
 type AccessSubjectKind = "account" | "group";
+
+function ibSettingsReady(draft: Record<string, string>): boolean {
+  const port = Number(draft.port);
+  return (
+    draft.host.trim() !== "" &&
+    Number.isInteger(port) &&
+    port >= 1 &&
+    port <= 65535 &&
+    isOptionalJSONInt64(draft.clientId)
+  );
+}
+
+function IBConnectionFields({
+  id,
+  draft,
+  busy,
+  onChange,
+}: {
+  id: string;
+  draft: Record<string, string>;
+  busy: boolean;
+  onChange: (patch: Record<string, string>) => void;
+}) {
+  const { t } = useTranslation("trading");
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      <div className="flex flex-col gap-y-2">
+        <Label htmlFor={`${id}-host`}>{t("marketData:settings.host")}</Label>
+        <Input
+          id={`${id}-host`}
+          value={draft.host}
+          onChange={(event) => onChange({ host: event.target.value })}
+          disabled={busy}
+        />
+      </div>
+      <div className="flex flex-col gap-y-2">
+        <Label htmlFor={`${id}-port`}>{t("marketData:settings.port")}</Label>
+        <Input
+          id={`${id}-port`}
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={65535}
+          value={draft.port}
+          onChange={(event) => onChange({ port: event.target.value })}
+          disabled={busy}
+        />
+      </div>
+      <div className="flex flex-col gap-y-2">
+        <Label htmlFor={`${id}-client-id`}>
+          {t("marketData:settings.clientId")}
+        </Label>
+        <Input
+          id={`${id}-client-id`}
+          type="number"
+          inputMode="numeric"
+          value={draft.clientId}
+          placeholder={t("marketData:settings.autoClientId")}
+          onChange={(event) => onChange({ clientId: event.target.value })}
+          disabled={busy}
+        />
+      </div>
+    </div>
+  );
+}
 
 function AddTradingConnectionDialog({
   provider,
@@ -190,15 +403,27 @@ function AddTradingConnectionDialog({
   const { t: tv } = useTranslation("venues");
   const { createTradingConnection } = useOfficerApi();
   const id = useId();
+  const fields = TRADING_PROVIDER_CREDENTIAL_FIELDS.get(provider.type);
   const [label, setLabel] = useState(provider.title);
-  const [apiKey, setApiKey] = useState("");
-  const [apiSecret, setApiSecret] = useState("");
+  const [credentialDraft, setCredentialDraft] = useState<
+    Record<string, string>
+  >(() => Object.fromEntries(fields ? fields.map(({ key }) => [key, ""]) : []));
+  const [ibSettings, setIBSettings] = useState({
+    host: "127.0.0.1",
+    port: "4002",
+    clientId: "",
+  });
+  const isIB = provider.type === "ib";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const errorBanner = useRef<HTMLDivElement>(null);
   const guide = TRADING_PROVIDER_GUIDES[provider.type];
   const ready =
-    label.trim() !== "" && apiKey.trim() !== "" && apiSecret.trim() !== "";
+    label.trim() !== "" &&
+    (isIB
+      ? ibSettingsReady(ibSettings)
+      : fields !== undefined &&
+        fields.every(({ key }) => credentialDraft[key].trim() !== ""));
 
   useEffect(() => {
     if (error !== "") errorBanner.current?.scrollIntoView({ block: "nearest" });
@@ -209,14 +434,21 @@ function AddTradingConnectionDialog({
     setBusy(true);
     setError("");
     try {
+      const credentials: Record<string, string | number> = {};
+      if (isIB) {
+        putIfFilled(credentials, "host", ibSettings.host);
+        putNumberIfFilled(credentials, "port", ibSettings.port);
+        putNumberIfFilled(credentials, "clientId", ibSettings.clientId);
+      } else if (fields) {
+        for (const { key } of fields) {
+          credentials[key] = credentialDraft[key].trim();
+        }
+      }
       const connection = await createTradingConnection({
         provider: provider.type,
         label: label.trim(),
         mode: "paper",
-        credentials: {
-          apiKey: apiKey.trim(),
-          apiSecret: apiSecret.trim(),
-        },
+        credentials,
         enabled: false,
       });
       onClose();
@@ -252,6 +484,9 @@ function AddTradingConnectionDialog({
             void submit();
           }}
         >
+          {!isIB && !fields && (
+            <ErrorBanner message={t("settings.unknownProviderCredentials")} />
+          )}
           <div className="flex flex-col gap-y-2">
             <Label htmlFor={`${id}-label`}>{tv("settings.label")}</Label>
             <Input
@@ -288,7 +523,15 @@ function AddTradingConnectionDialog({
                     key={instruction.textKey}
                     className="flex flex-col gap-y-2 pl-1"
                   >
-                    <p>{t(instruction.textKey)}</p>
+                    <p>
+                      {t(
+                        !accountScope().showsAccounts &&
+                          instruction.singleAccountTextKey !== undefined
+                          ? instruction.singleAccountTextKey
+                          : instruction.textKey,
+                        instruction.values,
+                      )}
+                    </p>
                     {instruction.links.length > 0 && (
                       <div className="flex flex-wrap gap-3">
                         {instruction.links.map((link) => (
@@ -309,32 +552,38 @@ function AddTradingConnectionDialog({
               </ol>
             )}
           </div>
-          <div className="flex flex-col gap-y-2">
-            <Label htmlFor={`${id}-api-key`}>{tv("settings.apiKey")}</Label>
-            <Input
-              id={`${id}-api-key`}
-              type="password"
-              autoComplete="new-password"
-              value={apiKey}
-              required
-              disabled={busy}
-              onChange={(event) => setApiKey(event.target.value)}
+          {isIB ? (
+            <IBConnectionFields
+              id={id}
+              draft={ibSettings}
+              busy={busy}
+              onChange={(patch) =>
+                setIBSettings((draft) => ({ ...draft, ...patch }))
+              }
             />
-          </div>
-          <div className="flex flex-col gap-y-2">
-            <Label htmlFor={`${id}-api-secret`}>
-              {tv("settings.apiSecret")}
-            </Label>
-            <Input
-              id={`${id}-api-secret`}
-              type="password"
-              autoComplete="new-password"
-              value={apiSecret}
-              required
-              disabled={busy}
-              onChange={(event) => setApiSecret(event.target.value)}
-            />
-          </div>
+          ) : (
+            fields?.map((field) => (
+              <div key={field.key} className="flex flex-col gap-y-2">
+                <Label htmlFor={`${id}-${field.key}`}>
+                  {t(field.labelKey)}
+                </Label>
+                <Input
+                  id={`${id}-${field.key}`}
+                  type="password"
+                  autoComplete="new-password"
+                  value={credentialDraft[field.key]}
+                  required
+                  disabled={busy}
+                  onChange={(event) =>
+                    setCredentialDraft({
+                      ...credentialDraft,
+                      [field.key]: event.target.value,
+                    })
+                  }
+                />
+              </div>
+            ))
+          )}
           {error && (
             <div ref={errorBanner}>
               <ErrorBanner message={error} />
@@ -375,25 +624,57 @@ function ConnectionSettingsDialog({
   const { t: tv } = useTranslation("venues");
   const { updateTradingConnectionSettings } = useOfficerApi();
   const id = useId();
+  const fields = TRADING_PROVIDER_CREDENTIAL_FIELDS.get(connection.provider);
   const [initialLabel] = useState(connection.label);
   const [label, setLabel] = useState(initialLabel);
-  const [apiKey, setApiKey] = useState("");
-  const [apiSecret, setApiSecret] = useState("");
+  const [credentialDraft, setCredentialDraft] = useState<
+    Record<string, string>
+  >(() => Object.fromEntries(fields ? fields.map(({ key }) => [key, ""]) : []));
+  const isIB = connection.provider === "ib";
+  const [initialIBSettings] = useState(() => ({
+    host: settingString(connection.settings, "host"),
+    port: settingString(connection.settings, "port"),
+    clientId: settingString(connection.settings, "clientId"),
+  }));
+  const [ibSettings, setIBSettings] = useState(initialIBSettings);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const labelChanged = label.trim() !== "" && label.trim() !== initialLabel;
-  const trimmedApiKey = apiKey.trim();
-  const trimmedApiSecret = apiSecret.trim();
-  const changed =
-    labelChanged || trimmedApiKey !== "" || trimmedApiSecret !== "";
+  const changed = isIB
+    ? label.trim() !== "" &&
+      ibSettingsReady(ibSettings) &&
+      (labelChanged ||
+        ibSettings.host !== initialIBSettings.host ||
+        ibSettings.port !== initialIBSettings.port ||
+        ibSettings.clientId !== initialIBSettings.clientId)
+    : fields !== undefined &&
+      (labelChanged ||
+        fields.some(({ key }) => credentialDraft[key].trim() !== ""));
 
   const submit = async () => {
     if (busy || !changed) return;
-    const body: { label?: string; credentials?: Record<string, string> } = {};
+    const body: {
+      label?: string;
+      credentials?: Record<string, string | number>;
+    } = {};
     if (labelChanged) body.label = label.trim();
-    const credentials: Record<string, string> = {};
-    if (trimmedApiKey !== "") credentials.apiKey = trimmedApiKey;
-    if (trimmedApiSecret !== "") credentials.apiSecret = trimmedApiSecret;
+    const credentials: Record<string, string | number> = {};
+    if (isIB) {
+      if (ibSettings.host !== initialIBSettings.host) {
+        putIfFilled(credentials, "host", ibSettings.host);
+      }
+      if (ibSettings.port !== initialIBSettings.port) {
+        putNumberIfFilled(credentials, "port", ibSettings.port);
+      }
+      if (ibSettings.clientId !== initialIBSettings.clientId) {
+        putNumberIfFilled(credentials, "clientId", ibSettings.clientId);
+      }
+    } else if (fields) {
+      for (const { key } of fields) {
+        const value = credentialDraft[key].trim();
+        if (value !== "") credentials[key] = value;
+      }
+    }
     if (Object.keys(credentials).length > 0) body.credentials = credentials;
     setBusy(true);
     setError("");
@@ -428,6 +709,9 @@ function ConnectionSettingsDialog({
             <DialogDescription>{t("settings.description")}</DialogDescription>
           </DialogHeader>
           {error && <ErrorBanner message={error} />}
+          {!isIB && !fields && (
+            <ErrorBanner message={t("settings.unknownProviderCredentials")} />
+          )}
           <div className="flex flex-col gap-y-2">
             <Label htmlFor={`${id}-label`}>{tv("settings.label")}</Label>
             <Input
@@ -438,39 +722,45 @@ function ConnectionSettingsDialog({
               disabled={busy}
             />
           </div>
-          <UnsealedKeysWarning storage={credentialStorage} />
-          <div className="flex flex-col gap-y-2">
-            <Label htmlFor={`${id}-api-key`}>{tv("settings.apiKey")}</Label>
-            <Input
-              id={`${id}-api-key`}
-              type="password"
-              autoComplete="new-password"
-              value={apiKey}
-              placeholder={
-                connection.secrets.apiKey ? tv("settings.keepStoredSecret") : ""
+          {isIB ? (
+            <IBConnectionFields
+              id={id}
+              draft={ibSettings}
+              busy={busy}
+              onChange={(patch) =>
+                setIBSettings((draft) => ({ ...draft, ...patch }))
               }
-              onChange={(event) => setApiKey(event.target.value)}
-              disabled={busy}
             />
-          </div>
-          <div className="flex flex-col gap-y-2">
-            <Label htmlFor={`${id}-api-secret`}>
-              {tv("settings.apiSecret")}
-            </Label>
-            <Input
-              id={`${id}-api-secret`}
-              type="password"
-              autoComplete="new-password"
-              value={apiSecret}
-              placeholder={
-                connection.secrets.apiSecret
-                  ? tv("settings.keepStoredSecret")
-                  : ""
-              }
-              onChange={(event) => setApiSecret(event.target.value)}
-              disabled={busy}
-            />
-          </div>
+          ) : (
+            <>
+              <UnsealedKeysWarning storage={credentialStorage} />
+              {fields?.map((field) => (
+                <div key={field.key} className="flex flex-col gap-y-2">
+                  <Label htmlFor={`${id}-${field.key}`}>
+                    {t(field.labelKey)}
+                  </Label>
+                  <Input
+                    id={`${id}-${field.key}`}
+                    type="password"
+                    autoComplete="new-password"
+                    value={credentialDraft[field.key]}
+                    placeholder={
+                      connection.secrets[field.key]
+                        ? tv("settings.keepStoredSecret")
+                        : ""
+                    }
+                    onChange={(event) =>
+                      setCredentialDraft({
+                        ...credentialDraft,
+                        [field.key]: event.target.value,
+                      })
+                    }
+                    disabled={busy}
+                  />
+                </div>
+              ))}
+            </>
+          )}
           <DialogFooter>
             <Button
               type="button"
@@ -541,16 +831,18 @@ function VenueAccountField({
   busy,
   venueAccount,
   setVenueAccount,
+  inputRef,
 }: {
   id: string;
   busy: boolean;
   venueAccount: string;
   setVenueAccount: (value: string) => void;
+  inputRef: Ref<HTMLDivElement>;
 }) {
   const { t: tv } = useTranslation("venues");
   const { t: tc } = useTranslation();
   return (
-    <div className="flex flex-col gap-y-2">
+    <div ref={inputRef} className="flex flex-col gap-y-2">
       <Label htmlFor={`${id}-venue-account`}>{tv("venueAccount")}</Label>
       <ClearableInput
         id={`${id}-venue-account`}
@@ -577,8 +869,10 @@ function ConnectionAccessSection({
   subjectCode,
   venueAccount,
   setVenueAccount,
+  venueAccountInput,
   feeBlock,
   focusFeeAccount,
+  focusVenueAccount,
   grantAccess,
   onRevoke,
 }: {
@@ -594,8 +888,10 @@ function ConnectionAccessSection({
   subjectCode: string;
   venueAccount: string;
   setVenueAccount: (value: string) => void;
+  venueAccountInput: Ref<HTMLDivElement>;
   feeBlock: AccessGrantBlock | null;
   focusFeeAccount: () => void;
+  focusVenueAccount: () => void;
   grantAccess: () => Promise<void>;
   onRevoke: (subject: TradingAccessSubject) => void;
 }) {
@@ -674,13 +970,18 @@ function ConnectionAccessSection({
             busy={busy}
             venueAccount={venueAccount}
             setVenueAccount={setVenueAccount}
+            inputRef={venueAccountInput}
           />
         )}
         {feeBlock !== null && (
           <AccessBlockedHint
             reason={feeBlock}
             providerTitle={provider.title}
-            onSetFeeAccount={focusFeeAccount}
+            onSetFeeAccount={
+              feeBlock === "needsVenueAccount"
+                ? focusVenueAccount
+                : focusFeeAccount
+            }
           />
         )}
         <Button
@@ -706,31 +1007,32 @@ function defaultAccountGrant(
   return connection.access.find((grant) => grant.accountGroup !== "");
 }
 
-/** Access of the default account while accounts are hidden: its own grant,
- *  which it can revoke, a read-only grant to its group, or none. */
-function DefaultAccountAccessSection({
+/** The venue account of the default account's grant while accounts are
+ *  hidden, for a provider that binds one per grant: the server writes the
+ *  grant of any other provider itself but cannot pick this account, so saving
+ *  the field writes the grant. A grant to its group shows read-only. */
+function DefaultVenueAccountSection({
   accessSection,
   id,
-  provider,
   busy,
   grant,
   venueAccount,
   setVenueAccount,
-  grantAccess,
-  revokeAccess,
+  venueAccountInput,
+  saveVenueAccount,
 }: {
   accessSection: Ref<HTMLElement>;
   id: string;
-  provider: TradingProvider;
   busy: boolean;
   grant: TradingAccessGrant | undefined;
   venueAccount: string;
   setVenueAccount: (value: string) => void;
-  grantAccess: () => Promise<void>;
-  revokeAccess: () => void;
+  venueAccountInput: Ref<HTMLDivElement>;
+  saveVenueAccount: () => Promise<void>;
 }) {
   const { t } = useTranslation("trading");
   const { t: tv } = useTranslation("venues");
+  const { t: tc } = useTranslation();
   const inherited = grant !== undefined && grant.accountGroup !== "";
   return (
     <section
@@ -740,59 +1042,35 @@ function DefaultAccountAccessSection({
       className="flex flex-col gap-y-3 border-t border-border pt-4"
     >
       <h4 id={`${id}-access`} className="text-sm font-medium">
-        {t("access.title")}
+        {tv("venueAccount")}
       </h4>
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={grant === undefined ? "neutral" : "ok"}>
-          {tv(
-            grant === undefined
-              ? "accessDialog.state.none"
-              : "accessDialog.state.granted",
-          )}
-        </Badge>
-        {grant !== undefined && !inherited && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={revokeAccess}
-          >
-            {tv("actions.revokeAccess")}
-          </Button>
-        )}
-      </div>
-      {inherited && (
-        <p className="text-xs text-muted">{t("access.inherited")}</p>
+      {grant !== undefined && grant.venueAccount !== "" && (
+        <p className="text-xs">
+          {tv("accessDialog.venueAccount", {
+            venueAccount: grant.venueAccount,
+          })}
+        </p>
       )}
-      {grant !== undefined &&
-        provider.venueAccounts &&
-        grant.venueAccount !== "" && (
-          <p className="text-xs">
-            {tv("accessDialog.venueAccount", {
-              venueAccount: grant.venueAccount,
-            })}
-          </p>
-        )}
-      {grant === undefined && (
+      {inherited ? (
+        <p className="text-xs text-muted">{t("access.inherited")}</p>
+      ) : (
         <form
-          aria-label={tv("actions.grantAccess")}
+          aria-label={tv("venueAccount")}
           className="flex flex-col gap-y-3"
           onSubmit={(event) => {
             event.preventDefault();
-            void grantAccess();
+            void saveVenueAccount();
           }}
         >
-          {provider.venueAccounts && (
-            <VenueAccountField
-              id={id}
-              busy={busy}
-              venueAccount={venueAccount}
-              setVenueAccount={setVenueAccount}
-            />
-          )}
-          <Button type="submit" disabled={busy}>
-            {tv("actions.grantAccess")}
+          <VenueAccountField
+            id={id}
+            busy={busy}
+            venueAccount={venueAccount}
+            setVenueAccount={setVenueAccount}
+            inputRef={venueAccountInput}
+          />
+          <Button type="submit" disabled={busy || venueAccount.trim() === ""}>
+            {tc("actions.save")}
           </Button>
         </form>
       )}
@@ -943,17 +1221,13 @@ function ConnectionInstrumentsSection({
   const { t } = useTranslation("trading");
   const api = useOfficerApi();
   const [verifying, setVerifying] = useState(false);
-  const [missingAsset, setMissingAsset] = useState<string | null>(null);
   const [searchError, setSearchError] = useState("");
   const [verifyError, setVerifyError] = useState<{
     symbol: string;
     message: string;
   } | null>(null);
-  const [draft, setDraft] = useState<InstrumentDraftFields>({
-    externalSymbol: "",
-    baseAsset: "",
-    quoteAsset: "",
-  });
+  // The add row starts as a market-data feed's does.
+  const [draft, setDraft] = useState(emptyInstrumentDraft);
   const [searchSupported, setSearchSupported] = useState<boolean | null>(null);
   const symbolSearch = useSymbolSearch(async (query) => {
     setSearchSupported(null);
@@ -1006,50 +1280,23 @@ function ConnectionInstrumentsSection({
     verifyError?.symbol === draft.externalSymbol.trim()
       ? verifyError.message
       : "";
-  const draftComplete =
-    draft.externalSymbol.trim() !== "" &&
-    draft.baseAsset.trim() !== "" &&
-    draft.quoteAsset.trim() !== "";
-  // createAsset names an asset the operator chose to create before the save.
-  const saveInstrument = async (createAsset?: string) => {
+  // As on a market-data feed, an asset code Officer cannot accept keeps the
+  // add button disabled.
+  const draftComplete = isInstrumentDraftFieldsValid(draft);
+  // As on a market-data feed, the server creates a base or quote asset Officer
+  // does not know yet.
+  const saveInstrument = async () => {
     if (busy || !draftComplete) return;
-    setMissingAsset(null);
-    const existingInstrument = connection.instruments.find(
-      (instrument) => instrument.externalSymbol === draft.externalSymbol.trim(),
-    );
-    const ok = await run(
-      async () => {
-        if (createAsset !== undefined) {
-          await api.createAsset(createAsset, "", "");
-        }
-        await api.upsertTradingInstrument(connection.id, {
-          externalSymbol: draft.externalSymbol.trim(),
-          baseAsset: draft.baseAsset.trim(),
-          quoteAsset: draft.quoteAsset.trim(),
-          enabled: existingInstrument ? existingInstrument.enabled : true,
-        });
-      },
-      // A missing draft asset is answered by the explicit create-and-save offer.
-      (err) => {
-        if (
-          err instanceof ApiError &&
-          err.code === "asset_missing" &&
-          err.asset !== undefined &&
-          (err.asset === draft.baseAsset.trim() ||
-            err.asset === draft.quoteAsset.trim())
-        ) {
-          setMissingAsset(err.asset);
-          return true;
-        }
-        return false;
-      },
+    const ok = await run(() =>
+      api.upsertTradingInstrument(connection.id, {
+        externalSymbol: draft.externalSymbol.trim(),
+        baseAsset: draft.baseAsset.trim(),
+        quoteAsset: draft.quoteAsset.trim(),
+        enabled: draft.enabled,
+      }),
     );
     if (ok) {
-      setDraft({
-        externalSymbol: "",
-        baseAsset: "",
-        quoteAsset: "",
-      });
+      setDraft(emptyInstrumentDraft);
       setVerification(null);
       setVerifyError(null);
     }
@@ -1081,11 +1328,12 @@ function ConnectionInstrumentsSection({
             }}
             onPick={(match) => {
               const pair = venueSymbolPair(match);
-              setDraft({
+              setDraft((previous) => ({
+                ...previous,
                 externalSymbol: match.symbol,
                 baseAsset: pair.base,
                 quoteAsset: pair.quote,
-              });
+              }));
               setVerification(null);
               setVerifyError(null);
             }}
@@ -1132,6 +1380,14 @@ function ConnectionInstrumentsSection({
             ? { verifying, onVerify: verifySymbol }
             : undefined
         }
+        enabled={{
+          value: draft.enabled,
+          onToggle: () =>
+            setDraft((previous) => ({
+              ...previous,
+              enabled: !previous.enabled,
+            })),
+        }}
         baseSuggestions={baseSuggestions.codes}
         quoteSuggestions={quoteSuggestions.codes}
         baseSuggestionsFailed={baseSuggestions.failed}
@@ -1158,30 +1414,6 @@ function ConnectionInstrumentsSection({
           />
         ) : null;
       })}
-      {missingAsset !== null &&
-        (draft.baseAsset.trim() === missingAsset ||
-          draft.quoteAsset.trim() === missingAsset) && (
-          <div
-            role="alert"
-            className="flex flex-col gap-y-2 text-xs text-[var(--warn)]"
-          >
-            <p>{t("instruments.assetMissing", { asset: missingAsset })}</p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy || !draftComplete}
-              onClick={() => {
-                void saveInstrument(missingAsset);
-              }}
-            >
-              {t("instruments.createAssetAndSave", {
-                asset: missingAsset,
-              })}
-            </Button>
-          </div>
-        )}
-
       <InstrumentsTable
         instruments={connection.instruments}
         ariaLabel={t("instruments.title")}
@@ -1286,6 +1518,7 @@ function ConnectionCard({
   const accessSection = useRef<HTMLElement>(null);
   const enableButton = useRef<HTMLButtonElement>(null);
   const feeInput = useRef<HTMLInputElement>(null);
+  const venueAccountInput = useRef<HTMLDivElement>(null);
   const card = useRef<HTMLDivElement>(null);
   const feeQuery = useDebouncedValue(
     feeCode.trim(),
@@ -1400,18 +1633,31 @@ function ConnectionCard({
     feeInput.current?.scrollIntoView({ block: "nearest" });
     feeInput.current?.focus();
   };
+  const focusVenueAccount = () => {
+    venueAccountInput.current?.scrollIntoView({ block: "nearest" });
+    venueAccountInput.current?.querySelector("input")?.focus();
+  };
   const { showsAccounts } = accountScope();
   // Hidden accounts leave no fee-account section to send the operator to.
   const showsFeeAccount = showsAccounts && provider.unlinkedFees;
   const subjectCode = subjectInput.trim();
   const feeAccountCode = feeCode.trim();
   // A group is refused whatever its code, so its reason shows before typing.
-  const feeBlock =
-    subjectKind === "group"
-      ? accessGrantBlock(provider, connection, { accountGroup: subjectCode })
+  // Hidden accounts grant nothing from the panel: the server writes the
+  // default account's grant, or the venue account field saves it.
+  const feeBlock = !showsAccounts
+    ? null
+    : subjectKind === "group"
+      ? accessGrantBlock(provider, connection, {
+          accountGroup: subjectCode,
+          venueAccount,
+        })
       : subjectCode === ""
         ? null
-        : accessGrantBlock(provider, connection, { account: subjectCode });
+        : accessGrantBlock(provider, connection, {
+            account: subjectCode,
+            venueAccount,
+          });
   const steps = [
     {
       key: "check",
@@ -1425,14 +1671,23 @@ function ConnectionCard({
       done: connection.instruments.length > 0,
       target: instrumentSection,
     },
-    {
-      key: "access",
-      label: t("access.title"),
-      // Also while accounts are hidden: the list then holds only the default
-      // account's own grants and those of its group.
-      done: connection.access.length > 0,
-      target: accessSection,
-    },
+    // Hidden accounts take no access step: the server grants the default
+    // account itself, and only a venue account still has to be named. The
+    // list then holds only the default account's own grants and its group's.
+    ...(showsAccounts || provider.venueAccounts
+      ? [
+          {
+            key: "access",
+            label: showsAccounts ? t("access.title") : tv("venueAccount"),
+            // Hidden accounts: done only once the default account's grant
+            // names the venue account an order needs.
+            done: showsAccounts
+              ? connection.access.length > 0
+              : (defaultAccountGrant(connection)?.venueAccount ?? "") !== "",
+            target: accessSection,
+          },
+        ]
+      : []),
     {
       key: "enable",
       label: tv("actions.enable"),
@@ -1506,9 +1761,8 @@ function ConnectionCard({
           <>
             <Badge variant="neutral">{provider.title}</Badge>
             <Badge>{t(`mode.${connection.mode}`)}</Badge>
-            <Badge variant={CONNECTION_STATE_BADGE[connection.state]}>
-              {t(`state.${connection.state}`)}
-            </Badge>
+            {/* The feed's enabled/disabled badge, worded to agree with
+                "connection" where a locale inflects it. */}
             <Badge variant={connection.enabled ? "ok" : "neutral"}>
               {t(
                 connection.enabled
@@ -1516,6 +1770,13 @@ function ConnectionCard({
                   : "connection.disabled",
               )}
             </Badge>
+            {/* As a feed's: the runtime state reads only while enabled. A
+                disabled connection's worker may still track its open orders. */}
+            {connection.enabled && (
+              <Badge variant={CONNECTION_STATE_BADGE[connection.state]}>
+                {t(`state.${connection.state}`)}
+              </Badge>
+            )}
           </>
         }
         error={connection.error}
@@ -1571,20 +1832,35 @@ function ConnectionCard({
             <dt className="text-muted">{tv("venueAccount")}</dt>
             <dd className="break-all">{connection.venueIdentity}</dd>
           </dl>
-          <p>
-            {t(
-              connection.secrets.apiKey
-                ? "connection.apiKeyStored"
-                : "connection.apiKeyNotSet",
-            )}
-          </p>
-          <p>
-            {t(
-              connection.secrets.apiSecret
-                ? "connection.apiSecretStored"
-                : "connection.apiSecretNotSet",
-            )}
-          </p>
+          {connection.provider === "ib" ? (
+            <>
+              <p>
+                {t("connection.ibEndpoint", {
+                  host: settingString(connection.settings, "host"),
+                  port: settingString(connection.settings, "port"),
+                })}
+              </p>
+              <p>
+                {t("connection.ibClientId", {
+                  clientId:
+                    settingString(connection.settings, "clientId") ||
+                    t("marketData:settings.autoClientId"),
+                })}
+              </p>
+            </>
+          ) : (
+            TRADING_PROVIDER_CREDENTIAL_FIELDS.get(connection.provider)?.map(
+              (field) => (
+                <p key={field.key}>
+                  {t(
+                    connection.secrets[field.key]
+                      ? field.storedKey
+                      : field.notSetKey,
+                  )}
+                </p>
+              ),
+            )
+          )}
         </div>
         {!connection.enabled && (
           <div className="flex flex-col gap-y-2">
@@ -1669,23 +1945,37 @@ function ConnectionCard({
             subjectCode={subjectCode}
             venueAccount={venueAccount}
             setVenueAccount={setVenueAccount}
+            venueAccountInput={venueAccountInput}
             feeBlock={feeBlock}
             focusFeeAccount={focusFeeAccount}
+            focusVenueAccount={focusVenueAccount}
             grantAccess={grantAccess}
             onRevoke={openRevoke}
           />
-        ) : (
-          <DefaultAccountAccessSection
+        ) : provider.venueAccounts ? (
+          <DefaultVenueAccountSection
             accessSection={accessSection}
             id={id}
-            provider={provider}
             busy={busy}
             grant={defaultAccountGrant(connection)}
             venueAccount={venueAccount}
             setVenueAccount={setVenueAccount}
-            grantAccess={() => grant({ account: accountScope().account })}
-            revokeAccess={() => openRevoke({ account: accountScope().account })}
+            venueAccountInput={venueAccountInput}
+            saveVenueAccount={() => grant({ account: accountScope().account })}
           />
+        ) : (
+          // The server grants the default account on create and enable; an
+          // enabled connection can still lack it, e.g. after a revoke through
+          // the API or a switch from multi-account mode.
+          connection.enabled &&
+          defaultAccountGrant(connection) === undefined && (
+            <p
+              role="alert"
+              className="border-t border-border pt-4 text-xs text-[var(--warn)]"
+            >
+              {t("access.missing")}
+            </p>
+          )
         )}
         {showsFeeAccount && (
           <ConnectionFeeAccountSection

@@ -20,18 +20,35 @@
     "stopped": "Parado"
   },
   "connection": {
+    "ibEndpoint": "{{host}}:{{port}}",
+    "ibClientId": "Client ID: {{clientId}}",
     "enabled": "Ativada",
     "disabled": "Desativada",
     "apiKeyStored": "API key: armazenada",
     "apiKeyNotSet": "API key: não definida",
     "apiSecretStored": "API secret: armazenado",
-    "apiSecretNotSet": "API secret: não definido"
+    "apiSecretNotSet": "API secret: não definido",
+    "etoro": {
+      "apiKeyStored": "Public API key: armazenada",
+      "apiKeyNotSet": "Public API key: não definida",
+      "userKeyStored": "User key: armazenada",
+      "userKeyNotSet": "User key: não definida"
+    }
   },
   "actions": {
     "addConnection": "Adicionar conexão de negociação",
     "check": "Verificar conexão"
   },
   "create": {
+    "ib": {
+      "install": "Instale o IB Gateway (ou TWS) e entre com seu nome de usuário de negociação simulada.",
+      "download": "Baixar IB Gateway",
+      "enableApi": "Em {{settingsPath}}, habilite os clientes de socket (TWS: \"{{socketClients}}\"), desmarque \"{{readOnlyApi}}\" para aceitar ordens e anote a porta de socket (IB Gateway simulado: 4002; TWS simulado: 7497). Permita 127.0.0.1 em {{trustedIPs}} ou aceite a solicitação de conexão.",
+      "documentation": "Documentação da TWS API",
+      "keepRunning": "Mantenha o IB Gateway em execução e com a sessão iniciada. Informe o host e a porta abaixo; o ID do cliente é opcional.",
+      "grantAccess": "Após criar a conexão, conceda acesso com seu ID de conta IB (começa com {{paperAccountPrefix}} na negociação simulada) como conta na plataforma. As ordens chegam ao IB somente por uma permissão vinculada a essa conta.",
+      "setVenueAccount": "Após criar a conexão, informe seu ID de conta IB (começa com {{paperAccountPrefix}} na negociação simulada) como a conta na plataforma dela. As ordens chegam ao IB somente por essa conta."
+    },
     "title": "Adicionar conexão {{provider}}",
     "chooseVenue": "Escolher plataforma",
     "prepareAccount": "Prepare sua conta {{provider}}",
@@ -46,6 +63,21 @@
       "aboutPaperTrading": "Sobre a negociação simulada",
       "generateKeys": "Gere chaves de API simuladas: com Paper Trading selecionado, localize o quadro API Keys no painel da Alpaca e clique em Generate New Key. Copie a API key e o API secret - a Alpaca mostra o API secret somente uma vez. As chaves simuladas funcionam somente com a conta simulada.",
       "keepDashboardOpen": "Mantenha o painel da Alpaca aberto - os campos abaixo pedem os dois valores."
+    },
+    "binance": {
+      "openTestnet": "Abra a rede de testes de negociação à vista da Binance e entre com uma conta do GitHub.",
+      "openSpotTestnet": "Abrir a rede de testes de negociação à vista",
+      "generateKeys": "Gere uma chave de API HMAC-SHA256 nessa página e copie a API key e o API secret. As conexões simuladas usam a rede de testes de negociação à vista; as chaves de teste funcionam somente nessa rede.",
+      "keepPageOpen": "Mantenha a página aberta - os campos abaixo pedem os dois valores."
+    },
+    "etoro": {
+      "logInAccount": "Entre em sua conta eToro.",
+      "logIn": "Entrar na eToro",
+      "createUserKey": "Crie uma chave de usuário: na eToro, abra Configurações e depois Negociação, role até API Key Management e clique em Create New Key. Selecione o ambiente de demonstração - cada chave funciona em apenas um ambiente, e o Officer conecta a conta de demonstração no modo simulado. Selecione a permissão de escrita - a permissão somente de leitura mostra dados da carteira e não permite enviar ordens. Clique em Generate Key e informe o código de verificação que a eToro envia ao seu telefone.",
+      "copyUserKey": "Copie a nova chave da lista Generated Keys para o campo User key.",
+      "publicApiKey": "A Public API key identifica o aplicativo. O guia de autenticação da eToro explica como ela é emitida.",
+      "authenticationGuide": "Guia de autenticação da eToro",
+      "keepDialogOpen": "Mantenha este diálogo aberto - os campos abaixo pedem os dois valores."
     }
   },
   "setup": {
@@ -58,13 +90,16 @@
     "result": "Conta na plataforma {{id}} · situação {{status}}"
   },
   "settings": {
-    "description": "Deixe os campos em branco para manter os valores armazenados."
+    "description": "Deixe os campos em branco para manter os valores armazenados.",
+    "unknownProviderCredentials": "Este painel não conhece os campos de credenciais deste provedor.",
+    "etoro": {
+      "apiKey": "Public API key",
+      "userKey": "User key"
+    }
   },
   "instruments": {
     "title": "Instrumentos",
     "deleteDescription": "{{symbol}} será removido de {{label}}.",
-    "assetMissing": "O ativo {{asset}} não existe no Officer. O Officer não cria ativos implicitamente; crie-o para salvar o instrumento.",
-    "createAssetAndSave": "Criar o ativo {{asset}} e salvar",
     "connectionDisabled": "Conexão desativada"
   },
   "search": {
@@ -80,7 +115,8 @@
   "access": {
     "title": "Acesso de contas",
     "grantTo": "Conceder a",
-    "inherited": "Herdado do grupo da conta. O acesso do grupo é gerenciado no modo de várias contas."
+    "inherited": "Herdado do grupo da conta. O acesso do grupo é gerenciado no modo de várias contas.",
+    "missing": "A conta não tem acesso a esta conexão, por isso as ordens enviadas por ela são recusadas. Desative e ative novamente a conexão para restabelecer o acesso."
   },
   "fee": {
     "title": "Conta de taxas",

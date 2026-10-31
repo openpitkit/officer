@@ -90,6 +90,7 @@ type fakeVenue struct {
 	snapshots    map[string]trading.Snapshot
 	sends        []trading.Order
 	lookups      int
+	lookupRefs   []trading.OrderRef
 	closes       int
 	builds       int
 	active       int
@@ -195,6 +196,7 @@ func (c *fakeConnector) Lookup(_ context.Context, ref trading.OrderRef) (trading
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.lookups++
+	v.lookupRefs = append(v.lookupRefs, ref)
 	snapshot, found := v.snapshots[ref.ClientOrderID]
 	snapshot.Fills = append([]trading.Fill(nil), snapshot.Fills...)
 	return snapshot, found, nil

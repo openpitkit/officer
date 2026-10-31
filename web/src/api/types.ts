@@ -793,7 +793,9 @@ export interface TradingConnection {
    *  none. Same shape market-data instances carry. */
   diagnostics: Diagnostic[];
   /** Presence flags only; credential values are write-only. */
-  secrets: { apiKey: boolean; apiSecret: boolean };
+  secrets: Record<string, boolean>;
+  /** Non-secret provider settings; IB host, port, clientId. */
+  settings?: Record<string, unknown>;
   instruments: TradingInstrument[];
   access: TradingAccessGrant[];
   /** Officer account for unlinked fees; need not be bound; empty when unset. */

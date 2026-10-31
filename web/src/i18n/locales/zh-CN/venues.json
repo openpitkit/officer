@@ -23,6 +23,7 @@
     "keepStoredSecret": "保留已保存密钥"
   },
   "actions": {
+    "setVenueAccount": "设置交易场所账户",
     "addInstrument": "添加工具",
     "enable": "启用",
     "disable": "停用",
@@ -68,6 +69,7 @@
     "groupDescription": "撤销账户组 {{group}} 对 {{label}} 的访问权限？组内账户仅在被直接授权时保留访问权限。"
   },
   "accessBlocked": {
+    "needsVenueAccount": "请先输入 {{provider}} 账户。订单仅能通过绑定交易场所账户的授权发送至 {{provider}}。",
     "groupNeedsFeeAccount": "请先设置手续费账户。账户组可包含多个账户，而 {{provider}} 收取不与订单关联的费用；Officer 需要指定一个账户记账。",
     "secondAccountNeedsFeeAccount": "请先设置手续费账户。{{provider}} 收取不与订单关联的费用；多个账户共用一个连接时，Officer 需要指定一个账户记账。"
   },

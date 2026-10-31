@@ -33,11 +33,12 @@ import (
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/internal/backoff"
+	"go.openpit.dev/officer/internal/binance"
 )
 
 const (
 	binanceStreamBaseURL   = "wss://data-stream.binance.vision/stream"
-	binanceExchangeInfoURL = "https://data-api.binance.vision/api/v3/exchangeInfo"
+	binanceExchangeInfoURL = binance.DataURL + binance.ExchangeInfoPath
 	binanceDiagnoseTimeout = 10 * time.Second
 	binanceReadLimit       = 64 << 10
 
@@ -486,34 +487,13 @@ func (c *binanceConnector) clearActiveConn() {
 	c.active = nil
 }
 
-// binanceExchangeInfoResponse carries only the symbol fields we need.
-type binanceExchangeInfoResponse struct {
-	Symbols []struct {
-		Symbol     string `json:"symbol"`
-		BaseAsset  string `json:"baseAsset"`
-		QuoteAsset string `json:"quoteAsset"`
-	} `json:"symbols"`
-}
-
 // fetchBinanceSymbols fetches the Binance exchange info and returns its
 // uppercased symbols with their base and quote assets. It is the default
 // implementation of fetchSymbols.
 func fetchBinanceSymbols(ctx context.Context) (map[string]symbolAssets, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, binanceExchangeInfoURL, nil)
+	info, err := binance.FetchExchangeInfo(ctx, http.DefaultClient, binance.DataURL)
 	if err != nil {
 		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("binance exchangeInfo: unexpected status %d", resp.StatusCode)
-	}
-	var info binanceExchangeInfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("binance exchangeInfo: decode: %w", err)
 	}
 	set := make(map[string]symbolAssets, len(info.Symbols))
 	for _, s := range info.Symbols {

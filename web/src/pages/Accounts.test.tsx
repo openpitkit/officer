@@ -530,7 +530,7 @@ const accessSnapshot: TradingSnapshot = {
     {
       type: "alpaca",
       title: "Alpaca",
-      venueAccounts: true,
+      venueAccounts: false,
       verifiesSymbols: true,
       searchesSymbols: true,
       unlinkedFees: true,

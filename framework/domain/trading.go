@@ -38,6 +38,15 @@ const (
 // TradingProviderAlpaca is the Alpaca trading-provider discriminator.
 const TradingProviderAlpaca = "alpaca"
 
+// TradingProviderBinance is the Binance trading-provider discriminator.
+const TradingProviderBinance = "binance"
+
+// TradingProviderIB is the Interactive Brokers trading-provider discriminator.
+const TradingProviderIB = "ib"
+
+// TradingProviderEtoro is the eToro trading-provider discriminator.
+const TradingProviderEtoro = "etoro"
+
 // TradingModeSupported reports whether mode is a supported trading mode.
 func TradingModeSupported(mode TradingMode) bool {
 	return mode == TradingModePaper || mode == TradingModeLive

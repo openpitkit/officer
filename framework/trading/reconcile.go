@@ -96,6 +96,16 @@ func fillQuantities(fill Fill) (qty, cum decimal.Decimal, err error) {
 	if _, err = parseVenueDecimal(fill.LeavesQuantity, "fill leaves quantity", false, false); err != nil {
 		return
 	}
+	if fill.CommissionLeg != "" {
+		if fill.CommissionLeg != CommissionLegBase && fill.CommissionLeg != CommissionLegQuote {
+			err = fmt.Errorf("trading: fill CommissionLeg %q is invalid: %w", fill.CommissionLeg, domain.ErrInvalid)
+			return
+		}
+		if fill.Commission == nil {
+			err = fmt.Errorf("trading: fill CommissionLeg requires Commission: %w", domain.ErrInvalid)
+			return
+		}
+	}
 	if fill.Commission != nil {
 		if _, err = parseVenueDecimal(fill.Commission.Amount, "fill commission amount", false, true); err != nil {
 			return
@@ -107,10 +117,21 @@ func fillQuantities(fill Fill) (qty, cum decimal.Decimal, err error) {
 	return
 }
 
-func (w *worker) applyFill(link domain.VenueOrder, fill Fill) error {
+func (w *worker) applyFill(link domain.VenueOrder, order domain.Order, fill Fill) error {
 	_, cum, err := fillQuantities(fill)
 	if err != nil {
 		return err
+	}
+	commission := fill.Commission
+	if commission != nil {
+		translated := *commission
+		switch fill.CommissionLeg {
+		case CommissionLegBase:
+			translated.Currency = order.BaseAsset
+		case CommissionLegQuote:
+			translated.Currency = order.QuoteAsset
+		}
+		commission = &translated
 	}
 	status := domain.OrderStatusPartiallyFilled
 	if fill.Final {
@@ -120,7 +141,7 @@ func (w *worker) applyFill(link domain.VenueOrder, fill Fill) error {
 		ExternalID: reportID(link.ClientOrderID, "fill:"+cum.String()),
 		Order:      link.Order, OrderStatus: status,
 		FillQuantity: fill.Quantity, FillPrice: fill.Price,
-		LeavesQuantity: fill.LeavesQuantity, Commission: fill.Commission,
+		LeavesQuantity: fill.LeavesQuantity, Commission: commission,
 	})
 	if errors.Is(err, domain.ErrAlreadyExists) {
 		return nil
@@ -190,7 +211,7 @@ func (w *worker) handleFill(link domain.VenueOrder, fill Fill) error {
 		w.trackReconcile(link)
 		return nil
 	}
-	return w.applyFill(link, fill)
+	return w.applyFill(link, detail.Order, fill)
 }
 
 func (w *worker) reconcileAll() {
@@ -289,10 +310,17 @@ func (w *worker) reconcile(link domain.VenueOrder) error {
 	if domain.OrderStatusTerminal(detail.Order.Status) {
 		return nil
 	}
+	instrument, mapped, err := w.r.store.FindTradingInstrument(ctx, w.connection.ExternalID,
+		detail.Order.BaseAsset, detail.Order.QuoteAsset)
+	if err != nil {
+		return err
+	}
+	ref := OrderRef{ClientOrderID: link.ClientOrderID, VenueOrderID: link.VenueOrderID, Side: detail.Order.Side}
+	if mapped {
+		ref.Symbol = instrument.ExternalSymbol
+	}
 	lookupCtx, cancel := context.WithTimeout(ctx, connectorTimeout)
-	snapshot, found, err := w.connector.Lookup(lookupCtx, OrderRef{
-		ClientOrderID: link.ClientOrderID, VenueOrderID: link.VenueOrderID,
-	})
+	snapshot, found, err := w.connector.Lookup(lookupCtx, ref)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("trading: venue lookup: %w", err)
@@ -336,7 +364,7 @@ func (w *worker) reconcile(link domain.VenueOrder) error {
 		if !cum.Sub(qty).Equal(officerCum) {
 			return fmt.Errorf("trading: Officer cumulative does not match next venue fill: %w", domain.ErrUpstream)
 		}
-		if err := w.applyFill(link, fill); err != nil {
+		if err := w.applyFill(link, detail.Order, fill); err != nil {
 			return err
 		}
 		// Re-read even for ErrAlreadyExists: only persisted core trades count.

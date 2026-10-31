@@ -459,8 +459,11 @@ or market-data sources hold keys in plain text. `GET /credential-storage` also
 reports `sealedAt`, when the database was sealed, and `resealedSecrets`, how
 many stored secret values that sealing re-sealed - `null` and `0` for a
 database never sealed; the MCP tool reports neither.
-An instrument mapping whose base or quote asset Officer does not know is refused
-with `asset_missing`, naming the asset; Officer never creates the asset itself.
+An instrument mapping whose base or quote asset Officer does not know creates
+that asset, as a market-data instrument mapping does; each created asset is
+audited as `create_asset`. An asset code Officer cannot accept is refused with
+`validation`, and an unknown connection or market-data source with `not_found`;
+neither creates an asset.
 
 In a non-release build, creating a trading connection enabled or enabling an
 existing one requires `nonReleaseConfirmed: true`, accepted only on the panel
@@ -485,6 +488,18 @@ the one account that can send through it; when none or several can, each fee
 is skipped with a `venue_fee_skipped` audit. A group grant, or a grant to a
 second account, needs the fee account there and is refused with
 `fee_account_required` without one.
+
+The `ib` provider trades through a running TWS or IB Gateway session over the
+TWS API. Its credentials are `{host, port, clientId?}`: host and port are
+required, and Officer derives a client ID from the connection when none is
+given. These values are not secret; the connection status returns them under
+`settings`, and the panel prefills its settings dialog from them. The route is
+`{"timeInForce": "day" | "gtc" | "ioc"}`. An IB order goes out only through a
+grant bound to a venue account, the IB account ID; a grant without one cannot
+carry an order. Commissions arrive with their fills. IB returns executions only
+since local midnight: when reconciliation needs older executions, the order
+stays pending and the connection shows a diagnostic. It
+never treats the order as missing and never infers a fill.
 
 Paper sends use `POST /orders/send-paper` or `send_paper_order`; live counterparts
 `POST /orders/send-live` and `send_live_order` come with the live-trading token.
@@ -539,6 +554,14 @@ While the mode runs:
 - Lists and counts show the default account's rows and rows of no account;
   groups, trading grants and fee accounts of other accounts are hidden. Venue
   executions and fees still post to the account they belong to.
+- Creating a trading connection, and enabling one, grants the default account
+  access to it when the account has none, its own or its group's; the system
+  writes the grant and the audit records it as such. A refused grant is the
+  error of that create or enable, whose own change is already stored and
+  started. The `ib` provider is the exception: its grant names the IB account
+  ID orders go through, which the client chooses among the accounts the
+  gateway manages, so the client writes that grant with
+  `PUT /trading/connections/{id}/access`.
 
 The mode narrows what clients see, not what they may do: backup export, backup
 restore and `POST /database/reset` act on every account, and any client can

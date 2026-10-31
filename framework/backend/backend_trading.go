@@ -65,10 +65,30 @@ type TradingConnectionStatus struct {
 	// diagnostic and in each action target are redacted.
 	Diagnostics []health.Diagnostic
 	Secrets     map[string]bool
+	Settings    map[string]any
 	Instruments []domain.TradingInstrument
 	// Access lists the connection's grants the account scope shows the caller,
 	// each with the granted account's current group.
 	Access []store.TradingAccessListRow
+}
+
+// TradingConnectionSettings reports non-secret settings safe to display in
+// edit forms: IB host, port and clientId. It is nil for any other provider,
+// whose credentials it never reads, and when the stored credentials are not
+// a JSON object or hold no such settings.
+func TradingConnectionSettings(c domain.TradingConnection) map[string]any {
+	if c.Provider != domain.TradingProviderIB {
+		return nil
+	}
+	credentials := credentialsObject(c.Credentials)
+	settings := make(map[string]any)
+	copyStringSetting(settings, credentials, "host")
+	copyNumberSetting(settings, credentials, "port")
+	copyNumberSetting(settings, credentials, "clientId")
+	if len(settings) == 0 {
+		return nil
+	}
+	return settings
 }
 
 // TradingStatus is the credential-free control-plane view of trading.
@@ -210,7 +230,8 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			Error: redact.Replace(reason),
 			Diagnostics: redactTradingDiagnostics(
 				redact, states[c.ExternalID].Diagnostics),
-			Secrets: secrets, Instruments: instruments, Access: access,
+			Secrets: secrets, Settings: TradingConnectionSettings(c),
+			Instruments: instruments, Access: access,
 		})
 	}
 	return status, nil
@@ -227,8 +248,10 @@ func (s *Service) requireNonReleaseTradingConfirmation(caller domain.Caller, con
 // CreateTradingConnection identifies the venue account before storing a paper
 // connection. The returned value omits credentials. A tighten-only caller is
 // refused with domain.ErrLoosening before anything is checked or the venue is
-// called: a new connection widens what can be sent. In a non-release build,
-// enabling requires the operator's confirmation through the panel.
+// called: a new connection widens what can be sent. In single-account mode the
+// create also writes the scope account's grant (see grantScopeAccountLocked).
+// In a non-release build, enabling requires the operator's confirmation through
+// the panel.
 func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection, nonReleaseConfirmed bool) (domain.TradingConnection, error) {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -298,10 +321,14 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 	if err != nil {
 		return domain.TradingConnection{}, err
 	}
+	// The grant goes first, so a failed restart cannot leave the connection
+	// stored without it; a refused grant still starts what the create stored.
+	err = s.grantScopeAccountLocked(ctx, created.ExternalID.String())
 	if created.Enabled {
-		if err := s.restartTradingLocked(); err != nil {
-			return domain.TradingConnection{}, err
-		}
+		err = errors.Join(err, s.restartTradingLocked())
+	}
+	if err != nil {
+		return domain.TradingConnection{}, err
 	}
 	created.Credentials = ""
 	return created, nil
@@ -390,7 +417,9 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 }
 
 // SetTradingConnectionEnabled starts enabled connections; disabling leaves
-// runtime reconciliation of existing venue orders active.
+// runtime reconciliation of existing venue orders active. In single-account
+// mode an enable also writes the scope account's grant (see
+// grantScopeAccountLocked), so a connection stored before it trades too.
 func (s *Service) SetTradingConnectionEnabled(ctx context.Context, id string, enabled, nonReleaseConfirmed bool) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -413,8 +442,51 @@ func (s *Service) SetTradingConnectionEnabled(ctx context.Context, id string, en
 	if err := s.node.SetTradingConnectionEnabled(ctx, connection, enabled, caller); err != nil {
 		return err
 	}
-	if enabled {
-		return s.restartTradingLocked()
+	if !enabled {
+		return nil
+	}
+	// As in the create: the grant before the restart, and a refused grant still
+	// starts the stored enable.
+	return errors.Join(s.grantScopeAccountLocked(ctx, connection.String()), s.restartTradingLocked())
+}
+
+// grantScopeAccountLocked keeps single-account mode's own grant: there the
+// scope's one account trades through a connection without an operator grant,
+// so the service writes that account's grant, attributed to the system, when
+// the account holds none to the connection, its own or its group's. A provider
+// binding a venue account per grant is left to the operator, who names that
+// account; multi-account mode writes nothing. The provider's fee policy still
+// applies: with unlinked fees, no fee account and another account's grant the
+// node refuses it with domain.ErrFeeAccountRequired. Callers refuse a
+// tighten-only caller before reaching it. Multi-account mode reads nothing.
+func (s *Service) grantScopeAccountLocked(ctx context.Context, id string) error {
+	account := s.scope.Features().Account
+	if account == "" {
+		return nil
+	}
+	c, err := s.tradingConnection(ctx, id)
+	if err != nil {
+		return err
+	}
+	p, err := s.tradingProvider(c.Provider)
+	if err != nil {
+		return err
+	}
+	if p.VenueAccounts {
+		return nil
+	}
+	access, err := s.node.ListTradingAccess(ctx, account)
+	if err != nil {
+		return fmt.Errorf("read trading access of %s: %w", account, err)
+	}
+	for _, a := range access {
+		if a.Connection == c.ExternalID {
+			return nil
+		}
+	}
+	grant := domain.TradingAccess{Account: account, Connection: c.ExternalID}
+	if err := s.node.PutTradingAccess(ctx, grant, p.UnlinkedFees, auth.SystemCaller()); err != nil {
+		return fmt.Errorf("grant %s access to trading connection %s: %w", account, c.ExternalID, err)
 	}
 	return nil
 }

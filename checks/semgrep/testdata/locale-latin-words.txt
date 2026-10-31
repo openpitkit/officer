@@ -24,6 +24,8 @@
     # ok: locale-latin-words
     "phrases": "Pit Officer, Claude Agent Skill, API key и IB Gateway; HTTPS-URL.",
     # ok: locale-latin-words
+    "etoroField": "Введите Public API key.",
+    # ok: locale-latin-words
     "platform": "Без Docker код в терминале macOS, Windows или Linux.",
     # ok: locale-latin-words
     "shell": "Команды для Windows PowerShell.",

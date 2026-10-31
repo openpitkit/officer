@@ -1369,7 +1369,12 @@ function normalizeTradingConnection(v: unknown): TradingConnection {
       "internal",
     );
   }
-  const secrets = isObject(o.secrets) ? o.secrets : {};
+  const secrets: Record<string, boolean> = {};
+  if (isObject(o.secrets)) {
+    for (const [key, value] of Object.entries(o.secrets)) {
+      secrets[key] = value === true;
+    }
+  }
   const connection: TradingConnection = {
     id: asString(o.id),
     provider: asString(o.provider),
@@ -1379,10 +1384,7 @@ function normalizeTradingConnection(v: unknown): TradingConnection {
     venueIdentity: asString(o.venueIdentity),
     state: normalizeTradingConnectionState(o.state),
     diagnostics: o.diagnostics.map(normalizeDiagnostic),
-    secrets: {
-      apiKey: asBool(secrets.apiKey),
-      apiSecret: asBool(secrets.apiSecret),
-    },
+    secrets,
     instruments: o.instruments.map(normalizeTradingInstrument),
     access: o.access.map(normalizeTradingAccessGrant),
     feeAccount: requireStringField(
@@ -1393,6 +1395,10 @@ function normalizeTradingConnection(v: unknown): TradingConnection {
   };
   if (o.error !== undefined) {
     connection.error = asString(o.error);
+  }
+  const settings = pick(o, "settings", "Settings");
+  if (isObject(settings)) {
+    connection.settings = settings;
   }
   return connection;
 }
@@ -2067,7 +2073,7 @@ async function createTradingConnection(
     provider: string;
     label: string;
     mode: TradingMode;
-    credentials: Record<string, string>;
+    credentials: Record<string, string | number>;
     enabled: boolean;
     nonReleaseConfirmed?: boolean;
   },
@@ -2086,7 +2092,7 @@ async function updateTradingConnectionSettings(
   id: string,
   body: {
     label?: string;
-    credentials?: Record<string, string>;
+    credentials?: Record<string, string | number>;
   },
 ): Promise<TradingSnapshot> {
   const v = await client.request(

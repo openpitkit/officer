@@ -32,10 +32,20 @@
 // reading. Venue connectors live outside this package.
 //
 // A destination is a connection, a venue account (empty where the venue has
-// none), and connector-read route JSON. A connector resolves any commission
-// currency to an Officer asset code and reports it as domain.Commission.
+// none), and connector-read route JSON. A connector sets CommissionLeg for a
+// commission in the order's base or quote asset, or reports an Officer asset
+// code. If it cannot map a third asset, it reports the venue's asset code,
+// which is booked as reported.
 // PreCheck runs before Officer pre-trade so a venue-invalid draft never takes
 // a reservation.
+//
+// OrderRef.Symbol uses the connection's current instrument mapping, including
+// disabled mappings, and is empty when the pair has no mapping. A connector
+// whose Lookup needs a symbol must return an error for an empty Symbol, never
+// found=false: reconciliation would mark the Officer order cancelled and
+// release its reservation while the venue order may still be live.
+// If the operator remaps the pair while an order is open, lookups use the new
+// symbol.
 //
 // A venue whose fees come with executions books them on the fill to the
 // order's Officer account. A venue that posts fees apart from executions

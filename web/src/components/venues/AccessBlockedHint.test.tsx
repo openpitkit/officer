@@ -29,8 +29,8 @@ import {
 } from "@/components/venues";
 import i18n from "@/i18n";
 
-const feeProvider = { unlinkedFees: true };
-const plainProvider = { unlinkedFees: false };
+const feeProvider = { unlinkedFees: true, venueAccounts: false };
+const plainProvider = { unlinkedFees: false, venueAccounts: false };
 
 function grant(account: string, accountGroup = ""): TradingAccessGrant {
   return { account, accountGroup, venueAccount: "", group: "" };
@@ -128,6 +128,43 @@ function renderHint(props: AccessBlockedHintProps) {
 }
 
 describe("AccessBlockedHint", () => {
+  it("offers the venue-account action for an unbound IB grant", async () => {
+    const user = userEvent.setup();
+    const onSetFeeAccount = vi.fn();
+    renderHint({
+      reason: "needsVenueAccount",
+      providerTitle: "Interactive Brokers",
+      onSetFeeAccount,
+    });
+    expect(
+      screen.getByText(
+        "Enter the Interactive Brokers account first. Orders reach Interactive Brokers only through a grant bound to a venue account.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Set fee account" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Set venue account" }));
+    expect(onSetFeeAccount).toHaveBeenCalledOnce();
+  });
+
+  it("links the venue-account action to trading connections", () => {
+    render(
+      <I18nextProvider i18n={i18n}>
+        <MemoryRouter>
+          <AccessBlockedHint
+            reason="needsVenueAccount"
+            providerTitle="Interactive Brokers"
+            feeAccountHref="/trading-connections"
+          />
+        </MemoryRouter>
+      </I18nextProvider>,
+    );
+    expect(
+      screen.getByRole("link", { name: "Set venue account" }),
+    ).toHaveAttribute("href", "/trading-connections");
+  });
+
   it("states the second-account reason with the provider title and focuses through the button", async () => {
     const user = userEvent.setup();
     const onSetFeeAccount = vi.fn();

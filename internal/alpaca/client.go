@@ -30,7 +30,7 @@ import (
 	"net/url"
 	"strings"
 
-	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/internal/apikey"
 )
 
 // PaperRESTURL and LiveRESTURL are the trading hosts of the two separate
@@ -43,31 +43,14 @@ const (
 )
 
 // Credentials identifies one account in one environment.
-type Credentials struct{ APIKey, APISecret string }
+type Credentials = apikey.Credentials
 
 // ParseCredentials accepts only a JSON object with apiKey and apiSecret, each
 // non-blank after trimming. Errors are domain validation errors whose JSON
 // pointer is relative to the credentials object, and they never include input
 // values or unknown field names.
 func ParseCredentials(raw string) (Credentials, error) {
-	var fields map[string]string
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
-		return Credentials{}, domain.NewValidationError("", "type", "alpaca: invalid credentials JSON")
-	}
-	for field := range fields {
-		if field != "apiKey" && field != "apiSecret" {
-			return Credentials{}, domain.NewValidationError("", "unknown_field", "alpaca: unknown credentials field")
-		}
-	}
-	apiKey := strings.TrimSpace(fields["apiKey"])
-	if apiKey == "" {
-		return Credentials{}, domain.NewValidationError("/apiKey", "required", "alpaca: apiKey is required")
-	}
-	apiSecret := strings.TrimSpace(fields["apiSecret"])
-	if apiSecret == "" {
-		return Credentials{}, domain.NewValidationError("/apiSecret", "required", "alpaca: apiSecret is required")
-	}
-	return Credentials{APIKey: apiKey, APISecret: apiSecret}, nil
+	return apikey.Parse(raw, "alpaca")
 }
 
 // APIError is an HTTP refusal. Message is the body's message and Code its

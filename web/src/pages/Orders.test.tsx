@@ -276,6 +276,14 @@ const alpacaDestination: TradingDestination = {
   state: "running",
 };
 
+const binanceDestination: TradingDestination = {
+  ...alpacaDestination,
+  connection: "binance-paper",
+  label: "Binance testnet",
+  provider: "binance",
+  venueAccount: "",
+};
+
 const linkedVenueOrder: VenueOrder = {
   connection: "alpaca-paper",
   venueAccount: "PA-1",
@@ -3658,6 +3666,438 @@ describe("Orders verify envelope toolbar", () => {
 });
 
 describe("Orders venue sending", () => {
+  it.each([
+    ["GTC", "GTC - Good till cancelled"],
+    ["IOC", "IOC - Immediate or cancel"],
+    ["FOK", "FOK - Fill or kill"],
+  ])(
+    "Binance limit offers exactly its three TIFs and sends %s",
+    async (value, label) => {
+      const user = userEvent.setup();
+      fetchTradingDestinationsMock.mockResolvedValue([binanceDestination]);
+      sendPaperOrderMock.mockRejectedValue(
+        new ApiError("Request inspected", "upstream", 502),
+      );
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFields(user, dialog);
+      await enablePaperSending(user, dialog);
+      await user.type(
+        within(dialog).getByLabelText("Limit price (optional)"),
+        "42.5",
+      );
+
+      const select = await within(dialog).findByRole("combobox", {
+        name: "Time in force",
+      });
+      expect(select).toHaveTextContent("Choose time in force");
+      expect(select).toBeRequired();
+      const submit = within(dialog).getByRole("button", {
+        name: "Submit PAPER order",
+      });
+      expect(submit).toBeDisabled();
+      await user.click(submit);
+      expect(sendPaperOrderMock).not.toHaveBeenCalled();
+      expect(
+        within(dialog).getByRole("link", { name: "About time in force" }),
+      ).toHaveAttribute(
+        "href",
+        "https://developers.binance.com/docs/binance-spot-api-docs/enums",
+      );
+
+      const focusSpy = vi
+        .spyOn(HTMLElement.prototype, "focus")
+        .mockImplementation(() => {});
+      try {
+        await user.click(select);
+        const options = await screen.findAllByRole("option");
+        expect(options.map((option) => option.textContent)).toEqual([
+          "GTC - Good till cancelled",
+          "IOC - Immediate or cancel",
+          "FOK - Fill or kill",
+        ]);
+        await user.click(screen.getByRole("option", { name: label }));
+      } finally {
+        focusSpy.mockRestore();
+      }
+      expect(submit).toBeEnabled();
+      await user.click(submit);
+      await waitFor(() =>
+        expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
+          {
+            account: "desk-alpha",
+            baseAsset: "AAPL",
+            quoteAsset: "USD",
+            side: "buy",
+            amountKind: "quantity",
+            amountValue: "10",
+            price: "42.5",
+            destination: {
+              connection: "binance-paper",
+              venueAccount: "",
+              route: { timeInForce: value },
+            },
+          },
+          expect.any(AbortSignal),
+        ),
+      );
+    },
+  );
+
+  it("Binance market hides TIF and sends an empty route", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([binanceDestination]);
+    sendPaperOrderMock.mockRejectedValue(
+      new ApiError("Request inspected", "upstream", 502),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    await within(dialog).findByRole("combobox", { name: "Target" });
+
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Time in force" }),
+    ).not.toBeInTheDocument();
+    const submit = within(dialog).getByRole("button", {
+      name: "Submit PAPER order",
+    });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    await waitFor(() =>
+      expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
+        {
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "10",
+          destination: {
+            connection: "binance-paper",
+            venueAccount: "",
+            route: {},
+          },
+        },
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("drops a chosen Binance limit TIF when the price is cleared", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([binanceDestination]);
+    sendPaperOrderMock.mockRejectedValue(
+      new ApiError("Request inspected", "upstream", 502),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    const price = within(dialog).getByLabelText("Limit price (optional)");
+    await user.type(price, "42.5");
+    await chooseTimeInForce(user, dialog, "GTC - Good till cancelled");
+    await user.clear(price);
+
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Time in force" }),
+    ).not.toBeInTheDocument();
+    const submit = within(dialog).getByRole("button", {
+      name: "Submit PAPER order",
+    });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    await waitFor(() =>
+      expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          destination: {
+            connection: "binance-paper",
+            venueAccount: "",
+            route: {},
+          },
+        }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(sendPaperOrderMock.mock.calls[0][0]).not.toHaveProperty("price");
+  });
+
+  it("requires a TIF when a Binance market order becomes a limit order", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([binanceDestination]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    await within(dialog).findByRole("combobox", { name: "Target" });
+    const submit = within(dialog).getByRole("button", {
+      name: "Submit PAPER order",
+    });
+    expect(submit).toBeEnabled();
+    await user.type(
+      within(dialog).getByLabelText("Limit price (optional)"),
+      "42.5",
+    );
+    expect(submit).toBeDisabled();
+    await chooseTimeInForce(user, dialog, "IOC - Immediate or cancel");
+    expect(submit).toBeEnabled();
+  });
+
+  const etoroDestination: TradingDestination = {
+    ...binanceDestination,
+    connection: "etoro-demo",
+    label: "eToro demo",
+    provider: "etoro",
+  };
+
+  it("eToro market hides TIF and sends an empty route", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([etoroDestination]);
+    sendPaperOrderMock.mockRejectedValue(
+      new ApiError("Request inspected", "upstream", 502),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    await within(dialog).findByRole("combobox", { name: "Target" });
+
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Time in force" }),
+    ).not.toBeInTheDocument();
+    const submit = within(dialog).getByRole("button", {
+      name: "Submit PAPER order",
+    });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    await waitFor(() =>
+      expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          destination: {
+            connection: "etoro-demo",
+            venueAccount: "",
+            route: {},
+          },
+        }),
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("eToro limit offers only IOC and sends it", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([etoroDestination]);
+    sendPaperOrderMock.mockRejectedValue(
+      new ApiError("Request inspected", "upstream", 502),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    await user.type(
+      within(dialog).getByLabelText("Limit price (optional)"),
+      "42.5",
+    );
+    const select = await within(dialog).findByRole("combobox", {
+      name: "Time in force",
+    });
+    const submit = within(dialog).getByRole("button", {
+      name: "Submit PAPER order",
+    });
+    expect(submit).toBeDisabled();
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    try {
+      await user.click(select);
+      const options = await screen.findAllByRole("option");
+      expect(options.map((option) => option.textContent)).toEqual([
+        "IOC - Immediate or cancel",
+      ]);
+      await user.click(
+        screen.getByRole("option", { name: "IOC - Immediate or cancel" }),
+      );
+    } finally {
+      focusSpy.mockRestore();
+    }
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    await waitFor(() =>
+      expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          price: "42.5",
+          destination: {
+            connection: "etoro-demo",
+            venueAccount: "",
+            route: { timeInForce: "ioc" },
+          },
+        }),
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("keeps an unsupported provider disabled", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([
+      { ...alpacaDestination, provider: "unsupported-venue" },
+    ]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await enablePaperSending(user, dialog);
+    expect(
+      await within(dialog).findByText(
+        "Sending to unsupported-venue is not supported by this panel.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Time in force" }),
+    ).not.toBeInTheDocument();
+    const submit = within(dialog).getByRole("button", {
+      name: "Submit PAPER order",
+    });
+    expect(submit).toBeDisabled();
+    await user.click(submit);
+    expect(sendPaperOrderMock).not.toHaveBeenCalled();
+  });
+
+  const ibDestination: TradingDestination = {
+    ...alpacaDestination,
+    connection: "ib-paper",
+    label: "IB paper",
+    provider: "ib",
+    venueAccount: "DU123",
+  };
+
+  it("shows unsupported-provider text for a constructor destination", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([
+      { ...alpacaDestination, provider: "constructor" },
+    ]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+    await enablePaperSending(user, dialog);
+    await fillOrderFields(user, dialog);
+    expect(
+      await within(dialog).findByText(
+        i18n.t("orders:addOrder.dialog.venue.unsupportedProvider", {
+          provider: "constructor",
+        }),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Time in force" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+    ).toBeDisabled();
+    expect(sendPaperOrderMock).not.toHaveBeenCalled();
+  });
+
+  it("offers exactly day, gtc and ioc for IB and requires one before sending", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([ibDestination]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+    await enablePaperSending(user, dialog);
+    await fillOrderFields(user, dialog);
+    const tif = await within(dialog).findByRole("combobox", {
+      name: "Time in force",
+    });
+    expect(tif).toBeRequired();
+    const submit = within(dialog).getByRole("button", {
+      name: "Submit PAPER order",
+    });
+    expect(submit).toBeDisabled();
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    try {
+      await user.click(tif);
+      expect(
+        screen.getAllByRole("option").map((option) => option.textContent),
+      ).toEqual([
+        "DAY - Day",
+        "GTC - Good till cancelled",
+        "IOC - Immediate or cancel",
+      ]);
+      await user.click(
+        screen.getByRole("option", { name: "IOC - Immediate or cancel" }),
+      );
+    } finally {
+      focusSpy.mockRestore();
+    }
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    expect(sendPaperOrderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: {
+          connection: "ib-paper",
+          venueAccount: "DU123",
+          route: { timeInForce: "ioc" },
+        },
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("clears Alpaca opg when switching to IB", async () => {
+    const user = userEvent.setup();
+    fetchTradingDestinationsMock.mockResolvedValue([
+      alpacaDestination,
+      ibDestination,
+    ]);
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+    await enablePaperSending(user, dialog);
+    await fillOrderFields(user, dialog);
+    const target = await within(dialog).findByRole("combobox", {
+      name: "Target",
+    });
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    try {
+      await user.click(target);
+      await user.click(screen.getByRole("option", { name: /Primary Alpaca/ }));
+      await user.click(
+        await within(dialog).findByRole("combobox", { name: "Time in force" }),
+      );
+      await user.click(screen.getByRole("option", { name: /^OPG/ }));
+      expect(
+        within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+      ).toBeEnabled();
+      await user.click(target);
+      await user.click(screen.getByRole("option", { name: /IB paper/ }));
+    } finally {
+      focusSpy.mockRestore();
+    }
+    expect(
+      within(dialog).getByRole("combobox", { name: "Time in force" }),
+    ).toHaveTextContent("Choose time in force");
+    expect(
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+    ).toBeDisabled();
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+    expect(
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+    ).toBeEnabled();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+    );
+    expect(sendPaperOrderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: {
+          connection: "ib-paper",
+          venueAccount: "DU123",
+          route: { timeInForce: "day" },
+        },
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
   it("shows the own venue fields and mode-specific submit button", async () => {
     const user = userEvent.setup();
     fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
@@ -4585,6 +5025,42 @@ async function openSampleOrderDetail(
 }
 
 describe("Order detail venue section", () => {
+  it("Binance market detail omits the time-in-force row for an empty route", async () => {
+    const dialog = await openSampleOrderDetail(userEvent.setup(), {
+      order: { ...sampleOrder, price: "" },
+      events: [],
+      trades: [],
+      venueOrder: {
+        ...linkedVenueOrder,
+        connection: "binance-paper",
+        route: {},
+      },
+    });
+    expect(await within(dialog).findByText("Venue status")).toBeInTheDocument();
+    expect(within(dialog).getByText("venue-123")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Time in force")).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(/^(DAY|GTC|IOC|FOK)$/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("Binance limit detail shows the route GTC", async () => {
+    const dialog = await openSampleOrderDetail(userEvent.setup(), {
+      order: sampleOrder,
+      events: [],
+      trades: [],
+      venueOrder: {
+        ...linkedVenueOrder,
+        connection: "binance-paper",
+        route: { timeInForce: "GTC" },
+      },
+    });
+    expect(
+      await within(dialog).findByText("Time in force"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("GTC")).toBeInTheDocument();
+  });
+
   it.each([
     ["acknowledged", linkedVenueOrder, sampleOrder, "venue-123"],
     [

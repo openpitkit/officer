@@ -205,3 +205,34 @@ func (n *localNode) ensureAccountAndAssetsRegisteredExclusive(
 		ctx, id, missing, operation, caller, assets...,
 	)
 }
+
+// ensureInstrumentAssetsRegisteredExclusive creates the missing base and quote
+// assets of an instrument mapping, as an order does, and audits each creation
+// under operation. Existing assets are read without the live identity lock;
+// the lock is taken only when an asset is missing. Both the market-data and the
+// trading instrument upsert call it before their own mutation.
+func (n *localNode) ensureInstrumentAssetsRegisteredExclusive(
+	ctx context.Context, baseAsset, quoteAsset, operation string,
+	caller domain.Caller,
+) error {
+	needed := false
+	for _, code := range []string{baseAsset, quoteAsset} {
+		if code == "" {
+			continue
+		}
+		if _, ok, err := n.realm.GetAsset(ctx, code); err != nil {
+			return fmt.Errorf("read asset for auto-create check: %w", err)
+		} else if !ok {
+			needed = true
+		}
+	}
+	if !needed {
+		return nil
+	}
+	if err := n.beginLiveIdentityPublication(); err != nil {
+		return err
+	}
+	defer n.endLiveIdentityPublication()
+	_, err := n.ensureAutoCreatedAssets(ctx, baseAsset, quoteAsset, operation, caller)
+	return err
+}
