@@ -64,6 +64,10 @@
     "warning": "Give the agent this token only - never the API token or the panel password: with those it steps around its MCP limits.",
     "later": "Connect later"
   },
+  "video": {
+    "intro": "Video: what Pit Officer is",
+    "mcp": "Video: connecting an agent over MCP"
+  },
   "done": {
     "title": "Officer is set up",
     "lead": "Your choices, and where each one lives now.",

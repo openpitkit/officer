@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { AlertTriangle, ExternalLink, Info, LogOut } from "lucide-react";
+import { AlertTriangle, Info, LogOut } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
@@ -25,6 +25,7 @@ import { useMarketData } from "@/api/useMarketData";
 import { useService } from "@/api/useService";
 import { errMessage } from "@/components/AccountDialogs";
 import { CompactStaleState, ErrorBanner } from "@/components/PageStates";
+import { ProductLinks } from "@/components/ProductLinks";
 import { useSidebar } from "@/components/sidebar-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -141,24 +142,6 @@ export function LogoutNavEntry() {
 
 export function AboutNavEntry() {
   const { t } = useTranslation();
-  const aboutLinks = [
-    {
-      label: t("about.links.website"),
-      href: "https://officer.openpit.dev?officer",
-    },
-    {
-      label: t("about.links.issues"),
-      href: "https://github.com/openpitkit/officer/issues?officer",
-    },
-    {
-      label: t("about.links.discussions"),
-      href: "https://github.com/openpitkit/officer/discussions?officer",
-    },
-    {
-      label: t("about.links.openpit"),
-      href: "https://openpit.dev?officer",
-    },
-  ];
 
   return (
     <Dialog>
@@ -189,20 +172,7 @@ export function AboutNavEntry() {
             </div>
             <div className="mt-1 text-text">{t("about.copyright")}</div>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {aboutLinks.map((link) => (
-              <a
-                key={link.href}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-between gap-3 rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-muted-lt transition-colors hover:border-border-hover hover:bg-card-hover-bg hover:text-accent"
-              >
-                <span>{link.label}</span>
-                <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-              </a>
-            ))}
-          </div>
+          <ProductLinks />
           <Button asChild variant="outline" className="w-full">
             <Link to="/setup">
               <Info />

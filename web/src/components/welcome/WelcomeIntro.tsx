@@ -15,10 +15,10 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { ExternalLink, ShieldCheck, TerminalSquare } from "lucide-react";
-import { useMemo } from "react";
+import { ShieldCheck, TerminalSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { ProductLinks } from "@/components/ProductLinks";
 import { Section } from "@/components/welcome/Section";
 
 /**
@@ -28,46 +28,11 @@ import { Section } from "@/components/welcome/Section";
 export function WelcomeIntro() {
   const { t } = useTranslation();
 
-  const links = useMemo(
-    () => [
-      {
-        label: t("about.links.website"),
-        href: "https://officer.openpit.dev?officer",
-      },
-      {
-        label: t("about.links.issues"),
-        href: "https://github.com/openpitkit/officer/issues?officer",
-      },
-      {
-        label: t("about.links.discussions"),
-        href: "https://github.com/openpitkit/officer/discussions?officer",
-      },
-      {
-        label: t("about.links.openpit"),
-        href: "https://openpit.dev?officer",
-      },
-    ],
-    [t],
-  );
-
   return (
     <>
       <Section icon={ShieldCheck} label={t("welcome.sections.product")}>
         <p>{t("welcome.product.copy")}</p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {links.map((link) => (
-            <a
-              key={link.href}
-              href={link.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center justify-between gap-3 rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-muted-lt transition-colors hover:border-border-hover hover:bg-card-hover-bg hover:text-accent"
-            >
-              <span>{link.label}</span>
-              <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-            </a>
-          ))}
-        </div>
+        <ProductLinks className="mt-3" />
       </Section>
 
       <Section icon={TerminalSquare} label={t("welcome.sections.uses")}>

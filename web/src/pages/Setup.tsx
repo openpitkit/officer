@@ -77,6 +77,7 @@ import {
   type DecisionStep,
   type WizardStep,
 } from "@/components/setup/steps";
+import { VideoLink } from "@/components/setup/VideoLink";
 import { Button } from "@/components/ui/button";
 import { WelcomeIntro } from "@/components/welcome/WelcomeIntro";
 import { WelcomeQuickStart } from "@/components/welcome/WelcomeQuickStart";
@@ -437,6 +438,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
           lead: t("welcome.lead"),
           body: (
             <>
+              <VideoLink video="intro" />
               <WelcomeIntro />
               {!review && (
                 <Notice
@@ -573,6 +575,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
           lead: t("agent.lead"),
           body: (
             <>
+              <VideoLink video="mcp" />
               <ConnectAgent />
               {accessMode === "token" && (
                 <Notice

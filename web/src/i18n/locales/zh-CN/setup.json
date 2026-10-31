@@ -64,6 +64,10 @@
     "warning": "只把此令牌交给智能体 - 切勿提供 API 令牌或面板密码：有了它们，智能体会绕过其在 MCP 中的限制。",
     "later": "稍后连接"
   },
+  "video": {
+    "intro": "视频：什么是 Pit Officer",
+    "mcp": "视频：通过 MCP 连接智能体"
+  },
   "done": {
     "title": "Officer 已设置完成",
     "lead": "您的选择，以及各项现在所在的位置。",

@@ -422,6 +422,32 @@ describe("Setup", () => {
       );
     });
 
+    it("links the intro video and the product pages", async () => {
+      renderSetup();
+
+      await heading(TITLES.welcome);
+      expect(
+        screen
+          .getAllByRole("link")
+          .map((link) => [link.textContent, link.getAttribute("href")]),
+      ).toEqual([
+        [
+          "Video: what Pit Officer is",
+          "https://www.youtube.com/watch?v=v34IdYhH5so",
+        ],
+        ["Pit Officer website", "https://officer.openpit.dev?officer"],
+        [
+          "Issue tracker",
+          "https://github.com/openpitkit/officer/issues?officer",
+        ],
+        [
+          "GitHub discussions",
+          "https://github.com/openpitkit/officer/discussions?officer",
+        ],
+        ["OpenPit website", "https://openpit.dev?officer"],
+      ]);
+    });
+
     it("stays when the progress write fails and shows the error", async () => {
       const user = userEvent.setup();
       vi.mocked(putSetupProgress).mockRejectedValue(
@@ -900,6 +926,14 @@ describe("Setup", () => {
           "Setup finished. REST and MCP answer by the access you chose.",
         ),
       ).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", {
+          name: "Video: connecting an agent over MCP",
+        }),
+      ).toHaveAttribute(
+        "href",
+        "https://www.youtube.com/watch?v=zq7a9xc0GD0&t=121s",
+      );
     });
 
     it("finishes in open access only once acknowledged", async () => {
@@ -1170,6 +1204,9 @@ describe("Setup", () => {
     renderSetup();
 
     expect(await heading("Настройка Pit Officer")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Видео: что такое Pit Officer" }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=F1ymuREbu4o");
   });
 });
 
