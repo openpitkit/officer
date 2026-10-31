@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -176,7 +177,7 @@ func TestLoadBuildsTheStoredScope(t *testing.T) {
 			createAccounts(t, n, desk)
 			storeSettings(t, n, tc.settings...)
 			got, err := Load(context.Background(), n)
-			if err != nil || got != tc.want {
+			if err != nil || got.held() != tc.want {
 				t.Fatalf("Load = %#v, %v; want %#v", got, err, tc.want)
 			}
 			if rows := auditRows(t, n, domain.AuditActionCreateAccount); len(rows) != 1 {
@@ -191,7 +192,7 @@ func TestLoadRecreatesMissingDefaultAccount(t *testing.T) {
 	n := newTestNode(t)
 	storeSettings(t, n, [2]string{SettingKeyMode, "single:desk"})
 	got, err := Load(ctx, n)
-	if err != nil || got != (singleAccount{account: desk}) {
+	if err != nil || got.held() != (singleAccount{account: desk}) {
 		t.Fatalf("Load = %#v, %v; want the single-account scope of desk", got, err)
 	}
 	if _, _, err := n.GetAccountState(ctx, desk); err != nil {
@@ -337,12 +338,190 @@ func TestApplyMulti(t *testing.T) {
 	})
 }
 
+func TestApplyDuringSetup(t *testing.T) {
+	ctx := clientContext()
+	t.Run("in setup", func(t *testing.T) {
+		n := newTestNode(t)
+		scope, err := Load(context.Background(), n)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		cp := newTestControlPlane(t, n, scope)
+		gate := &setupGate{}
+		state, err := ApplyDuringSetup(ctx, cp, scope, gate, Request{Mode: ModeSingle})
+		assertState(t, state, err, ModeSingle, defaultAccount, defaultAccount, false)
+		assertStored(t, n, ModeSingle, defaultAccount)
+		if gate.runs != 1 || !state.Live {
+			t.Fatalf("gate ran %d steps, live %v; want 1 and live", gate.runs, state.Live)
+		}
+		// The running control plane enforces single-account mode at once.
+		if _, err := cp.CreateAccount(ctx, domain.Account{Code: desk}); !errors.Is(
+			err, domain.ErrAccountsNotManaged,
+		) {
+			t.Fatalf("CreateAccount after the switch = %v, want a single-account refusal", err)
+		}
+		// And back: multi-account mode takes effect at once as well.
+		state, err = ApplyDuringSetup(ctx, cp, scope, gate, Request{Mode: ModeMulti})
+		assertState(t, state, err, ModeMulti, "", "", false)
+		if _, err := cp.CreateAccount(ctx, domain.Account{Code: desk}); err != nil {
+			t.Fatalf("CreateAccount after switching back = %v, want nil", err)
+		}
+	})
+	t.Run("refused in setup", func(t *testing.T) {
+		n := newTestNode(t)
+		scope, err := Load(context.Background(), n)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		cp := newTestControlPlane(t, n, scope)
+		createAccounts(t, n, desk, other)
+		state, err := ApplyDuringSetup(ctx, cp, scope, &setupGate{}, Request{Mode: ModeSingle})
+		if !validationAt("/account", "required")(err) {
+			t.Fatalf("ApplyDuringSetup = %s, %v; want the account required", describe(state), err)
+		}
+		if scope.held() != (backend.EveryAccount{}) {
+			t.Fatalf("scope after a refusal = %#v, want every account kept", scope.held())
+		}
+	})
+	t.Run("settings unreadable after the write", func(t *testing.T) {
+		n := newTestNode(t)
+		scope, err := Load(context.Background(), n)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		// The answer comes from the write itself: no read back can fail once
+		// the choice is stored and in effect.
+		cp := &failingReadBack{ControlPlane: newTestControlPlane(t, n, scope)}
+		state, err := ApplyDuringSetup(ctx, cp, scope, &setupGate{}, Request{Mode: ModeSingle})
+		assertState(t, state, err, ModeSingle, defaultAccount, defaultAccount, false)
+		assertStored(t, n, ModeSingle, defaultAccount)
+		if !state.Live || scope.held() != (singleAccount{account: defaultAccount}) {
+			t.Fatalf("live %v, scope %#v; want live and the stored single account",
+				state.Live, scope.held())
+		}
+	})
+	t.Run("setup complete", func(t *testing.T) {
+		n := newTestNode(t)
+		scope, err := Load(context.Background(), n)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		cp := newTestControlPlane(t, n, scope)
+		gate := &setupGate{complete: true}
+		state, err := ApplyDuringSetup(ctx, cp, scope, gate, Request{Mode: ModeSingle})
+		assertState(t, state, err, ModeSingle, defaultAccount, "", true)
+		assertStored(t, n, ModeSingle, defaultAccount)
+		if gate.runs != 0 || scope.held() != (backend.EveryAccount{}) || state.Live {
+			t.Fatalf("gate ran %d steps, scope %#v, live %v; want none, every account kept, not live",
+				gate.runs, scope.held(), state.Live)
+		}
+	})
+}
+
+// errReadBack is the failure of failingReadBack.
+var errReadBack = errors.New("read back failed")
+
+// failingReadBack is a control plane whose setting reads fail once a setting
+// is written through it.
+type failingReadBack struct {
+	backend.ControlPlane
+	written bool
+}
+
+func (c *failingReadBack) SetSetting(ctx context.Context, key, value string) error {
+	if err := c.ControlPlane.SetSetting(ctx, key, value); err != nil {
+		return err
+	}
+	c.written = true
+	return nil
+}
+
+func (c *failingReadBack) Setting(ctx context.Context, key string) (string, bool, error) {
+	if c.written {
+		return "", false, errReadBack
+	}
+	return c.ControlPlane.Setting(ctx, key)
+}
+
+// TestGetRouteReportsLive reads GET /account-mode: a choice takes effect at
+// once only while setup is open, in a composition whose scope switches.
+func TestGetRouteReportsLive(t *testing.T) {
+	n := newTestNode(t)
+	scope, err := Load(context.Background(), n)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cp := newTestControlPlane(t, n, scope)
+	for _, tc := range []struct {
+		name  string
+		scope *Scope
+		gate  *setupGate
+		want  bool
+	}{
+		{"in setup", scope, &setupGate{}, true},
+		{"setup complete", scope, &setupGate{complete: true}, false},
+		{"scope of its own", nil, &setupGate{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			get := Routes(cp, tc.scope, tc.gate)[0]
+			req := httptest.NewRequestWithContext(clientContext(), http.MethodGet,
+				"/account-mode", nil)
+			rec := httptest.NewRecorder()
+			get.Handler.ServeHTTP(rec, req)
+			want := fmt.Sprintf(`{"mode":null,"account":"",`+
+				`"features":{"accounts":true,"account":""},"restartRequired":false,`+
+				`"live":%v}`, tc.want)
+			if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
+				t.Fatalf("GET /account-mode = %d %s, want 200 %s", rec.Code, got, want)
+			}
+		})
+	}
+}
+
+// TestSetRouteWithoutScope stores a choice through PUT /account-mode of a
+// composition that runs a scope of its own: even in setup the choice waits
+// for the next start.
+func TestSetRouteWithoutScope(t *testing.T) {
+	n := newTestNode(t)
+	cp := newTestControlPlane(t, n, backend.EveryAccount{})
+	gate := &setupGate{}
+	put := Routes(cp, nil, gate)[1]
+	req := httptest.NewRequestWithContext(clientContext(), http.MethodPut,
+		"/account-mode", strings.NewReader(`{"mode":"single"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	put.Handler.ServeHTTP(rec, req)
+	want := `{"mode":"single","account":"default",` +
+		`"features":{"accounts":true,"account":""},"restartRequired":true,"live":false}`
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
+		t.Fatalf("PUT /account-mode = %d %s, want 200 %s", rec.Code, got, want)
+	}
+	if gate.runs != 0 {
+		t.Fatalf("gate ran %d steps, want none", gate.runs)
+	}
+}
+
+// setupGate is a SetupGate whose setup is complete once complete is set; runs
+// counts the steps it ran.
+type setupGate struct {
+	complete bool
+	runs     int
+}
+
+func (g *setupGate) WhileInSetup(fn func() error) error {
+	if g.complete {
+		return domain.ErrSetupComplete
+	}
+	g.runs++
+	return fn()
+}
+
 func TestRoutes(t *testing.T) {
 	want := []struct{ id, method, pattern string }{
 		{"account-mode.get", http.MethodGet, "/account-mode"},
 		{"account-mode.put", http.MethodPut, "/account-mode"},
 	}
-	routes := Routes(nil)
+	routes := Routes(nil, nil, nil)
 	if len(routes) != len(want) {
 		t.Fatalf("routes = %d, want %d", len(routes), len(want))
 	}
@@ -431,7 +610,7 @@ func TestApplyRefusals(t *testing.T) {
 			Request{Mode: ModeSingle, Account: "other"},
 			func(err error) bool {
 				return errors.Is(err, domain.ErrAccountsNotManaged) &&
-					strings.Contains(err.Error(), "switch to multi-account mode and restart")
+					strings.Contains(err.Error(), "put multi-account mode into effect first")
 			},
 		},
 	} {
@@ -492,6 +671,65 @@ func TestApplyConcurrentOppositeModes(t *testing.T) {
 			t.Fatalf("round %d: stored %s does not load: %v", round, storedChoice(t, n), err)
 		}
 	}
+}
+
+// TestApplyDuringSetupConcurrentOppositeModes races live saves of both modes:
+// every answer describes its own switch, never another request's, so none
+// reports a restart.
+func TestApplyDuringSetupConcurrentOppositeModes(t *testing.T) {
+	// perMode requests of each mode race in every round.
+	const rounds, perMode = 50, 4
+	ctx := clientContext()
+	n := newTestNode(t)
+	scope, err := Load(context.Background(), n)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cp := newTestControlPlane(t, n, scope)
+	gate := &lockingGate{}
+	for round := range rounds {
+		start := make(chan struct{})
+		states := make(chan State, 2*perMode)
+		var wg sync.WaitGroup
+		for i := range 2 * perMode {
+			mode := ModeSingle
+			if i%2 == 1 {
+				mode = ModeMulti
+			}
+			wg.Go(func() {
+				<-start
+				state, err := ApplyDuringSetup(ctx, cp, scope, gate, Request{Mode: mode})
+				if err != nil {
+					t.Errorf("round %d: ApplyDuringSetup(%s): %v", round, mode, err)
+				}
+				states <- state
+			})
+		}
+		close(start)
+		wg.Wait()
+		close(states)
+		for state := range states {
+			if state.Mode == nil {
+				continue
+			}
+			single := *state.Mode == ModeSingle
+			if state.RestartRequired || state.Features.Accounts() == single {
+				t.Fatalf("round %d: answer %s describes another request's switch", round, describe(state))
+			}
+		}
+	}
+}
+
+// lockingGate is a SetupGate whose setup stays open and which runs one step at
+// a time, as access.Service does.
+type lockingGate struct {
+	mu sync.Mutex
+}
+
+func (g *lockingGate) WhileInSetup(fn func() error) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return fn()
 }
 
 // TestSingleAccountExportRefusalsPointAtFilters exports every entity with a

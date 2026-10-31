@@ -170,6 +170,41 @@ func TestCompleteSetupOpen(t *testing.T) {
 	}
 }
 
+// TestWhileInSetupHoldsCompletion runs a setup step that blocks: completion
+// waits for it, and the step's own error comes back.
+func TestWhileInSetupHoldsCompletion(t *testing.T) {
+	h := newSetupHarness(t)
+	h.decisions.chosen, h.decisions.sealed = true, true
+	entered, release := make(chan struct{}), make(chan struct{})
+	stepErr := errors.New("step failed")
+	held := make(chan error, 1)
+	go func() {
+		held <- h.service.WhileInSetup(func() error {
+			close(entered)
+			<-release
+			return stepErr
+		})
+	}()
+	<-entered
+	completed := make(chan error, 1)
+	go func() {
+		_, err := h.service.CompleteSetup(panelCtx(), ModeOpen, "", true)
+		completed <- err
+	}()
+	select {
+	case err := <-completed:
+		t.Fatalf("CompleteSetup = %v while a setup step runs, want it to wait", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-held; !errors.Is(err, stepErr) {
+		t.Fatalf("WhileInSetup = %v, want the step's error", err)
+	}
+	if err := <-completed; err != nil || h.service.Mode() != ModeOpen {
+		t.Fatalf("CompleteSetup after the step = %v, mode %s; want open", err, h.service.Mode())
+	}
+}
+
 func TestCompleteSetupTokenIssuesCredentialsAndClearsRecovery(t *testing.T) {
 	h := newSetupHarness(t)
 	h.decisions.chosen, h.decisions.sealed = true, true
@@ -234,6 +269,10 @@ func TestSetupOperationsRefuseCompletedStateBeforeInput(t *testing.T) {
 				"progress":   h.service.SetSetupStep(ctx, "invalid"),
 				"encryption": h.service.DeclineEncryption(ctx, false),
 				"complete":   completeErr,
+				"step": h.service.WhileInSetup(func() error {
+					t.Error("WhileInSetup ran a step after completion")
+					return nil
+				}),
 			} {
 				if !errors.Is(err, domain.ErrSetupComplete) {
 					t.Errorf("%s after completion = %v, want setup_complete before invalid input or missing caller", name, err)

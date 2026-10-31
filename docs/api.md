@@ -503,15 +503,18 @@ In single-account mode every client request acts on one default account. The
 mode is stored and read once, when the process starts. `GET /account-mode`
 answers the stored `mode` (`single`, `multi`, or `null` until chosen, which
 behaves as `multi`) and `account`, the `features` the running process enforces,
-and `restartRequired`. `PUT /account-mode` stores the next mode and leaves the
-running process unchanged; the change takes effect after
-`POST /service/restart`. `single` takes the named account, which must exist;
-with none named, the one existing account, or a new account `default` when
-there is none. Several accounts without one named are refused with 422 with
-constraint `required` at pointer `/account`, and a running single-account mode
-accepts only its own account (409 `accounts_not_managed`: switch to `multi` and
-restart first). A database reset or a backup restore that changes the stored
-choice is reported by `restartRequired` too.
+`restartRequired`, and `live`. `PUT /account-mode` stores the next mode. Before
+the first-run setup is complete, while `live` is `true`, the running process
+takes it at once and the answer carries `live: true`; otherwise it leaves the
+running process unchanged, and the change takes effect after
+`POST /service/restart`. A host that runs an account scope of its own always
+answers `live: false`. `single` takes the named account, which must exist; with
+none named, the one existing account, or a new account `default` when there is
+none. Several accounts without one named are refused with 422 with constraint
+`required` at pointer `/account`, and a running single-account mode accepts
+only its own account (409 `accounts_not_managed`: put `multi` into effect
+first). A database reset or a backup restore that changes the stored choice is
+reported by `restartRequired` too.
 
 While the mode runs:
 
@@ -543,9 +546,12 @@ switch the mode.
 
 The stdio MCP server is a process of its own: it reads the mode when it starts,
 so it sees a change only once its host restarts it. MCP tool input schemas, over
-stdio and over HTTP, are built when the process starts; in single-account mode
-`account` and `missingAccount` are optional and `accountGroup` is not a
-property.
+stdio and over HTTP, follow the mode in effect when the session opens; in
+single-account mode `account` and `missingAccount` are optional and
+`accountGroup` is not a property. An HTTP session opened before the mode in
+effect changed - a database reset returns Officer to the first-run setup, which
+takes a mode at once - ends: its next request answers 404, and the client opens
+a new session.
 
 ## Audit source
 

@@ -3645,11 +3645,13 @@ paths:
       summary: Read the stored account mode and what the running process enforces
       description: >
         The service reads the stored account mode once, when it starts, and
-        keeps that mode until it stops. `mode` and `account` are the stored
-        choice; `mode` is null until a mode is chosen, which behaves as
-        multi-account mode. `features` is what the running process enforces,
-        and `restartRequired` reports that the stored choice takes effect only
-        after a restart.
+        keeps that mode until it stops; only before the first-run setup is
+        complete does a stored choice take effect at once. `mode` and `account`
+        are the stored choice; `mode` is null until a mode is chosen, which
+        behaves as multi-account mode. `features` is what the running process
+        enforces, `restartRequired` reports that the stored choice takes effect
+        only after a restart, and `live` that a choice stored now takes effect
+        at once.
       tags: [account-mode]
       responses:
         "200":
@@ -3668,11 +3670,14 @@ paths:
           $ref: "#/components/responses/SetupRequiredError"
     put:
       operationId: setAccountMode
-      summary: Store the account mode for the next start
+      summary: Store the account mode
       description: >
-        Stores the account mode; the running process keeps the mode it started
-        with. The change takes effect after `POST /service/restart`, and a stdio
-        MCP process picks it up at its own next start. `multi` lets clients see
+        Stores the account mode. Before the first-run setup is complete, in a
+        service whose `GET /account-mode` answers `live: true`, the running
+        process takes the stored mode at once and the answer carries `live:
+        true`. Otherwise the running process keeps the mode it started with:
+        the change takes effect after `POST /service/restart`. A stdio MCP
+        process picks it up at its own next start. `multi` lets clients see
         and choose every account and group, and takes no account. `single` makes
         every client request act on one default account: the named account,
         which must exist (404 `account_missing`); with none named, the one
@@ -3680,7 +3685,7 @@ paths:
         several accounts without one named are refused with 422 `required` at
         `/account`. While the process
         runs single-account mode only its own default account is accepted:
-        choosing another one needs multi-account mode and a restart first (409
+        choosing another one needs multi-account mode in effect first (409
         `accounts_not_managed`). A refused request stores nothing.
       tags: [account-mode]
       requestBody:
@@ -8212,7 +8217,7 @@ components:
     AccountMode:
       type: object
       additionalProperties: false
-      required: [mode, account, features, restartRequired]
+      required: [mode, account, features, restartRequired, live]
       properties:
         mode:
           type: [string, "null"]
@@ -8232,6 +8237,12 @@ components:
           description: >-
             Whether the stored choice enforces other account features than the
             running process; it takes effect after a restart.
+        live:
+          type: boolean
+          description: >-
+            Whether the running process takes a choice stored now at once, with
+            no restart: true only before the first-run setup is complete, in a
+            service whose host runs the account scope Officer builds.
 
     AccountFeatures:
       type: object

@@ -22,8 +22,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -330,13 +332,78 @@ func TestHandlerRejectsSessionReuseByDifferentCaller(t *testing.T) {
 	_ = session.Close()
 }
 
+// TestHandlerEndsSessionOpenedUnderOtherAccountFeatures switches the account
+// features the source reports while a session is open: the session's next
+// request answers 404 and ends it, and a new session opens under the features
+// now in effect.
+func TestHandlerEndsSessionOpenedUnderOtherAccountFeatures(t *testing.T) {
+	src := &featuresSource{}
+	src.set(backend.EveryAccount{}.Features())
+	httpServer := httptest.NewServer(newCallerHTTPHandler(t, src))
+	defer httpServer.Close()
+	transport := &principalTransport{principal: "agent"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stale := connectHTTPClient(t, httpServer.URL, transport)
+	src.set(backend.AccountFeatures{Account: "default"})
+	if _, err := stale.CallTool(ctx, &sdkmcp.CallToolParams{Name: "caller"}); err == nil {
+		t.Fatal("tool call over a session opened under other account features succeeded")
+	}
+	_ = stale.Close()
+
+	fresh := connectHTTPClient(t, httpServer.URL, transport)
+	defer func() { _ = fresh.Close() }()
+	if _, err := fresh.CallTool(ctx, &sdkmcp.CallToolParams{Name: "caller"}); err != nil {
+		t.Fatalf("call tool over a new session: %v", err)
+	}
+	if got := src.callerCount(); got != 1 {
+		t.Fatalf("tool ran %d times, want once, over the new session", got)
+	}
+}
+
+// TestSessionBindingHandlerClosesStaleSession checks that a session found
+// stale is closed in the SDK, as a DELETE from its client would, and
+// forgotten.
+func TestSessionBindingHandlerClosesStaleSession(t *testing.T) {
+	var sdkMethods []string
+	features := backend.EveryAccount{}.Features()
+	h := &sessionBindingHandler{
+		sdk: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sdkMethods = append(sdkMethods, r.Method+" "+r.Header.Get("Mcp-Session-Id"))
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		features: func() backend.AccountFeatures { return features },
+		sessions: make(map[string]boundSession),
+	}
+	caller := domain.Caller{Principal: "caller"}
+	h.sessions["open"] = boundSession{caller: caller, features: features}
+	features = backend.AccountFeatures{Account: "default"}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	req.Header.Set("Mcp-Session-Id", "open")
+	rec := httptest.NewRecorder()
+
+	h.serveHTTP(rec, req, caller)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if !slices.Equal(sdkMethods, []string{"DELETE open"}) {
+		t.Fatalf("SDK requests = %v, want the session's DELETE alone", sdkMethods)
+	}
+	if _, bound := h.sessions["open"]; bound {
+		t.Fatal("stale session is still bound")
+	}
+}
+
 func TestSessionBindingHandlerRejectsUnknownSession(t *testing.T) {
 	sdkRan := false
 	h := &sessionBindingHandler{
 		sdk: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			sdkRan = true
 		}),
-		callers: make(map[string]domain.Caller),
+		features: backend.EveryAccount{}.Features,
+		sessions: make(map[string]boundSession),
 	}
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.Header.Set("Mcp-Session-Id", "unknown")
@@ -360,14 +427,17 @@ func TestSessionBindingHandlerRejectsUnknownSession(t *testing.T) {
 
 func TestSessionResponseWriterFlushesAfterBinding(t *testing.T) {
 	caller := domain.Caller{Principal: "caller"}
-	h := &sessionBindingHandler{callers: make(map[string]domain.Caller)}
+	h := &sessionBindingHandler{
+		features: backend.EveryAccount{}.Features,
+		sessions: make(map[string]boundSession),
+	}
 	underlying := &flushResponseWriter{header: make(http.Header)}
 	underlying.beforeFlush = func() {
 		h.mu.Lock()
-		bound, exists := h.callers["opened"]
+		bound, exists := h.sessions["opened"]
 		h.mu.Unlock()
-		if !exists || bound != caller {
-			t.Fatalf("binding at Flush = (%+v, %v), want (%+v, true)", bound, exists, caller)
+		if !exists || bound.caller != caller {
+			t.Fatalf("binding at Flush = (%+v, %v), want caller %+v", bound, exists, caller)
 		}
 	}
 	h.sdk = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -457,6 +527,20 @@ type callerSource struct {
 	guardSource
 	mu      sync.Mutex
 	callers []domain.Caller
+}
+
+// featuresSource is a callerSource whose account features a test switches.
+type featuresSource struct {
+	callerSource
+	features atomic.Pointer[backend.AccountFeatures]
+}
+
+func (s *featuresSource) set(features backend.AccountFeatures) {
+	s.features.Store(&features)
+}
+
+func (s *featuresSource) AccountFeatures() backend.AccountFeatures {
+	return *s.features.Load()
 }
 
 func (s *callerSource) CommandEnabled(ctx context.Context, _ string) (bool, error) {

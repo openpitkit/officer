@@ -45,7 +45,11 @@ import {
   StaleState,
 } from "@/components/PageStates";
 import { useApiClient } from "@/framework";
-import { setAccountScope } from "@/lib/accountScope";
+import {
+  isLoadedScope,
+  scopeReloadHeld,
+  setAccountScope,
+} from "@/lib/accountScope";
 import { onCheckSession, setPanelSession } from "@/lib/panelSession";
 import { Login } from "@/pages/Login";
 import { PasswordRecovery } from "@/pages/PasswordRecovery";
@@ -102,7 +106,8 @@ const ADMITTED: SessionStep = { state: "admitted" };
  * admission makes the answers of earlier checks stale. Once admitted it renders
  * `children` only after the account scope of the running process is loaded,
  * then keeps polling it: other features reload the page, as the process was
- * restarted into another mode, and a failed poll marks the scope stale.
+ * restarted into another mode or, before the first-run setup is complete,
+ * took a saved mode at once, and a failed poll marks the scope stale.
  */
 export function StartupGate({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
@@ -292,21 +297,22 @@ function AccountModeStep({ children }: { children: ReactNode }) {
   );
 }
 
-/** Polls the account mode after the scope loaded with `loaded`. */
+/**
+ * Polls the account mode after the scope loaded with `loaded`, and reloads the
+ * page once it reports other features, unless a screen that changed them holds
+ * the reload to do it itself.
+ */
 function AccountScopeWatch({ loaded }: { loaded: AccountFeatures }) {
   const client = useApiClient();
   const fetcher = useCallback(
     async (signal: AbortSignal) => {
       const { features } = await fetchAccountMode(client, signal);
-      if (
-        features.accounts !== loaded.accounts ||
-        features.account !== loaded.account
-      ) {
+      if (!isLoadedScope(features) && !scopeReloadHeld()) {
         window.location.reload();
       }
       return features;
     },
-    [client, loaded],
+    [client],
   );
   const { load, reload } = usePolling(fetcher);
 

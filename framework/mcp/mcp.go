@@ -706,7 +706,8 @@ func Handler(
 		return nil, fmt.Errorf("mcp: nil caller resolver")
 	}
 	handler := &sessionBindingHandler{
-		callers: make(map[string]domain.Caller),
+		features: src.AccountFeatures,
+		sessions: make(map[string]boundSession),
 	}
 	handler.sdk = sdkmcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *sdkmcp.Server {
@@ -733,10 +734,19 @@ func Handler(
 	}), nil
 }
 
+// sessionBindingHandler binds every session to what it was opened under: its
+// caller, and the account features its tool schemas follow.
 type sessionBindingHandler struct {
-	sdk     http.Handler
-	mu      sync.Mutex
-	callers map[string]domain.Caller
+	sdk      http.Handler
+	features func() backend.AccountFeatures
+	mu       sync.Mutex
+	sessions map[string]boundSession
+}
+
+// boundSession is what a session was opened under.
+type boundSession struct {
+	caller   domain.Caller
+	features backend.AccountFeatures
 }
 
 func (h *sessionBindingHandler) serveHTTP(
@@ -747,27 +757,41 @@ func (h *sessionBindingHandler) serveHTTP(
 	sessionID := r.Header.Get("Mcp-Session-Id")
 	if sessionID != "" {
 		h.mu.Lock()
-		boundCaller, exists := h.callers[sessionID]
+		bound, exists := h.sessions[sessionID]
 		h.mu.Unlock()
 		if !exists {
 			httpx.WriteErr(w, fmt.Errorf("mcp: session %q: %w", sessionID, domain.ErrNotFound))
 			return
 		}
-		if boundCaller != caller {
+		if bound.caller != caller {
 			httpx.WriteErr(w, domain.ErrForbidden)
+			return
+		}
+		if bound.features != h.features() {
+			// The running process enforces other account features than the
+			// session's tool schemas follow - a first-run setup switched the
+			// account mode at once - so the session ends, and the client
+			// opens a new one, as for any session the server no longer knows.
+			h.end(r, sessionID)
+			httpx.WriteErr(w, fmt.Errorf(
+				"mcp: session %q was opened under other account features: %w",
+				sessionID, domain.ErrNotFound,
+			))
 			return
 		}
 	}
 
 	recorder := &sessionResponseWriter{ResponseWriter: w}
 	if sessionID == "" {
+		// Read before the SDK builds the session's tools from them.
+		features := h.features()
 		recorder.beforeWrite = func() {
 			openedSessionID := recorder.Header().Get("Mcp-Session-Id")
 			if openedSessionID == "" {
 				return
 			}
 			h.mu.Lock()
-			h.callers[openedSessionID] = caller
+			h.sessions[openedSessionID] = boundSession{caller: caller, features: features}
 			h.mu.Unlock()
 		}
 	}
@@ -775,10 +799,35 @@ func (h *sessionBindingHandler) serveHTTP(
 
 	if r.Method == http.MethodDelete && recorder.status == http.StatusNoContent {
 		h.mu.Lock()
-		delete(h.callers, sessionID)
+		delete(h.sessions, sessionID)
 		h.mu.Unlock()
 	}
 }
+
+// end forgets the binding of sessionID and closes its SDK session, as a DELETE
+// from its client does; r is the client's request that found it stale.
+func (h *sessionBindingHandler) end(r *http.Request, sessionID string) {
+	h.mu.Lock()
+	delete(h.sessions, sessionID)
+	h.mu.Unlock()
+	closing := r.Clone(r.Context())
+	closing.Method = http.MethodDelete
+	closing.Body = http.NoBody
+	closing.ContentLength = 0
+	h.sdk.ServeHTTP(discardResponse{header: make(http.Header)}, closing)
+}
+
+// discardResponse takes the answer to a request the handler sends the SDK
+// itself, which nobody reads.
+type discardResponse struct {
+	header http.Header
+}
+
+func (d discardResponse) Header() http.Header { return d.header }
+
+func (discardResponse) Write(p []byte) (int, error) { return len(p), nil }
+
+func (discardResponse) WriteHeader(int) {}
 
 type sessionResponseWriter struct {
 	http.ResponseWriter

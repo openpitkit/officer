@@ -30,7 +30,7 @@ import type { AccountFeatures, AccountMode } from "@/api/accountMode";
 import { LogoutNavEntry } from "@/components/SidebarExtras";
 import { StartupGate, useStartupAdmit } from "@/components/StartupGate";
 import { ApiClientProvider } from "@/framework";
-import { accountScope } from "@/lib/accountScope";
+import { accountScope, holdingScopeReload } from "@/lib/accountScope";
 import {
   checkSession,
   panelSession,
@@ -49,6 +49,7 @@ function accountModeResponse(
     account: features.account,
     features,
     restartRequired: mode !== (features.accounts ? "multi" : "single"),
+    live: false,
   });
 }
 
@@ -190,6 +191,29 @@ describe("StartupGate", () => {
         expect(reload).toHaveBeenCalledTimes(1);
       },
     );
+
+    it("leaves the reload to a screen that holds it, and reloads once the hold ends", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockImplementationOnce(async () => accountModeResponse(HIDDEN))
+        .mockImplementation(async () =>
+          accountModeResponse({ accounts: true, account: "" }),
+        );
+      let release!: () => void;
+      const held = holdingScopeReload(
+        () => new Promise<void>((resolve) => (release = resolve)),
+      );
+
+      await renderLoaded(fetchMock);
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(reload).not.toHaveBeenCalled();
+
+      release();
+      await held;
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
 
     it("keeps its children when later polls store another mode with the same features", async () => {
       const fetchMock = vi

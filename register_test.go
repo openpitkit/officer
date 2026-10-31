@@ -649,7 +649,7 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 	})
 	assertAccountMode(t, handler, "/app/api/v1", http.MethodGet, "",
 		`{"mode":"single","account":"default",`+
-			`"features":{"accounts":false,"account":"default"},"restartRequired":false}`)
+			`"features":{"accounts":false,"account":"default"},"restartRequired":false,"live":true}`)
 	if got := listedAccounts(t, handler, "/app/api/v1"); !slices.Equal(got, []string{"default"}) {
 		t.Fatalf("listed accounts in setup = %v, want the default account alone", got)
 	}
@@ -685,14 +685,14 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 
 	assertAccountMode(t, handler, "/api/v1", http.MethodPut, `{"mode":"multi"}`,
 		`{"mode":"multi","account":"",`+
-			`"features":{"accounts":false,"account":"default"},"restartRequired":true}`)
+			`"features":{"accounts":false,"account":"default"},"restartRequired":true,"live":false}`)
 	if got := listedAccounts(t, handler, "/api/v1"); !slices.Equal(got, []string{"default"}) {
 		t.Fatalf("listed accounts after the stored switch = %v, want the default account alone", got)
 	}
 	switched := restCall(t, handler, http.MethodPut, "/account-mode",
 		`{"mode":"single","account":"other"}`, http.StatusConflict)
 	if errObj, _ := switched["error"].(map[string]any); errObj["code"] != "accounts_not_managed" ||
-		!strings.Contains(fmt.Sprint(errObj["message"]), "switch to multi-account mode and restart") {
+		!strings.Contains(fmt.Sprint(errObj["message"]), "put multi-account mode into effect first") {
 		t.Fatalf("switch to another default account = %v, want accounts_not_managed with the way out", switched)
 	}
 }
@@ -706,7 +706,7 @@ func TestRegisterWithoutAccountMode(t *testing.T) {
 		t, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")}, nil,
 	)
 	assertAccountMode(t, handler, "/app/api/v1", http.MethodGet, "",
-		`{"mode":null,"account":"","features":{"accounts":true,"account":""},"restartRequired":false}`)
+		`{"mode":null,"account":"","features":{"accounts":true,"account":""},"restartRequired":false,"live":true}`)
 	got := listedAccounts(t, handler, "/app/api/v1")
 	slices.Sort(got)
 	if !slices.Equal(got, []string{"default", "other"}) {
@@ -739,6 +739,44 @@ func TestRegisterSingleAccountModeMCPSchemas(t *testing.T) {
 	})
 	accesstest.CompleteOpen(t, handler,
 		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, false)
+	assertOneAccountSubmitSchema(t, handler)
+}
+
+// TestRegisterSingleAccountModeChosenInSetup chooses single-account mode over
+// REST while the real composition, started with no mode stored, is in setup:
+// the running process takes it at once, REST and MCP act on the default
+// account once setup is complete, and from then on a switch waits for a
+// restart.
+func TestRegisterSingleAccountModeChosenInSetup(t *testing.T) {
+	_, handler := serveSeededApp(t, Config{
+		SQLitePath: filepath.Join(t.TempDir(), "officer.db"),
+	}, nil)
+	assertAccountMode(t, handler, "/app/api/v1", http.MethodPut,
+		`{"mode":"single","account":"default"}`,
+		`{"mode":"single","account":"default",`+
+			`"features":{"accounts":false,"account":"default"},"restartRequired":false,"live":true}`)
+	accesstest.CompleteOpen(t, handler,
+		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, false)
+
+	if got := listedAccounts(t, handler, "/api/v1"); !slices.Equal(got, []string{"default"}) {
+		t.Fatalf("listed accounts = %v, want the default account alone", got)
+	}
+	created := restCall(t, handler, http.MethodPost, "/accounts", `{"code":"desk"}`, http.StatusConflict)
+	if errObj, _ := created["error"].(map[string]any); errObj["code"] != "accounts_not_managed" {
+		t.Fatalf("account create = %v, want accounts_not_managed", created)
+	}
+	assertOneAccountSubmitSchema(t, handler)
+
+	assertAccountMode(t, handler, "/api/v1", http.MethodPut, `{"mode":"multi"}`,
+		`{"mode":"multi","account":"",`+
+			`"features":{"accounts":false,"account":"default"},"restartRequired":true,"live":false}`)
+}
+
+// assertOneAccountSubmitSchema lists the tools over the served MCP endpoint
+// of handler: submit_order neither requires an account nor offers an account
+// group.
+func assertOneAccountSubmitSchema(t *testing.T, handler http.Handler) {
+	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

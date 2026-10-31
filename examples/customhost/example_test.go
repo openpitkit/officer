@@ -286,7 +286,7 @@ func assertAccountModeServed(t *testing.T, router http.Handler) {
 		httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/v1/account-mode", nil),
 	)
 	const want = `{"mode":"multi","account":"",` +
-		`"features":{"accounts":true,"account":""},"restartRequired":false}`
+		`"features":{"accounts":true,"account":""},"restartRequired":false,"live":false}`
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
 		t.Fatalf("GET /account-mode = %d %s, want 200 %s", rec.Code, got, want)
 	}

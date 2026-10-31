@@ -92,7 +92,8 @@ login, and every path goes to the full-screen wizard at `/setup`
 login or password recovery screen until the browser has a session, and a
 `401 unauthorized` from any request returns it there. It then reads
 `GET /account-mode` before rendering and keeps polling it; a restart into
-another account mode reloads the page. A reset of the database returns the
+another account mode, or a mode the first-run setup took at once, reloads the
+page. A reset of the database returns the
 panel to the wizard. After setup, `/setup` opens the same wizard in review
 mode, from About > First-run guide and Service > Security. App code asks
 `accountScope()` (`src/lib/accountScope.ts`) whether accounts are shown and

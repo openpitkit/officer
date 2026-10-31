@@ -23,7 +23,8 @@
 // default account's code there. The mode is a realm setting. Load reads it
 // once, when the process starts, and builds the account scope the composition
 // installs for the life of the process; Apply stores a change, which takes
-// effect when the process next starts.
+// effect when the process next starts. Until the first-run setup is complete
+// ApplyDuringSetup puts a stored change into effect at once instead.
 package accountmode
 
 import (
@@ -32,6 +33,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
@@ -64,40 +66,124 @@ const defaultAccount domain.AccountID = "default"
 
 // Load reads the stored account mode once, when the process starts, and
 // returns the account scope the composition installs for the life of the
-// process: backend.EveryAccount when no mode is chosen or the mode is
-// ModeMulti, the single-account scope of the stored default account when it is
-// ModeSingle. A stored choice no start accepts - an unknown mode, or
+// process. It answers as backend.EveryAccount when no mode is chosen or the
+// mode is ModeMulti, as the single-account scope of the stored default account
+// when it is ModeSingle. A stored choice no start accepts - an unknown mode, or
 // single-account mode without an account - fails the start.
 //
 // In single-account mode a default account that no longer exists (a backup
 // restore or a database edit removed it) is recreated through the node,
 // audited as a system action. Nothing else is ever created implicitly.
-func Load(ctx context.Context, n node.Node) (backend.AccountScope, error) {
+func Load(ctx context.Context, n node.Node) (*Scope, error) {
 	_, features, err := readStored(ctx, n)
 	if err != nil {
 		return nil, err
 	}
-	if features.Accounts() {
-		return backend.EveryAccount{}, nil
+	if !features.Accounts() {
+		if err := ensureDefaultAccount(ctx, n, features.Account); err != nil {
+			return nil, err
+		}
 	}
-	if _, _, err := n.GetAccountState(ctx, features.Account); err != nil {
+	scope := &Scope{}
+	scope.set(scopeOf(features))
+	return scope, nil
+}
+
+// ensureDefaultAccount recreates account, the stored default account of
+// single-account mode, when it no longer exists.
+func ensureDefaultAccount(
+	ctx context.Context, n node.Node, account domain.AccountID,
+) error {
+	if _, _, err := n.GetAccountState(ctx, account); err != nil {
 		if !errors.Is(err, domain.ErrNotFound) {
-			return nil, fmt.Errorf(
-				"accountmode: read default account %q: %w", features.Account, err,
+			return fmt.Errorf(
+				"accountmode: read default account %q: %w", account, err,
 			)
 		}
 		// fallback(approved): the stored default account is recreated, as a
 		// system action the node audits, so single-account mode keeps the
 		// account it acts on.
 		if _, err := n.CreateAccount(
-			ctx, domain.Account{Code: features.Account}, auth.SystemCaller(),
+			ctx, domain.Account{Code: account}, auth.SystemCaller(),
 		); err != nil {
-			return nil, fmt.Errorf(
-				"accountmode: recreate default account %q: %w", features.Account, err,
+			return fmt.Errorf(
+				"accountmode: recreate default account %q: %w", account, err,
 			)
 		}
 	}
-	return singleAccount{account: features.Account}, nil
+	return nil
+}
+
+// scopeOf is the account scope that enforces features.
+func scopeOf(features backend.AccountFeatures) backend.AccountScope {
+	if features.Accounts() {
+		return backend.EveryAccount{}
+	}
+	return singleAccount{account: features.Account}
+}
+
+// Scope is the account scope of the running process: it answers as the scope
+// of the mode it holds. Load builds it, and only ApplyDuringSetup switches it,
+// so it holds one mode for the life of the process once setup is complete.
+type Scope struct {
+	current atomic.Pointer[heldScope]
+}
+
+// heldScope boxes the scope Scope holds: the scopes of the two modes are
+// different types, which one atomic.Pointer stores only behind a box.
+type heldScope struct {
+	backend.AccountScope
+}
+
+var _ backend.AccountScope = (*Scope)(nil)
+
+func (s *Scope) held() backend.AccountScope {
+	return s.current.Load().AccountScope
+}
+
+func (s *Scope) set(scope backend.AccountScope) {
+	s.current.Store(&heldScope{AccountScope: scope})
+}
+
+// Features answers as the held scope.
+func (s *Scope) Features() backend.AccountFeatures {
+	return s.held().Features()
+}
+
+// Account answers as the held scope.
+func (s *Scope) Account(
+	caller domain.Caller, requested domain.AccountID,
+) (domain.AccountID, error) {
+	return s.held().Account(caller, requested)
+}
+
+// MissingAccount answers as the held scope.
+func (s *Scope) MissingAccount(
+	caller domain.Caller, requested domain.MissingAccountPolicy,
+) (domain.MissingAccountPolicy, error) {
+	return s.held().MissingAccount(caller, requested)
+}
+
+// List answers as the held scope.
+func (s *Scope) List(
+	caller domain.Caller, requested domain.AccountID,
+) (domain.AccountRestriction, error) {
+	return s.held().List(caller, requested)
+}
+
+// Visible answers as the held scope.
+func (s *Scope) Visible(caller domain.Caller, owner domain.AccountID) error {
+	return s.held().Visible(caller, owner)
+}
+
+// Group answers as the held scope.
+func (s *Scope) Group(caller domain.Caller, requested string) error {
+	return s.held().Group(caller, requested)
+}
+
+// ManageAccounts answers as the held scope.
+func (s *Scope) ManageAccounts(caller domain.Caller) error {
+	return s.held().ManageAccounts(caller)
 }
 
 // settings reads realm settings: the node provides it at start, and the
@@ -294,13 +380,19 @@ type State struct {
 	// features than the running process does: it takes effect after a
 	// restart.
 	RestartRequired bool
+	// Live reports that the running process puts a choice stored now into
+	// effect at once, with no restart: only while the first-run setup is
+	// open, in a composition whose scope ApplyDuringSetup switches. Read
+	// leaves it false.
+	Live bool
 }
 
-// mu serialises Apply as a whole. Apply reads the account set, may create the
-// default account, and only then stores the choice, so two concurrent requests
-// for single-account mode could otherwise both find no account and both try to
-// create it. A process-local lock is enough: Apply runs only in the serving
-// process - no MCP tool switches the mode.
+// mu serialises Apply and ApplyDuringSetup as a whole, each with the state it
+// answers. Both read the account set, may create the default account, and only
+// then store the choice, so two concurrent requests for single-account mode
+// could otherwise both find no account and both try to create it. A
+// process-local lock is enough: they run only in the serving process - no MCP
+// tool switches the mode.
 var mu sync.Mutex
 
 // Read returns the stored mode choice and what the running process, served by
@@ -326,44 +418,121 @@ func Read(ctx context.Context, cp backend.ControlPlane) (State, error) {
 // account, or creates the account "default" when there is none, and refuses
 // to choose among several. In a
 // process that already runs single-account mode only its own default account
-// is accepted: changing it needs multi-account mode and a restart first.
+// is accepted: changing it needs multi-account mode in effect first.
 func Apply(ctx context.Context, cp backend.ControlPlane, req Request) (State, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	if _, err := store(ctx, cp, req); err != nil {
+		return State{}, err
+	}
+	return Read(ctx, cp)
+}
+
+// store stores the mode choice req asks for, as Apply describes, and returns
+// the account features the stored choice enforces. The caller holds mu.
+func store(
+	ctx context.Context, cp backend.ControlPlane, req Request,
+) (backend.AccountFeatures, error) {
 	switch req.Mode {
 	case "":
-		return State{}, domain.NewValidationError(
+		return backend.AccountFeatures{}, domain.NewValidationError(
 			"/mode", "required", fmt.Sprintf(
 				"account mode is required: use %q or %q", ModeSingle, ModeMulti,
 			),
 		)
 	case ModeMulti:
 		if req.Account != "" {
-			return State{}, domain.NewValidationError(
+			return backend.AccountFeatures{}, domain.NewValidationError(
 				"/account", "unsupported_value",
 				"multi-account mode takes no account",
 			)
 		}
 		if err := cp.SetSetting(ctx, SettingKeyMode, ModeMulti); err != nil {
-			return State{}, err
+			return backend.AccountFeatures{}, err
 		}
+		return backend.AccountFeatures{}, nil
 	case ModeSingle:
 		account, err := singleModeAccount(ctx, cp, domain.AccountID(req.Account))
 		if err != nil {
-			return State{}, err
+			return backend.AccountFeatures{}, err
 		}
 		if err := cp.SetSetting(ctx, SettingKeyMode, singlePrefix+string(account)); err != nil {
-			return State{}, err
+			return backend.AccountFeatures{}, err
 		}
+		return backend.AccountFeatures{Account: account}, nil
 	default:
-		return State{}, domain.NewValidationError(
+		return backend.AccountFeatures{}, domain.NewValidationError(
 			"/mode", "enum", fmt.Sprintf(
 				"account mode %q is not supported: use %q or %q",
 				req.Mode, ModeSingle, ModeMulti,
 			),
 		)
 	}
-	return Read(ctx, cp)
+}
+
+// SetupGate holds the first-run setup open.
+type SetupGate interface {
+	// WhileInSetup runs fn while setup is not complete and keeps it from
+	// completing until fn returns, returning fn's error. Once setup is
+	// complete it runs nothing and returns an error wrapping
+	// domain.ErrSetupComplete.
+	WhileInSetup(fn func() error) error
+}
+
+// ApplyDuringSetup is Apply, which also puts the stored choice into effect at
+// once while gate holds the first-run setup open: it switches scope, the
+// running process's account scope, so no restart is needed, and answers with
+// State.Live set. Once setup is complete it is Apply alone.
+//
+// Switching while a request runs is safe only because setup refuses every
+// client: the system caller left running acts on any account under either
+// mode's scope. The gate also serialises every switch, and the scope and the
+// answer both take the choice as it was written, with no read back that could
+// fail after the write, so the scope and the stored choice never part and the
+// answer describes this request's own switch.
+func ApplyDuringSetup(
+	ctx context.Context, cp backend.ControlPlane, scope *Scope, gate SetupGate,
+	req Request,
+) (State, error) {
+	var state State
+	err := gate.WhileInSetup(func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		stored, err := store(ctx, cp, req)
+		if err != nil {
+			return err
+		}
+		scope.set(scopeOf(stored))
+		mode := req.Mode
+		state = State{
+			Mode:     &mode,
+			Account:  string(stored.Account),
+			Features: cp.AccountFeatures(),
+			Live:     true,
+		}
+		state.RestartRequired = stored != state.Features
+		return nil
+	})
+	if errors.Is(err, domain.ErrSetupComplete) {
+		return Apply(ctx, cp, req)
+	}
+	return state, err
+}
+
+// live reports whether a choice stored now through ApplyDuringSetup with scope
+// and gate takes effect at once: scope is set and gate holds setup open.
+func live(scope *Scope, gate SetupGate) (bool, error) {
+	if scope == nil {
+		return false, nil
+	}
+	switch err := gate.WhileInSetup(func() error { return nil }); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, domain.ErrSetupComplete):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // singleModeAccount resolves the default account a ModeSingle request stores
@@ -375,8 +544,8 @@ func singleModeAccount(
 		if requested != "" && requested != running.Account {
 			return "", fmt.Errorf(
 				"single-account mode runs with its default account: to choose "+
-					"another one, switch to multi-account mode and restart "+
-					"first: %w", domain.ErrAccountsNotManaged,
+					"another one, put multi-account mode into effect first: %w",
+				domain.ErrAccountsNotManaged,
 			)
 		}
 		return running.Account, nil

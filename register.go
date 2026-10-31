@@ -101,12 +101,14 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	if b == nil {
 		return errors.New("officer: nil builder")
 	}
-	// Build sets these in the node hook before the app
-	// serves; the resolver and the route config read them afterwards.
+	// Build sets these in the node hook and the service factory before the
+	// app serves; the resolver and the route config read them afterwards.
 	var (
 		sealReports   httpapi.SealReportSource
 		accessService *access.Service
 		backupNode    node.Node
+		// Stays nil when a host replaces the service factory.
+		accountScope *accountmode.Scope
 	)
 	b.SetStoreFactory(func() (store.Store, error) {
 		return newStore(cfg)
@@ -174,12 +176,13 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		registry *fwmarketdata.Registry,
 		mcpRegistry *frameworkmcp.ToolRegistry,
 	) (fwbackend.ControlPlane, error) {
-		// The account mode is read once per process; a stored change takes
-		// effect at the next start.
+		// The account mode is read once per process; once setup is complete
+		// a stored change takes effect at the next start.
 		scope, err := accountmode.Load(ctx, n)
 		if err != nil {
 			return nil, err
 		}
+		accountScope = scope
 		opts := []fwbackend.Option{
 			fwbackend.WithMarketDataRegistry(registry),
 			fwbackend.WithTradingRuntime(rt),
@@ -203,7 +206,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		svc fwbackend.ControlPlane, logs httpx.LogSource,
 	) frameworkapp.RouteConfig {
 		config := httpapi.RouteConfig(svc, logs, sealReports)
-		for _, route := range accountmode.Routes(svc) {
+		for _, route := range accountmode.Routes(svc, accountScope, accessService) {
 			config.Routes.Register(route)
 		}
 		for _, route := range httpapi.PreMigrationBackupRoutes(preMigrationBackupSource(cfg.SQLitePath, backupNode)) {

@@ -19,7 +19,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { useState, type ReactElement } from "react";
 import { MemoryRouter, Route as RouterRoute, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccessMode } from "@/api/access";
 import { useAccountMode, type AccountModeState } from "@/api/accountMode";
@@ -35,6 +35,7 @@ import { useCredentialStorage } from "@/api/useCredentialStorage";
 import type { LoadState } from "@/api/usePolling";
 import { ApiError } from "@/framework";
 import i18n from "@/i18n";
+import { scopeReloadHeld, setAccountScope } from "@/lib/accountScope";
 import { checkSession, setPanelSession } from "@/lib/panelSession";
 import { Setup, SetupReview } from "@/pages/Setup";
 import {
@@ -105,6 +106,7 @@ function accountMode(
     account: "",
     features: { accounts: true, account: "" },
     restartRequired: false,
+    live: false,
     ...overrides,
   };
 }
@@ -246,21 +248,24 @@ async function saveSeveralAccounts(user: UserEvent) {
 }
 
 /**
- * Saves one account on the accounts step and confirms the restart it needs:
- * the process runs several accounts.
+ * Saves one account on the accounts step while the process runs several
+ * accounts. A process that answers `live` takes it at once; otherwise the save
+ * confirms the restart it needs (`confirm`).
  */
-async function saveOneAccount(user: UserEvent) {
+async function saveOneAccount(user: UserEvent, confirm = false) {
   await heading(TITLES.accounts);
   await user.click(screen.getByRole("button", { name: "One account" }));
   await screen.findByText(
     "No account exists yet: Officer creates the account default and acts on it only.",
   );
   await user.click(screen.getByRole("button", { name: "Save" }));
-  await user.click(
-    within(await screen.findByRole("alertdialog")).getByRole("button", {
-      name: "Save",
-    }),
-  );
+  if (confirm) {
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Save",
+      }),
+    );
+  }
 }
 
 /** Picks no encryption on the encryption step and acknowledges it. */
@@ -278,6 +283,8 @@ beforeEach(async () => {
   vi.mocked(declineEncryption).mockReset().mockResolvedValue(undefined);
   vi.mocked(completeSetup).mockReset().mockResolvedValue(undefined);
   admitMock.mockImplementation((accessMode) => setPanelSession(accessMode));
+  // The startup gate loads the scope of a process that runs several accounts.
+  setAccountScope({ accounts: true, account: "" });
   mockAccountMode(accountMode());
   mockStorage(true);
   mockReady({
@@ -529,117 +536,78 @@ describe("Setup", () => {
       ).toBeInTheDocument();
     });
 
-    it("starts no move while Officer restarts", async () => {
-      const user = userEvent.setup();
-      mockAccountMode(accountMode({ mode: null }));
-      const { restartService } = renderSetup(
-        { step: "accounts" },
-        {
-          [`PUT ${API}/account-mode`]: () =>
-            jsonResponse(accountMode({ restartRequired: true })),
-        },
-      );
+    describe("one account, taken at once", () => {
+      const reload = vi.fn();
+      // The answer of a process that took the mode at once.
+      const taken = accountMode({
+        mode: "single",
+        account: "default",
+        features: { accounts: false, account: "default" },
+        live: true,
+      });
 
-      await saveOneAccount(user);
-      await waitFor(() => expect(restartService).toHaveBeenCalledTimes(1));
-      await waitFor(() =>
-        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
-      );
+      beforeEach(() => {
+        vi.stubGlobal("location", { ...window.location, reload });
+      });
 
-      expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
-      for (const name of ["Welcome", "Accounts"]) {
-        expect(railStep(name)).toBeDisabled();
-      }
-      await user.click(railStep("Welcome"));
-      // Only the position stored before the restart.
-      expect(putSetupProgress).toHaveBeenCalledTimes(1);
-      expect(putSetupProgress).toHaveBeenCalledWith(
-        expect.anything(),
-        "encryption",
-      );
-    });
+      afterEach(() => {
+        vi.unstubAllGlobals();
+        reload.mockReset();
+      });
 
-    it("lets the moves go again when the restart fails", async () => {
-      mockAccountMode(accountMode({ mode: null }));
-      const user = userEvent.setup();
-      const { restartService } = renderSetup(
-        { step: "accounts" },
-        {
-          [`PUT ${API}/account-mode`]: () =>
-            jsonResponse(accountMode({ restartRequired: true })),
-        },
-      );
-      restartService.mockRejectedValueOnce(
-        new ApiError("restart is refused", "internal", 500),
-      );
+      it("stores the encryption step, then reloads with no restart", async () => {
+        const user = userEvent.setup();
+        mockAccountMode(accountMode({ mode: null, live: true }));
+        const write = held();
+        vi.mocked(putSetupProgress).mockReturnValueOnce(write.promise);
+        const { restartService } = renderSetup(
+          { step: "accounts" },
+          { [`PUT ${API}/account-mode`]: () => jsonResponse(taken) },
+        );
 
-      await saveOneAccount(user);
+        await saveOneAccount(user);
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(
-        "restart is refused",
-      );
-      expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
-      for (const name of ["Welcome", "Accounts"]) {
-        expect(railStep(name)).toBeEnabled();
-      }
-      await user.click(screen.getByRole("button", { name: "Back" }));
+        await waitFor(() =>
+          expect(putSetupProgress).toHaveBeenCalledWith(
+            expect.anything(),
+            "encryption",
+          ),
+        );
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+        expect(reload).not.toHaveBeenCalled();
+        // The startup gate's reload waits for the stored step.
+        expect(scopeReloadHeld()).toBe(true);
+        await write.resolve();
+        await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+        expect(restartService).not.toHaveBeenCalled();
 
-      await heading(TITLES.welcome);
-      expect(putSetupProgress).toHaveBeenCalledWith(
-        expect.anything(),
-        "welcome",
-      );
-    });
+        // Nothing moves on until the page reloads.
+        expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+        for (const name of ["Welcome", "Accounts"]) {
+          expect(railStep(name)).toBeDisabled();
+        }
+        expect(putSetupProgress).toHaveBeenCalledTimes(1);
+      });
 
-    it("stores the encryption step before Officer restarts", async () => {
-      const user = userEvent.setup();
-      mockAccountMode(accountMode({ mode: null }));
-      const write = held();
-      vi.mocked(putSetupProgress).mockReturnValueOnce(write.promise);
-      const { restartService } = renderSetup(
-        { step: "accounts" },
-        {
-          [`PUT ${API}/account-mode`]: () =>
-            jsonResponse(accountMode({ restartRequired: true })),
-        },
-      );
+      it("does not reload when storing the encryption step fails", async () => {
+        const user = userEvent.setup();
+        mockAccountMode(accountMode({ mode: null, live: true }));
+        vi.mocked(putSetupProgress).mockRejectedValueOnce(
+          new ApiError("database is locked", "internal", 500),
+        );
+        renderSetup(
+          { step: "accounts" },
+          { [`PUT ${API}/account-mode`]: () => jsonResponse(taken) },
+        );
 
-      await saveOneAccount(user);
+        await saveOneAccount(user);
 
-      await waitFor(() =>
-        expect(putSetupProgress).toHaveBeenCalledWith(
-          expect.anything(),
-          "encryption",
-        ),
-      );
-      expect(restartService).not.toHaveBeenCalled();
-      await write.resolve();
-      await waitFor(() => expect(restartService).toHaveBeenCalledTimes(1));
-      expect(putSetupProgress).toHaveBeenCalledTimes(1);
-      expect(next()).toBeDisabled();
-    });
-
-    it("does not restart when storing the encryption step fails", async () => {
-      const user = userEvent.setup();
-      mockAccountMode(accountMode({ mode: null }));
-      const write = held();
-      vi.mocked(putSetupProgress).mockReturnValueOnce(write.promise);
-      const { restartService } = renderSetup(
-        { step: "accounts" },
-        {
-          [`PUT ${API}/account-mode`]: () =>
-            jsonResponse(accountMode({ restartRequired: true })),
-        },
-      );
-
-      await saveOneAccount(user);
-      await waitFor(() => expect(putSetupProgress).toHaveBeenCalledTimes(1));
-      await write.reject(new ApiError("database is locked", "internal", 500));
-
-      expect(await screen.findByRole("alert")).toHaveTextContent(
-        "database is locked",
-      );
-      expect(restartService).not.toHaveBeenCalled();
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+          "database is locked",
+        );
+        expect(reload).not.toHaveBeenCalled();
+        expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+      });
     });
   });
 
@@ -1100,7 +1068,8 @@ describe("Setup", () => {
           new ApiError("setup complete", "setup_complete", 409),
         );
       },
-      trigger: saveOneAccount,
+      // A process that does not take the mode at once restarts for it.
+      trigger: (user: UserEvent) => saveOneAccount(user, true),
     },
     {
       call: "the decline",
@@ -1640,7 +1609,7 @@ describe("SetupReview", () => {
 
     await heading(TITLES.welcome);
     await user.click(railStep("Accounts", GUIDE));
-    await saveOneAccount(user);
+    await saveOneAccount(user, true);
     await waitFor(() => expect(restartService).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),

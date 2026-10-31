@@ -37,6 +37,7 @@ const single = {
   account: "main",
   features: { accounts: false, account: "main" },
   restartRequired: false,
+  live: false,
 };
 
 describe("fetchAccountMode", () => {
@@ -56,6 +57,7 @@ describe("fetchAccountMode", () => {
       account: "",
       features: { accounts: true, account: "" },
       restartRequired: true,
+      live: false,
     };
     const { client } = clientAnswering(unchosen);
 
@@ -89,6 +91,7 @@ describe("fetchAccountMode", () => {
       "a non-boolean restartRequired",
       { ...single, restartRequired: "no" },
     ],
+    ["live", "a missing live", { ...single, live: undefined }],
   ])("rejects %s for %s", async (field, _case, body) => {
     const { client } = clientAnswering(body);
 
@@ -105,6 +108,7 @@ describe("putAccountMode", () => {
       account: "main",
       features: { accounts: true, account: "" },
       restartRequired: true,
+      live: false,
     };
     const { client, fetchMock } = clientAnswering(stored);
 

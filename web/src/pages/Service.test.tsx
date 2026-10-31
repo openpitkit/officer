@@ -219,6 +219,7 @@ const waitingMulti: AccountModeState = {
   account: "",
   features: runningSingle,
   restartRequired: true,
+  live: false,
 };
 // Stored single on an account deleted since, while the process runs multi.
 const waitingOldAccount: AccountModeState = {
@@ -226,6 +227,7 @@ const waitingOldAccount: AccountModeState = {
   account: "old",
   features: runningMulti,
   restartRequired: true,
+  live: false,
 };
 const mainAccount = accountRow("main");
 const noticeTitle = "Restart needed to apply the account mode";
@@ -279,6 +281,7 @@ describe("ServiceCard", () => {
         fetch: answeringAccountMode({
           ...waitingMulti,
           restartRequired: false,
+          live: false,
         }) as unknown as typeof fetch,
       },
     );
@@ -675,6 +678,7 @@ describe("Service", () => {
         account: "main",
         features: runningSingle,
         restartRequired: false,
+        live: false,
       }),
     );
     await user.click(
@@ -731,6 +735,7 @@ describe("Service", () => {
     const fetchMock = answeringAccountMode({
       ...waitingMulti,
       restartRequired: false,
+      live: false,
     });
     fetchMock.mockImplementationOnce(async () => accountModeUnavailable());
     renderService("/service#account-mode", {}, fetchMock);
@@ -758,6 +763,7 @@ describe("Service", () => {
       const fetchMock = answeringAccountMode({
         ...waitingMulti,
         restartRequired: false,
+        live: false,
       });
       renderService("/service#account-mode", {}, fetchMock);
       const panel = await screen.findByRole("tabpanel", {

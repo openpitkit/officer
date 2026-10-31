@@ -45,6 +45,18 @@ func (s *Service) requireSetup() error {
 	}
 }
 
+// WhileInSetup runs fn while setup is not complete and keeps setup from
+// completing until fn returns, returning fn's error. Once setup is complete it
+// runs nothing and returns domain.ErrSetupComplete.
+func (s *Service) WhileInSetup(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireSetup(); err != nil {
+		return err
+	}
+	return fn()
+}
+
 // SetupState reads the wizard's bookmark and first encryption decline time.
 // After completion it returns ErrSetupComplete before consulting the store.
 func (s *Service) SetupState(ctx context.Context) (SetupState, error) {

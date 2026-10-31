@@ -27,7 +27,7 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import type { AccessMode } from "@/api/access";
-import { useAccountMode } from "@/api/accountMode";
+import { useAccountMode, type AccountModeState } from "@/api/accountMode";
 import {
   completeSetup,
   declineEncryption,
@@ -82,6 +82,7 @@ import { Button } from "@/components/ui/button";
 import { WelcomeIntro } from "@/components/welcome/WelcomeIntro";
 import { WelcomeQuickStart } from "@/components/welcome/WelcomeQuickStart";
 import { ApiError, useApiClient, useOfficerApi } from "@/framework";
+import { isLoadedScope } from "@/lib/accountScope";
 import { checkSession } from "@/lib/panelSession";
 import { usePasswordAttempt } from "@/lib/usePasswordAttempt";
 
@@ -337,22 +338,43 @@ function Wizard({ pass }: { pass: WizardPass }) {
     }
   };
 
-  // In the first run the position moves on before the restart, so the wizard
-  // resumes at the encryption step once Officer is back. No move starts from
-  // here on: once Officer restarts, the startup gate reloads the page.
-  const restart = async () => {
+  // In the first run the position moves on before the page starts afresh -
+  // `afresh` restarts Officer, after which the startup gate reloads the page,
+  // or reloads it itself - so the wizard resumes at the encryption step. No
+  // move starts from here on.
+  const resumeAfter = async (afresh: () => Promise<void> | void) => {
     busy.current = true;
     setMoving(true);
     try {
       if (pass.kind === "firstRun") {
         await putSetupProgress(client, "encryption");
       }
-      await restartService();
+      await afresh();
     } catch (err) {
       busy.current = false;
       setMoving(false);
       completedElsewhere(err);
       throw err;
+    }
+  };
+
+  const restart = () => resumeAfter(restartService);
+
+  // A mode the running process took at once changes the account scope this
+  // page loaded with, which only a reload of the page replaces. The choice
+  // holds the startup gate's reload until this settles, so the page reloads
+  // here, once the position has moved on.
+  const saved = async (state: AccountModeState) => {
+    if (isLoadedScope(state.features)) {
+      accountPoll.reload();
+      return;
+    }
+    try {
+      await resumeAfter(() => window.location.reload());
+    } catch (err) {
+      if (!isSetupComplete(err)) {
+        setError(errMessage(err));
+      }
     }
   };
 
@@ -474,7 +496,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
               poll={accountPoll}
               restart={restart}
               disabled={moving}
-              onSaved={accountPoll.reload}
+              onSaved={saved}
             />
           ),
           // The review takes no decision here.

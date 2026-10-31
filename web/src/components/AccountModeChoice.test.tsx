@@ -33,6 +33,7 @@ import {
   AccountModePanel,
 } from "@/components/AccountModeChoice";
 import i18n from "@/i18n";
+import { scopeReloadHeld } from "@/lib/accountScope";
 import {
   accountRow,
   answeringAccountMode,
@@ -53,12 +54,14 @@ const storedMulti: AccountModeState = {
   account: "",
   features: runningMulti,
   restartRequired: false,
+  live: false,
 };
 const storedSingle: AccountModeState = {
   mode: "single",
   account: "main",
   features: runningSingle,
   restartRequired: false,
+  live: false,
 };
 
 /** GET /accounts over `accounts`, filtered by code prefix and limit. */
@@ -104,7 +107,8 @@ function renderChoice(
     disabled?: boolean;
   } = {},
 ) {
-  const fetchMock = vi.fn(async () => answer ?? jsonResponse(state));
+  // A clone per request, so every save reads the same answer afresh.
+  const fetchMock = vi.fn(async () => answer?.clone() ?? jsonResponse(state));
   const fetchAccounts = accountsLookup(accounts);
   const restart = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   const onSaved = vi.fn();
@@ -200,6 +204,7 @@ describe("AccountModeChoice", () => {
         account: "default",
         features: runningMulti,
         restartRequired: true,
+        live: false,
       }),
     });
 
@@ -233,6 +238,7 @@ describe("AccountModeChoice", () => {
         account: "main",
         features: runningMulti,
         restartRequired: true,
+        live: false,
       }),
     });
 
@@ -261,6 +267,7 @@ describe("AccountModeChoice", () => {
         account: "beta",
         features: runningMulti,
         restartRequired: true,
+        live: false,
       }),
     });
 
@@ -293,6 +300,7 @@ describe("AccountModeChoice", () => {
           account: "",
           features: runningSingle,
           restartRequired: true,
+          live: false,
         }),
       },
     );
@@ -342,6 +350,83 @@ describe("AccountModeChoice", () => {
     expect(onSaved).toHaveBeenCalledExactlyOnceWith(saved);
     expect(restart).not.toHaveBeenCalled();
     expect(fetchAccounts).not.toHaveBeenCalled();
+  });
+
+  it("saves one account with no restart warning while the process takes it at once", async () => {
+    const user = userEvent.setup();
+    const saved: AccountModeState = {
+      mode: "single",
+      account: "default",
+      features: { accounts: false, account: "default" },
+      restartRequired: false,
+      live: true,
+    };
+    const { fetchMock, restart, onSaved } = renderChoice(
+      { ...storedMulti, mode: null, live: true },
+      { accounts: [], answer: jsonResponse(saved) },
+    );
+    // The scope changed, so the page reload waits for the caller's follow-up.
+    let heldWhileSaved = false;
+    onSaved.mockImplementation(() => {
+      heldWhileSaved = scopeReloadHeld();
+    });
+
+    await choose(user, "One account");
+    await screen.findByText(
+      "No account exists yet: Officer creates the account default and acts on it only.",
+    );
+    await user.click(saveButton());
+
+    expect(
+      await screen.findByText(
+        "The account mode is saved. No restart is needed.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(putBodies(fetchMock)).toEqual([{ mode: "single" }]);
+    expect(onSaved).toHaveBeenCalledExactlyOnceWith(saved);
+    expect(heldWhileSaved).toBe(true);
+    await waitFor(() => expect(scopeReloadHeld()).toBe(false));
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("asks before the restart a save the server did not take at once needs", async () => {
+    const user = userEvent.setup();
+    const stored: AccountModeState = {
+      mode: "single",
+      account: "default",
+      features: runningMulti,
+      restartRequired: true,
+      live: false,
+    };
+    const { fetchMock, restart, onSaved } = renderChoice(
+      { ...storedMulti, mode: null, live: true },
+      { accounts: [], answer: jsonResponse(stored) },
+    );
+
+    await choose(user, "One account");
+    await screen.findByText(
+      "No account exists yet: Officer creates the account default and acts on it only.",
+    );
+    await user.click(saveButton());
+
+    // Stored, but Officer restarts only once the operator confirms it.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(restart).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(
+      await screen.findByText(
+        "Officer is restarting; the panel reloads when it is back.",
+      ),
+    ).toBeInTheDocument();
+    expect(putBodies(fetchMock)).toEqual([
+      { mode: "single" },
+      { mode: "single" },
+    ]);
+    expect(restart).toHaveBeenCalledOnce();
   });
 
   it("saves several accounts on a fresh install without a restart warning", async () => {
@@ -449,6 +534,7 @@ describe("AccountModeChoice", () => {
         account: "",
         features: runningSingle,
         restartRequired: true,
+        live: false,
       }),
     });
     restart.mockRejectedValue(new Error("restart is not allowed"));
@@ -542,6 +628,7 @@ describe("AccountModePanel", () => {
         account: "main",
         features: runningMulti,
         restartRequired: true,
+        live: false,
       });
       const { restart } = renderPanel(fetchMock, ["main"]);
       restart.mockRejectedValueOnce(new Error("restart is not allowed"));

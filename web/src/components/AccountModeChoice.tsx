@@ -53,6 +53,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useApiClient, useOfficerApi } from "@/framework";
+import { holdingScopeReload } from "@/lib/accountScope";
 import { useAccountCodeSuggestions } from "@/lib/useAccountCodeSuggestions";
 
 /** The account the server creates for `single` when no account exists. */
@@ -109,9 +110,18 @@ function isStored(request: AccountModeRequest, state: AccountModeState) {
 
 /**
  * Whether storing `request` restarts Officer: it enforces other account
- * features than the running process does, as the server decides it.
+ * features than the running process does, as the server decides it, and the
+ * server reported that the running process does not take a change at once
+ * (`live`).
  */
-function restarts(request: AccountModeRequest, features: AccountFeatures) {
+function restarts(
+  request: AccountModeRequest,
+  features: AccountFeatures,
+  live: boolean,
+) {
+  if (live) {
+    return false;
+  }
   return request.mode === "multi"
     ? !features.accounts
     : features.accounts || request.account !== features.account;
@@ -120,7 +130,9 @@ function restarts(request: AccountModeRequest, features: AccountFeatures) {
 /**
  * Shows the stored account mode and lets the operator choose the next one,
  * then stores it and restarts Officer when the running mode has to change.
- * Only a save that restarts asks for confirmation first.
+ * Only a save that restarts asks for confirmation first, and Officer restarts
+ * only after one: a save the server answers with a restart unexpectedly asks
+ * for it then.
  */
 export function AccountModeChoice({
   load,
@@ -134,8 +146,13 @@ export function AccountModeChoice({
   restart: () => Promise<void>;
   /** Blocks the choice, e.g. while the host restarts or stops Officer. */
   disabled?: boolean;
-  /** Called with the stored state once a save needs no restart. */
-  onSaved?: (state: AccountModeState) => void;
+  /**
+   * Called with the stored state once a save needs no restart. The page
+   * reload other account features trigger waits until what it returns
+   * settles, so a caller can reload the page itself once its follow-up is
+   * done.
+   */
+  onSaved?: (state: AccountModeState) => Promise<void> | void;
 }) {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
@@ -207,23 +224,34 @@ export function AccountModeChoice({
     setError(null);
   };
 
-  const save = async (next: AccountModeRequest) => {
+  // `confirmed` is whether the operator confirmed a restart for this save.
+  const save = async (next: AccountModeRequest, confirmed: boolean) => {
     setBusy(true);
     setError(null);
+    let confirm = false;
     try {
-      const answer = await putAccountMode(client, next);
-      if (answer.restartRequired) {
-        await restart();
-        setOutcome("restarting");
-      } else {
-        setOutcome("saved");
-        onSaved?.(answer);
-      }
+      // A save the running process takes at once changes the account scope,
+      // so the page reload it triggers waits for `onSaved`.
+      await holdingScopeReload(async () => {
+        const answer = await putAccountMode(client, next);
+        if (!answer.restartRequired) {
+          setOutcome("saved");
+          await onSaved?.(answer);
+        } else if (confirmed) {
+          await restart();
+          setOutcome("restarting");
+        } else {
+          // The running process did not take the mode at once after all:
+          // it is stored, and the restart that applies it waits for a
+          // confirmation.
+          confirm = true;
+        }
+      });
     } catch (err) {
       setError(errMessage(err));
     } finally {
       setBusy(false);
-      setConfirming(false);
+      setConfirming(confirm);
     }
   };
 
@@ -231,10 +259,10 @@ export function AccountModeChoice({
     if (request === null) {
       return;
     }
-    if (restarts(request, features)) {
+    if (restarts(request, features, state.live)) {
       setConfirming(true);
     } else {
-      void save(request);
+      void save(request, false);
     }
   };
 
@@ -392,7 +420,7 @@ export function AccountModeChoice({
               onClick={(event) => {
                 event.preventDefault();
                 if (canSave && request !== null) {
-                  void save(request);
+                  void save(request, true);
                 }
               }}
             >

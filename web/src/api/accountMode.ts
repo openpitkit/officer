@@ -24,7 +24,10 @@ import { useApiClient, type ApiClient } from "@/framework";
 /** Stored account mode: one default account, or accounts named per request. */
 export type AccountMode = "single" | "multi";
 
-/** What the running process enforces; it never changes while it runs. */
+/**
+ * What the running process enforces; once the first-run setup is complete it
+ * never changes while the process runs.
+ */
 export interface AccountFeatures {
   /** Whether clients see and choose accounts and account groups. */
   accounts: boolean;
@@ -42,6 +45,11 @@ export interface AccountModeState {
   features: AccountFeatures;
   /** Whether the stored choice takes effect only after a restart. */
   restartRequired: boolean;
+  /**
+   * Whether the running process takes a choice stored now at once, with no
+   * restart: only before the first-run setup is complete.
+   */
+  live: boolean;
 }
 
 const RESPONSE = "account mode";
@@ -50,7 +58,7 @@ function decodeAccountMode(value: unknown): AccountModeState {
   if (!isRecord(value)) {
     throw invalid(RESPONSE, "body", "must be an object");
   }
-  const { mode, account, features, restartRequired } = value;
+  const { mode, account, features, restartRequired, live } = value;
   if (mode !== "single" && mode !== "multi" && mode !== null) {
     throw invalid(RESPONSE, "mode", 'must be "single", "multi" or null');
   }
@@ -77,11 +85,15 @@ function decodeAccountMode(value: unknown): AccountModeState {
   if (typeof restartRequired !== "boolean") {
     throw invalid(RESPONSE, "restartRequired", "must be a boolean");
   }
+  if (typeof live !== "boolean") {
+    throw invalid(RESPONSE, "live", "must be a boolean");
+  }
   return {
     mode,
     account,
     features: { accounts, account: defaultAccount },
     restartRequired,
+    live,
   };
 }
 
@@ -108,8 +120,10 @@ export interface AccountModeRequest {
 }
 
 /**
- * Store the next account mode with `PUT /account-mode`. The running process
- * keeps its features: the answer's `restartRequired` says a restart applies it.
+ * Store the next account mode with `PUT /account-mode`. Before the first-run
+ * setup is complete the running process may take it at once (the answer's
+ * `live`); otherwise it keeps its features, and the answer's
+ * `restartRequired` says a restart applies it.
  *
  * @throws Error naming the offending field when the response is malformed.
  */

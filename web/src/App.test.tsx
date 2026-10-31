@@ -127,6 +127,7 @@ function renderApp(
             account: "",
             features: { accounts: true, account: "" },
             restartRequired: false,
+            live: false,
           },
     ),
   );
