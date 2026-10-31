@@ -1,4 +1,9 @@
 {
+  "nonReleaseConfirm": {
+    "title": "¿Habilitar la negociación en una compilación no publicada?",
+    "description": "Esta compilación no publicada es solo para pruebas rápidas. Habilitar esta conexión le permite enviar órdenes reales a la plataforma. La versión publicada no verá las órdenes que envíe esta compilación. Esta compilación puede dañar sus propios datos.",
+    "action": "Habilitar negociación"
+  },
   "unknownVenue": "Plataforma desconocida {{provider}}",
   "empty": {
     "description": "Configure una conexión de negociación para enviar órdenes a una plataforma."

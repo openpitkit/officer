@@ -277,6 +277,134 @@ func TestNewLoadsEnumDictionaries(t *testing.T) {
 	}
 }
 
+func TestNewOpensEnumDictionariesWithMissingCodes(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newTestStore(t)
+	sq := s.(*sqliteStore)
+	codes := []struct {
+		code domain.AuditAction
+		id   int64
+	}{
+		{domain.AuditActionDownloadPreMigrationBackup, 53},
+		{domain.AuditActionDeletePreMigrationBackup, 54},
+	}
+	if _, err := sq.currentDB().ExecContext(
+		ctx, `DELETE FROM audit_action WHERE code IN (?, ?)`,
+		codes[0].code, codes[1].code,
+	); err != nil {
+		t.Fatalf("delete new audit_action codes: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := New(sq.path, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("New(older database): %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	sq = reopened.(*sqliteStore)
+	if dictionaries, err := sq.enumDictionaries(); err == nil ||
+		!strings.Contains(err.Error(), "unavailable") || dictionaries != nil {
+		t.Fatalf("enumDictionaries before Migrate = %v, %v, want unavailable", dictionaries, err)
+	}
+	if err := sq.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate(older database): %v", err)
+	}
+	dictionaries, err := sq.enumDictionaries()
+	if err != nil {
+		t.Fatalf("enumDictionaries after Migrate: %v", err)
+	}
+	for _, seed := range codes {
+		var storedID int64
+		if err := sq.currentDB().QueryRowContext(
+			ctx, `SELECT id FROM audit_action WHERE code = ?`, seed.code,
+		).Scan(&storedID); err != nil {
+			t.Fatalf("read audit_action %q: %v", seed.code, err)
+		}
+		if storedID != seed.id {
+			t.Fatalf("stored audit_action %q id = %d, want %d", seed.code, storedID, seed.id)
+		}
+		id, err := dictionaries.id(auditActionTable, "audit action", string(seed.code))
+		if err != nil || id != seed.id {
+			t.Fatalf("audit_action %q id = %d, %v, want %d", seed.code, id, err, seed.id)
+		}
+		code, err := dictionaries.code(auditActionTable, "audit action", seed.id)
+		if err != nil || code != string(seed.code) {
+			t.Fatalf("audit_action id %d code = %q, %v, want %q", seed.id, code, err, seed.code)
+		}
+	}
+}
+
+func TestNewRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
+	for _, missingCode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing_code=%t", missingCode), func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := newTestStore(t)
+			sq := s.(*sqliteStore)
+			if missingCode {
+				if _, err := sq.currentDB().ExecContext(
+					ctx, `DELETE FROM audit_action WHERE code = ?`,
+					domain.AuditActionDownloadPreMigrationBackup,
+				); err != nil {
+					t.Fatalf("delete audit_action code: %v", err)
+				}
+			}
+			if _, err := sq.currentDB().ExecContext(
+				ctx, `UPDATE audit_action SET id = ? WHERE code = ?`,
+				99, domain.AuditActionDeletePreMigrationBackup,
+			); err != nil {
+				t.Fatalf("change audit_action id: %v", err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+
+			reopened, err := New(sq.path, domain.DefaultRealm)
+			if reopened != nil {
+				_ = reopened.Close()
+				t.Fatal("New after audit_action id drift returned a store")
+			}
+			if err == nil || !strings.Contains(err.Error(), "audit_action") {
+				t.Fatalf("New after audit_action id drift = %v, want audit_action error", err)
+			}
+		})
+	}
+}
+
+func TestNewRejectsMissingEnumDictionaryCodeWithOccupiedStableID(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newTestStore(t)
+	sq := s.(*sqliteStore)
+	const holdingCode = "renamed_pre_migration_backup"
+	if _, err := sq.currentDB().ExecContext(
+		ctx, `UPDATE audit_action SET code = ? WHERE id = ?`,
+		holdingCode, 53,
+	); err != nil {
+		t.Fatalf("rename audit_action code: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := New(sq.path, domain.DefaultRealm)
+	if reopened != nil {
+		_ = reopened.Close()
+		t.Fatal("New with occupied audit_action id returned a store")
+	}
+	if err == nil {
+		t.Fatal("New with occupied audit_action id returned no error")
+	}
+	for _, want := range []string{
+		"audit_action", "53", holdingCode,
+		string(domain.AuditActionDownloadPreMigrationBackup),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("New with occupied audit_action id = %v, want %q", err, want)
+		}
+	}
+}
+
 func TestMigrateRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newTestStore(t)

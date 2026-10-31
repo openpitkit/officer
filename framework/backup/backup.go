@@ -160,6 +160,9 @@ type RestoreOptions struct {
 	// subject), and fails closed when it is nil. It is an in-process restore
 	// seam and never part of the wire form.
 	TradingProviderRequiresFeeAccount func(provider string) (bool, error) `json:"-"`
+	// DisableTradingConnections restores trading connections disabled for a
+	// non-release host. It applies only to this restore, never its rollback.
+	DisableTradingConnections bool `json:"-"`
 }
 
 // RestoreSummary reports the restore outcome per section. RestartRequired is
@@ -178,6 +181,9 @@ type RestoreSummary struct {
 	// TradingCredentialsUnavailable names connections restored disabled because
 	// their archived credentials could not be opened by this installation.
 	TradingCredentialsUnavailable []string `json:"tradingCredentialsUnavailable,omitempty"`
+	// TradingDisabledNonRelease names enabled connections restored disabled
+	// because the host is a non-release build, excluding unavailable credentials.
+	TradingDisabledNonRelease []string `json:"tradingDisabledNonRelease,omitempty"`
 	// RestartRequired reports that this restore actually replaced the engine.
 	RestartRequired bool `json:"restartRequired"`
 }
@@ -242,6 +248,8 @@ type Manifest struct {
 	Realm RealmLabel `json:"realm"`
 	// Sections is the ordered list of sections the archive carries.
 	Sections []Section `json:"sections"`
+	// NonRelease marks disposable data exported by a non-release build.
+	NonRelease bool `json:"nonRelease,omitempty"`
 }
 
 // Account is the portable archive form of an account dictionary row. It carries

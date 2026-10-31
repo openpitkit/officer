@@ -407,6 +407,70 @@ func TestTradingAccessWireCarriesOneSubject(t *testing.T) {
 	}
 }
 
+func TestArchiveNonReleaseMarker(t *testing.T) {
+	t.Run("release bytes unchanged", func(t *testing.T) {
+		archive := Archive{CredentialForm: CredentialFormPlaintext}
+		raw, err := json.Marshal(archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"credentialForm":"plaintext","manifest":{"formatVersion":0,"createdAt":"0001-01-01T00:00:00Z","source":"","realm":{"code":""},"sections":null},"data":{}}`
+		if string(raw) != want {
+			t.Fatalf("release archive JSON = %s, want %s", raw, want)
+		}
+		var decoded Archive
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Manifest.NonRelease {
+			t.Fatal("unmarked archive decoded as non-release")
+		}
+	})
+	t.Run("non-release round trip", func(t *testing.T) {
+		archive := Archive{Manifest: Manifest{NonRelease: true}}
+		raw, err := json.Marshal(archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(raw, []byte(`"nonRelease":true`)) {
+			t.Fatalf("non-release marker missing: %s", raw)
+		}
+		var decoded Archive
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if !decoded.Manifest.NonRelease {
+			t.Fatal("non-release marker lost on round trip")
+		}
+	})
+}
+
+func TestRestoreNonReleaseFieldsJSON(t *testing.T) {
+	raw, err := json.Marshal(RestoreOptions{DisableTradingConnections: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("DisableTrading")) || bytes.Contains(raw, []byte("disableTrading")) {
+		t.Fatalf("restore seam leaked into JSON: %s", raw)
+	}
+	for _, names := range [][]string{nil, {"paper desk"}} {
+		raw, err := json.Marshal(RestoreSummary{TradingDisabledNonRelease: names})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(raw, []byte(`"tradingDisabledNonRelease"`)) != (len(names) != 0) {
+			t.Fatalf("summary field presence for %v: %s", names, raw)
+		}
+		var decoded RestoreSummary
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decoded.TradingDisabledNonRelease, names) {
+			t.Fatalf("summary names = %v, want %v", decoded.TradingDisabledNonRelease, names)
+		}
+	}
+}
+
 func TestNewArchiveOmitsVersionAndCarriesRealmLabel(t *testing.T) {
 	created := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
 	archive := NewArchive(created, "src", RealmLabel{Code: "desk-a", Title: "Desk A"},

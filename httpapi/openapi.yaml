@@ -222,6 +222,12 @@ paths:
         after both success and failure.
         Trading scope restrictions are described by BackupScope; applying a
         live-mode connection returns 403 live_trading_unavailable before writing.
+        A release build refuses the archive it would restore (archiveFile when
+        non-empty, otherwise archive) if marked nonRelease, with 422
+        non_release_archive before decoding its data. Such disposable archives
+        restore only into a non-release build. In a non-release build, restored
+        trading connections are disabled and newly disabled connections are
+        named in tradingDisabledNonRelease.
       tags: [backup]
       requestBody:
         required: true
@@ -267,7 +273,16 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          description: >
+            Invalid restore input, or non_release_archive when a release build
+            refuses a disposable archive exported by a non-release build.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           $ref: "#/components/responses/TradingConflictError"
         "503":
@@ -363,6 +378,119 @@ paths:
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /database/pre-migration-backups:
+    get:
+      operationId: listPreMigrationBackups
+      summary: List raw pre-migration database copies, newest first
+      tags: [backup]
+      responses:
+        "200":
+          description: Copies beside this process's database, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [backups]
+                properties:
+                  backups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PreMigrationBackup"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignHostError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
+  /database/pre-migration-backups/{id}/download:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Exact file name returned by the pre-migration backup list.
+        schema:
+          type: string
+    post:
+      operationId: downloadPreMigrationBackup
+      summary: Download a raw pre-migration database copy
+      description: >
+        The copy is opened and validated before the request is audited.
+        Audit failure prevents the download.
+      tags: [backup]
+      responses:
+        "200":
+          description: Raw SQLite copy, sent after the audit succeeds.
+          headers:
+            Content-Disposition:
+              description: Attachment with the copy's file name.
+              schema:
+                type: string
+            Content-Length:
+              description: Opened copy's size in bytes.
+              schema:
+                type: integer
+                format: int64
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
+  /database/pre-migration-backups/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Exact file name returned by the pre-migration backup list.
+        schema:
+          type: string
+    delete:
+      operationId: deletePreMigrationBackup
+      summary: Delete a raw pre-migration database copy
+      description: >
+        The copy is validated before the request is audited. Audit failure
+        leaves it in place. If removal then fails, the error names the copy
+        and the audit row remains as the record of the request.
+      tags: [backup]
+      responses:
+        "204":
+          description: Copy deleted.
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
   # Assets / accounts
@@ -4185,7 +4313,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4255,7 +4383,18 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/TradingEnabled"
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+                nonReleaseConfirmed:
+                  type: boolean
+                  description: >-
+                    Honoured only on the dashboard mirror `/app/api/v1` in a
+                    non-release build. Release builds and `/api/v1` ignore it.
+                    In a non-release build, `/api/v1` cannot enable trading.
       responses:
         "200":
           description: Request completed.
@@ -4274,7 +4413,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -5883,6 +6022,21 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError:
+      description: >-
+        Live trading is refused until the live token exists
+        (`live_trading_unavailable`), the request's `Host` is not a name the
+        server answers to (`host_not_allowed`), a browser sent the request from
+        another origin (`origin_not_allowed`), or the request carries the agent
+        token, which is accepted only on `/mcp` (`wrong_token`). Names beyond
+        loopback come from `PIT_OFFICER_ALLOWED_HOSTS`. A non-release build
+        enables trading only with the operator's confirmation on the dashboard
+        mirror `/app/api/v1` (`non_release_confirmation_required`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     TradingConflictError:
       description: >
         A connection or account dependency conflicts with the request. A
@@ -6082,7 +6236,8 @@ components:
                 `forbidden`, `host_not_allowed`, `origin_not_allowed`,
                 `unauthorized`, `wrong_token`,
                 `unsupported_media_type`, `reserved_group`, `loosening_refused`,
-                `live_trading_unavailable`, `trading_mode_mismatch`,
+                `live_trading_unavailable`, `non_release_archive`,
+                `non_release_confirmation_required`, `trading_mode_mismatch`,
                 `fee_account_required`, `venue_order_managed`, `no_destination`,
                 `destination_ambiguous`, `accounts_not_managed`,
                 `setup_required`, `engine_restarting`, `signing`, `upstream`,
@@ -6257,6 +6412,20 @@ components:
 
     # Backup / restore
 
+    PreMigrationBackup:
+      type: object
+      required: [name, createdAt, sizeBytes]
+      properties:
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          description: UTC timestamp from the file name, formatted as RFC 3339.
+        sizeBytes:
+          type: integer
+          format: int64
+
     BackupSection:
       type: string
       enum:
@@ -6421,6 +6590,11 @@ components:
           description: Backup sections present in the archive data.
           items:
             $ref: "#/components/schemas/BackupSection"
+        nonRelease:
+          type: boolean
+          description: >
+            Present and true only for disposable archives exported by a
+            non-release (edge, dev or local) build. Release builds refuse them.
 
     BackupData:
       type: object
@@ -6596,6 +6770,14 @@ components:
             Connections whose sealed credentials could not be opened are
             restored disabled with no keys. Repair with PUT
             /trading/connections/{id}/settings, then enable the connection.
+          items:
+            type: string
+        tradingDisabledNonRelease:
+          type: array
+          description: >
+            Enabled connections restored disabled by a non-release build.
+            Excludes connections already disabled, skipped by insert-missing,
+            or named in tradingCredentialsUnavailable.
           items:
             type: string
         restartRequired:
@@ -8293,6 +8475,12 @@ components:
           $ref: "#/components/schemas/TradingCredentials"
         enabled:
           type: boolean
+        nonReleaseConfirmed:
+          type: boolean
+          description: >-
+            Honoured only on the dashboard mirror `/app/api/v1` in a
+            non-release build. Release builds and `/api/v1` ignore it.
+            In a non-release build, `/api/v1` cannot enable trading.
 
     TradingConnectionSettingsUpdate:
       type: object

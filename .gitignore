@@ -40,12 +40,14 @@ go.work.sum
 *.db
 *.db-shm
 *.db-wal
+*.db.non-release-*
 *.sqlite
 *.sqlite3
 .wt/
 
 # Runtime state published by `serve` next to the database.
 officer-runtime.json
+officer-runtime.non-release.json
 
 # Frontend
 /web/node_modules/

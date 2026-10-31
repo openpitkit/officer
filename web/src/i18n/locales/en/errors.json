@@ -1,5 +1,7 @@
 {
   "code": {
+    "non_release_archive": "This archive was made by a non-release build whose data is disposable. A release build cannot restore it.",
+    "non_release_confirmation_required": "Enabling trading in a non-release build requires your confirmation in the panel.",
     "validation": "The request was rejected as invalid.",
     "not_found": "The requested resource was not found.",
     "has_dependents": "The resource has dependent rows.",

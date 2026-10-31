@@ -2038,6 +2038,8 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrLoosening":               domain.ErrLoosening,
 		"ErrNoChange":                domain.ErrNoChange,
 		"ErrNoDestination":           domain.ErrNoDestination,
+		"ErrNonReleaseArchive":       domain.ErrNonReleaseArchive,
+		"ErrNonReleaseConfirmation":  domain.ErrNonReleaseConfirmation,
 		"ErrNotFound":                domain.ErrNotFound,
 		"ErrNotImplemented":          domain.ErrNotImplemented,
 		"ErrOriginNotAllowed":        domain.ErrOriginNotAllowed,

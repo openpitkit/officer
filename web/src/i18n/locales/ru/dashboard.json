@@ -85,6 +85,8 @@
       "setTrading": "Изменение торгового подключения",
       "venueFeeSkipped": "Комиссия площадки пропущена",
       "exportBackup": "Экспорт резервной копии",
+      "downloadPreMigrationBackup": "Скачивание резервной копии перед миграцией",
+      "deletePreMigrationBackup": "Удаление резервной копии перед миграцией",
       "restoreBackup": "Восстановление резервной копии",
       "exportBusinessCsv": "Экспорт CSV бизнес-сущностей",
       "generateSigningKey": "Генерация ключа подписи",

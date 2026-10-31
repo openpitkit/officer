@@ -1,10 +1,42 @@
 {
+  "nonRelease": {
+    "banner": "此构建版本的数据永远不会被迁移。",
+    "title": "请选择此构建版本的数据库",
+    "noticeTitle": "此构建版本仅供快速测试",
+    "notice": "其数据既不会转移到正式版本，也不会转移到下一个构建版本。它可能损坏自身的数据。正式版本不会看到其订单。",
+    "note": "此构建版本绝不会修改正式版本的数据库。",
+    "copy": {
+      "title": "复制正式版本的数据库",
+      "description": "创建正式版本数据库的只读快照，并为此构建版本迁移副本。副本中的交易连接已禁用；以后启用每个连接均需单独确认。复制前请先停止正式版本。"
+    },
+    "empty": {
+      "title": "使用空数据库开始",
+      "description": "为此构建版本创建空数据库。随后将打开常规设置向导。"
+    },
+    "noReleaseDatabase": "未找到稳定版数据库",
+    "preparing": "正在准备此构建版本的数据库…",
+    "confirm": {
+      "title": "准备此构建版本的数据库？",
+      "copy": "请先停止正式版本。系统将复制只读快照并为此构建版本迁移副本，交易连接将保持禁用。以后启用每个连接均需单独确认。",
+      "empty": "系统将为此构建版本创建空数据库，然后打开设置向导。",
+      "action": "准备数据库"
+    },
+    "failureTitle": "无法准备此构建版本"
+  },
   "sensitiveData": {
     "title": "敏感数据未加密存储",
     "detail": "Officer 未配置主密钥：已存储的 API 密钥和令牌以明文形式保存在数据库和备份中。请设置主密钥以加密存储它们。",
     "masterKeyLink": "如何设置主密钥",
     "unknown": "无法确认已存储的密钥是否已加密：{{error}}",
     "checking": "正在确认已存储的密钥是否已加密…"
+  },
+  "preMigrationBackup": {
+    "title": "迁移前的数据库副本可供下载",
+    "detail": "迁移前，Officer 已将数据库复制到数据库文件旁。请下载并妥善保存该副本：即使迁移未报告任何错误，问题也可能在之后才出现。",
+    "neverDeleted": "Officer 绝不会自行删除该副本。",
+    "entry": "副本创建于 {{time}}，{{size}}",
+    "deleteConfirm": "删除副本 {{name}}？此操作无法撤销。",
+    "unknown": "无法列出迁移前创建的数据库副本：{{error}}"
   },
   "language": {
     "label": "语言",
@@ -39,8 +71,10 @@
     "decrement": "减少",
     "setUpTradingConnection": "设置交易连接",
     "back": "返回",
+    "continue": "继续",
     "show": "显示",
-    "hide": "隐藏"
+    "hide": "隐藏",
+    "download": "下载"
   },
   "filters": {
     "venueLabel": "交易场所",

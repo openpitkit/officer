@@ -94,6 +94,7 @@ import {
 } from "@/framework";
 import { codeLabel } from "@/i18n/codeLabel";
 import { accountScope } from "@/lib/accountScope";
+import { downloadBlob } from "@/lib/download";
 import { checkSession } from "@/lib/panelSession";
 
 // This page is the canonical i18n pattern: user-facing text
@@ -231,7 +232,7 @@ function LogsCard() {
         serviceLogsDownloadUrl(apiClient.baseUrl),
         { accept: "text/plain", fallbackFilename: "pit-officer.log" },
       );
-      downloadArchive(blob, filename);
+      downloadBlob(blob, filename);
     } catch (err) {
       setDownloadError(errorText(err));
     } finally {
@@ -267,7 +268,7 @@ function LogsCard() {
             disabled={downloading}
           >
             <Download className="h-3.5 w-3.5" />
-            {t("logs.download")}
+            {tc("actions.download")}
           </Button>
         </div>
       </CardHeader>
@@ -315,15 +316,6 @@ function selectorScope(
     out.groups = groupList;
   }
   return out;
-}
-
-function downloadArchive(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -432,7 +424,7 @@ export function BackupCard() {
     setDownloaded("");
     try {
       const out = await exportBackup(scope(), undefined, zipArchive);
-      downloadArchive(out.blob, out.filename);
+      downloadBlob(out.blob, out.filename);
       setDownloaded(out.filename);
       resetScopeControls();
     } catch (err) {
@@ -656,6 +648,24 @@ export function BackupCard() {
                     connections: (
                       <span>
                         {summary.tradingCredentialsUnavailable.join(", ")}
+                      </span>
+                    ),
+                    tradingLink: (
+                      <Link to="/trading-connections" className="underline" />
+                    ),
+                  }}
+                />
+              </p>
+            ) : null}
+            {summary.tradingDisabledNonRelease?.length ? (
+              <p className="text-xs text-muted-lt">
+                <Trans
+                  t={t}
+                  i18nKey="backup.tradingDisabledNonRelease"
+                  components={{
+                    connections: (
+                      <span>
+                        {summary.tradingDisabledNonRelease.join(", ")}
                       </span>
                     ),
                     tradingLink: (

@@ -104,6 +104,7 @@
     "noCommands": "No commands defined."
   },
   "backup": {
+    "tradingDisabledNonRelease": "This is a non-release build, so these trading connections were restored disabled: <connections/>. Enable them in <tradingLink>Trading connections</tradingLink>, where enabling requires confirmation.",
     "plaintextKeys": {
       "title": "This backup will contain keys in plain text",
       "trading": "API keys of trading connections go into the archive unencrypted.",
@@ -162,7 +163,6 @@
   },
   "logs": {
     "title": "Logs",
-    "download": "Download",
     "empty": "No log lines captured yet.",
     "refreshAriaLabel": "Refresh logs"
   },

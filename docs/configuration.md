@@ -18,7 +18,7 @@ The run mode is not configured here - it comes from the subcommand.
 | --- | --- | --- | --- |
 | `PIT_OFFICER_HTTP_ADDR` | `-http-addr` | `127.0.0.1:0` | `serve`; also read by `healthcheck` as the fallback address when no runtime-state file is found |
 | `PIT_OFFICER_ALLOWED_HOSTS` | - | _(empty)_ | `serve`; every subcommand refuses to start on an invalid value |
-| `PIT_OFFICER_SQLITE_PATH` | `-sqlite-path` | `pit-officer.db` | all subcommands; the runtime-state file path derives from it, and from it alone |
+| `PIT_OFFICER_SQLITE_PATH` | `-sqlite-path` | `pit-officer.db` | all subcommands; a non-release build derives its own database file from it; it alone determines the runtime-state directory |
 | `OPENPIT_RUNTIME_LIBRARY_PATH` | `-runtime-library-path` | _(empty)_ | `mcp`, `serve` |
 | `PIT_OFFICER_OPEN_BROWSER` | `-open-browser` | `true` | `serve` |
 | `PIT_OFFICER_MASTER_KEY` | - | _(empty)_ | `mcp`, `serve` |
@@ -32,7 +32,9 @@ The run mode is not configured here - it comes from the subcommand.
   HTTP. It binds `127.0.0.1:0` - loopback, OS-assigned free port.
 - `mcp` - a local stdio
   [MCP](https://modelcontextprotocol.io/docs/getting-started/intro) server,
-  launched on demand by an MCP client. No network listener is opened.
+  launched on demand by an MCP client. No network listener is opened. A
+  non-release build requires its own database to have been prepared through
+  `serve` first; it deletes no database copies (see Non-release builds).
 - `dashboard` - print a running instance's URLs and open it in the browser; it
   reads the address `serve` published next to the database, so both need the
   same database path.
@@ -149,7 +151,70 @@ address in its canonical form; the port is not checked.
 
 The on-disk path of the database. The container image sets it to
 `/data/pit-officer.db` and maps `/data` to a named volume. The path also decides
-where the runtime-state file goes - see below.
+where the runtime-state file goes - see below. A release build opens this path
+directly. A non-release build uses it as the release path and derives its own
+file as described next.
+
+## Non-release builds
+
+Only the official image for a version tag is a release build. `edge`, `dev`,
+local builds and local images are non-release builds. Non-release `serve` and
+`mcp` refuse to start without a valid build commit. See the
+[development notes](development.md#building-without-just) for how builds set it.
+
+A non-release build uses `<sqlite path>.non-release-<commit>` for its own
+database. The configured SQLite path must be a plain file path: `:memory:`,
+`file:` URIs and paths with query parameters are refused. The build never
+changes the release database. Its own path must be a regular file; a symlink
+or another file type is refused with `is not a regular file (links and other
+file types are refused): remove that path before starting`. A hard link or
+mount referring to the release file is refused with `is the release file
+itself: remove that path before starting`.
+
+Run only one Officer per data directory at a time. At startup, non-release
+`serve` deletes every `<sqlite path>.non-release-*` entry except its own file
+and its SQLite sidecars. These files hold stored secrets. Starting `serve` of
+another commit deletes the copies of other commits, even the copy of a build
+that is still running. Only `serve` deletes old copies, and only at startup;
+`mcp` deletes nothing. A release build opens only the configured path and
+deletes no copies.
+
+When its own file is absent, non-release `serve` shows a database choice before
+sign-in, behind the panel's usual host, origin and JSON-body checks. The panel
+shows a permanent NON-RELEASE banner: in the sidebar footer, Service included,
+and on top of the screens without the sidebar, such as the database choice,
+the first-run setup and sign-in. The first screen offers:
+
+- **Copy the release database**, available only when that file exists; without
+  it the option is shown disabled. Stop the release
+  build before choosing it: the copy reads the release file, and the running
+  release's writes can fail while it does. Officer takes a read-only snapshot
+  through SQLite's backup API into a temporary file, migrates the copy and
+  disables every trading connection before publishing it as this build's file.
+- **Start with an empty database**. Officer creates an empty migrated database,
+  then opens the normal first-run setup.
+
+The data directory's filesystem must support hard links: Officer publishes
+the prepared database by a hard link. An existing own file is reused and skips
+the choice. To show the choice again, stop the build and delete its own file
+and its SQLite sidecars: `<sqlite path>.non-release-<commit>`,
+`<sqlite path>.non-release-<commit>-wal`,
+`<sqlite path>.non-release-<commit>-shm` and
+`<sqlite path>.non-release-<commit>-journal`.
+The data is disposable, may be corrupted and transfers neither to a release
+nor to the next commit. A release build will not see orders it sends. Enabling
+trading requires a separate panel confirmation; see [Trading](api.md#trading).
+
+For what answers before the database choice is ready, see
+[Mount points](api.md#mount-points).
+
+Non-release `mcp` refuses to start without its own file, reporting
+`non-release database "<path>" is missing: choose the database on the first
+screen of pit-officer serve`. Run `serve` of the same build with the same
+configured SQLite path and make the choice first.
+
+For non-release archive restrictions and restore summaries, see
+[Backups](api.md#backups).
 
 ## Runtime library path
 
@@ -213,11 +278,6 @@ Approval signing is off on a fresh Officer. To turn it on, generate or import a
 signing key on the Signing Keys screen and switch on "Require signature on
 approval and attestation envelopes".
 
-Officer does not migrate databases between versions. Startup refuses a database
-whose shared and application migration records disagree, either because it was
-created before the application tables existed or because its first start was
-interrupted. That database must be recreated.
-
 Startup resolves to one of five states:
 
 - **Unsealed database, no key** - trading and market-data credentials, the
@@ -242,17 +302,40 @@ Startup resolves to one of five states:
 > machine holding the database, and be sure you can restore it before you seal
 > anything.
 
+## Migrations and upgrades
+
+Officer migrates stored data, including databases and backup archives, from one
+released version to the next, never within a version. Data from an unreleased
+build is recreated, not migrated to another build. Back up before every
+upgrade, and regularly, from Service > Database > Database backup > Export in
+the panel.
+
+Before a release build migrates an existing database, it writes a SQLite copy
+`<database>.pre-migration-<UTC stamp>` beside it. If the copy cannot be written,
+Officer does not migrate and exits with an error naming the copy path.
+Non-release builds and new databases take no copy. Officer never deletes a
+copy; the panel lists copies for download and deletion. The volume must
+support hard links.
+
+Startup refuses a database whose shared and application migration records
+disagree, either because it was
+created before the application tables existed or because its first start was
+interrupted. That database must be recreated.
+
 ## Runtime-state file
 
 `serve` binds its listener before its address is knowable by anyone else, so it
-publishes what it bound: a file named `officer-runtime.json`, written next to
-the SQLite database, holding the bound address, the client-reachable URL, the
-process id, and an RFC 3339 start timestamp. It is written atomically - a temp
+publishes what it bound: a file named `officer-runtime.json` for a release build
+or `officer-runtime.non-release.json` for a non-release build, written beside
+the configured SQLite path, holding the bound address, the client-reachable
+URL, the process id, and an RFC 3339 start timestamp. It is written atomically - a temp
 file in the same directory, renamed into place - so a reader never sees a
 partial file, and it is removed when `serve` shuts down.
 
 `dashboard` and `healthcheck` derive the same path from the same configuration
-and read it to find the live instance. They open no store and no engine.
+and build kind and read it to find the live instance. Release commands do not
+read non-release state, and non-release commands do not read release state.
+They open no store and no engine.
 
 The path is derived from the database path, not from the address, so the three
 commands agree only when they share configuration. Run them from the same

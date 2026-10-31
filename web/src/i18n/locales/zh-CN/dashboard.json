@@ -85,6 +85,8 @@
       "setTrading": "更改交易连接",
       "venueFeeSkipped": "已跳过交易场所费用",
       "exportBackup": "导出备份",
+      "downloadPreMigrationBackup": "下载迁移前备份",
+      "deletePreMigrationBackup": "删除迁移前备份",
       "restoreBackup": "恢复备份",
       "exportBusinessCsv": "导出业务 CSV",
       "generateSigningKey": "生成签名密钥",

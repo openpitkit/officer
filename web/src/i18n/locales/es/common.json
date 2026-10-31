@@ -1,10 +1,42 @@
 {
+  "nonRelease": {
+    "banner": "Los datos de esta compilación nunca se migrarán.",
+    "title": "Seleccione la base de datos de esta compilación",
+    "noticeTitle": "Esta compilación es solo para pruebas rápidas",
+    "notice": "Sus datos no se transfieren ni a una versión publicada ni a la siguiente compilación. Esta compilación puede dañar sus propios datos. Una versión publicada no verá sus órdenes.",
+    "note": "Esta compilación nunca modifica la base de datos de la versión publicada.",
+    "copy": {
+      "title": "Copiar la base de datos de la versión publicada",
+      "description": "Crear una instantánea de solo lectura de la base de datos de la versión publicada y migrar la copia para esta compilación. Las conexiones de negociación de la copia están deshabilitadas; habilitar cada una más adelante requiere una confirmación aparte. Detenga la versión publicada antes de copiar."
+    },
+    "empty": {
+      "title": "Empezar con una base de datos vacía",
+      "description": "Crear una base de datos vacía para esta compilación. A continuación se abrirá el asistente de configuración habitual."
+    },
+    "noReleaseDatabase": "No se encontró la base de datos estable",
+    "preparing": "Preparando la base de datos de esta compilación…",
+    "confirm": {
+      "title": "¿Preparar la base de datos de esta compilación?",
+      "copy": "Detenga primero la versión publicada. Se copiará una instantánea de solo lectura y se migrará para esta compilación, con las conexiones de negociación deshabilitadas. Habilitar cada una más adelante requiere una confirmación aparte.",
+      "empty": "Se creará una base de datos vacía para esta compilación y se abrirá el asistente de configuración.",
+      "action": "Preparar base de datos"
+    },
+    "failureTitle": "No se pudo preparar esta compilación"
+  },
   "sensitiveData": {
     "title": "Los datos confidenciales se almacenan sin cifrar",
     "detail": "Officer funciona sin clave maestra: las claves de API y los tokens almacenados se guardan en texto plano en su base de datos y en las copias de seguridad. Configure una clave maestra para almacenarlos cifrados.",
     "masterKeyLink": "Cómo configurar una clave maestra",
     "unknown": "No se pudo comprobar si las claves almacenadas están cifradas: {{error}}",
     "checking": "Comprobando si las claves almacenadas están cifradas…"
+  },
+  "preMigrationBackup": {
+    "title": "Hay disponible una copia de su base de datos anterior a la migración",
+    "detail": "Antes de migrar, Officer copió la base de datos junto a ella. Descargue la copia y consérvela: aunque la migración no haya informado de errores, los problemas pueden aparecer más tarde.",
+    "neverDeleted": "Officer nunca elimina la copia por sí mismo.",
+    "entry": "Copia del {{time}}, {{size}}",
+    "deleteConfirm": "¿Eliminar la copia {{name}}? No se podrá restaurar.",
+    "unknown": "No se pudieron listar las copias de la base de datos hechas antes de una migración: {{error}}"
   },
   "language": {
     "label": "Idioma",
@@ -39,8 +71,10 @@
     "decrement": "Disminuir",
     "setUpTradingConnection": "Configurar una conexión de negociación",
     "back": "Atrás",
+    "continue": "Continuar",
     "show": "Mostrar",
-    "hide": "Ocultar"
+    "hide": "Ocultar",
+    "download": "Descargar"
   },
   "filters": {
     "venueLabel": "Plataforma",

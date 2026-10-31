@@ -1106,7 +1106,8 @@ func (s controlPlaneSource) CredentialStorage(ctx context.Context) (backend.Cred
 }
 
 func (s controlPlaneSource) CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error) {
-	return s.cp.CreateTradingConnection(ctx, connection)
+	// MCP never confirms; its tighten-only caller gets ErrLoosening first.
+	return s.cp.CreateTradingConnection(ctx, connection, false)
 }
 
 func (s controlPlaneSource) UpdateTradingConnectionSettings(ctx context.Context, id, label, credentials string) error {
@@ -1114,7 +1115,8 @@ func (s controlPlaneSource) UpdateTradingConnectionSettings(ctx context.Context,
 }
 
 func (s controlPlaneSource) SetTradingConnectionEnabled(ctx context.Context, id string, enabled bool) error {
-	return s.cp.SetTradingConnectionEnabled(ctx, id, enabled)
+	// MCP never confirms; its tighten-only caller gets ErrLoosening first.
+	return s.cp.SetTradingConnectionEnabled(ctx, id, enabled, false)
 }
 
 func (s controlPlaneSource) CheckTradingConnection(ctx context.Context, id string) (trading.AccountInfo, error) {

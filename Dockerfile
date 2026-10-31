@@ -62,9 +62,16 @@ COPY . /workspace/officer/
 
 COPY --from=frontend /app/web/dist /workspace/officer/web/dist
 
+# Set to the full commit ID of the Officer checkout being built.
+ARG OFFICER_COMMIT
+
 # -ldflags "-s -w" strips debug symbols for a smaller binary.
-RUN CGO_ENABLED=1 go build \
-    -ldflags="-s -w -X go.openpit.dev/officer/framework/backend.releaseTag=${OFFICER_RELEASE_TAG}" \
+RUN if [ -z "${OFFICER_COMMIT}" ]; then \
+        echo 'OFFICER_COMMIT is required: use just docker-build, or docker build ... --build-arg OFFICER_COMMIT=$(git rev-parse HEAD)' >&2; \
+        exit 1; \
+    fi; \
+    CGO_ENABLED=1 go build \
+    -ldflags="-s -w -X go.openpit.dev/officer/framework/backend.releaseTag=${OFFICER_RELEASE_TAG} -X go.openpit.dev/officer/framework/backend.buildCommit=${OFFICER_COMMIT}" \
     -o /pit-officer \
     ./cmd/pit-officer
 

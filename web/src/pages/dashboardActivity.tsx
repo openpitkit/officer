@@ -158,6 +158,7 @@ const AUDIT_ACTION_TITLE_KEYS = new Map<string, string>([
   ["set_trading", "audit.action.setTrading"],
   ["venue_fee_skipped", "audit.action.venueFeeSkipped"],
   ["export_backup", "audit.action.exportBackup"],
+  ["download_pre_migration_backup", "audit.action.downloadPreMigrationBackup"],
   ["restore_backup", "audit.action.restoreBackup"],
   ["export_business_csv", "audit.action.exportBusinessCsv"],
   ["generate_signing_key", "audit.action.generateSigningKey"],
@@ -306,6 +307,12 @@ export function auditActionMeta(action: string): AuditIconMeta {
       Icon: Trash2,
       variant: "danger",
       titleKey: "audit.action.resetDatabase",
+    };
+  if (a === "delete_pre_migration_backup")
+    return {
+      Icon: Trash2,
+      variant: "danger",
+      titleKey: "audit.action.deletePreMigrationBackup",
     };
   if (a === "restart_service")
     return {

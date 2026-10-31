@@ -182,6 +182,53 @@ func TestTradingRoutesSuccess(t *testing.T) {
 	}
 }
 
+func TestTradingNonReleaseConfirmationRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, body string
+		status                   int
+	}{
+		{"create", "POST", "/trading/connections", `{"provider":"alpaca","label":"Paper","mode":"paper","credentials":{},"enabled":true`, 201},
+		{"enable", "PUT", tradingPath + "/enabled", `{"enabled":true`, 200},
+	} {
+		for _, mount := range []string{"/api/v1", "/app/api/v1"} {
+			for _, flag := range []struct {
+				name, member string
+				want         bool
+			}{
+				{"absent", "", false},
+				{"false", `,"nonReleaseConfirmed":false`, false},
+				{"true", `,"nonReleaseConfirmed":true`, true},
+			} {
+				t.Run(tc.name+mount+"/"+flag.name, func(t *testing.T) {
+					svc := tradingFixture(t)
+					// A true initial value also catches a dropped absent/false flag.
+					svc.tradingConfirmed = !flag.want
+					rec := callTrading(t, svc, mount, tc.method, tc.path, tc.body+flag.member+"}")
+					if rec.Code != tc.status || len(svc.tradingCalls) == 0 {
+						t.Fatalf("response = %d %s, calls = %v", rec.Code, rec.Body, svc.tradingCalls)
+					}
+					if svc.tradingConfirmed != flag.want {
+						t.Fatalf("nonReleaseConfirmed = %t, want %t", svc.tradingConfirmed, flag.want)
+					}
+				})
+			}
+			t.Run(tc.name+mount+"/refused", func(t *testing.T) {
+				svc := tradingFixture(t)
+				svc.tradingErr = fmt.Errorf("operation: %w", domain.ErrNonReleaseConfirmation)
+				rec := callTrading(t, svc, mount, tc.method, tc.path, tc.body+"}")
+				if rec.Code != 403 {
+					t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body)
+				}
+				answer := bodyMap(t, rec.Result())["error"].(map[string]any)
+				if answer["code"] != "non_release_confirmation_required" ||
+					answer["message"] != domain.ErrNonReleaseConfirmation.Error() {
+					t.Fatalf("error = %v, want confirmation code and sentinel message", answer)
+				}
+			})
+		}
+	}
+}
+
 func TestTradingRequiredFields(t *testing.T) {
 	create := `{"provider":"alpaca","label":"Paper","mode":"paper","credentials":{"key":"` + tradingSecret + `"},"enabled":false}`
 	instrument := `{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":false}`
@@ -628,6 +675,16 @@ func TestOpenAPITradingContract(t *testing.T) {
 		!strings.Contains(spec, "\n    TradingConflictError:\n") {
 		t.Fatal("backup restore must document 409 fee_account_required for a group grant without a fee account")
 	}
+	connections := strings.SplitN(strings.SplitN(spec, "  /trading/connections:", 2)[1],
+		"  /trading/connections/{id}/settings:", 2)[0]
+	if !strings.Contains(connections, "        \"403\":\n          $ref: \"#/components/responses/LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError\"") {
+		t.Fatal("POST /trading/connections must document 403 non_release_confirmation_required")
+	}
+	enabled := strings.SplitN(strings.SplitN(spec, "  /trading/connections/{id}/enabled:", 2)[1],
+		"  /trading/connections/{id}/check:", 2)[0]
+	if !strings.Contains(enabled, "        \"403\":\n          $ref: \"#/components/responses/LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError\"") {
+		t.Fatal("PUT /trading/connections/{id}/enabled must document 403 non_release_confirmation_required")
+	}
 	for _, snippet := range []string{
 		"required: [providers, connections]",
 		"required: [provider, label, mode, credentials, enabled]",
@@ -637,7 +694,10 @@ func TestOpenAPITradingContract(t *testing.T) {
 		"enum: [acknowledged, refused, unknown]", "SendPaperOrderRequest:",
 		"SendPaperOrderResponse:", "required: [route]", "/orders/send-live", "comes with the live-trading token.",
 		"enum: [paper, live]", "enum: [running, degraded, unavailable, stopped]",
-		"live_trading_unavailable", "trading_mode_mismatch", "fee_account_required",
+		"live_trading_unavailable", "non_release_confirmation_required",
+		"nonReleaseConfirmed:",
+		"LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError:",
+		"trading_mode_mismatch", "fee_account_required",
 		"venue_order_managed", "no_destination", "destination_ambiguous",
 		"required: [candidates]", "tradingCredentialsUnavailable:",
 		"tradingConnections:", "tradingInstruments:", "tradingAccess:", "venueOrders:",

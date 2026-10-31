@@ -178,6 +178,20 @@ var (
 	// ErrLiveTradingUnavailable marks a live connection refused until the
 	// live-trading token exists.
 	ErrLiveTradingUnavailable = registerSentinel(errors.New("live trading unavailable"))
+	// ErrNonReleaseArchive refuses disposable non-release data in a release build.
+	ErrNonReleaseArchive = registerSentinel(errors.New(
+		"this archive was exported by a non-release (edge, dev or local) build " +
+			"of Officer; a release build does not restore it; its data is " +
+			"disposable and restores only into a non-release build",
+	))
+	// ErrNonReleaseConfirmation requires panel confirmation before enabling
+	// trading against disposable non-release data.
+	ErrNonReleaseConfirmation = registerSentinel(errors.New(
+		"this is a non-release (edge, dev or local) build of Officer; " +
+			"it enables a trading connection only after the operator confirms " +
+			"it in the panel, because its data is disposable and the build " +
+			"may corrupt it",
+	))
 	// ErrTradingModeMismatch marks a send whose mode differs from its connection.
 	ErrTradingModeMismatch = registerSentinel(errors.New("trading mode mismatch"))
 	// ErrDestinationAmbiguous requires an explicit connection for the send.
@@ -510,45 +524,47 @@ func ResolveCurrencyCascade(
 type AuditAction string
 
 const (
-	AuditActionHydrate            AuditAction = "hydrate"
-	AuditActionCreateAsset        AuditAction = "create_asset"
-	AuditActionUpdateAsset        AuditAction = "update_asset"
-	AuditActionDeleteAsset        AuditAction = "delete_asset"
-	AuditActionCreateAccount      AuditAction = "create_account"
-	AuditActionUpdateAccount      AuditAction = "update_account"
-	AuditActionDeleteAccount      AuditAction = "delete_account"
-	AuditActionBlock              AuditAction = "block"
-	AuditActionUnblock            AuditAction = "unblock"
-	AuditActionSetLimit           AuditAction = "set_limit"
-	AuditActionDeleteLimit        AuditAction = "delete_limit"
-	AuditActionSetGroupNotes      AuditAction = "set_group_notes"
-	AuditActionBlockGroup         AuditAction = "block_group"
-	AuditActionUnblockGroup       AuditAction = "unblock_group"
-	AuditActionSetNotes           AuditAction = "set_notes"
-	AuditActionSetGroup           AuditAction = "set_group"
-	AuditActionSetAccountCurrency AuditAction = "set_account_currency"
-	AuditActionSetGroupCurrency   AuditAction = "set_group_currency"
-	AuditActionAdjustment         AuditAction = "adjustment"
-	AuditActionCreateGroup        AuditAction = "create_group"
-	AuditActionUpdateGroup        AuditAction = "update_group"
-	AuditActionDeleteGroup        AuditAction = "delete_group"
-	AuditActionCreateAssetClass   AuditAction = "create_asset_class"
-	AuditActionUpdateAssetClass   AuditAction = "update_asset_class"
-	AuditActionDeleteAssetClass   AuditAction = "delete_asset_class"
-	AuditActionSubmitOrder        AuditAction = "submit_order"
-	AuditActionSubmitDropCopy     AuditAction = "submit_drop_copy_order"
-	AuditActionExecutionReport    AuditAction = "execution_report"
-	AuditActionSetMcpAccess       AuditAction = "set_mcp_access"
-	AuditActionSetSetting         AuditAction = "set_setting"
-	AuditActionSetMarketData      AuditAction = "set_market_data"
-	AuditActionSetTrading         AuditAction = "set_trading"
-	AuditActionVenueFeeSkipped    AuditAction = "venue_fee_skipped"
-	AuditActionExportBackup       AuditAction = "export_backup"
-	AuditActionRestoreBackup      AuditAction = "restore_backup"
-	AuditActionExportBusinessCSV  AuditAction = "export_business_csv"
-	AuditActionResetDatabase      AuditAction = "reset_database"
-	AuditActionRestartService     AuditAction = "restart_service"
-	AuditActionStopService        AuditAction = "stop_service"
+	AuditActionHydrate                    AuditAction = "hydrate"
+	AuditActionCreateAsset                AuditAction = "create_asset"
+	AuditActionUpdateAsset                AuditAction = "update_asset"
+	AuditActionDeleteAsset                AuditAction = "delete_asset"
+	AuditActionCreateAccount              AuditAction = "create_account"
+	AuditActionUpdateAccount              AuditAction = "update_account"
+	AuditActionDeleteAccount              AuditAction = "delete_account"
+	AuditActionBlock                      AuditAction = "block"
+	AuditActionUnblock                    AuditAction = "unblock"
+	AuditActionSetLimit                   AuditAction = "set_limit"
+	AuditActionDeleteLimit                AuditAction = "delete_limit"
+	AuditActionSetGroupNotes              AuditAction = "set_group_notes"
+	AuditActionBlockGroup                 AuditAction = "block_group"
+	AuditActionUnblockGroup               AuditAction = "unblock_group"
+	AuditActionSetNotes                   AuditAction = "set_notes"
+	AuditActionSetGroup                   AuditAction = "set_group"
+	AuditActionSetAccountCurrency         AuditAction = "set_account_currency"
+	AuditActionSetGroupCurrency           AuditAction = "set_group_currency"
+	AuditActionAdjustment                 AuditAction = "adjustment"
+	AuditActionCreateGroup                AuditAction = "create_group"
+	AuditActionUpdateGroup                AuditAction = "update_group"
+	AuditActionDeleteGroup                AuditAction = "delete_group"
+	AuditActionCreateAssetClass           AuditAction = "create_asset_class"
+	AuditActionUpdateAssetClass           AuditAction = "update_asset_class"
+	AuditActionDeleteAssetClass           AuditAction = "delete_asset_class"
+	AuditActionSubmitOrder                AuditAction = "submit_order"
+	AuditActionSubmitDropCopy             AuditAction = "submit_drop_copy_order"
+	AuditActionExecutionReport            AuditAction = "execution_report"
+	AuditActionSetMcpAccess               AuditAction = "set_mcp_access"
+	AuditActionSetSetting                 AuditAction = "set_setting"
+	AuditActionSetMarketData              AuditAction = "set_market_data"
+	AuditActionSetTrading                 AuditAction = "set_trading"
+	AuditActionVenueFeeSkipped            AuditAction = "venue_fee_skipped"
+	AuditActionExportBackup               AuditAction = "export_backup"
+	AuditActionRestoreBackup              AuditAction = "restore_backup"
+	AuditActionExportBusinessCSV          AuditAction = "export_business_csv"
+	AuditActionResetDatabase              AuditAction = "reset_database"
+	AuditActionDownloadPreMigrationBackup AuditAction = "download_pre_migration_backup"
+	AuditActionDeletePreMigrationBackup   AuditAction = "delete_pre_migration_backup"
+	AuditActionRestartService             AuditAction = "restart_service"
+	AuditActionStopService                AuditAction = "stop_service"
 
 	// Signing-key lifecycle.
 	AuditActionGenerateSigningKey AuditAction = "generate_signing_key"
@@ -632,6 +648,8 @@ func AllAuditActions() []AuditAction {
 		AuditActionRestoreBackup,
 		AuditActionExportBusinessCSV,
 		AuditActionResetDatabase,
+		AuditActionDownloadPreMigrationBackup,
+		AuditActionDeletePreMigrationBackup,
 		AuditActionRestartService,
 		AuditActionStopService,
 		AuditActionGenerateSigningKey,

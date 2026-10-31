@@ -437,6 +437,10 @@ func DescribeErr(err error) PublicError {
 		return PublicError{http.StatusUnprocessableEntity, "validation", err.Error()}
 	case errors.Is(err, domain.ErrLiveTradingUnavailable):
 		return PublicError{http.StatusForbidden, "live_trading_unavailable", domain.ErrLiveTradingUnavailable.Error()}
+	case errors.Is(err, domain.ErrNonReleaseArchive):
+		return PublicError{http.StatusUnprocessableEntity, "non_release_archive", domain.ErrNonReleaseArchive.Error()}
+	case errors.Is(err, domain.ErrNonReleaseConfirmation):
+		return PublicError{http.StatusForbidden, "non_release_confirmation_required", domain.ErrNonReleaseConfirmation.Error()}
 	case errors.Is(err, domain.ErrTradingModeMismatch):
 		return PublicError{http.StatusConflict, "trading_mode_mismatch", domain.ErrTradingModeMismatch.Error()}
 	case errors.Is(err, domain.ErrFeeAccountRequired):

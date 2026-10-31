@@ -76,6 +76,8 @@ func TestWriteErrSentinelCodes(t *testing.T) {
 		status int
 	}{
 		{"live_trading_unavailable", domain.ErrLiveTradingUnavailable, 403},
+		{"non_release_archive", domain.ErrNonReleaseArchive, 422},
+		{"non_release_confirmation_required", domain.ErrNonReleaseConfirmation, 403},
 		{"trading_mode_mismatch", domain.ErrTradingModeMismatch, 409},
 		{"fee_account_required", domain.ErrFeeAccountRequired, 409},
 		{"venue_order_managed", domain.ErrVenueOrderManaged, 409},

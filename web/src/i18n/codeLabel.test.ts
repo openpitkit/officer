@@ -157,6 +157,8 @@ const AUDIT_ACTIONS = [
   "set_trading",
   "venue_fee_skipped",
   "export_backup",
+  "download_pre_migration_backup",
+  "delete_pre_migration_backup",
   "restore_backup",
   "export_business_csv",
   "reset_database",

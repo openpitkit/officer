@@ -21,6 +21,7 @@ import {
   accountRow,
   answeringAccountMode,
   jsonResponse,
+  makeApi,
   renderWithApi as render,
 } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
@@ -70,6 +71,13 @@ const exportBackupMock = vi.fn();
 const resetDatabaseMock = vi.fn();
 const restoreBackupMock = vi.fn();
 const fetchTradingMock = vi.fn<() => Promise<TradingSnapshot>>();
+// PreMigrationBackupBanner polls GET /database/pre-migration-backups.
+vi.mock("@/api/usePreMigrationBackups", () => ({
+  usePreMigrationBackups: () => ({
+    load: { state: "ready", data: [], error: null },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/credentialStorage");
 const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 const serviceInfo: ServiceInfo = {
@@ -1194,6 +1202,131 @@ describe("BackupCard", () => {
       },
     });
   });
+
+  it.each([
+    [
+      ["Alpaca paper"],
+      "This is a non-release build, so these trading connections were restored disabled: Alpaca paper. Enable them in Trading connections, where enabling requires confirmation.",
+    ],
+    [
+      ["Alpaca paper", "Second connection"],
+      "This is a non-release build, so these trading connections were restored disabled: Alpaca paper, Second connection. Enable them in Trading connections, where enabling requires confirmation.",
+    ],
+  ])(
+    "lists non-release disabled trading connections %j as a muted restore rule",
+    async (connections, sentence) => {
+      const user = userEvent.setup();
+      restoreBackupMock.mockResolvedValue({
+        applied: { trading: connections.length },
+        skipped: {},
+        restartRequired: false,
+        tradingDisabledNonRelease: connections,
+      });
+      renderBackupCard();
+      await user.click(screen.getByRole("tab", { name: "Restore" }));
+      await user.click(
+        screen.getByRole("radio", { name: "Restore and overwrite matches" }),
+      );
+      const input =
+        document.querySelector<HTMLInputElement>('input[type="file"]');
+      if (!input) throw new Error("backup file input not found");
+      await user.upload(input, backupFile("backup.json", "{}"));
+      await user.click(screen.getByRole("button", { name: "Restore" }));
+      const link = await screen.findByRole("link", {
+        name: "Trading connections",
+      });
+      expect(link).toHaveAttribute("href", "/trading-connections");
+      expect(link.closest("p")).toHaveTextContent(sentence);
+      expect(link.closest("p")).toHaveClass("text-muted-lt");
+      expect(link.closest("p")).not.toHaveClass("text-[var(--danger)]");
+    },
+  );
+
+  it.each([undefined, []])(
+    "omits the non-release restore rule for %j",
+    async (disabled) => {
+      const user = userEvent.setup();
+      restoreBackupMock.mockResolvedValue({
+        applied: {},
+        skipped: {},
+        restartRequired: false,
+        tradingDisabledNonRelease: disabled,
+      });
+      renderBackupCard();
+      await user.click(screen.getByRole("tab", { name: "Restore" }));
+      await user.click(
+        screen.getByRole("radio", { name: "Restore and overwrite matches" }),
+      );
+      const input =
+        document.querySelector<HTMLInputElement>('input[type="file"]');
+      if (!input) throw new Error("backup file input not found");
+      await user.upload(input, backupFile("backup.json", "{}"));
+      await user.click(screen.getByRole("button", { name: "Restore" }));
+      expect(await screen.findByText(/Applied 0/)).toBeInTheDocument();
+      expect(
+        screen.queryByRole("link", { name: "Trading connections" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          /so these trading connections were restored disabled/,
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["en", "ru"])(
+    "explains a non_release_archive HTTP 422 refusal in %s",
+    async (locale) => {
+      const user = userEvent.setup();
+      await i18n.changeLanguage(locale);
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            error: {
+              code: "non_release_archive",
+              message:
+                "this archive was exported by a non-release (edge, dev or local) build of Officer; a release build does not restore it; its data is disposable and restores only into a non-release build",
+            },
+          },
+          422,
+        ),
+      );
+      restoreBackupMock.mockImplementation(makeApi(fetchMock).restoreBackup);
+      renderBackupCard();
+      await user.click(
+        screen.getByRole("tab", {
+          name: i18n.t("service:backup.tabs.restore"),
+        }),
+      );
+      await user.click(
+        screen.getByRole("radio", {
+          name: i18n.t("service:backup.modes.overwrite"),
+        }),
+      );
+      const input =
+        document.querySelector<HTMLInputElement>('input[type="file"]');
+      if (!input) throw new Error("backup file input not found");
+      await user.upload(input, backupFile("backup.json", "{}"));
+      await user.click(
+        screen.getByRole("button", { name: i18n.t("service:backup.restore") }),
+      );
+      expect(
+        await screen.findByText(i18n.t("errors:code.non_release_archive")),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(i18n.t("errors:code.internal")),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          "this archive was exported by a non-release (edge, dev or local) build of Officer; a release build does not restore it; its data is disposable and restores only into a non-release build",
+        ),
+      ).not.toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        "/app/api/v1/backup/restore",
+        expect.objectContaining({ method: "POST" }),
+      );
+    },
+  );
 
   it("lists unavailable trading credentials and links to connections", async () => {
     const user = userEvent.setup();

@@ -104,6 +104,7 @@
     "noCommands": "No hay comandos definidos."
   },
   "backup": {
+    "tradingDisabledNonRelease": "Esta compilación no está publicada, por lo que estas conexiones de negociación se restauraron deshabilitadas: <connections/>. Puede habilitarlas en <tradingLink>Conexiones de negociación</tradingLink>, donde la habilitación requiere confirmación.",
     "plaintextKeys": {
       "title": "Esta copia de seguridad contendrá claves en texto plano",
       "trading": "Las claves de API de las conexiones de negociación se incluyen en el archivo sin cifrar.",
@@ -162,7 +163,6 @@
   },
   "logs": {
     "title": "Registros",
-    "download": "Descargar",
     "empty": "Todavía no se ha capturado ninguna línea de registro.",
     "refreshAriaLabel": "Actualizar los registros"
   },

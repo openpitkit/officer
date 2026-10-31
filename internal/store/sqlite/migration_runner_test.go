@@ -21,6 +21,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -203,6 +204,105 @@ func TestMigrationRunner(t *testing.T) {
 		}
 		if version != 9 {
 			t.Errorf("SchemaVersion with attached schema = %d, want 9", version)
+		}
+	})
+}
+
+func TestPending(t *testing.T) {
+	ctx := context.Background()
+	source := migrationList{
+		{Version: 1, Name: "one.sql", SQL: "SELECT 1"},
+		{Version: 2, Name: "two.sql", SQL: "SELECT 2"},
+		{Version: 3, Name: "three.sql", SQL: "SELECT 3"},
+	}
+
+	t.Run("filters applied versions", func(t *testing.T) {
+		for _, cfg := range []migration.Config{
+			{},
+			{Schema: "main", Table: "migration \"history"},
+		} {
+			t.Run(cfg.Schema+"/"+cfg.Table, func(t *testing.T) {
+				db := openMigrationTestDB(t)
+				if err := migration.Apply(
+					ctx, db, source[:2], cfg, sqliteDialect{},
+				); err != nil {
+					t.Fatalf("Apply: %v", err)
+				}
+				pending, err := migration.Pending(ctx, db, source, cfg)
+				if err != nil {
+					t.Fatalf("Pending: %v", err)
+				}
+				if !reflect.DeepEqual(pending, []migration.Migration(source[2:])) {
+					t.Errorf("Pending() = %v, want %v", pending, source[2:])
+				}
+				pending, err = migration.Pending(ctx, db, source[:2], cfg)
+				if err != nil {
+					t.Fatalf("Pending applied source: %v", err)
+				}
+				if len(pending) != 0 {
+					t.Errorf("Pending applied source = %v, want none", pending)
+				}
+			})
+		}
+	})
+
+	t.Run("sorts pending versions", func(t *testing.T) {
+		db := openMigrationTestDB(t)
+		cfg := migration.Config{}
+		if err := migration.Apply(
+			ctx, db, source[:1], cfg, sqliteDialect{},
+		); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		unordered := migrationList{source[2], source[0], source[1]}
+		pending, err := migration.Pending(ctx, db, unordered, cfg)
+		if err != nil {
+			t.Fatalf("Pending: %v", err)
+		}
+		if !reflect.DeepEqual(pending, []migration.Migration(source[1:])) {
+			t.Errorf("Pending() = %v, want %v", pending, source[1:])
+		}
+	})
+
+	t.Run("missing bookkeeping table", func(t *testing.T) {
+		db := openMigrationTestDB(t)
+		_, err := migration.Pending(ctx, db, source, migration.Config{})
+		if err == nil || !strings.Contains(
+			err.Error(), `migration: read "schema_migration":`,
+		) {
+			t.Errorf("Pending() error = %v, want bookkeeping read error", err)
+		}
+		assertSQLiteTableCount(t, db, "schema_migration", 0)
+	})
+
+	t.Run("read only connection", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "migration.db")
+		db, err := openSQLiteDB(path)
+		if err != nil {
+			t.Fatalf("openSQLiteDB: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		cfg := migration.Config{}
+		if err := migration.Apply(
+			ctx, db, source[:2], cfg, sqliteDialect{},
+		); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close writable database: %v", err)
+		}
+
+		readOnly, err := sql.Open(driverName, snapshotSourceURI(path))
+		if err != nil {
+			t.Fatalf("open read-only database: %v", err)
+		}
+		t.Cleanup(func() { _ = readOnly.Close() })
+		pending, err := migration.Pending(ctx, readOnly, source, cfg)
+		if err != nil {
+			t.Fatalf("Pending read-only: %v", err)
+		}
+		if !reflect.DeepEqual(pending, []migration.Migration(source[2:])) {
+			t.Errorf("Pending read-only = %v, want %v", pending, source[2:])
 		}
 	})
 }

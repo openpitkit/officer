@@ -140,6 +140,8 @@
     "set_setting": "Изменение настройки {{key}} = {{value}}",
     "hydrate": "Загрузка состояния движка: активов {{assets}}, счетов {{accounts}}, барьеров {{barriers}}, групп {{groups}}, балансов {{balances}}",
     "export_backup": "Экспорт резервной копии {{realm}}, разделов: {{sections}}",
+    "download_pre_migration_backup": "Скачивание резервной копии {{name}}, созданной перед миграцией",
+    "delete_pre_migration_backup": "Удаление резервной копии {{name}}, созданной перед миграцией",
     "restore_backup": "Восстановление резервной копии {{realm}}, режим: {{restoreMode}}",
     "reset_database": "Полный сброс базы данных",
     "restart_service": "Запрошен перезапуск сервиса",

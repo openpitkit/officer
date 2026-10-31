@@ -44,6 +44,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useOfficerApi } from "@/framework";
+import { downloadBlob } from "@/lib/download";
 
 const DELIMITERS: BusinessCsvDelimiter[] = [
   "comma",
@@ -54,20 +55,6 @@ const DELIMITERS: BusinessCsvDelimiter[] = [
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const href =
-    typeof URL.createObjectURL === "function" ? URL.createObjectURL(blob) : "";
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  if (href && typeof URL.revokeObjectURL === "function") {
-    URL.revokeObjectURL(href);
-  }
 }
 
 export function BusinessCsvExportDialog({

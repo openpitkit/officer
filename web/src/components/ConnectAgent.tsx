@@ -39,6 +39,7 @@ import {
   codexConfig,
   cursorConfig,
 } from "@/lib/agentArtifacts";
+import { downloadBlob } from "@/lib/download";
 import { buildMcpAgentPrompt } from "@/lib/mcpAgentPrompt";
 import { checkSession, panelSession } from "@/lib/panelSession";
 
@@ -57,15 +58,7 @@ function mcpUrl(): string {
 
 /** Trigger a client-side download of `text` as `filename` (no new deps). */
 function downloadText(filename: string, text: string, mime: string) {
-  const blob = new Blob([text], { type: mime });
-  const href = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = href;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(href);
+  downloadBlob(new Blob([text], { type: mime }), filename);
 }
 
 /** Textarea rows that fit `text`'s lines with one to spare for wrapping. */

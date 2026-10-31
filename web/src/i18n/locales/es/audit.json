@@ -140,6 +140,8 @@
     "set_setting": "Cambio de configuración {{key}} = {{value}}",
     "hydrate": "Carga del estado del motor: activos {{assets}}, cuentas {{accounts}}, barreras {{barriers}}, grupos {{groups}}, saldos {{balances}}",
     "export_backup": "Exportación de copia de seguridad {{realm}}, secciones: {{sections}}",
+    "download_pre_migration_backup": "Descarga de la copia de seguridad {{name}} previa a la migración",
+    "delete_pre_migration_backup": "Eliminación de la copia de seguridad {{name}} previa a la migración",
     "restore_backup": "Restauración de copia de seguridad {{realm}}, modo: {{restoreMode}}",
     "reset_database": "Restablecimiento completo de la base de datos",
     "restart_service": "Reinicio del servicio solicitado",

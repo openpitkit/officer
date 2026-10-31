@@ -76,16 +76,17 @@ type Status struct {
 // Service is the Pit Officer control plane. It is constructed once per process
 // and is safe for concurrent use by the surface handlers.
 type Service struct {
-	node           node.Node
-	md             MarketDataRuntime
-	trading        TradingRuntime
-	registry       *marketdata.Registry
-	signer         fwsigning.Service
-	commands       catalog.Provider
-	lockSettlement LockSettlementPrice
-	scope          AccountScope
-	marketDataMu   sync.Mutex
-	tradingMu      sync.Mutex
+	node            node.Node
+	md              MarketDataRuntime
+	trading         TradingRuntime
+	registry        *marketdata.Registry
+	signer          fwsigning.Service
+	commands        catalog.Provider
+	lockSettlement  LockSettlementPrice
+	scope           AccountScope
+	marketDataMu    sync.Mutex
+	tradingMu       sync.Mutex
+	nonReleaseBuild bool
 }
 
 // TradingRuntime is the venue capability and lifecycle seam of the service.
@@ -109,6 +110,13 @@ type LockSettlementPrice func([]byte, domain.Order) (string, error)
 
 // Option configures Service composition seams.
 type Option func(*Service)
+
+// WithNonReleaseBuild marks this host as a non-release build whose backups
+// carry disposable data and whose restores disable trading connections.
+// Enabling trading requires explicit operator confirmation through the panel.
+func WithNonReleaseBuild() Option {
+	return func(s *Service) { s.nonReleaseBuild = true }
+}
 
 // WithMarketDataRegistry sets the provider registry used by catalogue and
 // validation paths.

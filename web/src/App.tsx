@@ -19,6 +19,7 @@ import { useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { SidebarProvider } from "@/components/SidebarContext";
+import { NonReleaseGate } from "@/components/NonReleaseGate";
 import { StartupGate } from "@/components/StartupGate";
 import { AppRoutes, Sidebar } from "@/framework";
 import { panelSession } from "@/lib/panelSession";
@@ -26,12 +27,14 @@ import { Setup, SetupReview } from "@/pages/Setup";
 
 export default function App() {
   return (
-    <StartupGate>
-      <Routes>
-        <Route path="/setup" element={<SetupRoute />} />
-        <Route path="*" element={<ShellRoute />} />
-      </Routes>
-    </StartupGate>
+    <NonReleaseGate>
+      <StartupGate>
+        <Routes>
+          <Route path="/setup" element={<SetupRoute />} />
+          <Route path="*" element={<ShellRoute />} />
+        </Routes>
+      </StartupGate>
+    </NonReleaseGate>
   );
 }
 
@@ -52,7 +55,7 @@ function ShellRoute() {
   }
   return (
     <SidebarProvider>
-      <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
+      <div className="flex h-full w-full overflow-hidden bg-bg text-text">
         <Sidebar />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <AppRoutes />

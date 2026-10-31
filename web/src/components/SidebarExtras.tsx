@@ -16,14 +16,15 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { AlertTriangle, Info, LogOut } from "lucide-react";
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 
 import { logOut } from "@/api/access";
 import { useMarketData } from "@/api/useMarketData";
-import { useService } from "@/api/useService";
 import { errMessage } from "@/components/AccountDialogs";
+import { useNonRelease } from "@/components/non-release-context";
+import { NonReleaseBanner } from "@/components/NonReleaseGate";
 import { CompactStaleState, ErrorBanner } from "@/components/PageStates";
 import { ProductLinks } from "@/components/ProductLinks";
 import { useSidebar } from "@/components/sidebar-context";
@@ -68,31 +69,29 @@ function RestartRequiredNavIndicator() {
   );
 }
 
+/**
+ * The non-release banner in the sidebar footer, on every shell page including
+ * `/service`, which it links to. While it is mounted, the gate keeps its top
+ * strip only below `md`, where the sidebar is a closed drawer.
+ */
 export function NonReleaseNavEntry() {
-  const { pathname } = useLocation();
-  if (pathname === "/service") {
-    return null;
-  }
-  return <NonReleaseNavIndicator />;
-}
-
-function NonReleaseNavIndicator() {
-  const { t } = useTranslation();
   const { close } = useSidebar();
-  const { load } = useService();
-  const isNonRelease = load.state === "ready" && load.data.release === false;
-  if (!isNonRelease) {
+  const { nonRelease, showInSidebar } = useNonRelease();
+  useLayoutEffect(() => {
+    if (!nonRelease) return;
+    showInSidebar(true);
+    return () => showInSidebar(false);
+  }, [nonRelease, showInSidebar]);
+  if (!nonRelease) {
     return null;
   }
   return (
     <Link
       to="/service"
       onClick={close}
-      className="mt-1 flex items-center gap-[var(--dens-nav-gap)] rounded-[3px] border border-accent bg-accent px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-[length:var(--dens-footer-fz)] font-bold uppercase tracking-[0.07em] text-bg transition-colors hover:border-accent-2 hover:bg-accent-2"
+      className="mt-1 block rounded-card transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <AlertTriangle className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
-      <span className="flex-1 text-left">{t("brand.nonRelease")}</span>
-      <CompactStaleState load={load} />
+      <NonReleaseBanner />
     </Link>
   );
 }

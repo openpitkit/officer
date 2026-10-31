@@ -140,6 +140,8 @@
     "set_setting": "更改设置 {{key}} = {{value}}",
     "hydrate": "加载引擎状态：资产 {{assets}}，账户 {{accounts}}，屏障 {{barriers}}，分组 {{groups}}，余额 {{balances}}",
     "export_backup": "导出备份 {{realm}}，分区数：{{sections}}",
+    "download_pre_migration_backup": "下载迁移前备份 {{name}}",
+    "delete_pre_migration_backup": "删除迁移前备份 {{name}}",
     "restore_backup": "恢复备份 {{realm}}，模式：{{restoreMode}}",
     "reset_database": "从头重置数据库",
     "restart_service": "已请求重启服务",

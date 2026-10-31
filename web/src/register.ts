@@ -30,6 +30,7 @@ import {
   Route,
   Settings,
   ShieldCheck,
+  Skull,
   SlidersHorizontal,
   User,
   Users,
@@ -39,6 +40,7 @@ import { registerAppRowActions, registerAppVocabulary } from "@/appDefaults";
 import {
   AboutNavEntry,
   LogoutNavEntry,
+  NonReleaseNavEntry,
   RestartRequiredNavEntry,
 } from "@/components/SidebarExtras";
 import {
@@ -300,7 +302,15 @@ export function registerOfficerDefaults(): void {
     section: "footer",
     order: 50,
   });
-  // The sidebar carries no NON-RELEASE badge.
+  registerNav({
+    id: "non-release",
+    to: "/service",
+    labelKey: "brand.nonRelease",
+    icon: Skull,
+    section: "footer",
+    order: 60,
+    render: () => createElement(NonReleaseNavEntry),
+  });
   registerNav({
     id: "logout",
     to: "#logout",

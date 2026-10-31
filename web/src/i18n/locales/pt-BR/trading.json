@@ -1,4 +1,9 @@
 {
+  "nonReleaseConfirm": {
+    "title": "Ativar a negociação em uma compilação não publicada?",
+    "description": "Esta compilação não publicada é apenas para testes rápidos. Ativar esta conexão permite que ela envie ordens reais à plataforma. A versão publicada não verá as ordens enviadas por esta compilação. Esta compilação pode corromper seus próprios dados.",
+    "action": "Ativar negociação"
+  },
   "unknownVenue": "Plataforma desconhecida {{provider}}",
   "empty": {
     "description": "Configure uma conexão de negociação para enviar ordens a uma plataforma."

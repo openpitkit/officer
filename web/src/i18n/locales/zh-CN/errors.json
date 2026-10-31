@@ -1,5 +1,7 @@
 {
   "code": {
+    "non_release_archive": "此归档由非正式版本创建，其数据可随时丢弃。正式版本无法恢复此归档。",
+    "non_release_confirmation_required": "在非正式版本中启用交易需要您在面板中确认。",
     "validation": "请求因无效而被拒绝。",
     "not_found": "请求的资源未找到。",
     "has_dependents": "资源存在关联行。",

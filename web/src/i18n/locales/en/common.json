@@ -1,10 +1,42 @@
 {
+  "nonRelease": {
+    "banner": "Data from this build will never be migrated.",
+    "title": "Choose this build's database",
+    "noticeTitle": "This build is for quick tests only",
+    "notice": "Its data transfers neither to a release build nor to the next build. It may corrupt its data. A release build will not see its orders.",
+    "note": "This build never changes the release database.",
+    "copy": {
+      "title": "Copy the release database",
+      "description": "Create a read-only snapshot of the release database and migrate the copy for this build. Trading connections in the copy are disabled; enabling one later requires a separate confirmation. Stop the release build before copying."
+    },
+    "empty": {
+      "title": "Start with an empty database",
+      "description": "Create an empty database for this build. The normal setup wizard follows."
+    },
+    "noReleaseDatabase": "Stable database not found",
+    "preparing": "Preparing this build's database…",
+    "confirm": {
+      "title": "Prepare this build's database?",
+      "copy": "Stop the release build first. A read-only snapshot will be copied and migrated for this build, with trading connections disabled. Enabling one later requires a separate confirmation.",
+      "empty": "An empty database will be created for this build, followed by the setup wizard.",
+      "action": "Prepare database"
+    },
+    "failureTitle": "Could not prepare this build"
+  },
   "sensitiveData": {
     "title": "Sensitive data is stored unencrypted",
     "detail": "Officer runs without a master key: stored API keys and tokens are kept in plain text in its database and in backups. Set a master key to store them sealed.",
     "masterKeyLink": "How to set a master key",
     "unknown": "Could not check whether stored keys are encrypted: {{error}}",
     "checking": "Checking whether stored keys are encrypted…"
+  },
+  "preMigrationBackup": {
+    "title": "A copy of your database from before the migration is available",
+    "detail": "Before migrating, Officer copied the database beside it. Download the copy and keep it: even if the migration reported no errors, problems may surface later.",
+    "neverDeleted": "Officer never deletes the copy itself.",
+    "entry": "Copied {{time}}, {{size}}",
+    "deleteConfirm": "Delete the copy {{name}}? It cannot be restored.",
+    "unknown": "Could not list the database copies made before a migration: {{error}}"
   },
   "language": {
     "label": "Language",
@@ -39,8 +71,10 @@
     "decrement": "Decrease",
     "setUpTradingConnection": "Set up a trading connection",
     "back": "Back",
+    "continue": "Continue",
     "show": "Show",
-    "hide": "Hide"
+    "hide": "Hide",
+    "download": "Download"
   },
   "filters": {
     "venueLabel": "Venue",

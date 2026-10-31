@@ -18,7 +18,10 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +30,7 @@ import (
 	"testing/fstest"
 
 	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
@@ -383,6 +387,247 @@ func TestNewRouter_MissingSPA(t *testing.T) {
 	})
 	if err == nil || err.Error() != "httpapi: nil SPA filesystem" {
 		t.Fatalf("NewRouter error = %v, want the nil SPA named", err)
+	}
+}
+
+func TestBackupRestoreNonReleaseArchive(t *testing.T) {
+	original := backupRestoreReleaseBuild
+	t.Cleanup(func() { backupRestoreReleaseBuild = original })
+	for _, release := range []bool{true, false} {
+		for _, marked := range []bool{true, false} {
+			for _, malformedData := range []bool{false, true} {
+				for _, shape := range []string{"inline", "JSON", "ZIP"} {
+					name := fmt.Sprintf("release=%t/marked=%t/malformed=%t/%s", release, marked, malformedData, shape)
+					t.Run(name, func(t *testing.T) {
+						backupRestoreReleaseBuild = func() bool { return release }
+						marker := ""
+						if marked {
+							marker = `,"nonRelease":true`
+						}
+						data := `{"tradingConnections":[{"enabled":true}]}`
+						if malformedData {
+							data = `"not an archive data object"`
+						}
+						payload := []byte(`{"manifest":{"source":"probe","sections":["trading"]` + marker + `},"credentialForm":"plaintext","data":` + data + `,"futureField":true}`)
+						request := map[string]any{
+							"scope": backup.Scope{All: true}, "mode": backup.RestoreModeOverwrite,
+						}
+						if shape == "inline" {
+							request["archive"] = json.RawMessage(payload)
+						} else {
+							if shape == "ZIP" {
+								payload = testZipPayload(t, map[string]string{"backup.json": string(payload)})
+							}
+							request["archiveFile"] = base64.StdEncoding.EncodeToString(payload)
+							request["archiveFilename"] = "backup." + shape
+						}
+						body, err := json.Marshal(request)
+						if err != nil {
+							t.Fatal(err)
+						}
+						svc := &fakeService{backupSummary: backup.NewSummary()}
+						router, err := newRouter(svc)
+						if err != nil {
+							t.Fatal(err)
+						}
+						rec := httptest.NewRecorder()
+						router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+							"/api/v1/backup/restore", bytes.NewReader(body)))
+						var response struct {
+							Error  struct{ Code, Message string }
+							Detail string
+							Errors []struct{ Code, Pointer, Constraint string }
+						}
+						if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+							t.Fatal(err)
+						}
+						if release && marked {
+							if rec.Code != 422 || response.Error.Code != "non_release_archive" || response.Error.Message != domain.ErrNonReleaseArchive.Error() {
+								t.Errorf("release refusal = %d %s, want 422 non_release_archive with sentinel message", rec.Code, rec.Body)
+							}
+						} else if malformedData {
+							if rec.Code != 422 || len(response.Errors) != 1 || response.Errors[0].Code != "validation" {
+								t.Fatalf("malformed archive = %d %s, want 422 validation", rec.Code, rec.Body)
+							}
+							if shape == "inline" {
+								if response.Detail != "request member has an invalid type" || response.Errors[0].Pointer != "/archive/data" {
+									t.Errorf("inline type validation changed: %s", rec.Body)
+								}
+							} else if response.Detail != "invalid backup archive JSON in backup."+shape || response.Errors[0].Pointer != "/archiveFile" {
+								t.Errorf("file validation changed: %s", rec.Body)
+							}
+						} else {
+							if rec.Code != 200 || svc.restoreArchive.Manifest.NonRelease != marked ||
+								len(svc.restoreArchive.Data.TradingConnections) != 1 || !svc.restoreArchive.Data.TradingConnections[0].Enabled {
+								t.Fatalf("archive did not reach service unchanged: status=%d body=%s archive=%+v", rec.Code, rec.Body, svc.restoreArchive)
+							}
+						}
+						wantCall := (!release || !marked) && !malformedData
+						if called := svc.restoreOptions.Mode != ""; called != wantCall {
+							t.Fatalf("service restore called=%t, want %t", called, wantCall)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestBackupRestoreNonReleaseDuplicateArchive(t *testing.T) {
+	original := backupRestoreReleaseBuild
+	backupRestoreReleaseBuild = func() bool { return true }
+	t.Cleanup(func() { backupRestoreReleaseBuild = original })
+	t.Run("marked archive followed by null", func(t *testing.T) {
+		body := `{"archive":{"manifest":{"source":"probe","sections":["trading"],"nonRelease":true},"data":{}},"archive":null,"mode":"` + string(backup.RestoreModeOverwrite) + `","scope":{"all":true}}`
+		svc := &fakeService{backupSummary: backup.NewSummary()}
+		rec := httptest.NewRecorder()
+		handleRestoreBackup(svc)(rec, httptest.NewRequest(http.MethodPost,
+			"/backup/restore", bytes.NewBufferString(body)))
+		var response struct{ Error struct{ Code string } }
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != http.StatusUnprocessableEntity || response.Error.Code != "non_release_archive" {
+			t.Errorf("duplicate archive refusal = %d %s, want 422 non_release_archive", rec.Code, rec.Body)
+		}
+		if svc.restoreOptions.Mode != "" {
+			t.Error("marked duplicate archive reached restore service")
+		}
+	})
+}
+
+func TestBackupRestoreNonReleaseFileOverridesInlineArchive(t *testing.T) {
+	original := backupRestoreReleaseBuild
+	backupRestoreReleaseBuild = func() bool { return true }
+	t.Cleanup(func() { backupRestoreReleaseBuild = original })
+	for _, markedFile := range []bool{false, true} {
+		t.Run(fmt.Sprintf("markedFile=%t", markedFile), func(t *testing.T) {
+			inline := backup.Archive{Manifest: backup.Manifest{
+				Source: "inline", Sections: []backup.Section{backup.SectionTrading},
+				NonRelease: !markedFile,
+			}}
+			fileArchive := backup.Archive{Manifest: backup.Manifest{
+				Source: "file", Sections: []backup.Section{backup.SectionTrading},
+				NonRelease: markedFile,
+			}}
+			payload, err := json.Marshal(fileArchive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]any{
+				"archive": inline, "archiveFile": base64.StdEncoding.EncodeToString(payload),
+				"archiveFilename": "backup.json",
+				"scope":           backup.Scope{All: true}, "mode": backup.RestoreModeOverwrite,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := &fakeService{backupSummary: backup.NewSummary()}
+			rec := httptest.NewRecorder()
+			handleRestoreBackup(svc)(rec, httptest.NewRequest(http.MethodPost,
+				"/backup/restore", bytes.NewReader(body)))
+			if markedFile {
+				var response struct{ Error struct{ Code string } }
+				if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != http.StatusUnprocessableEntity || response.Error.Code != "non_release_archive" {
+					t.Fatalf("marked file refusal = %d %s, want 422 non_release_archive", rec.Code, rec.Body)
+				}
+				if svc.restoreOptions.Mode != "" {
+					t.Fatal("marked file reached restore service")
+				}
+				return
+			}
+			if rec.Code != http.StatusOK || svc.restoreOptions.Mode != backup.RestoreModeOverwrite ||
+				svc.restoreArchive.Manifest.Source != "file" || svc.restoreArchive.Manifest.NonRelease {
+				t.Fatalf("unmarked file did not override marked inline archive: status=%d body=%s archive=%+v",
+					rec.Code, rec.Body, svc.restoreArchive)
+			}
+		})
+	}
+}
+
+func TestBackupRestoreArchiveTypeErrorPrecedesModeAndScope(t *testing.T) {
+	original := backupRestoreReleaseBuild
+	backupRestoreReleaseBuild = func() bool { return true }
+	t.Cleanup(func() { backupRestoreReleaseBuild = original })
+	for _, tc := range []struct{ name, body string }{
+		{
+			name: "unknown mode",
+			body: `{"archive":{"manifest":{"source":"s","sections":["trading"]},"data":"x"},"mode":"bogus","scope":{"all":true}}`,
+		},
+		{
+			name: "invalid scope",
+			body: `{"archive":{"manifest":{"source":"s","sections":["trading"]},"data":"x"},"mode":"overwrite","scope":{}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			rec := httptest.NewRecorder()
+			handleRestoreBackup(svc)(rec, httptest.NewRequest(http.MethodPost,
+				"/backup/restore", bytes.NewBufferString(tc.body)))
+			var response struct {
+				Detail string
+				Errors []struct{ Code, Pointer, Constraint string }
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusUnprocessableEntity || response.Detail != "request member has an invalid type" ||
+				len(response.Errors) != 1 || response.Errors[0].Code != "validation" ||
+				response.Errors[0].Pointer != "/archive/data" || response.Errors[0].Constraint != "type" {
+				t.Fatalf("first validation = %d %s, want 422 invalid type at /archive/data", rec.Code, rec.Body)
+			}
+			if svc.restoreOptions.Mode != "" {
+				t.Fatal("malformed archive reached restore service")
+			}
+		})
+	}
+}
+
+func TestBackupRestoreUnreadableNonReleaseMarker(t *testing.T) {
+	original := backupRestoreReleaseBuild
+	backupRestoreReleaseBuild = func() bool { return true }
+	t.Cleanup(func() { backupRestoreReleaseBuild = original })
+	for _, shape := range []string{"inline", "JSON", "ZIP"} {
+		t.Run(shape, func(t *testing.T) {
+			payload := []byte(`{"manifest":{"nonRelease":"true","sections":["trading"]},"data":{}}`)
+			request := map[string]any{"scope": backup.Scope{All: true}, "mode": backup.RestoreModeOverwrite}
+			if shape == "inline" {
+				request["archive"] = json.RawMessage(payload)
+			} else {
+				if shape == "ZIP" {
+					payload = testZipPayload(t, map[string]string{"backup.json": string(payload)})
+				}
+				request["archiveFile"] = base64.StdEncoding.EncodeToString(payload)
+			}
+			body, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := &fakeService{}
+			rec := httptest.NewRecorder()
+			handleRestoreBackup(svc)(rec, httptest.NewRequest(http.MethodPost,
+				"/backup/restore", bytes.NewReader(body)))
+			var response struct {
+				Detail string
+				Errors []struct{ Code, Pointer string }
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != 422 || len(response.Errors) != 1 || response.Errors[0].Code != "validation" || svc.restoreOptions.Mode != "" {
+				t.Fatalf("unreadable marker did not reach normal validation: %d %s", rec.Code, rec.Body)
+			}
+			if shape == "inline" {
+				if response.Detail != "request member has an invalid type" || response.Errors[0].Pointer != "/archive/manifest/nonRelease" {
+					t.Fatalf("inline marker validation changed: %s", rec.Body)
+				}
+			} else if response.Detail != "invalid backup archive JSON" || response.Errors[0].Pointer != "/archiveFile" {
+				t.Fatalf("file marker validation changed: %s", rec.Body)
+			}
+		})
 	}
 }
 

@@ -60,6 +60,13 @@ vi.mock("@/api/useMarketData", () => ({
     reload: () => {},
   }),
 }));
+// PreMigrationBackupBanner polls GET /database/pre-migration-backups.
+vi.mock("@/api/usePreMigrationBackups", () => ({
+  usePreMigrationBackups: () => ({
+    load: { state: "ready", data: [], error: null },
+    reload: () => {},
+  }),
+}));
 // SensitiveDataBanner and the page itself poll GET /credential-storage.
 vi.mock("@/api/useCredentialStorage");
 const useCredentialStorageMock = vi.mocked(useCredentialStorage);

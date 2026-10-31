@@ -155,6 +155,11 @@ copied response-and-headers factory, calendar round-trip comparisons,
 new-password fields, and translated Show/Hide labels. Their positive and
 negative fixtures run as part of `check-semgrep`.
 
+`checks/semgrep/panel-download-reuse.yml` keeps browser downloads in
+`downloadBlob` in `web/src/lib/download.ts`. The rule scans `web/src`, excluding
+that file, and catches an anchor created with `document.createElement("a")`
+whose `download` is then assigned. Its fixtures run as part of `check-semgrep`.
+
 ### Panel code labels
 
 `checks/semgrep/panel-code-label.yml` keeps every wire code the panel shows -

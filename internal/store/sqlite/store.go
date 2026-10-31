@@ -61,6 +61,7 @@ type sqliteStore struct {
 	dialect             sqliteDialect
 	path                string
 	realm               domain.RealmID
+	preMigrationCopy    bool
 
 	// accessSnapshot is the access state the live database last committed;
 	// Migrate publishes the first one.
@@ -87,11 +88,20 @@ func WithMasterKey(key secret.MasterKey) Option {
 	}
 }
 
+// WithPreMigrationCopy requires a SQLite copy beside an existing database
+// before Migrate applies pending migrations. Reset does not take a copy.
+func WithPreMigrationCopy() Option {
+	return func(s *sqliteStore) { s.preMigrationCopy = true }
+}
+
 // New opens (creating if absent) the SQLite database at path and binds the
 // single-realm connector to realm. An empty or invalid realm is rejected with
 // an error wrapping domain.ErrInvalid before the database is opened. The caller
 // must run Migrate before any read or write, then obtain the RealmStore from
 // ForRealm with the same realm. Close releases the underlying connection pool.
+// Complete enum dictionaries are loaded on open. Missing tables or codes with free
+// stable IDs leave them unavailable until Migrate seeds and verifies them. Codes
+// under wrong IDs or stable IDs held by other codes are errors.
 //
 // The connection opens the path as given; only Path() resolves to an absolute
 // filesystem path so the operator sees the full location. filepath.Abs returns
@@ -122,7 +132,7 @@ func New(
 	}
 	if dictionaries, err := loadEnumDictionaries(context.Background(), db); err == nil {
 		s.enumCodes.Store(dictionaries)
-	} else if !isSQLiteMissingTable(err) {
+	} else if !isSQLiteMissingTable(err) && !errors.Is(err, errEnumDictionaryCodeMissing) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: load enum dictionaries: %w", err)
 	}
@@ -224,6 +234,11 @@ func (s *sqliteStore) Migrate(ctx context.Context) error {
 	if db == nil {
 		return fmt.Errorf("store: sqlite is closed")
 	}
+	if s.preMigrationCopy {
+		if err := s.copyBeforeMigration(ctx, db); err != nil {
+			return err
+		}
+	}
 	snapshot, err := s.migrateDB(ctx, db)
 	if err != nil {
 		return err
@@ -251,13 +266,16 @@ func (l migrationList) Migrations() ([]migration.Migration, error) {
 	return l, nil
 }
 
-// migrateDB applies the shared and the application's migration sets to db,
-// configures sealing and returns db's access snapshot without publishing it:
-// the caller publishes it once db is the live database.
-func (s *sqliteStore) migrateDB(
-	ctx context.Context, db *sql.DB,
-) (access.Snapshot, error) {
-	// Refuse mismatched bookkeeping before migrations or seed data can write.
+func (s *sqliteStore) sharedMigrationSet() (migration.MigrationSource, migration.Config) {
+	return schema.NewEmbeddedMigrationSource(s.dialect), migration.Config{}
+}
+
+func applicationMigrationSet() (migration.MigrationSource, migration.Config) {
+	return migrationList{{Version: 1, Name: "app_schema.sql", SQL: appSchemaSQL}},
+		migration.Config{Table: appMigrationTable}
+}
+
+func migrationRecords(ctx context.Context, db *sql.DB) ([2]bool, error) {
 	var recorded [2]bool
 	for i, table := range [...]string{"schema_migration", appMigrationTable} {
 		var exists bool
@@ -265,7 +283,7 @@ func (s *sqliteStore) migrateDB(
 			ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)`,
 			table,
 		).Scan(&exists); err != nil {
-			return access.Snapshot{}, fmt.Errorf("store: inspect migration table %s: %w", table, err)
+			return recorded, fmt.Errorf("store: inspect migration table %s: %w", table, err)
 		}
 		if !exists {
 			continue
@@ -273,8 +291,22 @@ func (s *sqliteStore) migrateDB(
 		if err := db.QueryRowContext(
 			ctx, `SELECT EXISTS(SELECT 1 FROM `+table+`)`,
 		).Scan(&recorded[i]); err != nil {
-			return access.Snapshot{}, fmt.Errorf("store: read migration table %s: %w", table, err)
+			return recorded, fmt.Errorf("store: read migration table %s: %w", table, err)
 		}
+	}
+	return recorded, nil
+}
+
+// migrateDB applies the shared and the application's migration sets to db,
+// configures sealing and returns db's access snapshot without publishing it:
+// the caller publishes it once db is the live database.
+func (s *sqliteStore) migrateDB(
+	ctx context.Context, db *sql.DB,
+) (access.Snapshot, error) {
+	// Refuse mismatched bookkeeping before migrations or seed data can write.
+	recorded, err := migrationRecords(ctx, db)
+	if err != nil {
+		return access.Snapshot{}, err
 	}
 	if recorded[0] != recorded[1] {
 		return access.Snapshot{}, fmt.Errorf(
@@ -284,11 +316,12 @@ func (s *sqliteStore) migrateDB(
 			s.path, domain.ErrInvalid,
 		)
 	}
+	sharedSource, sharedConfig := s.sharedMigrationSet()
 	if err := migration.Apply(
 		ctx,
 		db,
-		schema.NewEmbeddedMigrationSource(s.dialect),
-		migration.Config{},
+		sharedSource,
+		sharedConfig,
 		s.dialect,
 	); err != nil {
 		return access.Snapshot{}, err
@@ -301,11 +334,12 @@ func (s *sqliteStore) migrateDB(
 		return access.Snapshot{}, err
 	}
 	// Sealing covers the access credentials, so their table exists first.
+	applicationSource, applicationConfig := applicationMigrationSet()
 	if err := migration.Apply(
 		ctx,
 		db,
-		migrationList{{Version: 1, Name: "app_schema.sql", SQL: appSchemaSQL}},
-		migration.Config{Table: appMigrationTable},
+		applicationSource,
+		applicationConfig,
 		s.dialect,
 	); err != nil {
 		return access.Snapshot{}, err
@@ -366,7 +400,9 @@ func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 	tmpPath := tmp.Name()
 	committed := false
 	defer func() {
-		result = errors.Join(result, cleanupSQLiteResetTemp(tmpPath))
+		if err := RemoveDatabaseFiles(tmpPath); err != nil {
+			result = errors.Join(result, fmt.Errorf("store: remove reset temporary sqlite: %w", err))
+		}
 		if committed && result != nil {
 			result = errors.Join(fwstore.ErrResetCommitted, result)
 		}
@@ -413,32 +449,32 @@ func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 		if err != nil {
 			return err
 		}
-		_, err = restore.Step(-1)
 		// Step commits the replacement before Finish and the deferred cleanup.
 		// Any later failure must not be reported as an unchanged database.
-		committed = err == nil
-		if committed {
+		return completeBackup(restore, func() {
+			committed = true
 			s.accessSnapshot.Store(&snapshot)
-		}
-		return errors.Join(err, restore.Finish())
+		})
 	}); err != nil {
 		return fmt.Errorf("store: reset replace sqlite at %q: %w", path, err)
 	}
 	return nil
 }
 
-func sqliteResetPaths(path string) []string {
+// DatabaseFiles returns the database path and its possible SQLite sidecars.
+func DatabaseFiles(path string) []string {
 	return []string{path, path + "-wal", path + "-shm", path + "-journal"}
 }
 
-func cleanupSQLiteResetTemp(path string) error {
+// RemoveDatabaseFiles removes a database and its sidecars, ignoring absent files.
+func RemoveDatabaseFiles(path string) error {
 	var result error
-	for _, candidate := range sqliteResetPaths(path) {
+	for _, candidate := range DatabaseFiles(path) {
 		if err := os.Remove(candidate); err != nil &&
 			!errors.Is(err, os.ErrNotExist) {
 			result = errors.Join(
 				result,
-				fmt.Errorf("store: remove reset temporary sqlite %q: %w", candidate, err),
+				fmt.Errorf("store: remove sqlite %q: %w", candidate, err),
 			)
 		}
 	}
@@ -657,6 +693,8 @@ type enumDictionaries struct {
 	idToCode map[string]map[int64]string
 }
 
+var errEnumDictionaryCodeMissing = errors.New("enum dictionary code is missing")
+
 func seedEnumDictionaries(
 	ctx context.Context, db *sql.DB,
 ) (seeded *enumDictionaries, err error) {
@@ -697,6 +735,7 @@ func loadEnumDictionaries(
 	q sqlQueryer,
 ) (*enumDictionaries, error) {
 	seeds := schema.EnumDictionarySeeds()
+	var missingCodeErr error
 	result := &enumDictionaries{
 		codeToID: make(map[string]map[string]int64, len(seeds)),
 		idToCode: make(map[string]map[int64]string, len(seeds)),
@@ -737,7 +776,22 @@ func loadEnumDictionaries(
 		}
 		for _, seed := range dictionary.Codes {
 			id, ok := codes[seed.Code]
-			if !ok || id != seed.ID {
+			if !ok {
+				if holdingCode, occupied := ids[seed.ID]; occupied {
+					return nil, fmt.Errorf(
+						"store: %s dictionary id %d is held by code %q, want code %q",
+						dictionary.Table, seed.ID, holdingCode, seed.Code,
+					)
+				}
+				if missingCodeErr == nil {
+					missingCodeErr = fmt.Errorf(
+						"store: %s dictionary code %q: %w",
+						dictionary.Table, seed.Code, errEnumDictionaryCodeMissing,
+					)
+				}
+				continue
+			}
+			if id != seed.ID {
 				return nil, fmt.Errorf(
 					"store: %s dictionary code %q has id %d, want %d",
 					dictionary.Table,
@@ -749,6 +803,9 @@ func loadEnumDictionaries(
 		}
 		result.codeToID[dictionary.Table] = codes
 		result.idToCode[dictionary.Table] = ids
+	}
+	if missingCodeErr != nil {
+		return nil, missingCodeErr
 	}
 	return result, nil
 }

@@ -21,11 +21,9 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useMarketData } from "@/api/useMarketData";
-import { useService } from "@/api/useService";
 import {
   AboutNavEntry,
   LogoutNavEntry,
-  NonReleaseNavEntry,
   RestartRequiredNavEntry,
 } from "@/components/SidebarExtras";
 import { getNav } from "@/framework";
@@ -35,13 +33,11 @@ import "@/register";
 import { jsonResponse, renderWithApi } from "@/test/apiClient";
 
 vi.mock("@/api/useMarketData", () => ({ useMarketData: vi.fn() }));
-vi.mock("@/api/useService", () => ({ useService: vi.fn() }));
 vi.mock("@/components/sidebar-context", () => ({
   useSidebar: () => ({ close: vi.fn() }),
 }));
 
 const useMarketDataMock = vi.mocked(useMarketData);
-const useServiceMock = vi.mocked(useService);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -58,46 +54,9 @@ beforeEach(() => {
     },
     reload: vi.fn(),
   });
-  useServiceMock.mockReturnValue({
-    load: {
-      state: "ready",
-      data: {
-        name: "Pit Officer",
-        engineVersion: "dev",
-        engineBuildProfile: "debug",
-        release: false,
-        database: { path: "officer.db", reachable: true },
-      },
-      error: null,
-    },
-    reload: vi.fn(),
-  });
 });
 
 describe("SidebarExtras page request ownership", () => {
-  it.each([
-    { release: true, engineBuildProfile: "profile=debug", visible: false },
-    { release: true, engineBuildProfile: "profile=release", visible: false },
-    { release: false, engineBuildProfile: "profile=debug", visible: true },
-    { release: false, engineBuildProfile: "profile=release", visible: true },
-  ])("shows the Officer warning independently of SDK: %j", (build) => {
-    const poll = useServiceMock();
-    if (poll.load.state !== "ready") throw new Error("Expected service data");
-    useServiceMock.mockReturnValue({
-      ...poll,
-      load: {
-        ...poll.load,
-        data: { ...poll.load.data, ...build },
-      },
-    });
-    render(
-      <MemoryRouter initialEntries={["/accounts"]}>
-        <NonReleaseNavEntry />
-      </MemoryRouter>,
-    );
-    expect(screen.queryByRole("link") !== null).toBe(build.visible);
-  });
-
   it("leaves the market-data request to its destination page", () => {
     render(
       <MemoryRouter initialEntries={["/market-data"]}>
@@ -118,28 +77,6 @@ describe("SidebarExtras page request ownership", () => {
 
     expect(useMarketDataMock).toHaveBeenCalledOnce();
     expect(screen.getByRole("link")).toHaveAttribute("href", "/market-data");
-  });
-
-  it("leaves the service request to its destination page", () => {
-    render(
-      <MemoryRouter initialEntries={["/service"]}>
-        <NonReleaseNavEntry />
-      </MemoryRouter>,
-    );
-
-    expect(useServiceMock).not.toHaveBeenCalled();
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
-  });
-
-  it("polls service state and shows the warning away from its page", () => {
-    render(
-      <MemoryRouter initialEntries={["/accounts"]}>
-        <NonReleaseNavEntry />
-      </MemoryRouter>,
-    );
-
-    expect(useServiceMock).toHaveBeenCalledOnce();
-    expect(screen.getByRole("link")).toHaveAttribute("href", "/service");
   });
 });
 

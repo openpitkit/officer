@@ -24,6 +24,8 @@ export type ApiErrorCode =
   | "has_dependents"
   | "conflict"
   | "fee_account_required"
+  | "non_release_archive"
+  | "non_release_confirmation_required"
   | "trading_mode_mismatch"
   | "destination_ambiguous"
   | "no_destination"
@@ -163,6 +165,8 @@ function asCode(v: unknown): ApiErrorCode {
     case "has_dependents":
     case "conflict":
     case "fee_account_required":
+    case "non_release_archive":
+    case "non_release_confirmation_required":
     case "trading_mode_mismatch":
     case "destination_ambiguous":
     case "no_destination":
@@ -207,6 +211,10 @@ function defaultTranslate(
     has_dependents: "The resource has dependent rows.",
     conflict: "The request conflicts with the current state.",
     fee_account_required: "A fee account is required.",
+    non_release_archive:
+      "This archive was made by a non-release build whose data is disposable. A release build cannot restore it.",
+    non_release_confirmation_required:
+      "Enabling trading in a non-release build requires your confirmation in the panel.",
     trading_mode_mismatch: "The connection uses a different trading mode.",
     destination_ambiguous: "Multiple trading destinations match the request.",
     no_destination: "No trading destination is available.",
@@ -274,6 +282,8 @@ function clientOwnedMessage(code: ApiErrorCode): boolean {
     code === "terminal_order" ||
     code === "approval_required" ||
     code === "execution_report_required" ||
+    code === "non_release_archive" ||
+    code === "non_release_confirmation_required" ||
     code === "too_large"
   );
 }

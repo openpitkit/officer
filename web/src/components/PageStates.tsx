@@ -65,16 +65,23 @@ export function LoadingStatus() {
 }
 
 /** The whole viewport while a full-screen step loads. */
-export function FullScreenLoading() {
+export function FullScreenLoading({ message }: { message?: string } = {}) {
   const { t } = useTranslation();
   return (
     <div
       role="status"
       aria-busy="true"
-      aria-label={t("states.loading")}
-      className="flex h-dvh w-full items-center justify-center bg-bg"
+      aria-label={message ?? t("states.loading")}
+      className="flex h-full w-full items-center justify-center bg-bg"
     >
-      <Loader2 className="h-5 w-5 animate-spin text-muted-lt" />
+      {message === undefined ? (
+        <Loader2 className="h-5 w-5 animate-spin text-muted-lt" />
+      ) : (
+        <div className="flex items-center gap-2 p-6 text-sm text-text">
+          <Loader2 aria-hidden className="h-5 w-5 animate-spin text-muted-lt" />
+          <p>{message}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -123,7 +130,7 @@ export function FullScreenError({
   onRetry: () => void;
 }) {
   return (
-    <div className="flex h-dvh w-full items-center justify-center bg-bg p-6 text-text">
+    <div className="flex h-full w-full items-center justify-center bg-bg p-6 text-text">
       <div className="w-full max-w-lg">
         <ErrorState title={title} message={message} onRetry={onRetry} />
       </div>

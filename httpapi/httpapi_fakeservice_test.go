@@ -46,6 +46,7 @@ type fakeService struct {
 	tradingLabel          string
 	tradingCredentials    string
 	tradingEnabled        bool
+	tradingConfirmed      bool
 	tradingInstrument     domain.TradingInstrument
 	tradingAccess         domain.TradingAccess
 	tradingAccount        domain.AccountID
@@ -222,9 +223,10 @@ func (f *fakeService) GetTrading(context.Context) (backend.TradingStatus, error)
 	return f.tradingStatus, f.tradingSnapshotErr
 }
 
-func (f *fakeService) CreateTradingConnection(_ context.Context, c domain.TradingConnection) (domain.TradingConnection, error) {
+func (f *fakeService) CreateTradingConnection(_ context.Context, c domain.TradingConnection, nonReleaseConfirmed bool) (domain.TradingConnection, error) {
 	f.tradingCalls = append(f.tradingCalls, "create")
 	f.tradingConnection = c
+	f.tradingConfirmed = nonReleaseConfirmed
 	return f.tradingCreateResult, f.tradingErr
 }
 
@@ -234,9 +236,10 @@ func (f *fakeService) UpdateTradingConnectionSettings(_ context.Context, id, lab
 	return f.tradingErr
 }
 
-func (f *fakeService) SetTradingConnectionEnabled(_ context.Context, id string, enabled bool) error {
+func (f *fakeService) SetTradingConnectionEnabled(_ context.Context, id string, enabled, nonReleaseConfirmed bool) error {
 	f.tradingCalls = append(f.tradingCalls, "enabled")
 	f.tradingID, f.tradingEnabled = id, enabled
+	f.tradingConfirmed = nonReleaseConfirmed
 	return f.tradingErr
 }
 

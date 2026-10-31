@@ -1,5 +1,4 @@
 {
-  "continue": "Continuar",
   "stepOf": "Etapa {{n}} de {{total}}",
   "changeLater": "Pode ser alterado depois: {{where}}",
   "place": "{{section}} › {{tab}}",
@@ -22,6 +21,8 @@
     "lead": "Este assistente prepara o Officer para o trabalho.",
     "closedTitle": "O Officer permanece fechado até a configuração ser concluída",
     "closedBody": "A REST API e o MCP dele ainda não respondem a nenhum programa nem a nenhum agente. Nada é negociado e nada é conectado até você configurá-lo.",
+    "backupTitle": "Versões publicadas copiam o banco de dados antes de cada migração",
+    "backupBody": "Antes de uma versão publicada migrar um banco de dados existente, o Officer grava uma cópia dele junto ao arquivo. O painel então oferece essa cópia para que você a baixe e a guarde.",
     "start": "Iniciar a configuração"
   },
   "accounts": {

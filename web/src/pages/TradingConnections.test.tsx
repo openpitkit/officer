@@ -145,6 +145,13 @@ const api = {
   createAccount: vi.fn(),
   createAsset: vi.fn(),
 };
+// PreMigrationBackupBanner polls GET /database/pre-migration-backups.
+vi.mock("@/api/usePreMigrationBackups", () => ({
+  usePreMigrationBackups: () => ({
+    load: { state: "ready", data: [], error: null },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/credentialStorage");
 const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 let snapshot: TradingSnapshot;
@@ -330,6 +337,132 @@ beforeEach(async () => {
 });
 
 describe("Trading connections", () => {
+  it("confirms non-release trading only after the server refusal", async () => {
+    const user = userEvent.setup();
+    api.setTradingConnectionEnabled.mockRejectedValueOnce(
+      new ApiError(
+        "Panel confirmation required",
+        "non_release_confirmation_required",
+        403,
+      ),
+    );
+    renderTrading();
+    const scope = await card();
+    await user.click(scope.getByRole("button", { name: "Enable" }));
+    const dialog = within(
+      await screen.findByRole("alertdialog", {
+        name: "Enable trading in a non-release build?",
+      }),
+    );
+    expect(
+      dialog.getByText(
+        "This non-release build is for quick tests only. Enabling this connection lets it send real orders to the venue. The release build will not see the orders this build sends. This build may corrupt its data.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Panel confirmation required"),
+    ).not.toBeInTheDocument();
+    expect(api.setTradingConnectionEnabled.mock.calls).toEqual([
+      ["alpaca-1", true],
+    ]);
+    await user.click(dialog.getByRole("button", { name: "Enable trading" }));
+    expect(api.setTradingConnectionEnabled.mock.calls).toEqual([
+      ["alpaca-1", true],
+      ["alpaca-1", true, true],
+    ]);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(
+      await scope.findByRole("button", { name: "Disable" }),
+    ).toBeInTheDocument();
+  });
+
+  it("cancels non-release trading without another request", async () => {
+    const user = userEvent.setup();
+    api.setTradingConnectionEnabled.mockRejectedValueOnce(
+      new ApiError(
+        "Panel confirmation required",
+        "non_release_confirmation_required",
+        403,
+      ),
+    );
+    renderTrading();
+    const scope = await card();
+    await user.click(scope.getByRole("button", { name: "Enable" }));
+    const dialog = within(await screen.findByRole("alertdialog"));
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(api.setTradingConnectionEnabled.mock.calls).toEqual([
+      ["alpaca-1", true],
+    ]);
+    expect(scope.getByRole("button", { name: "Enable" })).toBeEnabled();
+  });
+
+  it("enables immediately without confirmation when the server accepts", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const scope = await card();
+    await user.click(scope.getByRole("button", { name: "Enable" }));
+    expect(
+      await scope.findByRole("button", { name: "Disable" }),
+    ).toBeInTheDocument();
+    expect(api.setTradingConnectionEnabled.mock.calls).toEqual([
+      ["alpaca-1", true],
+    ]);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps the fee-account refusal on enable without confirmation", async () => {
+    const user = userEvent.setup();
+    api.setTradingConnectionEnabled.mockRejectedValueOnce(
+      new ApiError("Choose a fee ledger", "fee_account_required", 409),
+    );
+    renderTrading();
+    const scope = await card();
+    await user.click(scope.getByRole("button", { name: "Enable" }));
+    expect(await scope.findByText("Choose a fee ledger")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await user.click(scope.getByRole("button", { name: "Set fee account" }));
+    expect(scope.getByRole("combobox", { name: "Fee account" })).toHaveFocus();
+    expect(api.setTradingConnectionEnabled.mock.calls).toEqual([
+      ["alpaca-1", true],
+    ]);
+  });
+
+  it("disables without non-release confirmation", async () => {
+    const user = userEvent.setup();
+    snapshot.connections = [connection({ enabled: true })];
+    renderTrading();
+    const scope = await card();
+    await user.click(scope.getByRole("button", { name: "Disable" }));
+    expect(
+      await scope.findByRole("button", { name: "Enable" }),
+    ).toBeInTheDocument();
+    expect(api.setTradingConnectionEnabled.mock.calls).toEqual([
+      ["alpaca-1", false],
+    ]);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("shows a confirmed non-release enable failure through the usual error line", async () => {
+    const user = userEvent.setup();
+    api.setTradingConnectionEnabled
+      .mockRejectedValueOnce(
+        new ApiError("Confirm first", "non_release_confirmation_required", 403),
+      )
+      .mockRejectedValueOnce(new ApiError("Venue refused", "upstream", 502));
+    renderTrading();
+    const scope = await card();
+    await user.click(scope.getByRole("button", { name: "Enable" }));
+    const dialog = within(await screen.findByRole("alertdialog"));
+    await user.click(dialog.getByRole("button", { name: "Enable trading" }));
+    expect(await scope.findByText("Venue refused")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(api.setTradingConnectionEnabled.mock.calls).toEqual([
+      ["alpaca-1", true],
+      ["alpaca-1", true, true],
+    ]);
+  });
+
   it.each(["failed", "success", "pending"])(
     "forgets a %s row verdict when the deleted symbol is re-added",
     async (verification) => {

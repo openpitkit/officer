@@ -33,9 +33,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -54,6 +57,7 @@ import (
 	frameworkapp "go.openpit.dev/officer/framework/app"
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -68,6 +72,7 @@ import (
 	"go.openpit.dev/officer/internal/access/accesstest"
 	"go.openpit.dev/officer/internal/accountmode"
 	"go.openpit.dev/officer/internal/apitest"
+	"go.openpit.dev/officer/internal/nonrelease"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 )
@@ -234,6 +239,18 @@ func TestRegisterTradingComposition(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "alpaca: apiKey is required") {
 		t.Fatalf("registered Alpaca constructor was not called: %s", logs.String())
+	}
+}
+
+func TestRegisterBackupBuildIdentity(t *testing.T) {
+	app, _, _ := buildTestApp(t, nil, nil)
+	ctx := auth.ContextWithCaller(context.Background(), auth.SystemCaller())
+	archive, _, err := app.Service().ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archive.Manifest.NonRelease != !backend.ReleaseBuild() {
+		t.Fatalf("backup non-release = %t, release build = %t", archive.Manifest.NonRelease, backend.ReleaseBuild())
 	}
 }
 
@@ -818,6 +835,9 @@ func TestRegisterRouteBaseline(t *testing.T) {
 	v1 = append(v1,
 		operation{http.MethodGet, "/account-mode"},
 		operation{http.MethodPut, "/account-mode"},
+		operation{http.MethodGet, "/database/pre-migration-backups"},
+		operation{http.MethodPost, "/database/pre-migration-backups/{id}/download"},
+		operation{http.MethodDelete, "/database/pre-migration-backups/{id}"},
 		operation{http.MethodPost, "/service/restart"},
 		operation{http.MethodPost, "/service/stop"},
 	)
@@ -845,6 +865,7 @@ func TestRegisterRouteBaseline(t *testing.T) {
 		"PUT /app/api/v1/access/password panel",
 		"GET /app/api/v1/access/tokens/{kind} panel",
 		"POST /app/api/v1/access/tokens/{kind}/regenerate panel",
+		"GET /app/api/v1/build public",
 		"GET /mcp agent", "POST /mcp agent", "DELETE /mcp agent",
 		"GET /healthz public", "GET /api/openapi.yaml public", "GET /docs public",
 		"GET /docs/swagger-ui.css public", "GET /docs/swagger-ui-bundle.js public",
@@ -857,6 +878,7 @@ func TestRegisterRouteBaseline(t *testing.T) {
 		t.Fatalf("assembled route surface mismatch\ngot:  %v\nwant: %v", got, want)
 	}
 	wantDuringSetup := []string{
+		"GET /app/api/v1/build",
 		"GET /app/api/v1/credential-storage",
 		"GET /app/api/v1/accounts",
 		"POST /app/api/v1/signing/keys/generate",
@@ -881,6 +903,215 @@ func TestRegisterRouteBaseline(t *testing.T) {
 		t.Fatalf("routes answering during setup mismatch\ngot:  %v\nwant: %v",
 			duringSetup, wantDuringSetup)
 	}
+}
+
+func TestRegisterPreMigrationBackups(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	builder := frameworkapp.NewBuilder()
+	if err := Register(builder, Config{SQLitePath: path}); err != nil {
+		t.Fatal(err)
+	}
+	var opened store.Store
+	var backupNode node.Node
+	builder.SetNodeBuilder(func(ctx context.Context, st store.Store, fatalHook frameworkapp.FatalShutdownHook) (node.Node, engine.Engine, error) {
+		opened = st
+		n, eng, err := fakeEngineNodeBuilder(ctx, st, fatalHook)
+		backupNode = n
+		return n, eng, err
+	})
+	builder.SetSPAFactory(func() (fs.FS, error) {
+		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
+	})
+	app, err := builder.Build(ctx, slog.Default(), failOnFatal(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+	realm, err := opened.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+	const base = "/database/pre-migration-backups"
+	const name = "officer.db.pre-migration-20261028T120000Z"
+	const olderName = "officer.db.pre-migration-20261027T120000Z"
+	const payload = "SQLite format 3\x00raw pre-migration bytes\xff"
+	copyPath := path + ".pre-migration-20261028T120000Z"
+	for _, copy := range []struct{ path, body string }{
+		{copyPath, payload},
+		{path + ".pre-migration-20261027T120000Z", "older"},
+		{filepath.Join(filepath.Dir(path), "foreign.db"), "foreign"},
+	} {
+		if err := os.WriteFile(copy.path, []byte(copy.body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readAudit := func() []domain.AuditRow {
+		t.Helper()
+		rows, err := realm.ListAudit(ctx, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	before := len(readAudit())
+	listed := serveREST(handler, http.MethodGet, base, "")
+	var list struct {
+		Backups []httpapi.PreMigrationBackup `json:"backups"`
+	}
+	if err := json.Unmarshal(listed.Body.Bytes(), &list); err != nil || listed.Code != http.StatusOK {
+		t.Fatalf("list = %d %s: %v", listed.Code, listed.Body, err)
+	}
+	if len(list.Backups) != 2 || list.Backups[0].Name != name || list.Backups[1].Name != olderName || list.Backups[0].SizeBytes != int64(len(payload)) || list.Backups[0].CreatedAt.Format(time.RFC3339) != "2026-10-28T12:00:00Z" {
+		t.Fatalf("listed copies = %+v", list.Backups)
+	}
+	t.Run("cross-site download", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1"+base+"/"+name+"/download", nil)
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		var answer struct {
+			Error struct{ Code string } `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
+			rec.Code != http.StatusForbidden || answer.Error.Code != "origin_not_allowed" {
+			t.Fatalf("cross-site download = %d %s, want 403 origin_not_allowed", rec.Code, rec.Body)
+		}
+		if rec.Code != http.StatusForbidden || len(readAudit()) != before {
+			t.Fatalf("cross-site download = %d %s, audit rows = %d, want 403 and %d rows", rec.Code, rec.Body, len(readAudit()), before)
+		}
+	})
+	download := serveREST(handler, http.MethodPost, base+"/"+name+"/download", "")
+	if download.Code != http.StatusOK || download.Body.String() != payload {
+		t.Fatalf("download = %d %q", download.Code, download.Body.String())
+	}
+	rows := readAudit()
+	if len(rows) != before+1 {
+		t.Fatalf("audit rows after download = %d, want %d", len(rows), before+1)
+	}
+	downloadRow := auditRowForAction(t, rows, domain.AuditActionDownloadPreMigrationBackup)
+	if downloadRow.Detail.Code != domain.AuditDetailDownloadPreMigrationBackup || downloadRow.Detail.Params["name"] != name || downloadRow.Actor != domain.PrincipalOperator || downloadRow.Source != domain.SourceAPI {
+		t.Fatalf("download audit = %+v", downloadRow)
+	}
+	refuse := func(t *testing.T, name string, status int) {
+		t.Helper()
+		before := len(readAudit())
+		for _, method := range []string{http.MethodPost, http.MethodDelete} {
+			requestPath := base + "/" + url.PathEscape(name)
+			if method == http.MethodPost {
+				requestPath += "/download"
+			}
+			rec := serveREST(handler, method, requestPath, "")
+			if rec.Code != status {
+				t.Fatalf("%s %s = %d %s, want %d", method, requestPath, rec.Code, rec.Body, status)
+			}
+		}
+		if after := len(readAudit()); after != before {
+			t.Fatalf("refused copy added audit rows: before %d, after %d", before, after)
+		}
+	}
+	for _, tc := range []struct {
+		label, name string
+		status      int
+	}{
+		{"traversal", "../officer.db", http.StatusUnprocessableEntity},
+		{"absolute path", path, http.StatusUnprocessableEntity},
+		{"foreign file", "foreign.db", http.StatusUnprocessableEntity},
+		{"foreign copy", "foreign.db.pre-migration-20261028T120000Z", http.StatusUnprocessableEntity},
+		{"missing copy", "officer.db.pre-migration-20261026T120000Z", http.StatusNotFound},
+	} {
+		t.Run(tc.label, func(t *testing.T) { refuse(t, tc.name, tc.status) })
+	}
+	t.Run("symlink", func(t *testing.T) {
+		const linkName = "officer.db.pre-migration-20261029T120000Z"
+		link := path + ".pre-migration-20261029T120000Z"
+		if err := os.Symlink(path, link); err != nil {
+			if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+				t.Skipf("os.Symlink requires Windows privilege: %v", err)
+			}
+			t.Fatal(err)
+		}
+		refuse(t, linkName, http.StatusNotFound)
+		rec := serveREST(handler, http.MethodGet, base, "")
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), linkName) {
+			t.Fatalf("list includes symlink or failed: %d %s", rec.Code, rec.Body)
+		}
+		if _, err := os.Lstat(link); err != nil {
+			t.Fatalf("refused delete changed the symlink: %v", err)
+		}
+	})
+	t.Run("unresolved caller", func(t *testing.T) {
+		before := len(readAudit())
+		err := preMigrationBackupSource(path, backupNode).Audit(ctx,
+			domain.AuditActionDeletePreMigrationBackup,
+			domain.NewAuditDetail(domain.AuditDetailDeletePreMigrationBackup, domain.AuditDetailParams{"name": name}))
+		if err == nil || !strings.Contains(err.Error(), "no caller in context") || len(readAudit()) != before {
+			t.Fatalf("unresolved caller audit = %v", err)
+		}
+	})
+	deleted := serveREST(handler, http.MethodDelete, "/app/api/v1"+base+"/"+name, "")
+	if deleted.Code != http.StatusNoContent || deleted.Body.Len() != 0 {
+		t.Fatalf("delete = %d %s", deleted.Code, deleted.Body)
+	}
+	if _, err := os.Stat(copyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted copy still exists: %v", err)
+	}
+	rows = readAudit()
+	if len(rows) != before+2 {
+		t.Fatalf("audit rows after delete = %d, want %d", len(rows), before+2)
+	}
+	deleteRow := auditRowForAction(t, rows, domain.AuditActionDeletePreMigrationBackup)
+	if deleteRow.Detail.Code != domain.AuditDetailDeletePreMigrationBackup || deleteRow.Detail.Params["name"] != name || deleteRow.Actor != domain.PrincipalOperator || deleteRow.Source != domain.SourcePanel {
+		t.Fatalf("delete audit = %+v", deleteRow)
+	}
+}
+
+func TestRegisterPreMigrationBackupMissingInputs(t *testing.T) {
+	source := preMigrationBackupSource(filepath.Join(t.TempDir(), "missing", "officer.db"), nil)
+	if copies, err := source.List(); err == nil {
+		t.Fatalf("missing directory list = %+v, want error", copies)
+	}
+	if err := source.Audit(context.Background(), domain.AuditActionDownloadPreMigrationBackup,
+		domain.NewAuditDetail(domain.AuditDetailDownloadPreMigrationBackup, domain.AuditDetailParams{"name": "copy"})); err == nil || !strings.Contains(err.Error(), "nil node") {
+		t.Fatalf("missing node audit = %v", err)
+	}
+}
+
+// TestRegisterBuildStatus checks build status without a session in each mode.
+func TestRegisterBuildStatus(t *testing.T) {
+	app, _, opened := buildTestApp(t, nil, nil)
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(mode string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			"http://127.0.0.1/app/api/v1/build", nil))
+		var got nonrelease.Status
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != http.StatusOK || got.Phase != nonrelease.PhaseReady ||
+			got.Release != backend.ReleaseBuild() || got.Error != "" {
+			t.Fatalf("build status in %s without session = %d %s", mode, rec.Code, rec.Body)
+		}
+	}
+	check("setup")
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+	check("open")
+	state, ok := opened.(access.Store)
+	if !ok {
+		t.Fatal("composed store lacks access.Store")
+	}
+	enableTokenMode(t, state, "pit_api_build-status-test")
+	check("token")
 }
 
 // TestRegisterAccessModeFollowsService drives the real composition, with
@@ -1513,6 +1744,10 @@ func serveREST(handler http.Handler, method, path, body string) *httptest.Respon
 	if !strings.HasPrefix(path, "/app/api/v1/") {
 		path = "/api/v1" + path
 	}
+	return serveExactPath(handler, method, path, body)
+}
+
+func serveExactPath(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

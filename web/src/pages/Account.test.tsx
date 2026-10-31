@@ -36,6 +36,13 @@ const fetchAccountsMock = vi.fn();
 const setAccountCurrencyMock = vi.fn();
 const blockAccountMock = vi.fn();
 const unblockAccountMock = vi.fn();
+// PreMigrationBackupBanner polls GET /database/pre-migration-backups.
+vi.mock("@/api/usePreMigrationBackups", () => ({
+  usePreMigrationBackups: () => ({
+    load: { state: "ready", data: [], error: null },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/credentialStorage");
 const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 

@@ -1,5 +1,7 @@
 {
   "code": {
+    "non_release_archive": "Este archivo se creó con una compilación no publicada cuyos datos son desechables. Una versión publicada no puede restaurarlo.",
+    "non_release_confirmation_required": "Habilitar la negociación en una compilación no publicada requiere su confirmación en el panel.",
     "validation": "La solicitud se rechazó por no ser válida.",
     "not_found": "No se encontró el recurso solicitado.",
     "has_dependents": "El recurso tiene filas dependientes.",

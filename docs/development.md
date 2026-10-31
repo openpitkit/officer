@@ -201,10 +201,28 @@ just build-debug-dev /path/to/pit
 
 ## Building without Just
 
+Build identity comes from two link-time variables in
+`go.openpit.dev/officer/framework/backend`: `buildCommit` holds the full
+commit ID, and a non-empty `releaseTag` marks an official release build.
+Only the official image workflow for a version tag sets `releaseTag`; local
+images, `edge` and release dry runs are non-release builds. Building a tagged
+checkout locally with `just build` still produces a non-release binary.
+The binary build recipes, including the debug and `-dev` variants, set
+`buildCommit` from `git rev-parse HEAD` and leave `releaseTag` empty. Their
+`-release` suffix selects an optimization profile, not a release identity.
+
 ```bash
 cd web && npm ci && npm run build && cd ..
-CGO_ENABLED=1 go build -o pit-officer ./cmd/pit-officer
+CGO_ENABLED=1 go build -ldflags "-X go.openpit.dev/officer/framework/backend.buildCommit=$(git rev-parse HEAD)" -o pit-officer ./cmd/pit-officer
 ```
+
+This is a non-release build. Its `serve` and `mcp` subcommands refuse to start
+without a valid `buildCommit`: 40 or 64 lowercase hexadecimal characters.
+Plain `go build` without the link-time assignment produces a non-release
+binary that reports `missing or invalid build commit`, with instructions to
+use `just build` or the `-ldflags` assignment above. `dashboard` and
+`healthcheck` do not validate the commit. For the database choice and file
+lifetime, see [Non-release builds](configuration.md#non-release-builds).
 
 Build the SPA first. `//go:embed dist` takes whatever is in that directory
 at build time, and a fresh checkout carries only the placeholder file there; a
@@ -254,6 +272,10 @@ just docker-build myrepo/pit-officer:dev
 The image is built from the published OpenPit module, and the Docker build
 overwrites `web/dist` with compiled assets before the Go build.
 
+`Dockerfile` requires `OFFICER_COMMIT` and passes it to `buildCommit`;
+`just docker-build` supplies the checkout's full commit ID. The optional
+`OFFICER_RELEASE_TAG` is passed to `releaseTag` and defaults to empty.
+
 The build needs BuildKit, the default builder in current Docker, because the SPA
 stage runs on the build platform via `$BUILDPLATFORM`.
 
@@ -290,6 +312,8 @@ linux/arm64`.
 
 ## Releases
 
+For build identity, see [Building without Just](#building-without-just).
+
 A release is cut on `main` as a `major`, `minor` or `patch` bump of the highest
 stable `vX.Y.Z` tag merged into `HEAD`; before the first release that version is
 `0.0.0`, so the first `minor` release is `0.1.0`. `just release-version <kind>`
@@ -316,5 +340,8 @@ GitHub pre-release.
 
 ## Seeding
 
-`just seed` fills a running instance with demo accounts, balances, orders, and
-trades through its API.
+`just seed` passes no options; it fills a running instance with demo accounts,
+balances, orders, and trades through its API, finding the instance from
+`officer-runtime.json` or `officer-runtime.non-release.json`.
+When both files are present, run `python3 tools/seed/seed.py --runtime-file PATH`
+directly, or replace `--runtime-file PATH` with `--base URL`.

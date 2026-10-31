@@ -216,11 +216,20 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 	return status, nil
 }
 
+func (s *Service) requireNonReleaseTradingConfirmation(caller domain.Caller, confirmed bool) error {
+	if s.nonReleaseBuild && !caller.TightenOnly() &&
+		(caller.Source != domain.SourcePanel || !confirmed) {
+		return domain.ErrNonReleaseConfirmation
+	}
+	return nil
+}
+
 // CreateTradingConnection identifies the venue account before storing a paper
 // connection. The returned value omits credentials. A tighten-only caller is
 // refused with domain.ErrLoosening before anything is checked or the venue is
-// called: a new connection widens what can be sent.
-func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection) (domain.TradingConnection, error) {
+// called: a new connection widens what can be sent. In a non-release build,
+// enabling requires the operator's confirmation through the panel.
+func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection, nonReleaseConfirmed bool) (domain.TradingConnection, error) {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
 	if err := s.requireTradingRuntime(); err != nil {
@@ -235,6 +244,11 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 			"create trading connection: a new connection widens what can be sent: %w",
 			domain.ErrLoosening,
 		)
+	}
+	if c.Enabled {
+		if err := s.requireNonReleaseTradingConfirmation(caller, nonReleaseConfirmed); err != nil {
+			return domain.TradingConnection{}, fmt.Errorf("create trading connection: %w", err)
+		}
 	}
 	c.Provider = strings.TrimSpace(c.Provider)
 	c.Label = strings.TrimSpace(c.Label)
@@ -377,7 +391,7 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 
 // SetTradingConnectionEnabled starts enabled connections; disabling leaves
 // runtime reconciliation of existing venue orders active.
-func (s *Service) SetTradingConnectionEnabled(ctx context.Context, id string, enabled bool) error {
+func (s *Service) SetTradingConnectionEnabled(ctx context.Context, id string, enabled, nonReleaseConfirmed bool) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
 	if err := s.requireTradingRuntime(); err != nil {
@@ -390,6 +404,11 @@ func (s *Service) SetTradingConnectionEnabled(ctx context.Context, id string, en
 	connection, err := domain.ParseExternalID(strings.TrimSpace(id))
 	if err != nil {
 		return err
+	}
+	if enabled {
+		if err := s.requireNonReleaseTradingConfirmation(caller, nonReleaseConfirmed); err != nil {
+			return fmt.Errorf("enable trading connection %s: %w", connection, err)
+		}
 	}
 	if err := s.node.SetTradingConnectionEnabled(ctx, connection, enabled, caller); err != nil {
 		return err

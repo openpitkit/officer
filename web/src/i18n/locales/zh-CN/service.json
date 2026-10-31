@@ -104,6 +104,7 @@
     "noCommands": "未定义命令。"
   },
   "backup": {
+    "tradingDisabledNonRelease": "由于此构建版本为非正式版本，以下交易连接已恢复为禁用状态：<connections/>。您可以在<tradingLink>交易连接</tradingLink>中启用它们，启用时需要确认。",
     "plaintextKeys": {
       "title": "此备份将包含明文密钥",
       "trading": "交易连接的 API 密钥将以未加密形式写入归档。",
@@ -162,7 +163,6 @@
   },
   "logs": {
     "title": "日志",
-    "download": "下载",
     "empty": "尚未捕获日志行。",
     "refreshAriaLabel": "刷新日志"
   },

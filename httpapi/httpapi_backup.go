@@ -36,6 +36,8 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
+var backupRestoreReleaseBuild = backend.ReleaseBuild
+
 func handleExportBackup(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -118,6 +120,21 @@ func businessCSVGroupCode(value *string) string {
 // handleRestoreBackup handles POST /api/v1/backup/restore.
 func handleRestoreBackup(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var body json.RawMessage
+		if !httpx.DecodeBodyAllowUnknownFields(w, r, &body) {
+			return
+		}
+		if backupRestoreReleaseBuild() {
+			var probe struct {
+				Archive     nonReleaseArchiveProbe `json:"archive"`
+				ArchiveFile string                 `json:"archiveFile"`
+			}
+			// An unreadable probe is safe: the typed decoder validates it below.
+			if json.Unmarshal(body, &probe) == nil && probe.ArchiveFile == "" && probe.Archive.Manifest.NonRelease {
+				httpx.WriteErr(w, domain.ErrNonReleaseArchive)
+				return
+			}
+		}
 		var req struct {
 			Archive         backup.Archive     `json:"archive"`
 			ArchiveFile     string             `json:"archiveFile"`
@@ -130,7 +147,9 @@ func handleRestoreBackup(svc backend.ControlPlane) http.HandlerFunc {
 		// have written with fields this build does not know. Rejecting it here
 		// would also disagree with the sibling archiveFile path, which decodes the
 		// very same document leniently.
-		if !httpx.DecodeBodyAllowUnknownFields(w, r, &req) {
+		typedRequest := *r
+		typedRequest.Body = io.NopCloser(bytes.NewReader(body))
+		if !httpx.DecodeBodyAllowUnknownFields(w, &typedRequest, &req) {
 			return
 		}
 		if req.Mode == "" {
@@ -160,7 +179,7 @@ func handleRestoreBackup(svc backend.ControlPlane) http.HandlerFunc {
 			parsed, err := parseBackupArchiveFile(req.ArchiveFilename,
 				req.ArchiveFile)
 			if err != nil {
-				httpx.WriteValidationErr(w, err)
+				httpx.WriteErr(w, err)
 				return
 			}
 			archive = parsed
@@ -259,10 +278,25 @@ func parseBackupArchiveFile(
 	if !httpx.ValidJSONUnicode(raw) {
 		return backup.Archive{}, invalidBackupArchiveJSONError(filename)
 	}
+	if backupRestoreReleaseBuild() && isNonReleaseBackupArchive(raw) {
+		return backup.Archive{}, domain.ErrNonReleaseArchive
+	}
 	if err := json.Unmarshal(raw, &archive); err != nil {
 		return backup.Archive{}, invalidBackupArchiveJSONError(filename)
 	}
 	return archive, nil
+}
+
+type nonReleaseArchiveProbe struct {
+	Manifest struct {
+		NonRelease bool `json:"nonRelease"`
+	} `json:"manifest"`
+}
+
+func isNonReleaseBackupArchive(raw []byte) bool {
+	var probe nonReleaseArchiveProbe
+	// An unreadable marker leaves validation to the existing full decoder.
+	return json.Unmarshal(raw, &probe) == nil && probe.Manifest.NonRelease
 }
 
 func invalidBackupArchiveJSONError(filename string) error {

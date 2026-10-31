@@ -64,6 +64,13 @@ const updateSettingsMock = vi.fn();
 const deleteInstrumentMock = vi.fn();
 const deleteInstanceMock = vi.fn();
 const searchMock = vi.fn();
+// PreMigrationBackupBanner polls GET /database/pre-migration-backups.
+vi.mock("@/api/usePreMigrationBackups", () => ({
+  usePreMigrationBackups: () => ({
+    load: { state: "ready", data: [], error: null },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/credentialStorage");
 const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 const createInstanceMock = vi.fn();

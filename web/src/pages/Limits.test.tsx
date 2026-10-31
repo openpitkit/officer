@@ -37,6 +37,13 @@ import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
 vi.mock("@/api/useLimits", () => ({ useLimitsPage: vi.fn() }));
+// PreMigrationBackupBanner polls GET /database/pre-migration-backups.
+vi.mock("@/api/usePreMigrationBackups", () => ({
+  usePreMigrationBackups: () => ({
+    load: { state: "ready", data: [], error: null },
+    reload: () => {},
+  }),
+}));
 // SensitiveDataBanner polls GET /credential-storage.
 vi.mock("@/api/useCredentialStorage", () => ({
   useCredentialStorage: () => ({

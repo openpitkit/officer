@@ -23,6 +23,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fetchSession, type AccessMode } from "@/api/access";
 import type { AccountMode } from "@/api/accountMode";
+import type { BuildStatus } from "@/api/build";
 import App from "@/App";
 import { useStartupAdmit } from "@/components/StartupGate";
 import { panelSession } from "@/lib/panelSession";
@@ -108,14 +109,26 @@ function RerenderingApp() {
   );
 }
 
-function renderApp(mode: AccountMode | null, path = "/") {
-  const fetchMock = vi.fn(async () =>
-    jsonResponse({
-      mode,
-      account: "",
-      features: { accounts: true, account: "" },
-      restartRequired: false,
-    }),
+function renderApp(
+  mode: AccountMode | null,
+  path = "/",
+  build: BuildStatus = {
+    release: true,
+    phase: "ready",
+    releaseDatabaseExists: false,
+  },
+) {
+  const fetchMock = vi.fn(async (url: string) =>
+    jsonResponse(
+      url === "/app/api/v1/build"
+        ? build
+        : {
+            mode,
+            account: "",
+            features: { accounts: true, account: "" },
+            restartRequired: false,
+          },
+    ),
   );
   renderWithApi(
     <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
@@ -145,13 +158,57 @@ async function settle() {
 }
 
 describe("App", () => {
+  it("keeps the non-release banner on /service", async () => {
+    renderApp("multi", "/service", {
+      release: false,
+      phase: "ready",
+      releaseDatabaseExists: false,
+    });
+    expect(await screen.findByText("non-release")).toBeVisible();
+    await settle();
+    expect(currentLocation()).toBe("/service");
+    expect(screen.getByText("non-release")).toBeVisible();
+  });
+
+  it("keeps the non-release banner above login", async () => {
+    vi.mocked(fetchSession).mockResolvedValueOnce({
+      accessMode: "token",
+      authenticated: false,
+    });
+    renderApp("multi", "/", {
+      release: false,
+      phase: "ready",
+      releaseDatabaseExists: false,
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Log in to the panel" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("non-release")).toBeVisible();
+  });
+
+  it("does not ask for a session before the build is ready", async () => {
+    const sessionCalls = vi.mocked(fetchSession).mock.calls.length;
+    const { fetchMock } = renderApp("multi", "/", {
+      release: false,
+      phase: "choice",
+      releaseDatabaseExists: false,
+    });
+    expect(
+      await screen.findByRole("heading", {
+        name: "Choose this build's database",
+      }),
+    ).toBeInTheDocument();
+    expect(vi.mocked(fetchSession).mock.calls).toHaveLength(sessionCalls);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([null, "multi"] as const)(
     "opens no dialog over the shell with the account mode %s",
     async (mode) => {
       const { fetchMock } = renderApp(mode);
 
-      // The scope load and its first poll; no read of its own at startup.
-      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      // The build check, scope load and its first poll.
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
       await settle();
 
       expect(currentLocation()).toBe("/");

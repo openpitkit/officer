@@ -264,6 +264,13 @@ func TestEntryPointsRejectInvalidTableName(t *testing.T) {
 			},
 		},
 		{
+			name: "Pending",
+			run: func() error {
+				_, err := Pending(context.Background(), nil, nil, cfg)
+				return err
+			},
+		},
+		{
 			name: "SchemaVersion",
 			run: func() error {
 				_, err := SchemaVersion(context.Background(), nil, cfg)

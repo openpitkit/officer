@@ -88,6 +88,15 @@ const restartService = (
 const resetDatabase = (
   ...args: Parameters<ReturnType<typeof api>["resetDatabase"]>
 ) => api().resetDatabase(...args);
+const listPreMigrationBackups = (
+  ...args: Parameters<ReturnType<typeof api>["listPreMigrationBackups"]>
+) => api().listPreMigrationBackups(...args);
+const downloadPreMigrationBackup = (
+  ...args: Parameters<ReturnType<typeof api>["downloadPreMigrationBackup"]>
+) => api().downloadPreMigrationBackup(...args);
+const deletePreMigrationBackup = (
+  ...args: Parameters<ReturnType<typeof api>["deletePreMigrationBackup"]>
+) => api().deletePreMigrationBackup(...args);
 const restoreBackup = (
   ...args: Parameters<ReturnType<typeof api>["restoreBackup"]>
 ) => api().restoreBackup(...args);
@@ -490,6 +499,76 @@ describe("trading client", () => {
       }),
     );
   });
+
+  it.each([true, false])(
+    "sends explicit non-release confirmation %s when enabling",
+    async (nonReleaseConfirmed) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse({ enabled: true }));
+      expect(
+        await api().setTradingConnectionEnabled(
+          connection.id,
+          true,
+          nonReleaseConfirmed,
+        ),
+      ).toBe(true);
+      expect(fetch).toHaveBeenCalledExactlyOnceWith(
+        "/app/api/v1/trading/connections/paper%2Fdesk%20%231/enabled",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ enabled: true, nonReleaseConfirmed }),
+        }),
+      );
+    },
+  );
+
+  it("passes non-release confirmation through when creating a connection", async () => {
+    const body = {
+      provider: "alpaca",
+      label: "Paper desk",
+      mode: "paper" as const,
+      credentials: { apiKey: "test-key", apiSecret: "test-secret" },
+      enabled: true,
+      nonReleaseConfirmed: true,
+    };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ connection }, 201));
+    expect(await api().createTradingConnection(body)).toEqual(connection);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/app/api/v1/trading/connections",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) }),
+    );
+  });
+
+  it.each([
+    [
+      422,
+      "non_release_archive",
+      "This archive was made by a non-release build whose data is disposable. A release build cannot restore it.",
+      "this archive was exported by a non-release (edge, dev or local) build of Officer; a release build does not restore it; its data is disposable and restores only into a non-release build",
+    ],
+    [
+      403,
+      "non_release_confirmation_required",
+      "Enabling trading in a non-release build requires your confirmation in the panel.",
+      "this is a non-release (edge, dev or local) build of Officer; it enables a trading connection only after the operator confirms it in the panel, because its data is disposable and the build may corrupt it",
+    ],
+  ])(
+    "decodes HTTP %s with %s and its English explanation",
+    async (status, code, message, serverMessage) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse(
+          { error: { code, message: serverMessage } },
+          status as number,
+        ),
+      );
+      await expect(
+        api().setTradingConnectionEnabled(connection.id, true),
+      ).rejects.toMatchObject({
+        code,
+        status,
+        message,
+      });
+    },
+  );
 
   it("checks a connection without a request body", async () => {
     const check = { venueIdentity: "paper-account", venueStatus: "ACTIVE" };
@@ -2837,6 +2916,7 @@ describe("backup client", () => {
     expect(result.skipped).toEqual({});
     expect(result.marketDataCredentialsUnavailable).toBeUndefined();
     expect(result.tradingCredentialsUnavailable).toBeUndefined();
+    expect(result.tradingDisabledNonRelease).toBeUndefined();
     expect(result.restartRequired).toBe(false);
   });
 
@@ -2943,6 +3023,61 @@ describe("backup client", () => {
     },
   );
 
+  it.each([
+    "tradingDisabledNonRelease",
+    "TradingDisabledNonRelease",
+    "trading_disabled_non_release",
+  ])(
+    "normalizes non-release disabled trading connections from %s",
+    async (field) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          summary: {
+            applied: { trading: 2 },
+            skipped: {},
+            restartRequired: false,
+            [field]: ["Alpaca paper", "Second connection"],
+          },
+        }),
+      );
+      const result = await restoreBackup({
+        archive: backupArchive,
+        scope: { all: true },
+        mode: "overwrite",
+      });
+      expect(result.tradingDisabledNonRelease).toEqual([
+        "Alpaca paper",
+        "Second connection",
+      ]);
+    },
+  );
+
+  it.each([null, "Alpaca paper", 1, {}, ["Alpaca paper", 1]])(
+    "rejects malformed non-release disabled trading connections: %j",
+    async (disabled) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          summary: {
+            applied: {},
+            skipped: {},
+            restartRequired: false,
+            tradingDisabledNonRelease: disabled,
+          },
+        }),
+      );
+      await expect(
+        restoreBackup({
+          archive: backupArchive,
+          scope: { all: true },
+          mode: "overwrite",
+        }),
+      ).rejects.toMatchObject({
+        code: "internal",
+        message: "The service encountered an internal error.",
+      });
+    },
+  );
+
   it("rejects malformed unavailable market-data credentials", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
@@ -2988,6 +3123,108 @@ describe("backup client", () => {
         body: JSON.stringify({ confirm: true }),
       }),
     );
+  });
+
+  describe("pre-migration backups", () => {
+    const copy = {
+      name: "officer db/pre#1.bak",
+      createdAt: "2026-01-02T03:04:05Z",
+      sizeBytes: 2048,
+    };
+    const encodedName = "officer%20db%2Fpre%231.bak";
+
+    it("lists the copies in the order the server sent them", async () => {
+      const older = {
+        name: "officer.db.pre-migration-older",
+        createdAt: "2025-12-01T01:01:01.5+02:00",
+        sizeBytes: 0,
+      };
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ backups: [copy, older] }),
+      );
+      const signal = new AbortController().signal;
+
+      const result = await listPreMigrationBackups(signal);
+
+      expect(fetch).toHaveBeenCalledWith(
+        "/app/api/v1/database/pre-migration-backups",
+        expect.objectContaining({ method: "GET", signal }),
+      );
+      expect(result).toEqual([copy, older]);
+    });
+
+    it("returns an empty list the server sent as empty", async () => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse({ backups: [] }));
+
+      await expect(listPreMigrationBackups()).resolves.toEqual([]);
+    });
+
+    it.each([
+      ["a body without backups", {}],
+      ["a backups value that is not an array", { backups: "none" }],
+      ["a copy with an empty name", { backups: [{ ...copy, name: "" }] }],
+      [
+        "a copy with a createdAt that is not RFC 3339",
+        { backups: [{ ...copy, createdAt: "2026-01-02 03:04:05" }] },
+      ],
+      [
+        "a copy with a negative size",
+        { backups: [{ ...copy, sizeBytes: -1 }] },
+      ],
+      [
+        "a copy with a fractional size",
+        { backups: [{ ...copy, sizeBytes: 1.5 }] },
+      ],
+    ])("rejects %s as an internal error", async (_, body) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(body));
+
+      const failure = await listPreMigrationBackups().catch(
+        (err: unknown) => err,
+      );
+
+      expect(failure).toBeInstanceOf(ApiError);
+      expect(failure).toMatchObject({ code: "internal" });
+    });
+
+    it("downloads a copy with a bodyless POST to its encoded name", async () => {
+      vi.mocked(fetch).mockResolvedValue(
+        new Response("sqlite-bytes", {
+          status: 200,
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": 'attachment; filename="served-copy.bak"',
+          },
+        }),
+      );
+
+      const result = await downloadPreMigrationBackup(copy.name);
+
+      expect(fetch).toHaveBeenCalledWith(
+        `/app/api/v1/database/pre-migration-backups/${encodedName}/download`,
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Accept: "application/octet-stream",
+          }),
+          body: undefined,
+        }),
+      );
+      expect(result.filename).toBe("served-copy.bak");
+      expect(result.blob.size).toBe("sqlite-bytes".length);
+    });
+
+    it("deletes a copy with a DELETE to its encoded name", async () => {
+      vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+
+      await expect(
+        deletePreMigrationBackup(copy.name),
+      ).resolves.toBeUndefined();
+
+      expect(fetch).toHaveBeenCalledWith(
+        `/app/api/v1/database/pre-migration-backups/${encodedName}`,
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
   });
 
   it("requests service restart", async () => {

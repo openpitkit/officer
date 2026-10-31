@@ -41,7 +41,7 @@ export function AuthScreen({
   children: ReactNode;
 }) {
   return (
-    <div className="h-dvh w-full overflow-y-auto bg-bg text-text">
+    <div className="h-full w-full overflow-y-auto bg-bg text-text">
       <div className="flex min-h-full items-center justify-center p-6">
         <Card className={cn("w-full", wide ? "max-w-xl" : "max-w-md")}>
           <CardContent className="flex flex-col gap-y-5 pt-[var(--dens-card-pad)]">

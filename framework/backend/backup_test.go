@@ -66,6 +66,42 @@ func (n *backupRestoreTestNode) ExportBackup(
 	return backup.Archive{}, nil
 }
 
+func TestBackupNonReleaseBuild(t *testing.T) {
+	for _, nonRelease := range []bool{false, true} {
+		t.Run(fmt.Sprintf("non-release=%t", nonRelease), func(t *testing.T) {
+			n := &backupRestoreTestNode{}
+			var options []Option
+			if nonRelease {
+				options = append(options, WithNonReleaseBuild())
+			}
+			svc, err := New(n, nil, nil, func([]byte, domain.Order) (string, error) {
+				return "", nil
+			}, options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			archive, _, err := svc.ExportBackup(systemCtx(), backup.Scope{All: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n.exportCalls != 1 || archive.Manifest.NonRelease != nonRelease {
+				t.Fatalf("export calls=%d, non-release=%t, want %t", n.exportCalls, archive.Manifest.NonRelease, nonRelease)
+			}
+			archive.Manifest.Source = "test"
+			archive.CredentialForm = backup.CredentialFormPlaintext
+			_, err = svc.RestoreBackup(systemCtx(), archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n.restoreCalls != 1 || n.restoredOpts.DisableTradingConnections != nonRelease {
+				t.Fatalf("restore calls=%d, disable trading=%t, want %t", n.restoreCalls, n.restoredOpts.DisableTradingConnections, nonRelease)
+			}
+		})
+	}
+}
+
 func TestBackupEntriesRejectInvalidScopeBeforeWork(t *testing.T) {
 	for _, tc := range []struct {
 		name, pointer, constraint, message string

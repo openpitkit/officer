@@ -169,6 +169,8 @@ const (
 	AuditDetailSetSetting                      AuditDetailCode = "set_setting"
 	AuditDetailHydrate                         AuditDetailCode = "hydrate"
 	AuditDetailExportBackup                    AuditDetailCode = "export_backup"
+	AuditDetailDownloadPreMigrationBackup      AuditDetailCode = "download_pre_migration_backup"
+	AuditDetailDeletePreMigrationBackup        AuditDetailCode = "delete_pre_migration_backup"
 	AuditDetailRestoreBackup                   AuditDetailCode = "restore_backup"
 	AuditDetailResetDatabase                   AuditDetailCode = "reset_database"
 	AuditDetailRestartService                  AuditDetailCode = "restart_service"
@@ -275,6 +277,8 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 	AuditDetailSetSetting:                      "Setting {{key}} changed to {{value}}",
 	AuditDetailHydrate:                         "Engine state loaded: assets {{assets}}, accounts {{accounts}}, barriers {{barriers}}, groups {{groups}}, balances {{balances}}",
 	AuditDetailExportBackup:                    "Backup of {{realm}} exported, sections: {{sections}}",
+	AuditDetailDownloadPreMigrationBackup:      "Pre-migration backup {{name}} downloaded",
+	AuditDetailDeletePreMigrationBackup:        "Pre-migration backup {{name}} deleted",
 	AuditDetailRestoreBackup:                   "Backup of {{realm}} restored, mode: {{restoreMode}}",
 	AuditDetailResetDatabase:                   "Database reset from scratch",
 	AuditDetailRestartService:                  "Service restart requested",

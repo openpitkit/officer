@@ -33,9 +33,11 @@ Usage:
 
 Base-URL discovery (in order):
   1. --base flag (explicit override).
-  2. officer-runtime.json next to this script (or --runtime-file PATH).
-  3. officer-runtime.json in the current working directory.
-  4. Error - no hard-coded fallback; pass --base or start serve.
+  2. --runtime-file PATH, when specified.
+  3. officer-runtime.json or officer-runtime.non-release.json next to this script.
+  4. Either runtime-state name in the current working directory.
+  5. Error - pass --runtime-file or --base if both names exist in a directory;
+     pass --base or start serve if neither is found.
 """
 
 import argparse
@@ -51,23 +53,31 @@ from typing import Any
 # Base-URL discovery
 # ---------------------------------------------------------------------------
 
-_RUNTIME_FILE_NAME = "officer-runtime.json"
+_RUNTIME_FILE_NAMES = ("officer-runtime.json", "officer-runtime.non-release.json")
 
 
 def _discover_base(explicit: str | None, runtime_file: str | None) -> str:
     if explicit:
         return explicit.rstrip("/")
 
-    candidates: list[Path] = []
+    candidates: list[list[Path]] = []
     if runtime_file:
-        candidates.append(Path(runtime_file))
+        candidates.append([Path(runtime_file)])
     # Next to this script.
-    candidates.append(Path(__file__).parent / _RUNTIME_FILE_NAME)
+    candidates.append([Path(__file__).parent / name for name in _RUNTIME_FILE_NAMES])
     # CWD.
-    candidates.append(Path.cwd() / _RUNTIME_FILE_NAME)
+    candidates.append([Path.cwd() / name for name in _RUNTIME_FILE_NAMES])
 
-    for path in candidates:
-        if path.exists():
+    for paths in candidates:
+        present = [path for path in paths if path.exists()]
+        if len(present) == 2:
+            print(
+                f"error: both {present[0]} and {present[1]} exist. "
+                "Pass --runtime-file PATH or --base http://host:port.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        for path in present:
             try:
                 state = json.loads(path.read_text())
                 url: str = state.get("url", "").rstrip("/")
@@ -80,8 +90,8 @@ def _discover_base(explicit: str | None, runtime_file: str | None) -> str:
     print(
         "error: cannot determine the Officer base URL.\n"
         "  Pass --base http://host:port, or start 'pit-officer serve' so that\n"
-        "  officer-runtime.json is written next to this script or in the working "
-        "directory.",
+        "  officer-runtime.json or officer-runtime.non-release.json is written\n"
+        "  next to this script or in the working directory.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -1249,8 +1259,8 @@ def _parse_args() -> argparse.Namespace:
         "--runtime-file",
         metavar="PATH",
         default=None,
-        help="Path to officer-runtime.json. Used when auto-discovery cannot "
-        "find the file in the default locations.",
+        help="Path to officer-runtime.json or officer-runtime.non-release.json. "
+        "Use when auto-discovery cannot find a file or both names are present.",
     )
     return parser.parse_args()
 

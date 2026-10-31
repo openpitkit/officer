@@ -85,6 +85,8 @@
       "setTrading": "Change trading connection",
       "venueFeeSkipped": "Venue fee skipped",
       "exportBackup": "Export backup",
+      "downloadPreMigrationBackup": "Download pre-migration backup",
+      "deletePreMigrationBackup": "Delete pre-migration backup",
       "restoreBackup": "Restore backup",
       "exportBusinessCsv": "Export business CSV",
       "generateSigningKey": "Generate signing key",

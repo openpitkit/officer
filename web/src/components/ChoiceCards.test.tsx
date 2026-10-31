@@ -162,4 +162,26 @@ describe("ChoiceCards", () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(radio("This computer")).toBeChecked();
   });
+
+  it("shows an unavailable card disabled with its reason", async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderChoice({
+      options: OPTIONS.map((option) =>
+        option.value === "cloud"
+          ? { ...option, unavailable: "No provider configured" }
+          : option,
+      ),
+    });
+
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(radio("The cloud")).toBeDisabled();
+    expect(radio("The cloud")).toHaveAccessibleDescription(
+      "Keeps the files with a provider. No provider configured",
+    );
+    expect(radio("A server")).toBeEnabled();
+    await user.click(radio("The cloud"));
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(radio("This computer")).toBeChecked();
+  });
 });

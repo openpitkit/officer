@@ -226,6 +226,7 @@ jobs:
             GO_VERSION=${{ env.CI_GO }}
             NODE_VERSION=${{ env.CI_NODE }}
             OFFICER_RELEASE_TAG=${{ steps.mode.outputs.release_mode == 'production' && github.ref_name || '' }}
+            OFFICER_COMMIT=${{ github.sha }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

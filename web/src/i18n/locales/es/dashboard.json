@@ -85,6 +85,8 @@
       "setTrading": "Cambio de conexión de negociación",
       "venueFeeSkipped": "Comisión de la plataforma omitida",
       "exportBackup": "Exportación de copia de seguridad",
+      "downloadPreMigrationBackup": "Descarga de copia de seguridad previa a la migración",
+      "deletePreMigrationBackup": "Eliminación de copia de seguridad previa a la migración",
       "restoreBackup": "Restauración de copia de seguridad",
       "exportBusinessCsv": "Exportación de CSV de negocio",
       "generateSigningKey": "Generación de clave de firma",

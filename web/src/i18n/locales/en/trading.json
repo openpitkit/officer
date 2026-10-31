@@ -1,4 +1,9 @@
 {
+  "nonReleaseConfirm": {
+    "title": "Enable trading in a non-release build?",
+    "description": "This non-release build is for quick tests only. Enabling this connection lets it send real orders to the venue. The release build will not see the orders this build sends. This build may corrupt its data.",
+    "action": "Enable trading"
+  },
   "unknownVenue": "Unknown venue {{provider}}",
   "empty": {
     "description": "Configure a trading connection to send orders to a venue."

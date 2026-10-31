@@ -140,6 +140,8 @@
     "set_setting": "Setting {{key}} changed to {{value}}",
     "hydrate": "Engine state loaded: assets {{assets}}, accounts {{accounts}}, barriers {{barriers}}, groups {{groups}}, balances {{balances}}",
     "export_backup": "Backup of {{realm}} exported, sections: {{sections}}",
+    "download_pre_migration_backup": "Pre-migration backup {{name}} downloaded",
+    "delete_pre_migration_backup": "Pre-migration backup {{name}} deleted",
     "restore_backup": "Backup of {{realm}} restored, mode: {{restoreMode}}",
     "reset_database": "Database reset from scratch",
     "restart_service": "Service restart requested",

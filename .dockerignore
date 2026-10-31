@@ -31,11 +31,13 @@ coverage.out
 *.db
 *.db-shm
 *.db-wal
+*.db.non-release-*
 *.sqlite
 *.sqlite3
 
 # Runtime state published by `serve` next to the database.
 officer-runtime.json
+officer-runtime.non-release.json
 
 # Frontend build dependencies - rebuilt inside the image
 /web/node_modules/

@@ -61,12 +61,13 @@ func tradingObjectMember(w http.ResponseWriter, raw json.RawMessage, member, poi
 func handleCreateTradingConnection(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			ID          string             `json:"id"`
-			Provider    string             `json:"provider"`
-			Label       *string            `json:"label"`
-			Mode        domain.TradingMode `json:"mode"`
-			Credentials json.RawMessage    `json:"credentials"`
-			Enabled     *bool              `json:"enabled"`
+			ID                  string             `json:"id"`
+			Provider            string             `json:"provider"`
+			Label               *string            `json:"label"`
+			Mode                domain.TradingMode `json:"mode"`
+			Credentials         json.RawMessage    `json:"credentials"`
+			Enabled             *bool              `json:"enabled"`
+			NonReleaseConfirmed bool               `json:"nonReleaseConfirmed"`
 		}
 		if !httpx.DecodeBody(w, r, &req) {
 			return
@@ -104,7 +105,7 @@ func handleCreateTradingConnection(svc backend.ControlPlane) http.HandlerFunc {
 			}
 			c.ExternalID = id
 		}
-		created, err := svc.CreateTradingConnection(r.Context(), c)
+		created, err := svc.CreateTradingConnection(r.Context(), c, req.NonReleaseConfirmed)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -178,7 +179,8 @@ func handleSetTradingConnectionEnabled(svc backend.ControlPlane) http.HandlerFun
 			return
 		}
 		var req struct {
-			Enabled *bool `json:"enabled"`
+			Enabled             *bool `json:"enabled"`
+			NonReleaseConfirmed bool  `json:"nonReleaseConfirmed"`
 		}
 		if !httpx.DecodeBody(w, r, &req) {
 			return
@@ -187,7 +189,7 @@ func handleSetTradingConnectionEnabled(svc backend.ControlPlane) http.HandlerFun
 			httpx.WriteValidationProblem(w, "enabled is required", "/enabled", "required")
 			return
 		}
-		if err := svc.SetTradingConnectionEnabled(r.Context(), id, *req.Enabled); err != nil {
+		if err := svc.SetTradingConnectionEnabled(r.Context(), id, *req.Enabled, req.NonReleaseConfirmed); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}

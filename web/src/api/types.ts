@@ -831,6 +831,15 @@ export interface CredentialStorage extends FrameworkCredentialStorage {
   resealedSecrets: number;
 }
 
+/** A raw copy of the database Officer wrote beside it before a migration. */
+export interface PreMigrationBackup {
+  /** Exact file name; identifies the copy in download and delete requests. */
+  name: string;
+  /** RFC 3339 UTC time the copy was written. */
+  createdAt: string;
+  sizeBytes: number;
+}
+
 /** Venue identity and status returned by a connection check. */
 export interface TradingConnectionCheck {
   venueIdentity: string;
@@ -1147,6 +1156,7 @@ export interface BackupRestoreSummary {
   skipped: Partial<Record<BackupSection, number>>;
   marketDataCredentialsUnavailable?: string[];
   tradingCredentialsUnavailable?: string[];
+  tradingDisabledNonRelease?: string[];
   restartRequired: boolean;
 }
 

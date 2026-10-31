@@ -873,6 +873,11 @@ func (rt *restoreTx) restoreTrading(ctx context.Context, data backup.Data) error
 			rt.summary.TradingCredentialsUnavailable = append(
 				rt.summary.TradingCredentialsUnavailable, archived.Label,
 			)
+		} else if rt.disableTradingConnections && enabled {
+			enabled = false
+			rt.summary.TradingDisabledNonRelease = append(
+				rt.summary.TradingDisabledNonRelease, archived.Label,
+			)
 		}
 		connection := domain.TradingConnection{
 			ExternalID:    archived.ExternalID,

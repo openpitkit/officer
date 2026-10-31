@@ -171,6 +171,10 @@ again to start an Officer that is already installed. It fails, because the name
 
 ## Your data
 
+Back up before every upgrade, and regularly. In the panel, open Service,
+select the Database tab, find the Database backup card, select Export, and
+save the backup file.
+
 Officer keeps all its data in the volume `pit-officer-data`, not in the
 container. The data stays when you stop and start Officer. It also stays when
 you remove the container and create it again, with these three commands:
@@ -196,6 +200,60 @@ settings.
 
 > **Warning:** `docker volume rm pit-officer-data` deletes all Officer data. It
 > is never the fix for anything on this page.
+
+## Trying the development build
+
+`edge` is the current development build, for quick tests only. The panel marks
+it NON-RELEASE. Its data is disposable: it never moves to a release or to the
+next `edge`, and it may be corrupted. The release will not see orders that
+`edge` sends.
+
+Use only one Officer on the data volume at a time. First stop the release:
+
+```sh
+docker stop pit-officer
+```
+
+Then start `edge` on the same volume:
+
+```sh
+docker run -d --name pit-officer-edge --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer:edge
+```
+
+If you gave the release extra settings, such as a master key, give them to
+`edge` too. Open <http://127.0.0.1:8787>. Before sign-in, the first screen asks
+which data to use:
+
+- **Copy the release database** - available when the release database exists.
+  Officer reads a snapshot and prepares a separate copy for this build. It
+  never changes the release database. Keep the release stopped before copying:
+  its writes can fail while Officer reads the snapshot. Trading connections
+  in the copy start disabled. Enabling one later opens a separate confirmation
+  in the panel; only **Enable trading** in that dialog confirms it.
+- **Start with an empty database** - creates a database for this build, then
+  opens the normal setup wizard.
+
+Choose an option, click Continue, then confirm. Starting the same build again
+keeps its data and skips this screen.
+
+To return to the release, stop and remove the `edge` container, then start the
+release:
+
+```sh
+docker stop pit-officer-edge
+docker rm pit-officer-edge
+docker start pit-officer
+```
+
+The edge data stays in the volume.
+
+Before every upgrade, and regularly, [back up your data](#your-data).
+To try a newer `edge`, stop and remove `pit-officer-edge` as in the block above,
+without starting the release. Download the new image with
+`docker pull ghcr.io/openpitkit/officer:edge`, then run the `edge` command above
+with the release still stopped. A build from another commit
+asks again and deletes the previous build's data at startup, even if that
+build is still running. Never run both on the volume at once.
 
 ## When something goes wrong
 

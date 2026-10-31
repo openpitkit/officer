@@ -1237,6 +1237,46 @@ func TestLocalNode_RestoreBackupRollbackPreservesExactSelectors(t *testing.T) {
 	}
 }
 
+// TestLocalNode_RestoreBackupDisablesTradingOnlyOnForwardRestore pins that
+// DisableTradingConnections reaches the caller's restore but stays off in
+// the post-commit rollback, which must put back the prior connection state.
+func TestLocalNode_RestoreBackupDisablesTradingOnlyOnForwardRestore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	real := newMemoryStore("restore-disable-trading-seam.db")
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+
+	var probe *restoreScopeProbeRealm
+	st := newRealmWrapStore(real, func(r store.RealmStore) store.RealmStore {
+		probe = &restoreScopeProbeRealm{RealmStore: r}
+		return probe
+	})
+	n := newTestNodeWithStore(t, st, newFakeEngine(), failOnFatal(t))
+	scope := backup.Scope{Sections: []backup.Section{backup.SectionTrading}}
+	archive := testArchive(scope, backup.Data{})
+	archive.Manifest.Sections = []backup.Section{backup.SectionTrading}
+
+	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope:                     scope,
+		Mode:                      backup.RestoreModeReplaceAll,
+		DisableTradingConnections: true,
+	}, testCaller); !errors.Is(err, errRestoreAuditFailed) {
+		t.Fatalf("RestoreBackup error = %v, want audit failure", err)
+	}
+	if len(probe.restoreOptions) != 2 {
+		t.Fatalf("restore options = %+v, want restore plus rollback", probe.restoreOptions)
+	}
+	if !probe.restoreOptions[0].DisableTradingConnections {
+		t.Fatal("forward restore dropped DisableTradingConnections")
+	}
+	if probe.restoreOptions[1].DisableTradingConnections {
+		t.Fatal("rollback restore inherited DisableTradingConnections")
+	}
+}
+
 // TestLocalNode_RestoreBackupRollbackKeepsTradingFeeSeam pins that the
 // post-commit rollback of a non-runtime restore carrying trading hands the
 // caller's TradingProviderRequiresFeeAccount seam to its replace-all restore,

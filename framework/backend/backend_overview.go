@@ -26,10 +26,6 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
-// releaseTag is set by the official image build through -ldflags -X.
-// An empty tag identifies local, edge, and dry-run builds of Officer.
-var releaseTag string
-
 // Counts is the headline tally on the operator overview: how many accounts,
 // groups, and risk barriers the deployment holds.
 type Counts struct {
@@ -271,7 +267,7 @@ func (s *Service) ServiceInfo(ctx context.Context) (ServiceInfo, error) {
 		Name:               "Pit Officer",
 		EngineVersion:      h.Engine.Version,
 		EngineBuildProfile: h.Engine.BuildProfile,
-		Release:            releaseTag != "",
+		Release:            ReleaseBuild(),
 		Database: ServiceDatabase{
 			Path:      h.Store.Path,
 			Reachable: h.Store.Reachable,

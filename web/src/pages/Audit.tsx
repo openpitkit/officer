@@ -92,6 +92,7 @@ function actionVariant(action: string): BadgeProps["variant"] {
     case "block":
     case "delete_limit":
     case "reset_database":
+    case "delete_pre_migration_backup":
     case "stop_service":
     case "submit_drop_copy_order":
       return "danger";

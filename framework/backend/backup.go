@@ -47,6 +47,9 @@ func (s *Service) ExportBackup(
 	if err != nil {
 		return backup.Archive{}, "", fmt.Errorf("backend: export backup: %w", err)
 	}
+	if s.nonReleaseBuild {
+		archive.Manifest.NonRelease = true
+	}
 	return archive, backup.Filename(archive.Manifest.CreatedAt), nil
 }
 
@@ -130,6 +133,9 @@ func (s *Service) RestoreBackup(
 		tradingStopped = true
 	}
 	restoreOpts := opts
+	if s.nonReleaseBuild {
+		restoreOpts.DisableTradingConnections = true
+	}
 	restoreOpts.ValidateMarketDataInstance = func(instance domain.MarketDataInstance) error {
 		return validateMarketDataProvider(s.registry, instance)
 	}

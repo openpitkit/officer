@@ -56,6 +56,13 @@ import { ThemeProvider } from "@/theme/ThemeProvider";
 vi.mock("@/api/useAccounts", () => ({ useAccounts: vi.fn() }));
 vi.mock("@/api/useAdjustments", () => ({ useAdjustmentsPage: vi.fn() }));
 vi.mock("@/api/useBalances", () => ({ useBalancesPage: vi.fn() }));
+// PreMigrationBackupBanner polls GET /database/pre-migration-backups.
+vi.mock("@/api/usePreMigrationBackups", () => ({
+  usePreMigrationBackups: () => ({
+    load: { state: "ready", data: [], error: null },
+    reload: () => {},
+  }),
+}));
 // SensitiveDataBanner polls GET /credential-storage.
 vi.mock("@/api/useCredentialStorage", () => ({
   useCredentialStorage: () => ({

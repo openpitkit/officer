@@ -29,6 +29,7 @@ import (
 
 	"go.openpit.dev/officer/engine"
 	frameworkapp "go.openpit.dev/officer/framework/app"
+	"go.openpit.dev/officer/framework/auth"
 	fwbackend "go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
@@ -43,6 +44,7 @@ import (
 	"go.openpit.dev/officer/internal/access"
 	"go.openpit.dev/officer/internal/accountmode"
 	appmarketdata "go.openpit.dev/officer/internal/marketdata"
+	"go.openpit.dev/officer/internal/nonrelease"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	apptrading "go.openpit.dev/officer/internal/trading"
 	"go.openpit.dev/officer/mcptools"
@@ -92,6 +94,9 @@ func (d setupDecisions) CredentialsSealed() bool { return d.node.CredentialsSeal
 // panel routes. An added node hook builds the access Service whatever factories
 // a host replaces. Build fails if the store lacks access.Store or the
 // seal-report reader; nothing serves without the access Service.
+//
+// The store opens cfg.SQLitePath as given. A non-release host passes its own
+// database path, prepared through PrepareNonReleaseDatabase.
 func Register(b *frameworkapp.Builder, cfg Config) error {
 	if b == nil {
 		return errors.New("officer: nil builder")
@@ -101,13 +106,10 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	var (
 		sealReports   httpapi.SealReportSource
 		accessService *access.Service
+		backupNode    node.Node
 	)
 	b.SetStoreFactory(func() (store.Store, error) {
-		var opts []sqlite.Option
-		if cfg.MasterKey != nil {
-			opts = append(opts, sqlite.WithMasterKey(*cfg.MasterKey))
-		}
-		return sqlite.New(cfg.SQLitePath, domain.DefaultRealm, opts...)
+		return newStore(cfg)
 	})
 	b.SetNodeBuilder(func(
 		ctx context.Context,
@@ -136,6 +138,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 			return fmt.Errorf("officer: build access service: %w", err)
 		}
 		sealReports = reports
+		backupNode = n
 		return nil
 	})
 	b.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) {
@@ -147,15 +150,11 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	b.SetCallerResolver(func(r *http.Request) (domain.Caller, error) {
 		return accessService.ResolveCaller(r)
 	})
-	host, err := httpx.AllowedHosts(slices.Concat(loopbackHosts, cfg.AllowedHosts))
+	guards, err := browserGuards(cfg)
 	if err != nil {
-		return fmt.Errorf("officer: browser guards: %w", err)
+		return err
 	}
-	b.SetBrowserGuards(httpx.BrowserGuards{
-		Host:        host,
-		Origin:      httpx.SameOrigin(),
-		ContentType: httpx.JSONBody(),
-	})
+	b.SetBrowserGuards(guards)
 	for _, provider := range appmarketdata.FirstPartyProviders() {
 		if err := b.RegisterMarketDataProvider(provider); err != nil {
 			return fmt.Errorf("officer: register market data provider: %w", err)
@@ -181,15 +180,21 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		if err != nil {
 			return nil, err
 		}
+		opts := []fwbackend.Option{
+			fwbackend.WithMarketDataRegistry(registry),
+			fwbackend.WithTradingRuntime(rt),
+			fwbackend.WithMCPCatalogProvider(mcpRegistry),
+			fwbackend.WithAccountScope(scope),
+		}
+		if !fwbackend.ReleaseBuild() {
+			opts = append(opts, fwbackend.WithNonReleaseBuild())
+		}
 		return fwbackend.New(
 			n,
 			md,
 			signer,
 			engine.LockSettlementPrice,
-			fwbackend.WithMarketDataRegistry(registry),
-			fwbackend.WithTradingRuntime(rt),
-			fwbackend.WithMCPCatalogProvider(mcpRegistry),
-			fwbackend.WithAccountScope(scope),
+			opts...,
 		)
 	})
 	// A host that customises routes wraps b.RouteConfigBuilder(), so the
@@ -201,10 +206,16 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		for _, route := range accountmode.Routes(svc) {
 			config.Routes.Register(route)
 		}
+		for _, route := range httpapi.PreMigrationBackupRoutes(preMigrationBackupSource(cfg.SQLitePath, backupNode)) {
+			config.Routes.Register(route)
+		}
 		config.PanelRoutes = &httpx.RouteRegistry{}
 		for _, route := range access.Routes(accessService) {
 			config.PanelRoutes.Register(route)
 		}
+		config.PanelRoutes.Register(nonrelease.BuildRoute(func() nonrelease.Status {
+			return nonrelease.Status{Release: fwbackend.ReleaseBuild(), Phase: nonrelease.PhaseReady}
+		}))
 		config.AccessMode = func() httpx.AccessMode {
 			return manifestAccessMode(accessService)
 		}
@@ -213,6 +224,29 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	b.AddToolRegistrar(mcptools.RegisterTools)
 	b.SetSPAFactory(web.Dist)
 	return nil
+}
+
+func browserGuards(cfg Config) (httpx.BrowserGuards, error) {
+	host, err := httpx.AllowedHosts(slices.Concat(loopbackHosts, cfg.AllowedHosts))
+	if err != nil {
+		return httpx.BrowserGuards{}, fmt.Errorf("officer: browser guards: %w", err)
+	}
+	return httpx.BrowserGuards{
+		Host:        host,
+		Origin:      httpx.SameOrigin(),
+		ContentType: httpx.JSONBody(),
+	}, nil
+}
+
+func newStore(cfg Config) (store.Store, error) {
+	var opts []sqlite.Option
+	if fwbackend.ReleaseBuild() {
+		opts = append(opts, sqlite.WithPreMigrationCopy())
+	}
+	if cfg.MasterKey != nil {
+		opts = append(opts, sqlite.WithMasterKey(*cfg.MasterKey))
+	}
+	return sqlite.New(cfg.SQLitePath, domain.DefaultRealm, opts...)
 }
 
 // sealReportSource adapts the seal report of st, the store the store factory
@@ -229,6 +263,40 @@ func sealReportSource(st store.Store) (httpapi.SealReportSource, error) {
 		report, sealed, err := reader.SealReport(ctx)
 		return report.SealedAt, report.ResealedSecrets, sealed, err
 	}, nil
+}
+
+func preMigrationBackupSource(path string, n node.Node) httpapi.PreMigrationBackupSource {
+	return httpapi.PreMigrationBackupSource{
+		List: func() ([]httpapi.PreMigrationBackup, error) {
+			copies, err := sqlite.ListPreMigrationCopies(path)
+			if err != nil {
+				return nil, err
+			}
+			backups := make([]httpapi.PreMigrationBackup, 0, len(copies))
+			for _, copy := range copies {
+				backups = append(backups, httpapi.PreMigrationBackup{
+					Name: copy.Name, CreatedAt: copy.CreatedAt, SizeBytes: copy.Size,
+				})
+			}
+			return backups, nil
+		},
+		Open: func(name string) (*os.File, int64, error) {
+			return sqlite.OpenPreMigrationCopy(path, name)
+		},
+		Remove: func(name string) error {
+			return sqlite.RemovePreMigrationCopy(path, name)
+		},
+		Audit: func(ctx context.Context, action domain.AuditAction, detail domain.AuditDetail) error {
+			if n == nil {
+				return errors.New("officer: pre-migration backup: nil node")
+			}
+			caller, err := auth.CallerFromContext(ctx)
+			if err != nil {
+				return err
+			}
+			return n.AppendAudit(ctx, store.AuditEntry{Action: action, Detail: detail}, caller)
+		},
+	}
 }
 
 // manifestAccessMode is the route manifest's access mode for service's mode.

@@ -435,6 +435,7 @@ func (r *realmStore) RestoreBackup(
 		credentialForm:                    archive.CredentialForm,
 		validateMarketDataInstance:        opts.ValidateMarketDataInstance,
 		tradingProviderRequiresFeeAccount: opts.TradingProviderRequiresFeeAccount,
+		disableTradingConnections:         opts.DisableTradingConnections,
 		summary:                           &summary,
 	}
 
@@ -471,6 +472,7 @@ type restoreTx struct {
 	credentialForm                    string
 	validateMarketDataInstance        func(domain.MarketDataInstance) error
 	tradingProviderRequiresFeeAccount func(provider string) (bool, error)
+	disableTradingConnections         bool
 	summary                           *backup.RestoreSummary
 }
 

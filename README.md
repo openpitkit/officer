@@ -22,16 +22,20 @@ docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787
 ```
 
 Open <http://127.0.0.1:8787>. `latest` is the newest release; your data stays
-in the `pit-officer-data` volume.
+in the `pit-officer-data` volume. Back up before every upgrade, and regularly,
+from Service > Database > Database backup > Export in the panel.
 
-`edge` is the current development build. It may be unstable, so run it apart
-from the release, with its own name, port and data:
+`edge` is the current development build, for quick tests only. Its data is
+disposable. Stop the release container first, then use the same volume:
 
 ```sh
-docker run -d --name pit-officer-edge --restart unless-stopped -p 127.0.0.1:8788:8787 -v pit-officer-edge-data:/data ghcr.io/openpitkit/officer:edge
+docker stop pit-officer
+docker run -d --name pit-officer-edge --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer:edge
 ```
 
-Then open <http://127.0.0.1:8788>.
+On its first start, the panel asks whether to copy the release data or start
+empty. It never changes the release database. See
+[Trying the development build](docs/quickstart.md#trying-the-development-build).
 
 ## Build
 
@@ -46,13 +50,17 @@ the compiled assets:
 ```bash
 npm --prefix web ci
 npm --prefix web run build
-CGO_ENABLED=1 go build -o pit-officer ./cmd/pit-officer
+CGO_ENABLED=1 go build -ldflags "-X go.openpit.dev/officer/framework/backend.buildCommit=$(git rev-parse HEAD)" -o pit-officer ./cmd/pit-officer
 ```
 
-On Windows, set `CGO_ENABLED=1` in your shell, build with
-`go build -o pit-officer.exe ./cmd/pit-officer`, and run `./pit-officer.exe`.
+On Windows with PowerShell, set `CGO_ENABLED=1` in your shell, build with
+`go build -ldflags "-X go.openpit.dev/officer/framework/backend.buildCommit=$(git rev-parse HEAD)" -o pit-officer.exe ./cmd/pit-officer`, and run `./pit-officer.exe`.
 
 ### Run from source
+
+A locally built binary behaves like `edge`: its first `serve` asks which
+database to use, and it never changes the release database. Make that
+[choice](docs/configuration.md#non-release-builds) before running `mcp`.
 
 Pit Officer is a single binary with four subcommands: `serve`, `mcp`,
 `dashboard`, `healthcheck`. After building it, run from the repository root:
@@ -74,7 +82,7 @@ To build and run a local container image with the settings in
 
 ```bash
 . ./.github/ci-versions.env
-docker build --build-arg GO_VERSION="$CI_GO" -t pit-officer:local .
+docker build --build-arg GO_VERSION="$CI_GO" --build-arg OFFICER_COMMIT="$(git rev-parse HEAD)" -t pit-officer:local .
 docker compose up
 ```
 

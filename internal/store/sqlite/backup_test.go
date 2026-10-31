@@ -3631,6 +3631,79 @@ func TestBackupTradingRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBackupRestoreDisablesTradingForNonRelease(t *testing.T) {
+	ctx := context.Background()
+	_, source := newRealmStoreWithOptions(t, "non-release-source",
+		WithMasterKey(mustStoreMasterKey(t, 0x71)))
+	connection, order := seedTradingBackupState(t, ctx, source)
+	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		disable     bool
+		archivedOn  bool
+		unavailable bool
+		skip        bool
+	}{
+		{name: "enabled", disable: true, archivedOn: true},
+		{name: "already disabled", disable: true},
+		{name: "credentials unavailable", disable: true, archivedOn: true, unavailable: true},
+		{name: "insert missing skips existing", disable: true, archivedOn: true, skip: true},
+		{name: "release preserves enabled", archivedOn: true},
+		{name: "release preserves disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keyByte := byte(0x71)
+			if tc.unavailable {
+				keyByte = 0x72
+			}
+			_, target := newRealmStoreWithOptions(t, "non-release-target",
+				WithMasterKey(mustStoreMasterKey(t, keyByte)))
+			incoming := cloneBackupArchive(t, archive)
+			incoming.Data.TradingConnections[0].Enabled = tc.archivedOn
+			opts := backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+				DisableTradingConnections: tc.disable,
+			}
+			if tc.skip {
+				if _, err := target.RestoreBackup(ctx, incoming, backup.RestoreOptions{
+					Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				opts.Mode = backup.RestoreModeInsertMissing
+			}
+			summary, err := target.RestoreBackup(ctx, incoming, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wantDisabled, wantUnavailable []string
+			if tc.unavailable {
+				wantUnavailable = []string{connection.Label}
+			} else if tc.disable && tc.archivedOn && !tc.skip {
+				wantDisabled = []string{connection.Label}
+			}
+			if !reflect.DeepEqual(summary.TradingDisabledNonRelease, wantDisabled) {
+				t.Errorf("non-release disabled = %v, want %v", summary.TradingDisabledNonRelease, wantDisabled)
+			}
+			if !reflect.DeepEqual(summary.TradingCredentialsUnavailable, wantUnavailable) {
+				t.Errorf("unavailable credentials = %v, want %v", summary.TradingCredentialsUnavailable, wantUnavailable)
+			}
+			if tc.skip && summary.Skipped[backup.SectionTrading] != 4 {
+				t.Fatalf("skipped trading rows = %d, want 4", summary.Skipped[backup.SectionTrading])
+			}
+			credentials := tradingBackupSecret
+			if tc.unavailable {
+				credentials = "{}"
+			}
+			wantEnabled := tc.archivedOn && (!tc.disable || tc.skip) && !tc.unavailable
+			assertTradingBackupState(t, ctx, target, connection, order, credentials, wantEnabled, false)
+		})
+	}
+}
+
 func TestBackupRestoreUnavailableSealedTradingCredentials(t *testing.T) {
 	ctx := context.Background()
 	_, source := newRealmStoreWithOptions(

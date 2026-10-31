@@ -18,6 +18,7 @@
 import type { ReactNode } from "react";
 
 import { PendingRestartBanner } from "@/components/PendingRestartBanner";
+import { PreMigrationBackupBanner } from "@/components/PreMigrationBackupBanner";
 import { SensitiveDataBanner } from "@/components/SensitiveDataBanner";
 import { TopBar } from "@/components/TopBar";
 
@@ -37,6 +38,7 @@ export function Page({
         <div className="mx-auto flex w-full max-w-[var(--content-max)] flex-col gap-y-[var(--dens-row-gap)]">
           <PendingRestartBanner />
           <SensitiveDataBanner />
+          <PreMigrationBackupBanner />
           {children}
         </div>
       </main>

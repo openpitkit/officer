@@ -7,14 +7,22 @@ what credentials it takes, what it answers with, and the two error shapes.
 
 REST is mounted at `/api/v1`. A mirror at `/app/api/v1` is reserved for the
 operator panel. The two carry the same REST routes except the route manifest,
-which is published only on `/api/v1`; otherwise they differ only in the
-credential they take and the source stamped on the audit record. `/app/api/v1`
-also carries the panel's own access routes (see Panel access), which are not in
-the OpenAPI document. Outside them, MCP over HTTP is mounted at `/mcp`, liveness
+which is published only on `/api/v1`. They differ in non-release trading
+confirmation (see Trading), the credential they take and the source stamped
+on the audit record. `/app/api/v1` also carries the panel's own access and
+build routes (see Panel access), which are not in the OpenAPI document.
+Outside them, MCP over HTTP is mounted at `/mcp`, liveness
 at `/healthz`, the OpenAPI document at `/api/openapi.yaml`, its docs page at
 `/docs`, and the Swagger UI files under `/docs/` (`GET` only). The dashboard
 answers `GET` and `HEAD` on every other path; any other standard method there
 answers `404` `not_found`.
+
+Once a non-release build has prepared its database, the access states below
+apply as usual. Before that choice is ready, only the panel shell, `/healthz`,
+`/docs` and its files, `/api/openapi.yaml`, and the two build routes in
+[Panel access](#panel-access) answer normally, behind the same browser checks.
+`/mcp` and `GET /api/v1/route-manifest.json` answer `503` `setup_required`;
+every other `/api/v1` and `/app/api/v1` path answers a typed `404` `not_found`.
 
 In `setup`, `/api/v1` and `/mcp` answer `503` `setup_required`; the panel's API
 admits only its routes marked `duringSetup` (see Panel access). Liveness, the
@@ -135,9 +143,27 @@ The panel access routes (see Panel access) add their own, in the second shape:
 
 The panel's own access routes are mounted only under `/app/api/v1` and are not
 in the OpenAPI document. Paths below are relative to that prefix.
-`GET /session`, `POST /session`, and the two recovery routes are public; the
-rest take the panel session in `token` mode.
+`GET /build`, `POST /build/database`, `GET /session`, `POST /session`, and the
+two recovery routes are public; the rest take the panel session in `token`
+mode. The database-choice gate serves only the two build routes before ready.
 
+- `GET /build` - `200` `{release, phase, releaseDatabaseExists, error?}`,
+  without a session, including during setup. A non-release build reports phase
+  `choice`, `preparing`, `failed` or `ready`; `error` is present only in
+  `failed`, and `releaseDatabaseExists` is meaningful during `choice` and
+  `failed`. Once ready, the normal application reports
+  `{release: false, phase: "ready", releaseDatabaseExists: false}`. A release
+  build serves the same route with `release: true`, `phase: "ready"` and
+  `releaseDatabaseExists: false`.
+- `POST /build/database` - `{fromRelease: bool}` chooses a release snapshot
+  (`true`) or an empty database (`false`); `202` with the build status while
+  preparation runs. It exists only before ready in a non-release build.
+  While this route exists, a choice outside `choice` and `failed` answers
+  `409` `conflict`; choosing a copy
+  without a release file answers `422` `validation`. Missing or null
+  `fromRelease` answers a `422` problem response with constraint `required` at
+  `/fromRelease`. Stop the release build before choosing a copy; see
+  [Non-release builds](configuration.md#non-release-builds).
 - `GET /session` - `{accessMode, setupComplete, authenticated}`;
   `setupComplete` is `false` exactly in `setup`, and `authenticated` is whether
   the request carries a live session, always `false` in `setup` and `open`.
@@ -193,7 +219,8 @@ After completion all four answer `409` `setup_complete`, subject to the panel
 session check in `token` mode. They are panel-only, outside OpenAPI, as are the
 session and access routes above.
 
-In `setup`, `GET /session` and these four routes answer without credentials.
+In `setup`, `GET /build`, `GET /session` and these four routes answer without
+credentials.
 The other panel access routes answer `503` `setup_required`, including the
 public sign-in and both recovery routes. The panel mirror also admits the
 routes marked `duringSetup`: account-mode reads and choices, service restart,
@@ -399,6 +426,26 @@ execution report. This is an incompatible REST and MCP change in 0.1: before
 it, a market order in `immediate` settled at the engine's reservation lock
 price.
 
+## Backups
+
+A release build copies the database before a migration. `GET
+/database/pre-migration-backups` lists these raw SQLite copies; `POST
+/database/pre-migration-backups/{id}/download` downloads one and `DELETE
+/database/pre-migration-backups/{id}` deletes it. Both download and delete
+are audited. Officer never deletes a copy itself. See
+[Migrations and upgrades](configuration.md#migrations-and-upgrades).
+
+An archive exported by a non-release build has
+`nonRelease: true` in its manifest. A release build refuses it with `422`
+`non_release_archive` before decoding its data, so an `edge` backup restores
+only into a non-release build.
+
+A restore in a non-release build disables enabled trading connections it
+restores. Its summary names those disabled for this reason in
+`tradingDisabledNonRelease`; a connection disabled because its credentials
+could not be opened is named in `tradingCredentialsUnavailable` instead. The
+OpenAPI document describes the restore request and summary.
+
 ## Trading
 
 Trading credentials are JSON objects accepted on write; no trading route or
@@ -414,6 +461,14 @@ many stored secret values that sealing re-sealed - `null` and `0` for a
 database never sealed; the MCP tool reports neither.
 An instrument mapping whose base or quote asset Officer does not know is refused
 with `asset_missing`, naming the asset; Officer never creates the asset itself.
+
+In a non-release build, creating a trading connection enabled or enabling an
+existing one requires `nonReleaseConfirmed: true`, accepted only on the panel
+mirror `/app/api/v1`. Without panel confirmation the server answers `403`
+`non_release_confirmation_required`. `/api/v1` and MCP cannot enable trading;
+disabling needs no confirmation. A release build ignores the member. In the
+panel, enabling opens a warning dialog; only **Enable trading** in that dialog
+sends the confirmation.
 
 A venue-linked order is managed by its venue connection. Manual execution
 reports, confirm and cancel refuse it with `venue_order_managed`. Trading MCP

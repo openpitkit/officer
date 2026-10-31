@@ -1,5 +1,4 @@
 {
-  "continue": "继续",
   "stepOf": "第 {{n}} 步，共 {{total}} 步",
   "changeLater": "稍后修改：{{where}}",
   "place": "{{section}} › {{tab}}",
@@ -22,6 +21,8 @@
     "lead": "此向导用于完成 Officer 的设置。",
     "closedTitle": "设置完成前，Officer 保持关闭",
     "closedBody": "其 REST API 与 MCP 暂不响应任何程序或智能体。在您完成设置之前，不会进行任何交易，也不会建立任何连接。",
+    "backupTitle": "正式版本在每次迁移前都会复制数据库",
+    "backupBody": "正式版本迁移现有数据库之前，Officer 会在数据库文件旁写入一份副本。随后面板会提供该副本供您下载并保存。",
     "start": "开始设置"
   },
   "accounts": {

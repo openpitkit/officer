@@ -91,7 +91,7 @@ export function StepFooter({
           </Button>
         )}
         <Button type="button" disabled={busy || nextDisabled} onClick={next}>
-          {nextLabel ?? t("continue")}
+          {nextLabel ?? tc("actions.continue")}
           {busy ? (
             <Loader2 aria-hidden="true" className="animate-spin" />
           ) : (

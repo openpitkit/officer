@@ -130,24 +130,52 @@ func Apply(
 	if _, err := db.ExecContext(ctx, schemaMigrationsDDL(table)); err != nil {
 		return fmt.Errorf("migration: create %s: %w", table, err)
 	}
-	sort.Slice(migrations, func(i, j int) bool {
-		return migrations[i].Version < migrations[j].Version
-	})
-
-	applied, err := appliedVersions(ctx, db, table)
+	pending, err := pendingMigrations(ctx, db, table, migrations)
 	if err != nil {
 		return err
 	}
 
-	for _, m := range migrations {
-		if applied[m.Version] {
-			continue
-		}
+	for _, m := range pending {
 		if err := applyMigration(ctx, db, table, m, binder); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// Pending returns source's unapplied migrations in ascending Version order.
+// It only reads the bookkeeping table; a missing table returns an error.
+func Pending(
+	ctx context.Context, db *sql.DB, source MigrationSource, cfg Config,
+) ([]Migration, error) {
+	table, err := tableName(cfg)
+	if err != nil {
+		return nil, err
+	}
+	migrations, err := source.Migrations()
+	if err != nil {
+		return nil, err
+	}
+	return pendingMigrations(ctx, db, table, migrations)
+}
+
+func pendingMigrations(
+	ctx context.Context, db *sql.DB, table string, migrations []Migration,
+) ([]Migration, error) {
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].Version < migrations[j].Version
+	})
+	applied, err := appliedVersions(ctx, db, table)
+	if err != nil {
+		return nil, err
+	}
+	var pending []Migration
+	for _, m := range migrations {
+		if !applied[m.Version] {
+			pending = append(pending, m)
+		}
+	}
+	return pending, nil
 }
 
 // SchemaVersion returns the highest applied migration version, or zero.

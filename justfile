@@ -34,7 +34,7 @@ node_version := env_var("CI_NODE")
 go_cache := env_var_or_default("GOCACHE", justfile_directory() / ".tmp" / "go-build-cache")
 golangci_lint_cache := env_var_or_default("GOLANGCI_LINT_CACHE", justfile_directory() / ".tmp" / "golangci-lint-cache")
 go_packages := ". ./web ./httpapi/... ./mcptools/... ./engine/... ./signing/... ./framework/... ./internal/... ./cmd/... ./examples/..."
-go_dirs := "register.go register_test.go web/dist.go httpapi mcptools engine signing framework internal cmd examples checks/semgrep/testdata"
+go_dirs := "register.go register_test.go nonrelease.go nonrelease_test.go web/dist.go httpapi mcptools engine signing framework internal cmd examples checks/semgrep/testdata"
 export GOTOOLCHAIN := go_toolchain
 export GOCACHE := go_cache
 export GOLANGCI_LINT_CACHE := golangci_lint_cache
@@ -61,11 +61,11 @@ check-cgo-toolchain:
 
 # Build the pit-officer binary with debug compiler flags.
 build-debug: check-cgo-toolchain frontend-install build-js
-    {{ python }} {{ just_helper }} go build "-gcflags=all=-N -l" -o {{ officer_binary }} ./cmd/pit-officer
+    {{ python }} {{ just_helper }} go build "-gcflags=all=-N -l" "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" -o {{ officer_binary }} ./cmd/pit-officer
 
 # Build the optimized pit-officer binary.
 build-release: check-cgo-toolchain frontend-install build-js
-    {{ python }} {{ just_helper }} go build -o {{ officer_binary }} ./cmd/pit-officer
+    {{ python }} {{ just_helper }} go build "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" -o {{ officer_binary }} ./cmd/pit-officer
 
 # Build all Go packages (no frontend; uses the committed web/dist placeholder).
 build-go: build-go-release
@@ -193,6 +193,7 @@ check-semgrep: install-python-tools
     {{ semgrep }} --test --config checks/semgrep/locale-english-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-english-words.txt
     {{ semgrep }} --test --config checks/semgrep/file-header-site-link.yml --metrics=off --disable-version-check checks/semgrep/testdata/file-header-site-link.txt
     {{ semgrep }} --test --config checks/semgrep/panel-access-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-access-reuse.tsx
+    {{ semgrep }} --test --config checks/semgrep/panel-download-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-download-reuse.tsx
     {{ semgrep }} --test --config checks/semgrep/panel-code-label.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-code-label.tsx
     {{ semgrep }} --test --config checks/semgrep/no-legacy-database-probe.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-legacy-database-probe.go
     {{ semgrep }} --test --config checks/semgrep/tailwind-v4-utilities.yml --metrics=off --disable-version-check checks/semgrep/testdata/tailwind-v4-utilities.tsx
@@ -364,7 +365,7 @@ frontend-ci-install: ensure-node
 
 # Build the stable Docker image from the published OpenPit module.
 docker-build tag="pit-officer:local":
-    docker build --build-arg GO_VERSION={{ go_version }} --build-arg NODE_VERSION={{ node_version }} -f {{ justfile_directory() }}/Dockerfile -t {{ tag }} {{ justfile_directory() }}
+    docker build --build-arg GO_VERSION={{ go_version }} --build-arg NODE_VERSION={{ node_version }} --build-arg OFFICER_COMMIT={{ `git rev-parse HEAD` }} -f {{ justfile_directory() }}/Dockerfile -t {{ tag }} {{ justfile_directory() }}
 
 # Start a local image for one platform; wait until it is healthy and /healthz answers 200.
 docker-start-check image platform:
@@ -402,10 +403,12 @@ dylib-release-dev pit_checkout="../pit":
 build-dev pit_checkout="../pit": (build-release-dev pit_checkout)
 
 # Build the pit-officer binary against a debug local Pit checkout.
-build-debug-dev pit_checkout="../pit": frontend-install build-js (dylib-debug-dev pit_checkout) (_go-dev-mode "debug" pit_checkout "build" "-gcflags=all=-N -l" "-o" officer_binary "./cmd/pit-officer")
+build-debug-dev pit_checkout="../pit": frontend-install build-js (dylib-debug-dev pit_checkout)
+    just _go-dev-mode debug {{ quote(pit_checkout) }} "build" "-gcflags=all=-N -l" "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" "-o" {{ officer_binary }} "./cmd/pit-officer"
 
 # Build the pit-officer binary against an optimized local Pit checkout.
-build-release-dev pit_checkout="../pit": frontend-install build-js (dylib-release-dev pit_checkout) (_go-dev-mode "release" pit_checkout "build" "-o" officer_binary "./cmd/pit-officer")
+build-release-dev pit_checkout="../pit": frontend-install build-js (dylib-release-dev pit_checkout)
+    just _go-dev-mode release {{ quote(pit_checkout) }} "build" "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" "-o" {{ officer_binary }} "./cmd/pit-officer"
 
 # Build all Go packages against a local Pit checkout.
 build-go-dev pit_checkout="../pit": (build-go-release-dev pit_checkout)

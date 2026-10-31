@@ -252,7 +252,7 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 			func(t *testing.T, service *backend.Service, connection domain.ExternalID) {
 				t.Helper()
 				if err := service.SetTradingConnectionEnabled(
-					systemCtx(), connection.String(), false,
+					systemCtx(), connection.String(), false, false,
 				); err != nil {
 					t.Fatalf("disable connection %s: %v", connection, err)
 				}

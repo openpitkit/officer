@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { AlertTriangle, Lock } from "lucide-react";
+import { AlertTriangle, DatabaseBackup, Lock } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -441,13 +441,22 @@ function Wizard({ pass }: { pass: WizardPass }) {
               <VideoLink video="intro" />
               <WelcomeIntro />
               {!review && (
-                <Notice
-                  tone="info"
-                  icon={Lock}
-                  title={t("welcome.closedTitle")}
-                >
-                  <p>{t("welcome.closedBody")}</p>
-                </Notice>
+                <>
+                  <Notice
+                    tone="info"
+                    icon={Lock}
+                    title={t("welcome.closedTitle")}
+                  >
+                    <p>{t("welcome.closedBody")}</p>
+                  </Notice>
+                  <Notice
+                    tone="info"
+                    icon={DatabaseBackup}
+                    title={t("welcome.backupTitle")}
+                  >
+                    <p>{t("welcome.backupBody")}</p>
+                  </Notice>
+                </>
               )}
             </>
           ),
@@ -641,7 +650,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
       footer.extra
     );
   return (
-    <div className="flex h-dvh w-full flex-col bg-bg text-text">
+    <div className="flex h-full w-full flex-col bg-bg text-text">
       {/* The brand and the language and theme switches stand where the
           panel has them: across the top, the switches in the right corner. */}
       <header className="ledger-masthead flex h-[var(--topbar-height)] shrink-0 items-center gap-2 px-[var(--dens-shell-x)]">

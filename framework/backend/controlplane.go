@@ -155,9 +155,15 @@ type ControlPlane interface {
 	DeleteMarketDataInstrument(ctx context.Context, instanceID, externalSymbol string) error
 	GetTrading(ctx context.Context) (TradingStatus, error)
 	// CreateTradingConnection returns the stored settings without credentials.
-	CreateTradingConnection(ctx context.Context, connection domain.TradingConnection) (domain.TradingConnection, error)
+	// nonReleaseConfirmed means the operator confirmed in the panel enabling
+	// trading in a non-release build. It counts only for a panel caller; a
+	// release build does not need it.
+	CreateTradingConnection(ctx context.Context, connection domain.TradingConnection, nonReleaseConfirmed bool) (domain.TradingConnection, error)
 	UpdateTradingConnectionSettings(ctx context.Context, id, label, credentials string) error
-	SetTradingConnectionEnabled(ctx context.Context, id string, enabled bool) error
+	// SetTradingConnectionEnabled uses nonReleaseConfirmed when the operator
+	// confirmed in the panel enabling trading in a non-release build. It counts
+	// only for a panel caller; a release build does not need it.
+	SetTradingConnectionEnabled(ctx context.Context, id string, enabled, nonReleaseConfirmed bool) error
 	CheckTradingConnection(ctx context.Context, id string) (trading.AccountInfo, error)
 	UpsertTradingInstrument(ctx context.Context, instrument domain.TradingInstrument) error
 	DeleteTradingInstrument(ctx context.Context, connection, externalSymbol string) error

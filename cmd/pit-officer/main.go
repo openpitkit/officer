@@ -23,10 +23,11 @@
 //	pit-officer dashboard     discover a serve URL and open the browser
 //	pit-officer healthcheck   probe a serve instance's /healthz
 //
-// The mcp and serve subcommands share the same startup: open the store, run
-// migrations, then build the single local node, which builds the one engine
-// seeded from the store and assembles the single-node control plane. They
-// differ only in the surface they then expose. serve binds a loopback
+// Release builds open the configured store, run migrations, then build the
+// single local node and its engine seeded from that store. Non-release builds
+// use a separate store per commit: serve asks for a database choice before
+// creating it, and mcp requires that choice to have been made already.
+// serve binds a loopback
 // OS-assigned free port by default and publishes
 // its real address as runtime state; dashboard and healthcheck read that state
 // to find the live URL. dashboard and healthcheck open no engine and no store;
@@ -52,11 +53,14 @@ import (
 
 	"go.openpit.dev/officer"
 	frameworkapp "go.openpit.dev/officer/framework/app"
+	fwbackend "go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	officerhttp "go.openpit.dev/officer/httpapi"
 	"go.openpit.dev/officer/internal/config"
 	"go.openpit.dev/officer/internal/logtail"
+	"go.openpit.dev/officer/internal/nonrelease"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
+	"go.openpit.dev/officer/web"
 	"go.openpit.dev/openpit"
 )
 
@@ -139,24 +143,39 @@ func setup(
 	logger *slog.Logger,
 	fatalHook func(error),
 ) (*frameworkapp.App, error) {
-	if err := checkRuntimeLibraryPath(
-		cfg.RuntimeLibraryPath, openpit.RuntimeLibraryPath(),
-	); err != nil {
-		return nil, err
-	}
-	masterKey, err := config.ResolveMasterKey(cfg, os.LookupEnv)
+	appConfig, err := resolveAppConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
+	return buildApp(ctx, appConfig, web.Dist, logger, fatalHook)
+}
 
-	builder := frameworkapp.NewBuilder()
-	if err := officer.Register(builder, officer.Config{
+func resolveAppConfig(cfg config.Config) (officer.Config, error) {
+	if err := checkRuntimeLibraryPath(
+		cfg.RuntimeLibraryPath, openpit.RuntimeLibraryPath(),
+	); err != nil {
+		return officer.Config{}, err
+	}
+	masterKey, err := config.ResolveMasterKey(cfg, os.LookupEnv)
+	if err != nil {
+		return officer.Config{}, err
+	}
+	return officer.Config{
 		SQLitePath:   cfg.SQLitePath,
 		MasterKey:    masterKey,
 		AllowedHosts: cfg.AllowedHosts,
-	}); err != nil {
+	}, nil
+}
+
+func buildApp(
+	ctx context.Context, cfg officer.Config, spa frameworkapp.SPAFactory,
+	logger *slog.Logger, fatalHook func(error),
+) (*frameworkapp.App, error) {
+	builder := frameworkapp.NewBuilder()
+	if err := officer.Register(builder, cfg); err != nil {
 		return nil, err
 	}
+	builder.SetSPAFactory(spa)
 	return builder.Build(ctx, logger, fatalHook)
 }
 
@@ -185,6 +204,10 @@ func checkRuntimeLibraryPath(configured, loaded string) error {
 // MCP surface over stdio until the process is signalled. No HTTP listener is
 // opened in this mode.
 func runMCP(args []string, logger *slog.Logger) error {
+	release, commit, err := buildIdentity()
+	if err != nil {
+		return err
+	}
 	cfg, err := config.Load(append([]string{"-mode", string(config.RunModeMCP)},
 		args...), os.LookupEnv)
 	if err != nil {
@@ -196,7 +219,7 @@ func runMCP(args []string, logger *slog.Logger) error {
 	defer stop()
 
 	fatal := newFatalShutdown(logger)
-	app, err := setup(ctx, cfg, logger, fatal.handle)
+	app, err := setupMCP(ctx, cfg, release, commit, logger, fatal.handle)
 	if err != nil {
 		return err
 	}
@@ -226,6 +249,10 @@ func runMCP(args []string, logger *slog.Logger) error {
 // runServe loads the serve-mode configuration, assembles the app, and runs the
 // HTTP dashboard/API/MCP listener until the process is signalled.
 func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
+	release, commit, err := buildIdentity()
+	if err != nil {
+		return err
+	}
 	cfg, err := config.Load(append([]string{"-mode", string(config.RunModeServe)},
 		args...), os.LookupEnv)
 	if err != nil {
@@ -237,28 +264,18 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	defer stop()
 
 	fatal := newFatalShutdown(logger)
-	app, err := setup(ctx, cfg, logger, fatal.handle)
+	lifecycleRequests := make(chan lifecycleAction, 1)
+	handler, closeApp, err := setupServe(
+		ctx, cfg, release, commit, web.Dist, logger, fatal.handle, buf, lifecycleRequests,
+	)
 	if err != nil {
 		return err
-	}
-	closeApp := func() error {
-		if app == nil {
-			return nil
-		}
-		defer func() { app = nil }()
-		return app.Close()
 	}
 	defer func() {
 		if err := closeApp(); err != nil {
 			logger.Error("shutdown error", "err", err)
 		}
 	}()
-
-	lifecycleRequests := make(chan lifecycleAction, 1)
-	handler, err := buildServeHandler(app, buf, lifecycleRequests)
-	if err != nil {
-		return fmt.Errorf("build http handler: %w", err)
-	}
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -267,6 +284,27 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 	}
+	httpStopped := false
+	shutdownHTTP := func() error {
+		if httpStopped {
+			return nil
+		}
+		httpStopped = true
+		shutdownCtx, cancel := context.WithTimeout(context.Background(),
+			shutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return errors.Join(err, srv.Close())
+		}
+		return nil
+	}
+	// Drain HTTP before closing the gate and its asynchronously built app,
+	// including when startup or Serve fails.
+	defer func() {
+		if err := shutdownHTTP(); err != nil {
+			logger.Error("http shutdown", "err", err)
+		}
+	}()
 
 	listener, err := net.Listen("tcp", cfg.HTTPAddr)
 	if err != nil {
@@ -336,10 +374,7 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		return nil
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(),
-		shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := shutdownHTTP(); err != nil {
 		return fmt.Errorf("http shutdown: %w", err)
 	}
 	if err := <-serveErr; err != nil {
@@ -361,6 +396,124 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		}
 	}
 	return nil
+}
+
+func buildIdentity() (release bool, commit string, err error) {
+	release = fwbackend.ReleaseBuild()
+	if !release {
+		commit, err = fwbackend.BuildCommit()
+	}
+	return release, commit, err
+}
+
+func databaseForBuild(
+	releasePath string, release bool, commit string,
+) (path string, ownExists, releaseExists bool, err error) {
+	if release {
+		return releasePath, false, false, nil
+	}
+	path, err = nonrelease.DatabasePath(releasePath, commit)
+	if err != nil {
+		return "", false, false, err
+	}
+	if ownInfo, err := os.Lstat(path); err == nil {
+		if !ownInfo.Mode().IsRegular() {
+			return "", false, false, fmt.Errorf("non-release database %q is not a regular file (links and other file types are refused): remove that path before starting", path)
+		}
+		releaseInfo, err := os.Stat(releasePath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", false, false, err
+		}
+		if err == nil && os.SameFile(ownInfo, releaseInfo) {
+			return "", false, false, fmt.Errorf("non-release database %q is the release file itself: remove that path before starting", path)
+		}
+		ownExists = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", false, false, err
+	}
+	releaseExists, err = nonrelease.ReleaseDatabaseExists(releasePath)
+	if err != nil {
+		return "", false, false, err
+	}
+	return path, ownExists, releaseExists, nil
+}
+
+func setupMCP(
+	ctx context.Context, cfg config.Config, release bool, commit string,
+	logger *slog.Logger, fatalHook func(error),
+) (*frameworkapp.App, error) {
+	path, ownExists, _, err := databaseForBuild(cfg.SQLitePath, release, commit)
+	if err != nil {
+		return nil, err
+	}
+	if !release && !ownExists {
+		return nil, fmt.Errorf("non-release database %q is missing: choose the database on the first screen of pit-officer serve", path)
+	}
+	cfg.SQLitePath = path
+	return setup(ctx, cfg, logger, fatalHook)
+}
+
+func setupServe(
+	ctx context.Context, cfg config.Config, release bool, commit string,
+	spa frameworkapp.SPAFactory, logger *slog.Logger, fatalHook func(error), buf *logtail.Buffer,
+	lifecycleRequests chan<- lifecycleAction,
+) (http.Handler, func() error, error) {
+	releasePath := cfg.SQLitePath
+	if !release {
+		removed, err := nonrelease.RemoveStale(releasePath, commit)
+		for _, path := range removed {
+			logger.Info("removed stale non-release database file", "path", path)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	path, ownExists, releaseExists, err := databaseForBuild(releasePath, release, commit)
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg.SQLitePath = path
+	appConfig, err := resolveAppConfig(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	var app *frameworkapp.App
+	var gate *officer.NonReleaseGate
+	closeApp := func() error {
+		if gate != nil {
+			gate.Close()
+		}
+		// Close waits for the callback before this app variable is read.
+		if app == nil {
+			return nil
+		}
+		defer func() { app = nil }()
+		return app.Close()
+	}
+	build := func(ctx context.Context) (http.Handler, error) {
+		built, err := buildApp(ctx, appConfig, spa, logger, fatalHook)
+		if err != nil {
+			return nil, err
+		}
+		handler, err := buildServeHandler(built, buf, lifecycleRequests)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("build http handler: %w", err), built.Close())
+		}
+		app = built
+		return handler, nil
+	}
+	if release || ownExists {
+		handler, err := build(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return handler, closeApp, nil
+	}
+	gate, err = officer.NewNonReleaseGate(ctx, appConfig, releasePath, mcpPath, releaseExists, spa, build)
+	if err != nil {
+		return nil, nil, err
+	}
+	return gate, closeApp, nil
 }
 
 func restartProcessArgs(args []string, httpAddr string) []string {

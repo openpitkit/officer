@@ -106,6 +106,7 @@ import type {
   PagedResult,
   Policy,
   PolicyListFilters,
+  PreMigrationBackup,
   RateLimit,
   RangeFilterMode,
   SigningKey,
@@ -125,6 +126,7 @@ import type {
   Trade,
 } from "../../api/types";
 import { ADJUSTMENT_TYPES } from "../registries/vocabulary";
+import { isRfc3339Time } from "./rfc3339";
 
 type Json = Record<string, unknown>;
 
@@ -1952,6 +1954,12 @@ function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
     "TradingCredentialsUnavailable",
     "trading_credentials_unavailable",
   );
+  const tradingDisabledNonRelease = pick(
+    o,
+    "tradingDisabledNonRelease",
+    "TradingDisabledNonRelease",
+    "trading_disabled_non_release",
+  );
   if (
     !isObject(applied) ||
     !isObject(skipped) ||
@@ -1964,6 +1972,11 @@ function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
     (tradingCredentialsUnavailable !== undefined &&
       (!Array.isArray(tradingCredentialsUnavailable) ||
         !tradingCredentialsUnavailable.every(
+          (connection) => typeof connection === "string",
+        ))) ||
+    (tradingDisabledNonRelease !== undefined &&
+      (!Array.isArray(tradingDisabledNonRelease) ||
+        !tradingDisabledNonRelease.every(
           (connection) => typeof connection === "string",
         )))
   ) {
@@ -1979,6 +1992,9 @@ function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
       | string[]
       | undefined,
     tradingCredentialsUnavailable: tradingCredentialsUnavailable as
+      | string[]
+      | undefined,
+    tradingDisabledNonRelease: tradingDisabledNonRelease as
       | string[]
       | undefined,
     restartRequired,
@@ -2053,6 +2069,7 @@ async function createTradingConnection(
     mode: TradingMode;
     credentials: Record<string, string>;
     enabled: boolean;
+    nonReleaseConfirmed?: boolean;
   },
 ): Promise<TradingConnection> {
   const v = await client.request(`${client.baseUrl}/trading/connections`, {
@@ -2083,10 +2100,17 @@ async function setTradingConnectionEnabled(
   client: ApiClient,
   id: string,
   enabled: boolean,
+  nonReleaseConfirmed?: boolean,
 ): Promise<boolean> {
   const v = await client.request(
     `${client.baseUrl}/trading/connections/${encode(id)}/enabled`,
-    { method: "PUT", body: { enabled } },
+    {
+      method: "PUT",
+      body:
+        nonReleaseConfirmed === undefined
+          ? { enabled }
+          : { enabled, nonReleaseConfirmed },
+    },
   );
   const o = isObject(v) ? v : {};
   if (typeof o.enabled !== "boolean") {
@@ -2588,6 +2612,72 @@ async function resetDatabase(client: ApiClient): Promise<void> {
     method: "POST",
     body: { confirm: true },
   });
+}
+
+function decodePreMigrationBackup(value: unknown): PreMigrationBackup {
+  if (
+    !isObject(value) ||
+    typeof value.name !== "string" ||
+    value.name === "" ||
+    !isRfc3339Time(value.createdAt) ||
+    typeof value.sizeBytes !== "number" ||
+    !Number.isSafeInteger(value.sizeBytes) ||
+    value.sizeBytes < 0
+  ) {
+    throw new ApiError(
+      "Invalid pre-migration backup in the API response",
+      "internal",
+    );
+  }
+  return {
+    name: value.name,
+    createdAt: value.createdAt,
+    sizeBytes: value.sizeBytes,
+  };
+}
+
+/** GET /database/pre-migration-backups - raw copies, newest first. */
+async function listPreMigrationBackups(
+  client: ApiClient,
+  signal?: AbortSignal,
+): Promise<PreMigrationBackup[]> {
+  const value = await client.request(
+    `${client.baseUrl}/database/pre-migration-backups`,
+    { signal },
+  );
+  if (!isObject(value) || !Array.isArray(value.backups)) {
+    throw new ApiError(
+      "Invalid or missing pre-migration backups in the API response",
+      "internal",
+    );
+  }
+  return value.backups.map(decodePreMigrationBackup);
+}
+
+/** POST /database/pre-migration-backups/{name}/download - the raw copy. */
+async function downloadPreMigrationBackup(
+  client: ApiClient,
+  name: string,
+): Promise<{ blob: Blob; filename: string }> {
+  return client.requestBlob(
+    `${client.baseUrl}/database/pre-migration-backups/${encode(name)}/download`,
+    {
+      method: "POST",
+      accept: "application/octet-stream",
+      fallbackFilename: name,
+    },
+  );
+}
+
+/** DELETE /database/pre-migration-backups/{name}. */
+async function deletePreMigrationBackup(
+  client: ApiClient,
+  name: string,
+): Promise<void> {
+  await client.request(
+    `${client.baseUrl}/database/pre-migration-backups/${encode(name)}`,
+    { method: "DELETE" },
+  );
 }
 
 /** Same-origin URL for the full-buffer log download, used as an anchor href so
@@ -4663,6 +4753,9 @@ export function createOfficerApi(client: ApiClient) {
     exportBackup: bind(exportBackup),
     restoreBackup: bind(restoreBackup),
     resetDatabase: bind(resetDatabase),
+    listPreMigrationBackups: bind(listPreMigrationBackups),
+    downloadPreMigrationBackup: bind(downloadPreMigrationBackup),
+    deletePreMigrationBackup: bind(deletePreMigrationBackup),
     fetchAccountsPage: bind(fetchAccountsPage),
     fetchAccounts: bind(fetchAccounts),
     createAccount: bind(createAccount),

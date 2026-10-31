@@ -56,6 +56,13 @@ vi.mock("@/api/useAccounts", async () => ({
 }));
 vi.mock("@/api/useGroups", () => ({ useGroupsPage: vi.fn() }));
 vi.mock("@/api/useTrading", () => ({ useTrading: vi.fn() }));
+// PreMigrationBackupBanner polls GET /database/pre-migration-backups.
+vi.mock("@/api/usePreMigrationBackups", () => ({
+  usePreMigrationBackups: () => ({
+    load: { state: "ready", data: [], error: null },
+    reload: () => {},
+  }),
+}));
 // SensitiveDataBanner polls GET /credential-storage.
 vi.mock("@/api/useCredentialStorage", () => ({
   useCredentialStorage: () => ({

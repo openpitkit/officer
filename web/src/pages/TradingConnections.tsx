@@ -67,6 +67,16 @@ import {
   TableSkeleton,
 } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -1255,6 +1265,7 @@ function ConnectionCard({
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [feeRequired, setFeeRequired] = useState(false);
+  const [confirmingNonRelease, setConfirmingNonRelease] = useState(false);
   const [checkError, setCheckError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [check, setCheck] = useState<TradingConnectionCheck | null>(null);
@@ -1529,11 +1540,23 @@ function ConnectionCard({
               size="sm"
               disabled={busy}
               onClick={() => {
-                void run(() =>
-                  api.setTradingConnectionEnabled(
-                    connection.id,
-                    !connection.enabled,
-                  ),
+                void run(
+                  () =>
+                    api.setTradingConnectionEnabled(
+                      connection.id,
+                      !connection.enabled,
+                    ),
+                  (err) => {
+                    if (
+                      !connection.enabled &&
+                      err instanceof ApiError &&
+                      err.code === "non_release_confirmation_required"
+                    ) {
+                      setConfirmingNonRelease(true);
+                      return true;
+                    }
+                    return false;
+                  },
                 );
               }}
             >
@@ -1692,6 +1715,33 @@ function ConnectionCard({
           reload={reload}
         />
       )}
+      <AlertDialog
+        open={confirmingNonRelease}
+        onOpenChange={setConfirmingNonRelease}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("nonReleaseConfirm.title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("nonReleaseConfirm.description")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{tc("actions.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="danger"
+              onClick={() => {
+                setConfirmingNonRelease(false);
+                void run(() =>
+                  api.setTradingConnectionEnabled(connection.id, true, true),
+                );
+              }}
+            >
+              {t("nonReleaseConfirm.action")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <RevokeAccessDialog
         open={revokeSubject !== null}
         subject={revokeSubject}

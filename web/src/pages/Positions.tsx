@@ -149,6 +149,7 @@ import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 import { accountScope } from "@/lib/accountScope";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { operatorOptions } from "@/lib/dataControlLabels";
+import { downloadBlob } from "@/lib/download";
 import { isDecimalRangeValid } from "@/lib/numberStep";
 import { cn } from "@/lib/utils";
 
@@ -315,14 +316,7 @@ function csvCell(value: string | number | undefined): string {
 function downloadCsv(filename: string, rows: string[][]): void {
   const body = rows.map((row) => row.map(csvCell).join(",")).join("\n");
   const blob = new Blob([body, "\n"], { type: "text/csv;charset=utf-8" });
-  const href = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(href);
+  downloadBlob(blob, filename);
 }
 
 function adjustmentCsvRow(adj: Adjustment): string[] {

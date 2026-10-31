@@ -412,6 +412,11 @@ describe("Setup", () => {
       expect(
         screen.getByText("Officer is closed until setup is finished"),
       ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Release builds copy the database before every migration",
+        ),
+      ).toBeInTheDocument();
       await user.click(next("Start setup"));
 
       await heading(TITLES.accounts);
@@ -1237,6 +1242,11 @@ describe("SetupReview", () => {
     expect(screen.getByText("Step 1 of 7")).toBeInTheDocument();
     expect(
       screen.queryByText("Officer is closed until setup is finished"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Release builds copy the database before every migration",
+      ),
     ).not.toBeInTheDocument();
     // The review starts nothing.
     expect(next()).toBeEnabled();

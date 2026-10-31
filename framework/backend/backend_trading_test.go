@@ -246,15 +246,114 @@ func tradingTestConnection() domain.TradingConnection {
 	return domain.TradingConnection{ExternalID: "connection-1", Provider: "venue", Label: "Paper", Mode: domain.TradingModePaper, VenueIdentity: "venue-1", Credentials: `{"apiKey":"test-key-value","apiSecret":"test-secret-value"}`, Enabled: true}
 }
 
-func newTradingTestService(t *testing.T) (*Service, *tradingTestNode, *tradingTestRuntime) {
+func newTradingTestService(t *testing.T, opts ...Option) (*Service, *tradingTestNode, *tradingTestRuntime) {
 	t.Helper()
 	n := &tradingTestNode{}
 	rt := &tradingTestRuntime{identity: "venue-1", providers: []trading.Provider{{Type: "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}}}
-	s, err := New(n, nil, nil, testLockSettlementPrice, WithTradingRuntime(rt))
+	s, err := New(n, nil, nil, testLockSettlementPrice, append([]Option{WithTradingRuntime(rt)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s, n, rt
+}
+
+func TestTradingNonReleaseConfirmation(t *testing.T) {
+	for _, operation := range []string{"create", "enable"} {
+		for _, nonRelease := range []bool{false, true} {
+			for name, caller := range map[string]domain.Caller{
+				"panel":  tradingTestOperators["panel"],
+				"api":    tradingTestOperators["api"],
+				"system": tradingTestOperators["system"],
+				"mcp":    tradingTestAgent,
+			} {
+				for _, enabled := range []bool{false, true} {
+					for _, confirmed := range []bool{false, true} {
+						t.Run(fmt.Sprintf("%s/non-release=%t/%s/enabled=%t/confirmed=%t",
+							operation, nonRelease, name, enabled, confirmed), func(t *testing.T) {
+							var opts []Option
+							if nonRelease {
+								opts = append(opts, WithNonReleaseBuild())
+							}
+							s, n, rt := newTradingTestService(t, opts...)
+							ctx := auth.ContextWithCaller(context.Background(), caller)
+							c := tradingTestConnection()
+							c.Enabled = enabled
+							var wantErr error
+							if caller.TightenOnly() && (operation == "create" || enabled) {
+								wantErr = domain.ErrLoosening
+							} else if nonRelease && enabled && (name != "panel" || !confirmed) {
+								wantErr = domain.ErrNonReleaseConfirmation
+							}
+							var err error
+							wantWrites, wantChecks, wantRestarts := 0, 0, 0
+							if operation == "create" {
+								_, err = s.CreateTradingConnection(ctx, c, confirmed)
+							} else {
+								c.Enabled = !enabled
+								n.connections = []domain.TradingConnection{c}
+								if caller.TightenOnly() && enabled {
+									// The node enforces tighten-only enables.
+									n.writeErr = domain.ErrLoosening
+									wantWrites = 1
+								}
+								err = s.SetTradingConnectionEnabled(ctx, c.ExternalID.String(), enabled, confirmed)
+							}
+							if !errors.Is(err, wantErr) {
+								t.Fatalf("%s = %v, want %v", operation, err, wantErr)
+							}
+							if wantErr == nil {
+								wantWrites = 1
+								if operation == "create" {
+									wantChecks = 1
+								}
+								if enabled {
+									wantRestarts = 1
+								}
+							}
+							if len(rt.checks) != wantChecks || len(n.writes) != wantWrites || rt.restarts != wantRestarts {
+								t.Fatalf("%s: venue checks %d, writes %v, restarts %d; want %d, %d, %d",
+									operation, len(rt.checks), n.writes, rt.restarts, wantChecks, wantWrites, wantRestarts)
+							}
+							wantConnections := 1
+							if operation == "create" && wantErr != nil {
+								wantConnections = 0
+							}
+							if len(n.connections) != wantConnections {
+								t.Fatalf("connections = %d, want %d", len(n.connections), wantConnections)
+							}
+							if wantConnections != 0 {
+								wantEnabled := enabled
+								if wantErr != nil {
+									wantEnabled = !enabled
+								}
+								if n.connections[0].Enabled != wantEnabled {
+									t.Fatalf("stored enabled = %t, want %t", n.connections[0].Enabled, wantEnabled)
+								}
+							}
+							if wantErr == domain.ErrLoosening && errors.Is(err, domain.ErrNonReleaseConfirmation) {
+								t.Fatalf("tighten-only refusal also wraps ErrNonReleaseConfirmation: %v", err)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestTradingNonReleaseCreateConfirmationBeforeValidation(t *testing.T) {
+	s, n, rt := newTradingTestService(t, WithNonReleaseBuild())
+	c := tradingTestConnection()
+	c.Mode = "invalid"
+	ctx := auth.ContextWithCaller(context.Background(), tradingTestOperators["panel"])
+	_, err := s.CreateTradingConnection(ctx, c, false)
+	if !errors.Is(err, domain.ErrNonReleaseConfirmation) {
+		t.Fatalf("create invalid settings without confirmation = %v, want ErrNonReleaseConfirmation", err)
+	}
+	if len(rt.checks) != 0 || len(n.writes) != 0 || rt.restarts != 0 {
+		t.Fatalf("refused create: venue checks %d, writes %v, restarts %d, want none",
+			len(rt.checks), n.writes, rt.restarts)
+	}
 }
 
 func TestTradingCreate(t *testing.T) {
@@ -281,7 +380,7 @@ func TestTradingCreate(t *testing.T) {
 			c.VenueIdentity = "caller-supplied-identity"
 			c.Enabled, c.Mode, c.Provider, c.Label = tc.enabled, tc.mode, tc.provider, tc.label
 			c.Credentials = " " + c.Credentials + " "
-			created, err := s.CreateTradingConnection(systemCtx(), c)
+			created, err := s.CreateTradingConnection(systemCtx(), c, false)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("create error = %v, want %v", err, tc.wantErr)
@@ -323,7 +422,7 @@ func TestTradingCreate(t *testing.T) {
 				t.Fatal("incorrect restart or caller")
 			}
 			c.Label = "Other"
-			if _, err := s.CreateTradingConnection(systemCtx(), c); !errors.Is(err, domain.ErrAlreadyExists) {
+			if _, err := s.CreateTradingConnection(systemCtx(), c, false); !errors.Is(err, domain.ErrAlreadyExists) {
 				t.Fatalf("duplicate identity = %v", err)
 			}
 			if len(n.connections) != 1 || rt.restarts != wantRestarts {
@@ -410,7 +509,7 @@ func TestTradingCreateRefusesFeeAccountBeforeVenue(t *testing.T) {
 	s, n, rt := newTradingTestService(t)
 	c := tradingTestConnection()
 	c.FeeAccount = "fee-account"
-	_, err := s.CreateTradingConnection(systemCtx(), c)
+	_, err := s.CreateTradingConnection(systemCtx(), c, false)
 	if len(rt.checks) != 0 || len(n.writes) != 0 || rt.restarts != 0 {
 		t.Fatal("create with fee account reached venue or mutated state")
 	}
@@ -433,7 +532,7 @@ func TestTradingSearchDoesNotBlockEnable(t *testing.T) {
 	<-rt.searchEntered
 	enableDone := make(chan error, 1)
 	go func() {
-		enableDone <- s.SetTradingConnectionEnabled(systemCtx(), "connection-1", true)
+		enableDone <- s.SetTradingConnectionEnabled(systemCtx(), "connection-1", true, false)
 	}()
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
@@ -589,7 +688,7 @@ func TestTradingCreateCredentialRefusalIsValidation(t *testing.T) {
 	s, n, rt := newTradingTestService(t)
 	rt.checkErr = fmt.Errorf("trading: build connector: %w",
 		domain.NewValidationError("/credentials/apiKey", "format", "key test-key-value is malformed"))
-	_, err := s.CreateTradingConnection(systemCtx(), tradingTestConnection())
+	_, err := s.CreateTradingConnection(systemCtx(), tradingTestConnection(), false)
 	if !errors.Is(err, domain.ErrInvalid) || errors.Is(err, domain.ErrUpstream) {
 		t.Fatalf("create error = %v, want validation and not upstream", err)
 	}
@@ -609,7 +708,7 @@ func TestTradingCreateBlankCredentialKeepsRefusalText(t *testing.T) {
 	rt.checkErr = domain.NewValidationError("/credentials/apiKey", "required", "alpaca: apiKey is required")
 	c := tradingTestConnection()
 	c.Credentials = `{"apiKey":" ","apiSecret":"test-secret-value"}`
-	_, err := s.CreateTradingConnection(systemCtx(), c)
+	_, err := s.CreateTradingConnection(systemCtx(), c, false)
 	if err == nil || err.Error() != "alpaca: apiKey is required" {
 		t.Fatalf("blank key refusal = %v, want the text intact", err)
 	}
@@ -618,7 +717,7 @@ func TestTradingCreateBlankCredentialKeepsRefusalText(t *testing.T) {
 func TestTradingCreateProviderInvalidOutsideCredentialsIsUpstream(t *testing.T) {
 	s, _, rt := newTradingTestService(t)
 	rt.checkErr = fmt.Errorf("trading: provider %q returned no connector: %w", "venue", domain.ErrInvalid)
-	_, err := s.CreateTradingConnection(systemCtx(), tradingTestConnection())
+	_, err := s.CreateTradingConnection(systemCtx(), tradingTestConnection(), false)
 	if !errors.Is(err, domain.ErrUpstream) {
 		t.Fatalf("create error = %v, want upstream", err)
 	}
@@ -638,7 +737,7 @@ func TestTradingUpstreamCause(t *testing.T) {
 				var err error
 				switch operation {
 				case "create":
-					_, err = s.CreateTradingConnection(systemCtx(), tradingTestConnection())
+					_, err = s.CreateTradingConnection(systemCtx(), tradingTestConnection(), false)
 				case "update":
 					err = s.UpdateTradingConnectionSettings(systemCtx(), "connection-1", "", `{"extra":"value"}`)
 				case "check":
@@ -1078,13 +1177,13 @@ func TestTradingMutations(t *testing.T) {
 	if err := s.RemoveTradingAccess(ctx, access.Connection, access.Account, ""); err != nil || len(n.access) != 0 {
 		t.Fatal("access removal failed")
 	}
-	if err := s.SetTradingConnectionEnabled(ctx, " connection-1 ", false); err != nil || n.connections[0].Enabled || rt.restarts != 0 {
+	if err := s.SetTradingConnectionEnabled(ctx, " connection-1 ", false, false); err != nil || n.connections[0].Enabled || rt.restarts != 0 {
 		t.Fatal("disable restarted or failed")
 	}
-	if err := s.SetTradingConnectionEnabled(ctx, "connection-1", true); err != nil || !n.connections[0].Enabled || rt.restarts != 1 {
+	if err := s.SetTradingConnectionEnabled(ctx, "connection-1", true, false); err != nil || !n.connections[0].Enabled || rt.restarts != 1 {
 		t.Fatal("enable did not restart")
 	}
-	if err := s.SetTradingConnectionEnabled(ctx, "missing", true); !errors.Is(err, domain.ErrNotFound) || rt.restarts != 1 {
+	if err := s.SetTradingConnectionEnabled(ctx, "missing", true, false); !errors.Is(err, domain.ErrNotFound) || rt.restarts != 1 {
 		t.Fatal("failed enable restarted")
 	}
 	caller, _ := auth.CallerFromContext(ctx)
@@ -1098,9 +1197,9 @@ func TestTradingMutations(t *testing.T) {
 func tradingTestCalls(s *Service, ctx context.Context) map[string]func() error {
 	return map[string]func() error{
 		"get":    func() error { _, err := s.GetTrading(ctx); return err },
-		"create": func() error { _, err := s.CreateTradingConnection(ctx, tradingTestConnection()); return err },
+		"create": func() error { _, err := s.CreateTradingConnection(ctx, tradingTestConnection(), false); return err },
 		"update": func() error { return s.UpdateTradingConnectionSettings(ctx, "connection-1", "Other", "") },
-		"enable": func() error { return s.SetTradingConnectionEnabled(ctx, "connection-1", true) },
+		"enable": func() error { return s.SetTradingConnectionEnabled(ctx, "connection-1", true, false) },
 		"check":  func() error { _, err := s.CheckTradingConnection(ctx, "connection-1"); return err },
 		"instrument": func() error {
 			return s.UpsertTradingInstrument(ctx, domain.TradingInstrument{Connection: "connection-1", ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD"})
@@ -1150,7 +1249,7 @@ func TestTradingRequiresRuntime(t *testing.T) {
 func TestTradingRestartFailure(t *testing.T) {
 	s, n, rt := newTradingTestService(t)
 	rt.restartErr = domain.ErrConflict
-	if _, err := s.CreateTradingConnection(systemCtx(), tradingTestConnection()); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "configuration was saved") {
+	if _, err := s.CreateTradingConnection(systemCtx(), tradingTestConnection(), false); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "configuration was saved") {
 		t.Fatalf("create restart failure = %v", err)
 	}
 	if len(n.connections) != 1 {
@@ -1190,7 +1289,7 @@ func TestTradingAgentCreateRefusedBeforeVenue(t *testing.T) {
 	t.Run("agent", func(t *testing.T) {
 		s, n, rt := newTradingTestService(t)
 		ctx := auth.ContextWithCaller(context.Background(), tradingTestAgent)
-		_, err := s.CreateTradingConnection(ctx, tradingTestConnection())
+		_, err := s.CreateTradingConnection(ctx, tradingTestConnection(), false)
 		if !errors.Is(err, domain.ErrLoosening) {
 			t.Fatalf("agent create = %v, want ErrLoosening", err)
 		}
@@ -1205,7 +1304,7 @@ func TestTradingAgentCreateRefusedBeforeVenue(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, n, rt := newTradingTestService(t)
 			ctx := auth.ContextWithCaller(context.Background(), caller)
-			if _, err := s.CreateTradingConnection(ctx, tradingTestConnection()); err != nil {
+			if _, err := s.CreateTradingConnection(ctx, tradingTestConnection(), false); err != nil {
 				t.Fatalf("create: %v", err)
 			}
 			if len(rt.checks) != 1 || len(n.connections) != 1 || rt.restarts != 1 ||

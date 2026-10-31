@@ -1,10 +1,42 @@
 {
+  "nonRelease": {
+    "banner": "Os dados desta compilação nunca serão migrados.",
+    "title": "Selecione o banco de dados desta compilação",
+    "noticeTitle": "Esta compilação é apenas para testes rápidos",
+    "notice": "Seus dados não são transferidos para uma versão publicada nem para a próxima compilação. Ela pode corromper seus próprios dados. Uma versão publicada não verá suas ordens.",
+    "note": "Esta compilação nunca altera o banco de dados da versão publicada.",
+    "copy": {
+      "title": "Copiar o banco de dados da versão publicada",
+      "description": "Criar uma cópia instantânea somente para leitura do banco de dados da versão publicada e migrar a cópia para esta compilação. As conexões de negociação na cópia ficam desativadas; ativar cada uma posteriormente exige uma confirmação separada. Pare a versão publicada antes de copiar."
+    },
+    "empty": {
+      "title": "Iniciar com um banco de dados vazio",
+      "description": "Criar um banco de dados vazio para esta compilação. Em seguida, será aberto o assistente de configuração habitual."
+    },
+    "noReleaseDatabase": "Banco de dados estável não encontrado",
+    "preparing": "Preparando o banco de dados desta compilação…",
+    "confirm": {
+      "title": "Preparar o banco de dados desta compilação?",
+      "copy": "Pare primeiro a versão publicada. Uma cópia instantânea somente para leitura será copiada e migrada para esta compilação, com as conexões de negociação desativadas. Ativar cada uma posteriormente exige uma confirmação separada.",
+      "empty": "Um banco de dados vazio será criado para esta compilação e o assistente de configuração será aberto.",
+      "action": "Preparar banco de dados"
+    },
+    "failureTitle": "Não foi possível preparar esta compilação"
+  },
   "sensitiveData": {
     "title": "Os dados confidenciais estão armazenados sem criptografia",
     "detail": "O Officer funciona sem chave mestra: as chaves de API e os tokens armazenados ficam em texto claro no banco de dados e nas cópias de segurança. Configure uma chave mestra para armazená-los criptografados.",
     "masterKeyLink": "Como configurar uma chave mestra",
     "unknown": "Não foi possível verificar se as chaves armazenadas estão criptografadas: {{error}}",
     "checking": "Verificando se as chaves armazenadas estão criptografadas…"
+  },
+  "preMigrationBackup": {
+    "title": "Há uma cópia do seu banco de dados anterior à migração",
+    "detail": "Antes de migrar, o Officer copiou o banco de dados para junto dele. Baixe a cópia e guarde-a: mesmo que a migração não tenha relatado erros, problemas podem aparecer depois.",
+    "neverDeleted": "O Officer nunca exclui a cópia por conta própria.",
+    "entry": "Cópia de {{time}}, {{size}}",
+    "deleteConfirm": "Excluir a cópia {{name}}? Ela não poderá ser restaurada.",
+    "unknown": "Não foi possível listar as cópias do banco de dados feitas antes de uma migração: {{error}}"
   },
   "language": {
     "label": "Idioma",
@@ -39,8 +71,10 @@
     "decrement": "Diminuir",
     "setUpTradingConnection": "Configurar uma conexão de negociação",
     "back": "Voltar",
+    "continue": "Continuar",
     "show": "Mostrar",
-    "hide": "Ocultar"
+    "hide": "Ocultar",
+    "download": "Baixar"
   },
   "filters": {
     "venueLabel": "Plataforma",

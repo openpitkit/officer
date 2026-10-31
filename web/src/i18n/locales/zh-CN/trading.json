@@ -1,4 +1,9 @@
 {
+  "nonReleaseConfirm": {
+    "title": "在非正式版本中启用交易？",
+    "description": "此非正式版本仅供快速测试。启用此连接将允许它向交易场所发送真实订单。正式版本不会看到此构建版本发送的订单。此构建版本可能损坏自身的数据。",
+    "action": "启用交易"
+  },
   "unknownVenue": "未知交易场所 {{provider}}",
   "empty": {
     "description": "配置交易连接以向交易场所发送订单。"

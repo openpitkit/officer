@@ -30,6 +30,11 @@ export interface ChoiceCard<Choice extends string> {
   icon: LucideIcon;
   /** A mark under the description, such as "Recommended". */
   badge?: string;
+  /**
+   * Why the option cannot be chosen now. The card stays in the group,
+   * disabled, with this reason under its description.
+   */
+  unavailable?: string;
 }
 
 /**
@@ -65,7 +70,9 @@ export function ChoiceCards<Choice extends string>({
         const titleId = `${name}-${option.value}-title`;
         const descriptionId = `${name}-${option.value}-description`;
         const badgeId = `${name}-${option.value}-badge`;
+        const unavailableId = `${name}-${option.value}-unavailable`;
         const Icon = option.icon;
+        const off = disabled || option.unavailable !== undefined;
         return (
           <label
             key={option.value}
@@ -75,10 +82,11 @@ export function ChoiceCards<Choice extends string>({
               checked
                 ? "border-accent bg-accent-dim shadow-[inset_0_0_0_1px_var(--accent)]"
                 : "border-border bg-surface",
-              disabled
-                ? "cursor-not-allowed opacity-50"
+              off
+                ? "cursor-not-allowed"
                 : "cursor-pointer hover:border-border-hover",
-              !checked && !disabled && "hover:bg-card-hover-bg",
+              disabled && "opacity-50",
+              !checked && !off && "hover:bg-card-hover-bg",
             )}
           >
             <input
@@ -86,17 +94,24 @@ export function ChoiceCards<Choice extends string>({
               name={name}
               value={option.value}
               checked={checked}
-              disabled={disabled}
+              disabled={off}
               onChange={() => onChange(option.value)}
               aria-labelledby={titleId}
-              aria-describedby={
-                option.badge === undefined
-                  ? descriptionId
-                  : `${descriptionId} ${badgeId}`
-              }
+              aria-describedby={[
+                descriptionId,
+                option.badge === undefined ? null : badgeId,
+                option.unavailable === undefined ? null : unavailableId,
+              ]
+                .filter((id) => id !== null)
+                .join(" ")}
               className="sr-only"
             />
-            <span className="flex items-center gap-2.5">
+            <span
+              className={cn(
+                "flex items-center gap-2.5",
+                option.unavailable !== undefined && "opacity-50",
+              )}
+            >
               <span
                 aria-hidden="true"
                 className={cn(
@@ -120,12 +135,23 @@ export function ChoiceCards<Choice extends string>({
               />
             </span>
             <span className="flex flex-col gap-1.5 pl-[25px]">
-              <span id={descriptionId} className="text-xs text-muted-lt">
+              <span
+                id={descriptionId}
+                className={cn(
+                  "text-xs text-muted-lt",
+                  option.unavailable !== undefined && "opacity-50",
+                )}
+              >
                 {option.description}
               </span>
               {option.badge !== undefined && (
                 <Badge id={badgeId} variant="ok" className="w-fit">
                   {option.badge}
+                </Badge>
+              )}
+              {option.unavailable !== undefined && (
+                <Badge id={unavailableId} variant="warn" className="w-fit">
+                  {option.unavailable}
                 </Badge>
               )}
             </span>

@@ -32,11 +32,16 @@ import (
 	"os"
 	"path/filepath"
 
+	fwbackend "go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/internal/config"
 )
 
-// stateFile is the runtime-state filename placed alongside the SQLite database.
-const stateFile = "officer-runtime.json"
+func stateFile(release bool) string {
+	if release {
+		return "officer-runtime.json"
+	}
+	return "officer-runtime.non-release.json"
+}
 
 // State is the runtime record a serve instance publishes. Addr is the actual
 // bound listen address (host:port, with the resolved port); URL is the
@@ -49,11 +54,12 @@ type State struct {
 	StartedAt string `json:"startedAt"`
 }
 
-// StatePath returns the runtime-state file path derived from cfg. It is stable
-// across serve, dashboard, and healthcheck: all derive it from the SQLite path
-// without knowing the resolved port. It sits next to the database.
+// StatePath returns the runtime-state file path next to the configured database.
+// Its name depends on the build kind: officer-runtime.json for a release build,
+// officer-runtime.non-release.json otherwise. Release and non-release commands
+// therefore do not see each other's state.
 func StatePath(cfg config.Config) string {
-	return filepath.Join(filepath.Dir(cfg.SQLitePath), stateFile)
+	return filepath.Join(filepath.Dir(cfg.SQLitePath), stateFile(fwbackend.ReleaseBuild()))
 }
 
 // Write persists state atomically: it writes a temp file in the target
@@ -66,7 +72,7 @@ func Write(cfg config.Config, state State) error {
 		return fmt.Errorf("runtime: marshal state: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), stateFile+".tmp-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("runtime: create temp state: %w", err)
 	}
