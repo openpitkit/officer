@@ -545,7 +545,8 @@ func TestSetMarketDataInstrumentToolRefusesEnable(t *testing.T) {
 
 // appliedAsListed calls apply_adjustment on account with adjustment, requires
 // its result to be the body REST answers for the record the service lists
-// last for the account, and returns that record with the tool's text.
+// last for the account, and returns that record with the summary line of the
+// tool's text.
 func appliedAsListed(
 	t *testing.T, service *backend.Service, src frameworkmcp.Source,
 	account domain.AccountID, adjustment map[string]any,
@@ -566,7 +567,7 @@ func appliedAsListed(
 	}
 	record := httpx.ToAdjustmentDTO(listed[0])
 	assertResultBody(t, res.Wire, map[string]any{"adjustment": record})
-	return record, textContent(res.Content)
+	return record, summaryText(res.Content)
 }
 
 // outcomeJSON renders an adjustment outcome for a failure message.
@@ -792,7 +793,7 @@ func TestApplyAdjustmentRefusalsOnControlPlane(t *testing.T) {
 		"adjustment": map[string]any{"type": "deposit", "asset": "USD"},
 	})
 	requireNotToolError(t, res.IsError)
-	if got, want := textContent(res.Content), "the engine reported no change; no adjustment was recorded"; got != want {
+	if got, want := summaryText(res.Content), "the engine reported no change; no adjustment was recorded"; got != want {
 		t.Fatalf("no-change text = %q, want %q", got, want)
 	}
 	assertTradingWire(t, res.Wire, `{}`)

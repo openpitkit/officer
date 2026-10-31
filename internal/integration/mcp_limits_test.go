@@ -57,7 +57,7 @@ func (d setLimitDriver[Limit]) accepts(in map[string]any, text string, want Limi
 	if res.IsError {
 		d.t.Fatalf("set_limit %v: %s", in, textContent(res.Content))
 	}
-	if got := textContent(res.Content); got != text {
+	if got := summaryText(res.Content); got != text {
 		d.t.Fatalf("set_limit %v text = %q, want %q", in, got, text)
 	}
 	if got := d.stored(); !slices.Equal(got, []Limit{want}) {

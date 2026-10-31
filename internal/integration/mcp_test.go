@@ -298,6 +298,14 @@ func textContent(content []sdkmcp.Content) string {
 	return ""
 }
 
+// summaryText returns the summary line of a successful call's text: the text
+// without the structured content serialized as JSON on its last line, which
+// callTool checks on its own.
+func summaryText(content []sdkmcp.Content) string {
+	text := textContent(content)
+	return text[:max(strings.LastIndex(text, "\n"), 0)]
+}
+
 // mustExternalID parses a 22-char wire form into an ExternalID, failing the test
 // on a malformed handle. It lets the tests build machine-record fixtures keyed by
 // their opaque public handle, the only id the MCP surface ever speaks.
@@ -352,7 +360,7 @@ func TestHealthHappyPath(t *testing.T) {
 	if res.StructuredContent.Node.Engine.Version != "v1.2.3" {
 		t.Error("wrong engine version")
 	}
-	if got := textContent(res.Content); got != "officer healthy" {
+	if got := summaryText(res.Content); got != "officer healthy" {
 		t.Errorf("unexpected text: %q", got)
 	}
 }
@@ -366,7 +374,7 @@ func TestHealthDegraded(t *testing.T) {
 	if res.StructuredContent.Healthy {
 		t.Error("want healthy:false")
 	}
-	if got := textContent(res.Content); got != "officer degraded" {
+	if got := summaryText(res.Content); got != "officer degraded" {
 		t.Errorf("unexpected text: %q", got)
 	}
 }
@@ -524,7 +532,7 @@ func TestGetAccountStateGroupBlockedAccount(t *testing.T) {
 		t.Error("want groupBlocked:true")
 	}
 	const wantSummary = "account acc-3: 0 limit(s) - blocked (group)"
-	if got := textContent(res.Content); got != wantSummary {
+	if got := summaryText(res.Content); got != wantSummary {
 		t.Errorf("summary hides the block: %q", got)
 	}
 }
@@ -567,7 +575,7 @@ func TestGetAccountStateBothTiersBlocked(t *testing.T) {
 		)
 	}
 	const wantSummary = "account acc-4: 0 limit(s) - blocked (account)"
-	if got := textContent(res.Content); got != wantSummary {
+	if got := summaryText(res.Content); got != wantSummary {
 		t.Errorf("summary names the wrong tier: %q", got)
 	}
 }
@@ -593,7 +601,7 @@ func TestGetAccountStateUnknownGroup(t *testing.T) {
 			account.GroupBlocked, account.GroupBlockReason,
 		)
 	}
-	if got := textContent(res.Content); strings.Contains(got, "blocked") {
+	if got := summaryText(res.Content); strings.Contains(got, "blocked") {
 		t.Errorf("summary reports a block: %q", got)
 	}
 }
@@ -693,7 +701,7 @@ func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
 	}}
 	res := callGetLimits(t, src, "acc-spot")
 	requireNotToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "1 limit(s)" {
+	if got := summaryText(res.Content); got != "1 limit(s)" {
 		t.Fatalf("summary = %q, want 1 limit(s)", got)
 	}
 	limits := res.StructuredContent.Limits
@@ -1159,7 +1167,7 @@ func TestCheckOrderPass(t *testing.T) {
 	if len(src.checkProbes) != 1 || src.checkProbes[0].Side != domain.OrderSideBuy {
 		t.Fatalf("probe not forwarded with mapped fields: %+v", src.checkProbes)
 	}
-	if got := textContent(res.Content); got != "check acc-1: pass" {
+	if got := summaryText(res.Content); got != "check acc-1: pass" {
 		t.Fatalf("unexpected text: %q", got)
 	}
 }
@@ -1189,7 +1197,7 @@ func TestCheckOrderReject(t *testing.T) {
 		res.StructuredContent.WouldBlock.Account != "acc-1" {
 		t.Fatalf("would-block not mapped: %+v", res.StructuredContent.WouldBlock)
 	}
-	if got := textContent(res.Content); got != "check acc-1: reject - 1 reason(s)" {
+	if got := summaryText(res.Content); got != "check acc-1: reject - 1 reason(s)" {
 		t.Fatalf("unexpected text: %q", got)
 	}
 }

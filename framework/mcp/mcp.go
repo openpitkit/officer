@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -547,7 +548,8 @@ func buildServer(
 	return server
 }
 
-// ToolBody is the typed body wrapped by Guard.
+// ToolBody is the typed body wrapped by Guard. Its string is the one-line
+// summary of a successful call; Guard appends the serialized output to it.
 type ToolBody[In, Out any] func(
 	context.Context,
 	*sdkmcp.ServerSession,
@@ -647,9 +649,27 @@ func toolErr[Out any](msg string) *sdkmcp.CallToolResult {
 	}
 }
 
+// toolOK answers a successful call. Its text block carries the body's summary
+// line followed by the structured content serialized as JSON, as the MCP spec
+// asks of a tool returning structured content: a client that hands its model
+// only the text - LM Studio, Cursor - still passes on every field, such as the
+// reject reasons of an order. A structured content that cannot be serialized
+// fails the call as a tool error naming the encoding failure.
 func toolOK[Out any](text string, out Out) *sdkmcp.CallToolResult {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	// Reasons and messages are read by a model, not embedded in HTML: keep
+	// their comparison signs and ampersands literal.
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(out); err != nil {
+		return toolErr[Out](fmt.Sprintf("encoding the tool result: %v", err))
+	}
+	data := strings.TrimSuffix(encoded.String(), "\n")
+	if text != "" {
+		data = text + "\n" + data
+	}
 	return &sdkmcp.CallToolResult{
-		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
+		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: data}},
 		StructuredContent: out,
 	}
 }

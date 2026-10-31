@@ -429,7 +429,7 @@ func TestSubmitOrderRiskRejectReturnsDecision(t *testing.T) {
 	if out.Reasons[0].Code != "insufficient_funds" {
 		t.Fatalf("reject reason = %+v", out.Reasons[0])
 	}
-	if got := textContent(res.Content); got != "order "+testOrderEID+" rejected - 1 reason(s)" {
+	if got := summaryText(res.Content); got != "order "+testOrderEID+" rejected - 1 reason(s)" {
 		t.Fatalf("summary = %q", got)
 	}
 }

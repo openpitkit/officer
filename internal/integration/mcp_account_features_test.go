@@ -244,7 +244,7 @@ func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 		if len(src.checkProbes) != 1 || src.checkProbes[0].Account != "" {
 			t.Fatalf("probes = %+v, want one with the account omitted", src.checkProbes)
 		}
-		if got := textContent(res.Content); got != "check default: pass" {
+		if got := summaryText(res.Content); got != "check default: pass" {
 			t.Fatalf("summary = %q, want it to name the one account", got)
 		}
 	})
@@ -285,7 +285,7 @@ func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 		}
 		res := callTool[map[string]any](t, src, getAccountStateToolName, map[string]any{})
 		requireNotToolError(t, res.IsError)
-		if got, want := textContent(res.Content), "account default: 0 limit(s)"; got != want {
+		if got, want := summaryText(res.Content), "account default: 0 limit(s)"; got != want {
 			t.Fatalf("summary = %q, want %q naming the one account", got, want)
 		}
 	})

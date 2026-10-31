@@ -662,8 +662,8 @@ func TestSendPaperOrderWire(t *testing.T) {
 					wantText += ": venue reason"
 				}
 			}
-			if len(result.Content) != 1 || textContent(result.Content) != wantText {
-				t.Fatalf("send text = %q, want %q", textContent(result.Content), wantText)
+			if len(result.Content) != 1 || summaryText(result.Content) != wantText {
+				t.Fatalf("send text = %q, want %q", summaryText(result.Content), wantText)
 			}
 			if !reflect.DeepEqual(src.arguments, []any{domain.Order{ExternalID: "order", Account: "desk", BaseAsset: "AAPL", QuoteAsset: "USD",
 				Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "10", Price: "2"},

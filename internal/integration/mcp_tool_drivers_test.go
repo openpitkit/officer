@@ -70,7 +70,7 @@ func runToolSuccess(t *testing.T, fixture recordedFixture, cases []toolSuccessCa
 				t.Fatalf("delegation mismatch: calls %v args %#v", recorder.calls, recorder.arguments)
 			}
 			assertTradingWire(t, res.Wire, tc.want)
-			if got := textContent(res.Content); got != tc.text {
+			if got := summaryText(res.Content); got != tc.text {
 				t.Fatalf("text = %q, want %q", got, tc.text)
 			}
 		})

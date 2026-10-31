@@ -21,6 +21,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -401,5 +403,34 @@ func callTool[Out any](
 			t.Fatalf("decode %s structured content: %v", name, err)
 		}
 	}
+	if !res.IsError {
+		requireTextCarriesStructuredContent(t, name, textContent(res.Content), out.Wire)
+	}
 	return out
+}
+
+// requireTextCarriesStructuredContent fails the test unless the text of a
+// successful call to the tool name ends with its structured content wire
+// serialized as JSON, after the summary line when there is one: a client that
+// hands its model only the text passes on every field of the structure.
+func requireTextCarriesStructuredContent(
+	t *testing.T, name, text string, wire json.RawMessage,
+) {
+	t.Helper()
+	serialized := text[strings.LastIndex(text, "\n")+1:]
+	var fromText, fromStructure any
+	if err := json.Unmarshal([]byte(serialized), &fromText); err != nil {
+		t.Fatalf("%s text %q does not end with the structured content as JSON: %v",
+			name, text, err)
+	}
+	if wire == nil {
+		// The client decodes an absent or null structuredContent to nil.
+		wire = json.RawMessage("null")
+	}
+	if err := json.Unmarshal(wire, &fromStructure); err != nil {
+		t.Fatalf("decode %s structured content: %v", name, err)
+	}
+	if !reflect.DeepEqual(fromText, fromStructure) {
+		t.Fatalf("%s text carries %s, structured content is %s", name, serialized, wire)
+	}
 }
