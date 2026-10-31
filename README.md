@@ -25,6 +25,8 @@ Open <http://127.0.0.1:8787>. `latest` is the newest release; your data stays
 in the `pit-officer-data` volume. Back up before every upgrade, and regularly,
 from Service > Database > Database backup > Export in the panel.
 
+To upgrade an installed Officer, see [Upgrade Officer](docs/quickstart.md#upgrade-officer).
+
 `edge` is the current development build, for quick tests only. Its data is
 disposable. Stop the release container first, then use the same volume:
 

@@ -201,6 +201,70 @@ settings.
 > **Warning:** `docker volume rm pit-officer-data` deletes all Officer data. It
 > is never the fix for anything on this page.
 
+## Upgrade Officer
+
+Officer does not upgrade itself. Before every upgrade,
+[back up your data](#your-data) in the panel and keep the backup file. Back up
+regularly too, not only before an upgrade.
+
+To upgrade to the newest version, run:
+
+```sh
+docker pull ghcr.io/openpitkit/officer
+docker stop pit-officer
+docker rm pit-officer
+docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer
+```
+
+To stay on one version, or to go back to an earlier one, put the version after
+a colon. The versions are listed on the
+[releases page](https://github.com/openpitkit/officer/releases); write them
+without the leading `v`. For example, for version 0.1.0:
+
+```sh
+docker pull ghcr.io/openpitkit/officer:0.1.0
+docker stop pit-officer
+docker rm pit-officer
+docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer:0.1.0
+```
+
+To go back, then restore the backup you made before the upgrade. In the panel,
+open Service, select the Database tab, find the Database backup card, and
+select Restore. Keep All data checked, choose "Delete selected data, then
+restore", choose the backup file, select Restore, and confirm.
+
+If the panel then shows a red NON-RELEASE banner and asks which data to use, see
+[The panel asks which data to use](#the-panel-asks-which-data-to-use).
+
+<details>
+<summary>What these commands do</summary>
+
+- A container never upgrades itself. `docker pull` downloads the new image.
+  Without a version after the colon, the image is the newest release.
+- `docker stop` and `docker rm` remove only the old container. Without them,
+  `docker run` fails, because the name `pit-officer` is taken.
+- `docker run` creates a new container from the new image, with the same name,
+  port and volume. Pass the same extra settings you gave before, for example a
+  master key.
+- Your data lives in the volume `pit-officer-data`, not in the container, so it
+  survives the upgrade, and the new version opens it.
+- A version after the colon keeps Officer on that version: `docker pull` never
+  brings a newer one. To move on, run the commands with the new version, or
+  without a version for the newest.
+- Docker cannot take an upgrade back. The backup file is your way back: going
+  back restores your data as it was when you made the backup, and loses what
+  changed after that.
+- When a new version changes how it stores data, Officer itself first keeps a
+  copy of the database in the volume, but the upgrade from 0.1 to 0.2 changes
+  nothing there, so no such copy appears and your own backup is the one that
+  counts.
+- If Officer does not become ready after the upgrade, see
+  [Officer is not ready or the panel does not
+  open](#officer-is-not-ready-or-the-panel-does-not-open). A master key left
+  out of the new `docker run` stops an Officer that was given one before.
+
+</details>
+
 ## Trying the development build
 
 `edge` is the current development build, for quick tests only. The panel marks
@@ -394,6 +458,25 @@ When Officer works, its log has a line with `panel listening` and the panel
 address, and the readiness check reports `"Status":"healthy"`. The readiness
 check's own messages appear only in the second command's output, not in
 `docker logs`.
+
+### The panel asks which data to use
+
+The panel shows a red NON-RELEASE banner, and its first screen asks which data
+to use: Copy the release database, or Start with an empty database.
+
+The image you started is a development build such as `edge`, not a release. A
+development build never changes your release data, so your data is as it was.
+If you meant to try it, see
+[Trying the development build](#trying-the-development-build). Otherwise do
+not select Continue on that screen. Remove the container and start the release:
+
+```sh
+docker stop pit-officer
+docker rm pit-officer
+docker run -d --name pit-officer --restart unless-stopped -p 127.0.0.1:8787:8787 -v pit-officer-data:/data ghcr.io/openpitkit/officer
+```
+
+The panel then opens your data as before.
 
 ## What comes next
 
