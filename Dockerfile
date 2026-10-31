@@ -28,9 +28,11 @@ FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS frontend
 
 WORKDIR /app/web
 
-# Install dependencies in their own layer for caching.
+# Install dependencies in their own layer for caching, from the committed
+# lockfile: npm ci fails when it disagrees with package.json instead of
+# resolving a set nobody committed.
 COPY web/package.json web/package-lock.json ./
-RUN npm install
+RUN npm ci
 
 COPY web/ ./
 RUN npm run build
