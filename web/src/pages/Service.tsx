@@ -71,6 +71,7 @@ import {
 } from "@/components/security/AccessSection";
 import { GuideSection } from "@/components/security/GuideSection";
 import { StorageSection } from "@/components/security/StorageSection";
+import { SensitiveDataBanner } from "@/components/SensitiveDataBanner";
 import { StatRow } from "@/components/StatRow";
 import { StatusDot } from "@/components/StatusDot";
 import { Badge } from "@/components/ui/badge";
@@ -1533,6 +1534,7 @@ export function Service() {
         </>
       }
     >
+      <SensitiveDataBanner />
       {load.state === "loading" && (
         <div
           role="status"

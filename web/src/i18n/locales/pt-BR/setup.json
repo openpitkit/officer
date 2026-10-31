@@ -46,7 +46,7 @@
     "noneTitle": "Sem criptografia, quem obtiver o arquivo do banco de dados obtém as suas chaves",
     "noneWho": "Quem o obtém: qualquer pessoa que copie o arquivo ou uma cópia de segurança - deste disco, de uma pasta sincronizada, de uma imagem de disco, de um notebook perdido.",
     "noneWhat": "O que ela pode fazer: negociar pelas suas conexões de negociação, usar as suas assinaturas de dados, usar os próprios tokens do Officer e assinar decisões em nome do Officer.",
-    "noneBanner": "Enquanto as chaves de conexões de negociação ou de provedores de dados estiverem armazenadas sem criptografia, um aviso vermelho permanecerá em todas as páginas.",
+    "noneBanner": "Enquanto as chaves de conexões de negociação ou de provedores de dados estiverem armazenadas sem criptografia, um aviso amarelo permanecerá na parte inferior do painel lateral, com um link para a configuração da chave mestra.",
     "noneAck": "Entendo: minhas chaves estão armazenadas sem criptografia."
   },
   "signing": {

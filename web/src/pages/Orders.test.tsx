@@ -88,21 +88,6 @@ vi.mock("@/api/usePreMigrationBackups", () => ({
     reload: () => {},
   }),
 }));
-// SensitiveDataBanner polls GET /credential-storage.
-vi.mock("@/api/useCredentialStorage", () => ({
-  useCredentialStorage: () => ({
-    load: {
-      state: "ready",
-      data: {
-        credentialsSealed: true,
-        plaintextTradingKeys: false,
-        plaintextMarketDataKeys: false,
-      },
-      error: null,
-    },
-    reload: () => {},
-  }),
-}));
 vi.mock("@/api/useTrading", () => ({
   useTrading: vi.fn(() => ({
     load: {

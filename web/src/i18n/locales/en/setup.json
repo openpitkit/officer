@@ -46,7 +46,7 @@
     "noneTitle": "Without encryption, whoever gets the database file gets your keys",
     "noneWho": "Who gets it: anyone who copies the file or a backup - from this disk, a synced folder, a disk image, a lost laptop.",
     "noneWhat": "What they can do: trade through your trading connections, use your data subscriptions, use Officer's own tokens, sign decisions in Officer's name.",
-    "noneBanner": "While keys of trading connections or data providers are stored unencrypted, a red notice stays on every page.",
+    "noneBanner": "While keys of trading connections or data providers are stored unencrypted, a yellow notice stays at the bottom of the side panel; it leads to the master key setting.",
     "noneAck": "I understand: my keys are stored unencrypted."
   },
   "signing": {

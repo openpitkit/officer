@@ -46,7 +46,7 @@
     "noneTitle": "Sin cifrado, quien obtenga el archivo de base de datos obtiene sus claves",
     "noneWho": "Quién lo obtiene: cualquiera que copie el archivo o una copia de seguridad - desde este disco, una carpeta sincronizada, una imagen de disco o un portátil perdido.",
     "noneWhat": "Qué puede hacer: negociar a través de sus conexiones de negociación, usar sus suscripciones de datos, usar los propios tokens de Officer y firmar decisiones en nombre de Officer.",
-    "noneBanner": "Mientras las claves de conexiones de negociación o de proveedores de datos se almacenen sin cifrar, se mostrará un aviso rojo en todas las páginas.",
+    "noneBanner": "Mientras las claves de conexiones de negociación o de proveedores de datos se almacenen sin cifrar, se mostrará un aviso amarillo en la parte inferior del panel lateral, con un enlace a la configuración de la clave maestra.",
     "noneAck": "Entiendo: mis claves se almacenan sin cifrar."
   },
   "signing": {

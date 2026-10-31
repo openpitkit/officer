@@ -394,6 +394,22 @@ describe("Service", () => {
     expect(screen.getByRole("tabpanel", { name })).toBeInTheDocument();
   }
 
+  it("keeps the red unencrypted-data notice on its own page, where the sidebar plaque leads", async () => {
+    setPanelSession("open");
+    fetchCredentialStorageMock.mockResolvedValue(unsealedStorage(true, false));
+    renderService("/service#security");
+
+    expect(
+      await screen.findByText("Sensitive data is stored unencrypted"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "How to set a master key" }),
+    ).toHaveAttribute("href", "/service#security");
+    expect(
+      await screen.findByRole("tab", { name: "Security" }),
+    ).toHaveAttribute("aria-selected", "true");
+  });
+
   it.each(["Application", "Logs"])(
     "shows Logs from the hash and clears it when clicking %s",
     async (name) => {

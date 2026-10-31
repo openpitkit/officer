@@ -29,6 +29,7 @@ import {
   LogOut,
   Route,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Skull,
   SlidersHorizontal,
@@ -42,6 +43,7 @@ import {
   LogoutNavEntry,
   NonReleaseNavEntry,
   RestartRequiredNavEntry,
+  SensitiveDataNavEntry,
 } from "@/components/SidebarExtras";
 import {
   registerLocaleResourceMap,
@@ -301,6 +303,15 @@ export function registerOfficerDefaults(): void {
     icon: Settings,
     section: "footer",
     order: 50,
+  });
+  registerNav({
+    id: "sensitive-data",
+    to: "/service#security",
+    labelKey: "sensitiveData.title",
+    icon: ShieldAlert,
+    section: "footer",
+    order: 55,
+    render: () => createElement(SensitiveDataNavEntry),
   });
   registerNav({
     id: "non-release",

@@ -19,8 +19,25 @@ import { useCallback } from "react";
 
 import { fetchCredentialStorage } from "@/api/credentialStorage";
 import type { CredentialStorage } from "@/api/types";
-import { usePolling, type PollingResult } from "@/api/usePolling";
+import {
+  usePolling,
+  type LoadState,
+  type PollingResult,
+} from "@/api/usePolling";
 import { useApiClient } from "@/framework";
+
+/**
+ * Whether the loaded storage keeps keys of any kind in plain text: the
+ * condition both the Service page notice and the sidebar plaque show under.
+ */
+export function storesPlaintextKeys(
+  load: LoadState<CredentialStorage>,
+): boolean {
+  return (
+    load.state === "ready" &&
+    (load.data.plaintextTradingKeys || load.data.plaintextMarketDataKeys)
+  );
+}
 
 /** Poll GET /credential-storage. */
 export function useCredentialStorage(): PollingResult<CredentialStorage> {

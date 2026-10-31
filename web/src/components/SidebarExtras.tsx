@@ -21,10 +21,15 @@ import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 
 import { logOut } from "@/api/access";
+import {
+  storesPlaintextKeys,
+  useCredentialStorage,
+} from "@/api/useCredentialStorage";
 import { useMarketData } from "@/api/useMarketData";
 import { errMessage } from "@/components/AccountDialogs";
 import { useNonRelease } from "@/components/non-release-context";
 import { NonReleaseBanner } from "@/components/NonReleaseGate";
+import { Notice } from "@/components/Notice";
 import { CompactStaleState, ErrorBanner } from "@/components/PageStates";
 import { ProductLinks } from "@/components/ProductLinks";
 import { useSidebar } from "@/components/sidebar-context";
@@ -92,6 +97,40 @@ export function NonReleaseNavEntry() {
       className="mt-1 block rounded-card transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
     >
       <NonReleaseBanner />
+    </Link>
+  );
+}
+
+/**
+ * The yellow plaque in the sidebar footer while stored keys sit in plain text;
+ * it leads to Service › Security, where the master key is set. That page shows
+ * the full red notice itself and owns the request there, so the plaque stays
+ * off it.
+ */
+export function SensitiveDataNavEntry() {
+  const { pathname } = useLocation();
+  if (pathname === "/service") {
+    return null;
+  }
+  return <SensitiveDataNavPlaque />;
+}
+
+function SensitiveDataNavPlaque() {
+  const { t } = useTranslation();
+  const { close } = useSidebar();
+  const { load } = useCredentialStorage();
+  if (!storesPlaintextKeys(load)) {
+    return null;
+  }
+  return (
+    <Link
+      to="/service#security"
+      onClick={close}
+      className="mt-1 block rounded-card transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Notice tone="warn" icon={AlertTriangle} title={t("sensitiveData.title")}>
+        <p>{t("sensitiveData.masterKeyLink")}</p>
+      </Notice>
     </Link>
   );
 }

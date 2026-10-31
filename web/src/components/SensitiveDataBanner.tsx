@@ -18,20 +18,23 @@
 import { AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { useCredentialStorage } from "@/api/useCredentialStorage";
+import {
+  storesPlaintextKeys,
+  useCredentialStorage,
+} from "@/api/useCredentialStorage";
 import { MasterKeyLink } from "@/components/MasterKeyLink";
 import { Notice } from "@/components/Notice";
 
-/** Warns on every page while stored keys of any kind sit in plain text. */
+/**
+ * Warns on the Service page, where the master key is set, while stored keys of
+ * any kind sit in plain text. Elsewhere the sidebar plaque
+ * (`SensitiveDataNavEntry`) carries the warning.
+ */
 export function SensitiveDataBanner() {
   const { t } = useTranslation();
   const { load } = useCredentialStorage();
 
-  if (
-    load.state !== "ready" ||
-    !(load.data.plaintextTradingKeys || load.data.plaintextMarketDataKeys)
-  )
-    return null;
+  if (!storesPlaintextKeys(load)) return null;
 
   return (
     <Notice tone="danger" icon={AlertTriangle} title={t("sensitiveData.title")}>

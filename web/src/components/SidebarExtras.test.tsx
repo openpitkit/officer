@@ -20,11 +20,17 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { Fragment } from "react";
+
+import type { CredentialStorage } from "@/api/types";
+import { useCredentialStorage } from "@/api/useCredentialStorage";
 import { useMarketData } from "@/api/useMarketData";
+import { NonReleaseContext } from "@/components/non-release-context";
 import {
   AboutNavEntry,
   LogoutNavEntry,
   RestartRequiredNavEntry,
+  SensitiveDataNavEntry,
 } from "@/components/SidebarExtras";
 import { getNav } from "@/framework";
 import { onCheckSession, setPanelSession } from "@/lib/panelSession";
@@ -33,14 +39,49 @@ import "@/register";
 import { jsonResponse, renderWithApi } from "@/test/apiClient";
 
 vi.mock("@/api/useMarketData", () => ({ useMarketData: vi.fn() }));
+vi.mock("@/api/useCredentialStorage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/useCredentialStorage")>()),
+  useCredentialStorage: vi.fn(),
+}));
 vi.mock("@/components/sidebar-context", () => ({
   useSidebar: () => ({ close: vi.fn() }),
 }));
 
 const useMarketDataMock = vi.mocked(useMarketData);
+const useCredentialStorageMock = vi.mocked(useCredentialStorage);
+
+const plaqueTitle = "Sensitive data is stored unencrypted";
+
+function storage(flags: Partial<CredentialStorage>) {
+  useCredentialStorageMock.mockReturnValue({
+    load: {
+      state: "ready",
+      data: {
+        credentialsSealed: false,
+        plaintextTradingKeys: false,
+        plaintextMarketDataKeys: false,
+        sealedAt: null,
+        resealedSecrets: 0,
+        ...flags,
+      },
+      error: null,
+    },
+    reload: vi.fn(),
+  });
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <output aria-label="Current location">
+      {location.pathname + location.hash}
+    </output>
+  );
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
+  storage({ plaintextTradingKeys: true });
   useMarketDataMock.mockReturnValue({
     load: {
       state: "ready",
@@ -80,12 +121,112 @@ describe("SidebarExtras page request ownership", () => {
   });
 });
 
-describe("AboutNavEntry", () => {
-  function LocationProbe() {
-    const location = useLocation();
-    return <output aria-label="Current location">{location.pathname}</output>;
-  }
+describe("SensitiveDataNavEntry", () => {
+  it.each([
+    ["trading keys", { plaintextTradingKeys: true }],
+    ["market-data keys", { plaintextMarketDataKeys: true }],
+  ])(
+    "shows the yellow plaque for plain-text %s and leads to Service › Security",
+    async (_, flags) => {
+      storage(flags);
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter initialEntries={["/accounts"]}>
+          <SensitiveDataNavEntry />
+          <LocationProbe />
+        </MemoryRouter>,
+      );
 
+      const plaque = screen.getByRole("link", { name: /^Sensitive data/ });
+      expect(plaque).toHaveAttribute("href", "/service#security");
+      expect(plaque).toHaveTextContent(plaqueTitle);
+      expect(plaque).toHaveTextContent("How to set a master key");
+      expect(plaque.firstElementChild).toHaveClass("border-[var(--warn)]");
+
+      await user.click(plaque);
+
+      expect(screen.getByLabelText("Current location")).toHaveTextContent(
+        "/service#security",
+      );
+    },
+  );
+
+  it.each([
+    ["sealed", { credentialsSealed: true }],
+    ["unsealed with no stored keys", {}],
+  ])("shows no plaque while storage is %s", (_, flags) => {
+    storage(flags);
+    render(
+      <MemoryRouter initialEntries={["/accounts"]}>
+        <SensitiveDataNavEntry />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("shows no plaque before the storage is loaded", () => {
+    useCredentialStorageMock.mockReturnValue({
+      load: { state: "loading", data: null, error: null },
+      reload: vi.fn(),
+    });
+    render(
+      <MemoryRouter initialEntries={["/accounts"]}>
+        <SensitiveDataNavEntry />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("leaves the warning and its request to the Service page", () => {
+    render(
+      <MemoryRouter initialEntries={["/service"]}>
+        <SensitiveDataNavEntry />
+      </MemoryRouter>,
+    );
+
+    expect(useCredentialStorageMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a release build shows it alone", false, [plaqueTitle]],
+    [
+      "a non-release build shows it above the non-release plaque",
+      true,
+      [plaqueTitle, "non-release"],
+    ],
+  ])("sits in the footer where %s", (_, nonRelease, titles) => {
+    const ids = ["sensitive-data", "non-release"];
+    const footer = getNav("footer");
+    const order = footer.map((entry) => entry.id);
+    expect(order.indexOf("sensitive-data")).toBe(
+      order.indexOf("non-release") - 1,
+    );
+    render(
+      <NonReleaseContext.Provider
+        value={{ nonRelease, showInSidebar: vi.fn() }}
+      >
+        <MemoryRouter initialEntries={["/accounts"]}>
+          {footer
+            .filter((entry) => ids.includes(entry.id))
+            .map((entry) => (
+              <Fragment key={entry.id}>{entry.render?.()}</Fragment>
+            ))}
+        </MemoryRouter>
+      </NonReleaseContext.Provider>,
+    );
+
+    const plaques = screen.getAllByRole("link");
+    expect(plaques).toHaveLength(titles.length);
+    titles.forEach((title, index) => {
+      expect(plaques[index]).toHaveTextContent(new RegExp(title, "i"));
+    });
+  });
+});
+
+describe("AboutNavEntry", () => {
   it("leads to the first-run guide at /setup", async () => {
     const user = userEvent.setup();
     render(

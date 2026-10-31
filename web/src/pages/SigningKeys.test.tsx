@@ -67,7 +67,7 @@ vi.mock("@/api/usePreMigrationBackups", () => ({
     reload: () => {},
   }),
 }));
-// SensitiveDataBanner and the page itself poll GET /credential-storage.
+// Stubs GET /credential-storage for whatever on the page polls it.
 vi.mock("@/api/useCredentialStorage");
 const useCredentialStorageMock = vi.mocked(useCredentialStorage);
 const useSigningKeysMock = vi.mocked(useSigningKeys);
