@@ -369,6 +369,24 @@ describe("Service", () => {
     );
   }
 
+  it("shows the service tabs in the operator's order", async () => {
+    renderService("/service");
+
+    expect(
+      within(await screen.findByRole("tablist"))
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual([
+      "Application",
+      "API",
+      "Security",
+      "Account mode",
+      "Database",
+      "Engine",
+      "Logs",
+    ]);
+  });
+
   async function renderAtLogsHash() {
     vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
     renderService("/service#logs");

@@ -126,12 +126,12 @@ const serviceTabs: {
   icon: LucideIcon;
 }[] = [
   { id: "application", labelKey: "tabs.application", icon: Server },
-  { id: "engine", labelKey: "engine.title", icon: Info },
-  { id: "account-mode", labelKey: "tabs.accountMode", icon: Users },
   { id: "api", labelKey: "tabs.api", icon: Plug },
-  { id: "database", labelKey: "tabs.database", icon: Database },
-  { id: "logs", labelKey: "tabs.logs", icon: Logs },
   { id: "security", labelKey: "tabs.security", icon: ShieldCheck },
+  { id: "account-mode", labelKey: "tabs.accountMode", icon: Users },
+  { id: "database", labelKey: "tabs.database", icon: Database },
+  { id: "engine", labelKey: "engine.title", icon: Info },
+  { id: "logs", labelKey: "tabs.logs", icon: Logs },
 ];
 
 const backupWorkflowTabs: {
