@@ -100,8 +100,9 @@ func assertPreMigrationFileClosed(t *testing.T, file *os.File) {
 	if file == nil {
 		t.Fatal("no file was opened")
 	}
-	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("file.Stat after handling = %v, want closed file", err)
+	var buffer [1]byte
+	if _, err := file.Read(buffer[:]); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("file.Read after handling = %v, want closed file", err)
 	}
 }
 

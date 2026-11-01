@@ -385,7 +385,7 @@ func callTool[Out any](
 
 	session, closeSession := officerSession(t, ctx, src)
 	defer closeSession()
-	callCtx, stopCall := context.WithTimeout(systemCtx(), 5*time.Second)
+	callCtx, stopCall := context.WithTimeout(systemCtx(), 30*time.Second)
 	defer stopCall()
 	res, callErr := session.CallTool(callCtx, &sdkmcp.CallToolParams{Name: name, Arguments: in})
 	if callErr != nil {

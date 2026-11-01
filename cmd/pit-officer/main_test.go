@@ -559,7 +559,7 @@ func TestMCPRefusesMissingNonReleaseDatabase(t *testing.T) {
 	if err == nil {
 		t.Fatal("mcp accepted a missing non-release database")
 	}
-	for _, want := range []string{"first screen", "pit-officer serve", cfg.SQLitePath + ".non-release-" + testBuildCommit} {
+	for _, want := range []string{"first screen", "pit-officer serve", fmt.Sprintf("%q", cfg.SQLitePath+".non-release-"+testBuildCommit)} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("mcp error = %v, want %q", err, want)
 		}
