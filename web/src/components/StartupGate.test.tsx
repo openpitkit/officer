@@ -37,6 +37,7 @@ import {
   setPanelSession,
 } from "@/lib/panelSession";
 import { errorResponse, jsonResponse, renderWithApi } from "@/test/apiClient";
+import { ThemeProvider } from "@/theme/ThemeProvider";
 
 const HIDDEN: AccountFeatures = { accounts: false, account: "main" };
 
@@ -351,9 +352,11 @@ describe("StartupGate session step", () => {
 
   function renderSessionGate(fetchMock: ReturnType<typeof answering>) {
     return renderWithApi(
-      <StartupGate>
-        <ShellProbe />
-      </StartupGate>,
+      <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+        <StartupGate>
+          <ShellProbe />
+        </StartupGate>
+      </ThemeProvider>,
       {
         fetch: fetchMock as unknown as typeof fetch,
         config: { onUnauthorized: checkSession },
@@ -675,10 +678,12 @@ describe("StartupGate session step", () => {
       "DELETE /session": [noContent],
     });
     renderWithApi(
-      <StartupGate>
-        <ShellProbe />
-        <LogoutNavEntry />
-      </StartupGate>,
+      <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+        <StartupGate>
+          <ShellProbe />
+          <LogoutNavEntry />
+        </StartupGate>
+      </ThemeProvider>,
       {
         fetch: fetchMock as unknown as typeof fetch,
         config: { onUnauthorized: checkSession },

@@ -18,13 +18,13 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { BrandLockup } from "@/components/BrandLockup";
+import { StandaloneTopBar } from "@/components/StandaloneTopBar";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 /**
- * A screen the startup gate shows in place of the shell: the brand, a title
- * and the screen's content on a centered card, with a note at the bottom.
+ * A screen the startup gate shows in place of the shell: the standalone top
+ * bar over a centered card with a title, content and a note at the bottom.
  */
 export function AuthScreen({
   title,
@@ -41,22 +41,22 @@ export function AuthScreen({
   children: ReactNode;
 }) {
   return (
-    <div className="h-full w-full overflow-y-auto bg-bg text-text">
-      <div className="flex min-h-full items-center justify-center p-6">
-        <Card className={cn("w-full", wide ? "max-w-xl" : "max-w-md")}>
-          <CardContent className="flex flex-col gap-y-5 pt-[var(--dens-card-pad)]">
-            <div className="flex items-center gap-[var(--dens-nav-gap)]">
-              <BrandLockup />
-            </div>
-            <h1 className="ledger-title text-2xl">{title}</h1>
-            {children}
-            <div className="flex gap-2 border-t border-border pt-4 text-xs text-muted">
-              <NoteIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-              <p>{note}</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+    <div className="flex h-full w-full flex-col bg-bg text-text">
+      <StandaloneTopBar />
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex min-h-full items-center justify-center p-6">
+          <Card className={cn("w-full", wide ? "max-w-xl" : "max-w-md")}>
+            <CardContent className="flex flex-col gap-y-5 pt-[var(--dens-card-pad)]">
+              <h1 className="ledger-title text-2xl">{title}</h1>
+              {children}
+              <div className="flex gap-2 border-t border-border pt-4 text-xs text-muted">
+                <NoteIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                <p>{note}</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </main>
     </div>
   );
 }

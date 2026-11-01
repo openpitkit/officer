@@ -23,6 +23,7 @@ import { formatTime } from "@/i18n/format";
 import { onCheckSession } from "@/lib/panelSession";
 import { PasswordRecovery } from "@/pages/PasswordRecovery";
 import { errorResponse, jsonResponse, renderWithApi } from "@/test/apiClient";
+import { ThemeProvider } from "@/theme/ThemeProvider";
 
 // Letters, digits and hyphens only: a URL never percent-encodes them, so a
 // secret that reached the URL would show there as written.
@@ -36,7 +37,9 @@ function renderRecovery(answer: () => Response | Promise<Response>) {
   const onPasswordReset = vi.fn();
   const onBack = vi.fn();
   renderWithApi(
-    <PasswordRecovery onPasswordReset={onPasswordReset} onBack={onBack} />,
+    <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+      <PasswordRecovery onPasswordReset={onPasswordReset} onBack={onBack} />
+    </ThemeProvider>,
     { fetch: fetchMock as unknown as typeof fetch },
   );
   return { fetchMock, onPasswordReset, onBack };

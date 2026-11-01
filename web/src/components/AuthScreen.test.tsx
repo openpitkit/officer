@@ -15,22 +15,25 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { Info } from "lucide-react";
 import { describe, expect, it } from "vitest";
 
 import { AuthScreen } from "@/components/AuthScreen";
+import { ThemeProvider } from "@/theme/ThemeProvider";
 
 function renderScreen(wide?: boolean) {
   return render(
-    <AuthScreen
-      title="Log in to the panel"
-      note="Agents use their tokens."
-      noteIcon={Info}
-      wide={wide}
-    >
-      <button type="button">Log in</button>
-    </AuthScreen>,
+    <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+      <AuthScreen
+        title="Log in to the panel"
+        note="Agents use their tokens."
+        noteIcon={Info}
+        wide={wide}
+      >
+        <button type="button">Log in</button>
+      </AuthScreen>
+    </ThemeProvider>,
   );
 }
 
@@ -39,18 +42,32 @@ function card() {
 }
 
 describe("AuthScreen", () => {
-  it("shows the brand, the title, the content and the note in that order", () => {
+  it("shows the standalone bar above the card's title, content and note", () => {
     renderScreen();
 
-    const brand = screen.getByText("Pit Officer");
+    const banner = screen.getByRole("banner");
     const title = screen.getByRole("heading", {
       level: 1,
       name: "Log in to the panel",
     });
     const content = screen.getByRole("button", { name: "Log in" });
     const note = screen.getByText("Agents use their tokens.");
-    expect(screen.getByRole("img", { name: "Pit logo" })).toBeInTheDocument();
-    expect(brand.compareDocumentPosition(title)).toBe(
+    expect(within(banner).getByText("Pit Officer")).toBeInTheDocument();
+    expect(screen.getAllByText("Pit Officer")).toHaveLength(1);
+    expect(
+      within(banner).getByRole("button", { name: "Change language" }),
+    ).toBeInTheDocument();
+    expect(
+      within(banner).getByRole("button", { name: /^Theme: / }),
+    ).toBeInTheDocument();
+    expect(card()).not.toContainElement(banner);
+    const main = screen.getByRole("main");
+    expect(main).toContainElement(card() ?? null);
+    expect(main).not.toContainElement(banner);
+    expect(card()).toContainElement(title);
+    expect(card()).toContainElement(content);
+    expect(card()).toContainElement(note);
+    expect(banner.compareDocumentPosition(title)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
     expect(title.compareDocumentPosition(content)).toBe(

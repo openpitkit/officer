@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { onCheckSession } from "@/lib/panelSession";
 import { Login } from "@/pages/Login";
 import { errorResponse, jsonResponse, renderWithApi } from "@/test/apiClient";
+import { ThemeProvider } from "@/theme/ThemeProvider";
 
 // Letters and hyphens only: a URL never percent-encodes them, so a password
 // that reached the URL would show there as written.
@@ -34,7 +35,9 @@ function renderLogin(answer: () => Response | Promise<Response>) {
   const onLoggedIn = vi.fn();
   const onForgotPassword = vi.fn();
   renderWithApi(
-    <Login onLoggedIn={onLoggedIn} onForgotPassword={onForgotPassword} />,
+    <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+      <Login onLoggedIn={onLoggedIn} onForgotPassword={onForgotPassword} />
+    </ThemeProvider>,
     { fetch: fetchMock as unknown as typeof fetch },
   );
   return { fetchMock, onLoggedIn, onForgotPassword };

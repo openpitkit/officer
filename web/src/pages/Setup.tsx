@@ -43,9 +43,7 @@ import type { LoadState } from "@/api/usePolling";
 import { AccessModePanel } from "@/components/AccessModePanel";
 import { AccountModePanel } from "@/components/AccountModeChoice";
 import { errMessage } from "@/components/AccountDialogs";
-import { BrandLockup } from "@/components/BrandLockup";
 import { ConnectAgent } from "@/components/ConnectAgent";
-import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { Notice } from "@/components/Notice";
 import {
   ErrorBanner,
@@ -56,8 +54,8 @@ import {
   SigningKeysPanel,
   useSigningKeysPanel,
 } from "@/components/SigningKeysPanel";
+import { StandaloneTopBar } from "@/components/StandaloneTopBar";
 import { useStartupAdmit } from "@/components/StartupGate";
-import { ThemeSwitch } from "@/components/ThemeSwitch";
 import {
   AccessSection,
   AccessTokensProvider,
@@ -673,15 +671,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
     );
   return (
     <div className="flex h-full w-full flex-col bg-bg text-text">
-      {/* The brand and the language and theme switches stand where the
-          panel has them: across the top, the switches in the right corner. */}
-      <header className="ledger-masthead flex h-[var(--topbar-height)] shrink-0 items-center gap-2 px-[var(--dens-shell-x)]">
-        <BrandLockup />
-        <div className="ml-auto flex items-center gap-2">
-          <LanguageSwitch />
-          <ThemeSwitch />
-        </div>
-      </header>
+      <StandaloneTopBar />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
         <SetupRail
           review={review}

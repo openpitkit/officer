@@ -31,6 +31,7 @@ import {
   renderWithApi,
   serving,
 } from "@/test/apiClient";
+import { ThemeProvider } from "@/theme/ThemeProvider";
 
 const CHOICE: BuildStatus = {
   release: false,
@@ -45,9 +46,11 @@ const BANNER = "Data from this build will never be migrated.";
 
 function renderGate(fetchMock: typeof fetch) {
   return renderWithApi(
-    <NonReleaseGate>
-      <p>{CHILD}</p>
-    </NonReleaseGate>,
+    <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
+      <NonReleaseGate>
+        <p>{CHILD}</p>
+      </NonReleaseGate>
+    </ThemeProvider>,
     { fetch: fetchMock },
   );
 }
