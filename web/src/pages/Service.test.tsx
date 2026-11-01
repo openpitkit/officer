@@ -84,7 +84,7 @@ const serviceInfo: ServiceInfo = {
   name: "Pit Officer",
   engineVersion: "0.9.0",
   engineBuildProfile:
-    "version=0.10.0;profile=release;opt_level=3;debug_assertions=false",
+    "version=0.11.0;profile=release;opt_level=3;debug_assertions=false",
   release: true,
   database: { path: "/tmp/officer.db", reachable: true },
 };

@@ -261,9 +261,9 @@ If the panel then shows a red NON-RELEASE banner and asks which data to use, see
   back restores your data as it was when you made the backup, and loses what
   changed after that.
 - When a new version changes how it stores data, Officer itself first keeps a
-  copy of the database in the volume, but the upgrade from 0.1 to 0.2 changes
-  nothing there, so no such copy appears and your own backup is the one that
-  counts.
+  copy of the database in the volume. After the upgrade, the Service page offers
+  the copy for download. Download and keep it; Officer never deletes it
+  automatically. Keep the backup you exported before upgrading too.
 - If Officer does not become ready after the upgrade, see
   [Officer is not ready or the panel does not
   open](#officer-is-not-ready-or-the-panel-does-not-open). A master key left

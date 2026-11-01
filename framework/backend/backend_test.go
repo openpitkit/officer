@@ -71,13 +71,13 @@ func TestServiceInfoSeparatesOfficerReleaseFromEngineProfile(t *testing.T) {
 	for _, profile := range []string{
 		"release",
 		"debug",
-		"version=0.10.0;profile=release;opt_level=3;debug_assertions=false",
-		"version=0.10.0;profile=debug;opt_level=0;debug_assertions=true",
+		"version=0.11.0;profile=release;opt_level=3;debug_assertions=false",
+		"version=0.11.0;profile=debug;opt_level=0;debug_assertions=true",
 	} {
 		t.Run(profile, func(t *testing.T) {
 			t.Parallel()
 			n := &serviceInfoTestNode{health: node.Health{
-				Engine: engine.Health{Version: "0.10.0", BuildProfile: profile},
+				Engine: engine.Health{Version: "0.11.0", BuildProfile: profile},
 			}}
 			svc, err := New(n, nil, nil, testLockSettlementPrice)
 			if err != nil {
@@ -91,7 +91,7 @@ func TestServiceInfoSeparatesOfficerReleaseFromEngineProfile(t *testing.T) {
 				t.Fatalf("Release = %t for Officer tag %q and SDK profile %q",
 					info.Release, releaseTag, profile)
 			}
-			if info.EngineVersion != "0.10.0" || info.EngineBuildProfile != profile {
+			if info.EngineVersion != "0.11.0" || info.EngineBuildProfile != profile {
 				t.Fatalf("SDK metadata changed: %+v", info)
 			}
 		})
