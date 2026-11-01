@@ -58,8 +58,10 @@ state, so a restore keeps the state, the password, the tokens, and the sessions.
   request that passes the browser checks below.
 - **`token`** - each HTTP surface admits only its own credential: the REST API
   on `/api/v1` the API token, `pit_api_...`; MCP over HTTP on `/mcp` the agent
-  token, `pit_mcp_...`; the panel's API on `/app/api/v1` a session that
-  signing in with the panel password (`POST /app/api/v1/session`) opens. A
+  token, `pit_officer_mcp_...`; the panel's API on `/app/api/v1` a session that
+  signing in with the panel password (`POST /app/api/v1/session`) opens. An
+  agent token issued by 0.1 or 0.2 starts with `pit_mcp_` and stays valid,
+  with no change to the agent's configuration, until it is regenerated. A
   token is sent as `Authorization: Bearer <token>`. The other surface's token
   is refused with `403` `wrong_token`, a missing or unknown credential with
   `401` `unauthorized`.

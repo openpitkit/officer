@@ -478,7 +478,8 @@ describe("endAllSessions", () => {
 });
 
 // 32 bytes in unpadded base64url: 43 characters after the prefix.
-const AGENT_TOKEN = "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
+const AGENT_TOKEN =
+  "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
 const API_TOKEN = "pit_api_Lm4Ts9Qa2Xc7Vn1Bk6Hd3Wy8Pe5Rz0Gu2Jf7Os4Ni9w";
 
 describe("fetchAccessToken", () => {
@@ -498,11 +499,30 @@ describe("fetchAccessToken", () => {
     },
   );
 
+  it("decodes an agent token issued by 0.1 and 0.2 with the prefix pit_mcp_", async () => {
+    const released = AGENT_TOKEN.replace("pit_officer_mcp_", "pit_mcp_");
+    const { client } = clientAnswering(jsonResponse({ token: released }));
+
+    await expect(fetchAccessToken(client, "agent")).resolves.toBe(released);
+  });
+
   it.each([
     ["body", "a non-object body", [AGENT_TOKEN]],
     ["token", "a missing token", {}],
     ["token", "the API token", { token: API_TOKEN }],
+    [
+      "token",
+      "an unknown prefix",
+      { token: AGENT_TOKEN.replace("pit_officer_mcp_", "pit_other_") },
+    ],
     ["token", "a short body", { token: AGENT_TOKEN.slice(0, -1) }],
+    [
+      "token",
+      "a short body behind the prefix pit_mcp_",
+      {
+        token: AGENT_TOKEN.replace("pit_officer_mcp_", "pit_mcp_").slice(0, -1),
+      },
+    ],
     ["token", "a padded body", { token: `${AGENT_TOKEN.slice(0, -1)}A=` }],
     [
       "token",

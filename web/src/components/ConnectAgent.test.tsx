@@ -41,8 +41,9 @@ import {
 } from "@/test/apiClient";
 
 const API = "/app/api/v1";
-const AGENT_TOKEN = "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
-const MASKED = `pit_mcp_Q2x7${"•".repeat(14)}Vr4w`;
+const AGENT_TOKEN =
+  "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
+const MASKED = `pit_officer_mcp_Q2x7${"•".repeat(14)}Vr4w`;
 const TOKEN_REQUEST = `GET ${API}/access/tokens/agent`;
 
 const CLI = "Add the connector with the Claude CLI";
@@ -149,7 +150,7 @@ describe("ConnectAgent", () => {
         const text = snippet(label);
         expect(text).toHaveValue(expected);
         expect((text as HTMLTextAreaElement).value).not.toMatch(
-          /--header|headers|http_headers|"env"|Bearer|pit_mcp_/,
+          /--header|headers|http_headers|"env"|Bearer|pit_officer_mcp_/,
         );
         await user.click(snippetCopy(label));
 

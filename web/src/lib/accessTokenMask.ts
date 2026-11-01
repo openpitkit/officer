@@ -15,11 +15,25 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { ACCESS_TOKEN_PREFIXES, type AccessTokenKind } from "@/api/access";
+import {
+  ACCESS_TOKEN_PREFIXES,
+  accessTokenPrefix,
+  type AccessTokenKind,
+} from "@/api/access";
 
-/** The prefix, the body's first and last four characters, dots between. */
+/**
+ * The prefix, the body's first and last four characters, dots between.
+ *
+ * @throws Error for a token that carries none of its kind's prefixes, which
+ * the token decoder never lets through.
+ */
 export function maskAccessToken(kind: AccessTokenKind, token: string): string {
-  const prefix = ACCESS_TOKEN_PREFIXES[kind];
+  const prefix = accessTokenPrefix(kind, token);
+  if (prefix === undefined) {
+    throw new Error(
+      `${kind} token carries none of ${ACCESS_TOKEN_PREFIXES[kind].join(", ")}`,
+    );
+  }
   const body = token.slice(prefix.length);
   return `${prefix}${body.slice(0, 4)}${"•".repeat(14)}${body.slice(-4)}`;
 }

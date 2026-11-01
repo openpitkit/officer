@@ -31,7 +31,9 @@ In the `open` access mode no mount takes credentials. In `token` each takes one
 (see Authorization in the [configuration reference](configuration.md)):
 
 - `/api/v1` - the API token, `Authorization: Bearer pit_api_...`;
-- `/mcp` - the agent token, `Authorization: Bearer pit_mcp_...`;
+- `/mcp` - the agent token, `Authorization: Bearer pit_officer_mcp_...`; an
+  agent token issued by 0.1 or 0.2, `pit_mcp_...`, stays valid until it is
+  regenerated;
 - `/app/api/v1` - the panel session cookie, which signing in sets; a bearer
   token is not read there, and the cookie is not read on the other two;
 - liveness, the OpenAPI document, the docs page and its files, the dashboard,

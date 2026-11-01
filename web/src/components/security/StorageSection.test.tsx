@@ -42,9 +42,11 @@ import {
 const API = "/app/api/v1";
 const SEALED_AT = "2026-10-15T14:05:00Z";
 const FINGERPRINT = "3f9a51c0d2e4c21e";
-const AGENT_TOKEN = "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
+const AGENT_TOKEN =
+  "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
 const API_TOKEN = "pit_api_Lm4Ts9Qa2Xc7Vn1Bk6Hd3Wy8Pe5Rz0Gu2Jf7Os4Ni9w";
-const NEW_AGENT_TOKEN = "pit_mcp_Hx4Wq7Lc2Tn9Pb1Kd6Rs3Vy8Fm5Gz0Ju2Ne7Oa4Ui9Q";
+const NEW_AGENT_TOKEN =
+  "pit_officer_mcp_Hx4Wq7Lc2Tn9Pb1Kd6Rs3Vy8Fm5Gz0Ju2Ne7Oa4Ui9Q";
 const DOTS = "•".repeat(14);
 const EXPOSED_TITLE =
   "Secrets stored before the master key was set must be considered exposed";
@@ -383,7 +385,7 @@ describe("StorageSection", () => {
 
     expect(
       await within(row("Agent token · MCP")).findByText(
-        `pit_mcp_Hx4W${DOTS}Ui9Q`,
+        `pit_officer_mcp_Hx4W${DOTS}Ui9Q`,
       ),
     ).toBeInTheDocument();
     expect(

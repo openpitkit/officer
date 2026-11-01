@@ -37,7 +37,8 @@ import {
 const API = "/app/api/v1";
 const SET_AT = "2026-10-15T12:00:00Z";
 const CHANGED_AT = "2026-10-16T12:00:00Z";
-const AGENT_TOKEN = "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
+const AGENT_TOKEN =
+  "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
 const API_TOKEN = "pit_api_Lm4Ts9Qa2Xc7Vn1Bk6Hd3Wy8Pe5Rz0Gu2Jf7Os4Ni9w";
 const NEW_API_TOKEN = "pit_api_Rb3Ny8Kq1Wd6Tm4Hx9Lc2Vp7Gz5Fs0Je3Ua8Ok1Mi6Q";
 const DOTS = "•".repeat(14);
@@ -292,7 +293,7 @@ describe("AccessSection", () => {
         within(sessions).getByRole("button", { name: "Log out everywhere" }),
       ).toBeInTheDocument();
       expect(
-        within(agent).getByText(`pit_mcp_Q2x7${DOTS}Vr4w`),
+        within(agent).getByText(`pit_officer_mcp_Q2x7${DOTS}Vr4w`),
       ).toBeInTheDocument();
       expect(
         within(row("API token · REST")).getByText(`pit_api_Lm4T${DOTS}Ni9w`),
@@ -365,7 +366,9 @@ describe("AccessSection", () => {
         await within(apiRow).findByText(`pit_api_Rb3N${DOTS}Mi6Q`),
       ).toBeInTheDocument();
       expect(
-        within(row("Agent token · MCP")).getByText(`pit_mcp_Q2x7${DOTS}Vr4w`),
+        within(row("Agent token · MCP")).getByText(
+          `pit_officer_mcp_Q2x7${DOTS}Vr4w`,
+        ),
       ).toBeInTheDocument();
       expect(requests(fetchMock)).toContain(
         `POST ${API}/access/tokens/api/regenerate`,

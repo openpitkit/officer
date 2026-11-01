@@ -82,14 +82,16 @@ func randomBytes(n int) ([]byte, error) {
 	return b, nil
 }
 
-// tokenPrefix returns the prefix that opens every value of the token of
-// kind, so that secret scanners recognise the token.
+// tokenPrefix returns the prefix that opens every new value of the token of
+// kind, so that secret scanners recognise the token. Only issuing reads it:
+// CheckToken compares the whole stored value, so an agent token issued by
+// 0.1 or 0.2 with the prefix pit_mcp_ authenticates until it is regenerated.
 func tokenPrefix(kind TokenKind) (string, error) {
 	switch kind {
 	case TokenAPI:
 		return "pit_api_", nil
 	case TokenAgent:
-		return "pit_mcp_", nil
+		return "pit_officer_mcp_", nil
 	default:
 		return "", errUnknownTokenKind
 	}

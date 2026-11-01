@@ -218,7 +218,7 @@ func TestCompleteSetupTokenIssuesCredentialsAndClearsRecovery(t *testing.T) {
 		t.Fatalf("completed mode = %s, want token", snapshot.Mode)
 	}
 	assertTokenFormat(t, "API token", snapshot.APIToken, "pit_api_")
-	assertTokenFormat(t, "agent token", snapshot.AgentToken, "pit_mcp_")
+	assertTokenFormat(t, "agent token", snapshot.AgentToken, "pit_officer_mcp_")
 	if snapshot.APIToken == snapshot.AgentToken {
 		t.Fatal("completion issued the same token twice")
 	}

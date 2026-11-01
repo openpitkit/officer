@@ -45,25 +45,27 @@ describe("CopyableSnippet", () => {
     const user = userEvent.setup();
     render(
       <CopyableSnippet
-        text="Bearer pit_mcp_Q2x7••••Vr4w"
-        copyText="Bearer pit_mcp_real"
+        text="Bearer pit_officer_mcp_Q2x7••••Vr4w"
+        copyText="Bearer pit_officer_mcp_real"
         label="Command"
       />,
     );
 
     expect(screen.getByRole("textbox", { name: "Command" })).toHaveValue(
-      "Bearer pit_mcp_Q2x7••••Vr4w",
+      "Bearer pit_officer_mcp_Q2x7••••Vr4w",
     );
     await user.click(screen.getByRole("button", { name: "Copy" }));
 
-    expect(await navigator.clipboard.readText()).toBe("Bearer pit_mcp_real");
+    expect(await navigator.clipboard.readText()).toBe(
+      "Bearer pit_officer_mcp_real",
+    );
   });
 
   it("puts the copy text on the clipboard when the text area itself is copied", () => {
     render(
       <CopyableSnippet
-        text="Bearer pit_mcp_Q2x7••••Vr4w"
-        copyText="Bearer pit_mcp_real"
+        text="Bearer pit_officer_mcp_Q2x7••••Vr4w"
+        copyText="Bearer pit_officer_mcp_real"
         label="Command"
       />,
     );
@@ -77,7 +79,7 @@ describe("CopyableSnippet", () => {
     expect(notPrevented).toBe(false);
     expect(setData).toHaveBeenCalledExactlyOnceWith(
       "text/plain",
-      "Bearer pit_mcp_real",
+      "Bearer pit_officer_mcp_real",
     );
   });
 

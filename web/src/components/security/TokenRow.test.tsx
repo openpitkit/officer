@@ -23,7 +23,8 @@ import type { AccessTokenKind } from "@/api/access";
 import { TokenRow } from "@/components/security/TokenRow";
 import { ApiError } from "@/framework";
 
-const AGENT_TOKEN = "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
+const AGENT_TOKEN =
+  "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
 const API_TOKEN = "pit_api_Lm4Ts9Qa2Xc7Vn1Bk6Hd3Wy8Pe5Rz0Gu2Jf7Os4Ni9w";
 const DOTS = "•".repeat(14);
 
@@ -46,7 +47,7 @@ describe("TokenRow", () => {
       "agent",
       AGENT_TOKEN,
       "Agent token · MCP",
-      `pit_mcp_Q2x7${DOTS}Vr4w`,
+      `pit_officer_mcp_Q2x7${DOTS}Vr4w`,
       "The same token as in Connect your agent on MCP access. Regenerating stops the old one at once.",
     ],
     [
@@ -68,6 +69,16 @@ describe("TokenRow", () => {
     },
   );
 
+  it("masks an agent token issued by 0.1 and 0.2 behind its pit_mcp_ prefix", () => {
+    const released = AGENT_TOKEN.replace("pit_officer_mcp_", "pit_mcp_");
+    renderRow("agent", released);
+
+    expect(
+      within(row("Agent token · MCP")).getByText(`pit_mcp_Q2x7${DOTS}Vr4w`),
+    ).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain(released);
+  });
+
   it("shows the whole token on Show and masks it again on Hide", async () => {
     const user = userEvent.setup();
     renderRow("agent", AGENT_TOKEN);
@@ -77,7 +88,9 @@ describe("TokenRow", () => {
 
     await user.click(screen.getByRole("button", { name: "Hide" }));
     expect(screen.queryByText(AGENT_TOKEN)).not.toBeInTheDocument();
-    expect(screen.getByText(`pit_mcp_Q2x7${DOTS}Vr4w`)).toBeInTheDocument();
+    expect(
+      screen.getByText(`pit_officer_mcp_Q2x7${DOTS}Vr4w`),
+    ).toBeInTheDocument();
   });
 
   it("copies the whole token while it is masked", async () => {

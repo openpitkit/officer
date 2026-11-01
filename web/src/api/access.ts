@@ -345,12 +345,25 @@ export async function endAllSessions(client: ApiClient): Promise<void> {
 /** One of the two tokens: `agent` works only for MCP, `api` for REST. */
 export type AccessTokenKind = "agent" | "api";
 
-/** The prefix each token starts with, which secret scanners recognise. */
-export const ACCESS_TOKEN_PREFIXES: Readonly<Record<AccessTokenKind, string>> =
-  {
-    agent: "pit_mcp_",
-    api: "pit_api_",
-  };
+/**
+ * The prefixes a token of each kind may start with, which secret scanners
+ * recognise: first the one Officer issues, then `pit_mcp_`, which agent tokens
+ * issued by 0.1 and 0.2 keep until they are regenerated.
+ */
+export const ACCESS_TOKEN_PREFIXES: Readonly<
+  Record<AccessTokenKind, readonly string[]>
+> = {
+  agent: ["pit_officer_mcp_", "pit_mcp_"],
+  api: ["pit_api_"],
+};
+
+/** The prefix of its kind that token starts with, or undefined for none. */
+export function accessTokenPrefix(
+  kind: AccessTokenKind,
+  token: string,
+): string | undefined {
+  return ACCESS_TOKEN_PREFIXES[kind].find((prefix) => token.startsWith(prefix));
+}
 
 /** A token body: 32 random bytes in unpadded base64url. */
 const TOKEN_BODY = /^[A-Za-z0-9_-]{43}$/;
@@ -361,16 +374,17 @@ function decodeToken(kind: AccessTokenKind, value: unknown): string {
     throw invalid(response, "body", "must be an object");
   }
   const { token } = value;
-  const prefix = ACCESS_TOKEN_PREFIXES[kind];
+  const prefix =
+    typeof token === "string" ? accessTokenPrefix(kind, token) : undefined;
   if (
     typeof token !== "string" ||
-    !token.startsWith(prefix) ||
+    prefix === undefined ||
     !TOKEN_BODY.test(token.slice(prefix.length))
   ) {
     throw invalid(
       response,
       "token",
-      `must be ${prefix} and 43 base64url characters`,
+      `must be ${ACCESS_TOKEN_PREFIXES[kind].join(" or ")} and 43 base64url characters`,
     );
   }
   return token;

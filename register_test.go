@@ -1339,6 +1339,45 @@ func TestRegisterAccessWithReplacedStoreFactory(t *testing.T) {
 	request(token, http.StatusOK)
 }
 
+// TestRegisterReleasedAgentTokenOnMCP checks that an agent token stored with
+// the prefix 0.1 and 0.2 issued, pit_mcp_, still opens /mcp now that new
+// agent tokens carry pit_officer_mcp_, and that a token is matched whole: the
+// same body under the new prefix or an unknown one is refused.
+func TestRegisterReleasedAgentTokenOnMCP(t *testing.T) {
+	app, _, opened := buildTestApp(t, nil, nil)
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatalf("BuildServeHandler: %v", err)
+	}
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+	enableTokenMode(t, opened.(access.Store), "pit_api_released-agent-token")
+	body, ok := strings.CutPrefix(releasedAgentToken, "pit_mcp_")
+	if !ok {
+		t.Fatal("releasedAgentToken does not carry the released prefix")
+	}
+	for _, tc := range []struct {
+		name, token string
+		want        int
+	}{
+		{"released prefix", releasedAgentToken, http.StatusOK},
+		{"new prefix, same body", "pit_officer_mcp_" + body, http.StatusUnauthorized},
+		{"unknown prefix, same body", "pit_unknown_" + body, http.StatusUnauthorized},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8787/mcp",
+			strings.NewReader(mcpInitializeBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer "+tc.token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		apitest.ExpectStatus(t, tc.name+" agent token on /mcp", rec, tc.want)
+		if tc.want == http.StatusOK && (!strings.Contains(rec.Body.String(), `"result":`) ||
+			strings.Contains(rec.Body.String(), `"error":`)) {
+			t.Fatalf("%s agent token: MCP initialize returned no success result", tc.name)
+		}
+	}
+}
+
 type nodeProbeStore struct {
 	store.Store
 	realmCalls, closeCalls int
@@ -1468,15 +1507,26 @@ func TestRegisterRejectsStoreAndClosesNode(t *testing.T) {
 	}
 }
 
+// releasedAgentToken is an agent token as 0.1 and 0.2 issued it: the prefix
+// pit_mcp_ and 32 random bytes in unpadded base64url.
+const releasedAgentToken = "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w"
+
+// mcpInitializeBody is an MCP initialize request, the first call an agent
+// makes on /mcp.
+const mcpInitializeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
+	`"protocolVersion":"2025-03-26","capabilities":{},` +
+	`"clientInfo":{"name":"register-test","version":"1"}}}`
+
 // enableTokenMode switches the stored access mode to token mode with apiToken
-// as the API token, past the access Service, which no app exposes.
+// as the API token and releasedAgentToken as the agent token, past the access
+// Service, which no app exposes.
 func enableTokenMode(t *testing.T, state access.Store, apiToken string) {
 	t.Helper()
 	now := time.Now()
 	if err := state.EnableTokenMode(context.Background(), access.Credentials{
 		Password:   access.Password{Hash: "$argon2id$test", SetAt: now},
 		APIToken:   apiToken,
-		AgentToken: "pit_mcp_register-test",
+		AgentToken: releasedAgentToken,
 	}, access.Session{
 		IDHash:     sha256.Sum256([]byte("register-test")),
 		CreatedAt:  now,
@@ -2022,7 +2072,7 @@ func TestRegisterFirstRun(t *testing.T) {
 				if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" {
 					t.Fatal("setup completion issued a session cookie without the panel protections")
 				}
-				for kind, prefix := range map[string]string{"api": "pit_api_", "agent": "pit_mcp_"} {
+				for kind, prefix := range map[string]string{"api": "pit_api_", "agent": "pit_officer_mcp_"} {
 					rec := call(http.MethodGet, "/app/api/v1/access/tokens/"+kind, "", http.StatusOK)
 					var answer struct{ Token string }
 					if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
@@ -2031,10 +2081,7 @@ func TestRegisterFirstRun(t *testing.T) {
 					}
 					method, path, body := http.MethodGet, "/api/v1/accounts", ""
 					if kind == "agent" {
-						method, path = http.MethodPost, "/mcp"
-						body = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
-							`"protocolVersion":"2025-03-26","capabilities":{},` +
-							`"clientInfo":{"name":"first-run-test","version":"1"}}}`
+						method, path, body = http.MethodPost, "/mcp", mcpInitializeBody
 					}
 					req := httptest.NewRequest(method, "http://127.0.0.1:8787"+path, strings.NewReader(body))
 					req.Header.Set("Content-Type", "application/json")

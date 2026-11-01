@@ -1323,7 +1323,8 @@ describe("SetupReview", () => {
       renderReview("token", {
         [`GET ${API}/access/tokens/agent`]: () =>
           jsonResponse({
-            token: "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w",
+            token:
+              "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w",
           }),
         [`GET ${API}/access/tokens/api`]: () =>
           jsonResponse({
@@ -1345,7 +1346,7 @@ describe("SetupReview", () => {
       async (failedKind) => {
         const user = userEvent.setup();
         const tokens = {
-          agent: "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w",
+          agent: "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w",
           api: "pit_api_Lm4Ts9Qa2Xc7Vn1Bk6Hd3Wy8Pe5Rz0Gu2Jf7Os4Ni9w",
         };
         const retry = deferred<Response>();
@@ -1535,7 +1536,7 @@ describe("SetupReview", () => {
     async (failedKind) => {
       const user = userEvent.setup();
       const tokens = {
-        agent: "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w",
+        agent: "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w",
         api: "pit_api_Lm4Ts9Qa2Xc7Vn1Bk6Hd3Wy8Pe5Rz0Gu2Jf7Os4Ni9w",
       };
       const loadToken = vi

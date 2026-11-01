@@ -25,7 +25,7 @@ import {
 } from "@/lib/agentArtifacts";
 
 const URL = "http://127.0.0.1:8787/mcp";
-const TOKEN = "pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
+const TOKEN = "pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w";
 
 // The access design's exact instructions for the agent token in an MCP client,
 // with the URL and the token substituted; the `open` forms drop the token
@@ -37,7 +37,7 @@ describe("agentArtifacts", () => {
     );
     expect(claudeMcpAddCommand(URL, TOKEN)).toBe(
       "claude mcp add --transport http pit-officer http://127.0.0.1:8787/mcp" +
-        ' --header "Authorization: Bearer pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w"',
+        ' --header "Authorization: Bearer pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w"',
     );
   });
 
@@ -66,7 +66,7 @@ describe("agentArtifacts", () => {
         '        "-y", "mcp-remote", "http://127.0.0.1:8787/mcp",',
         '        "--header", "Authorization:${PIT_OFFICER_AUTH}"',
         "      ],",
-        '      "env": { "PIT_OFFICER_AUTH": "Bearer pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w" }',
+        '      "env": { "PIT_OFFICER_AUTH": "Bearer pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w" }',
         "    }",
         "  }",
         "}",
@@ -84,7 +84,7 @@ describe("agentArtifacts", () => {
       [
         "[mcp_servers.pit-officer]",
         'url = "http://127.0.0.1:8787/mcp"',
-        'http_headers = { Authorization = "Bearer pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w" }',
+        'http_headers = { Authorization = "Bearer pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w" }',
       ].join("\n"),
     );
   });
@@ -107,7 +107,7 @@ describe("agentArtifacts", () => {
         '  "mcpServers": {',
         '    "pit-officer": {',
         '      "url": "http://127.0.0.1:8787/mcp",',
-        '      "headers": { "Authorization": "Bearer pit_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w" }',
+        '      "headers": { "Authorization": "Bearer pit_officer_mcp_Q2x7bWv9R1t4YzK8pN3sJd6HfL0aEu5cXg2iTo7Vr4w" }',
         "    }",
         "  }",
         "}",

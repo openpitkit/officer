@@ -198,7 +198,7 @@ func TestSwitchToTokenIssuesBothTokensAndASession(t *testing.T) {
 		t.Fatalf("mode = %q, want %q", snapshot.Mode, ModeToken)
 	}
 	assertTokenFormat(t, "the API token", snapshot.APIToken, "pit_api_")
-	assertTokenFormat(t, "the agent token", snapshot.AgentToken, "pit_mcp_")
+	assertTokenFormat(t, "the agent token", snapshot.AgentToken, "pit_officer_mcp_")
 	session, ok := h.store.session(t, id)
 	if !ok {
 		t.Fatal("the session issued for this browser is not stored")
@@ -347,7 +347,7 @@ func TestCheckToken(t *testing.T) {
 	snapshot := h.store.Snapshot()
 	tokens := []string{snapshot.APIToken, snapshot.AgentToken}
 	garbageAPI := "pit_api_" + strings.Repeat("A", 43)
-	garbageAgent := "pit_mcp_" + strings.Repeat("A", 43)
+	garbageAgent := "pit_officer_mcp_" + strings.Repeat("A", 43)
 
 	for _, tc := range []struct {
 		name      string
@@ -391,7 +391,7 @@ func TestCheckTokenRefusesEveryTokenInOpenMode(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	for _, kind := range []TokenKind{TokenAPI, TokenAgent} {
-		for _, presented := range []string{"", "pit_api_x", "pit_mcp_x"} {
+		for _, presented := range []string{"", "pit_api_x", "pit_officer_mcp_x"} {
 			err := h.service.CheckToken(kind, presented)
 			if !errors.Is(err, domain.ErrUnauthorized) {
 				t.Errorf("CheckToken(%s, %q) in open mode = %v, want unauthorized",
@@ -969,7 +969,7 @@ func TestRegenerateTokenInvalidatesTheOldValue(t *testing.T) {
 		old    string
 	}{
 		{TokenAPI, "pit_api_", before.APIToken},
-		{TokenAgent, "pit_mcp_", before.AgentToken},
+		{TokenAgent, "pit_officer_mcp_", before.AgentToken},
 	} {
 		shown, err := h.service.Token(tc.kind)
 		if err != nil || shown != tc.old {
