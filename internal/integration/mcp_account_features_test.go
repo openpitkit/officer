@@ -130,6 +130,7 @@ func TestInputSchemasByAccountFeatures(t *testing.T) {
 		{"submit_drop_copy_order", []string{"account", "missingAccount"}, false,
 			"must be create, as a drop-copy reports an execution that already happened and cannot reject an account that does not exist yet; for such an account, create is refused for an agent with loosening_refused"},
 		{"send_paper_order", []string{"account"}, false, ""},
+		{"send_live_order", []string{"account"}, false, ""},
 		{"grant_trading_access", nil, true, ""},
 		{"revoke_trading_access", nil, true, ""},
 		{"set_trading_fee_account", []string{"account"}, false, ""},
@@ -306,6 +307,15 @@ func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 		{"send_paper_order", orderInput(map[string]any{
 			"destination": map[string]any{"route": map[string]any{}},
 		}), []string{"send-paper"}, []any{
+			domain.Order{
+				BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+				AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",
+			},
+			backend.SendDestination{Route: "{}"},
+		}},
+		{"send_live_order", orderInput(map[string]any{
+			"destination": map[string]any{"route": map[string]any{}},
+		}), []string{"send-live"}, []any{
 			domain.Order{
 				BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 				AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",

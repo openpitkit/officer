@@ -453,8 +453,8 @@ OpenAPI document describes the restore request and summary.
 Trading credentials are JSON objects accepted on write; no trading route or
 MCP tool returns them. A backup export carries the stored credentials according
 to its `credentialForm`: sealed under a master key, plaintext without one, as with
-market-data credentials. Modes are `paper` and `live`; live connection creation
-is refused until the live-trading token exists. `GET /credential-storage` and
+market-data credentials. Modes are `paper` and `live`, and both are created,
+enabled and restored alike, with or without a master key. `GET /credential-storage` and
 the MCP tool `get_credential_storage` report whether stored credentials are
 sealed under the master key and, when they are not, whether trading connections
 or market-data sources hold keys in plain text. `GET /credential-storage` also
@@ -503,8 +503,8 @@ since local midnight: when reconciliation needs older executions, the order
 stays pending and the connection shows a diagnostic. It
 never treats the order as missing and never infers a fill.
 
-Paper sends use `POST /orders/send-paper` or `send_paper_order`; live counterparts
-`POST /orders/send-live` and `send_live_order` come with the live-trading token.
+Paper sends use `POST /orders/send-paper` or `send_paper_order`; live sends use
+`POST /orders/send-live` or `send_live_order`, with the same checks and outcomes.
 `acknowledged` means the venue accepted. `refused` means a definitive refusal by
 the venue or Officer provably did not hand it the order, recorded cancelled with
 leaves 0 and reservation released; `error` says why.

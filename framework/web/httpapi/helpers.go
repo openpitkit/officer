@@ -435,8 +435,6 @@ func DescribeErr(err error) PublicError {
 		return PublicError{http.StatusRequestEntityTooLarge, "too_large", err.Error()}
 	case errors.Is(err, domain.ErrInvalid):
 		return PublicError{http.StatusUnprocessableEntity, "validation", err.Error()}
-	case errors.Is(err, domain.ErrLiveTradingUnavailable):
-		return PublicError{http.StatusForbidden, "live_trading_unavailable", domain.ErrLiveTradingUnavailable.Error()}
 	case errors.Is(err, domain.ErrNonReleaseArchive):
 		return PublicError{http.StatusUnprocessableEntity, "non_release_archive", domain.ErrNonReleaseArchive.Error()}
 	case errors.Is(err, domain.ErrNonReleaseConfirmation):

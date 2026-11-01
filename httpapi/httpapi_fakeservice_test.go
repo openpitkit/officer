@@ -34,8 +34,8 @@ import (
 )
 
 type fakeService struct {
-	paperSendResult       backend.VenueSendResult
-	paperDestination      backend.SendDestination
+	venueSendResult       backend.VenueSendResult
+	sendDestination       backend.SendDestination
 	tradingStatus         backend.TradingStatus
 	tradingErr            error
 	tradingSnapshotErr    error
@@ -299,8 +299,14 @@ func (f *fakeService) ListTradingDestinations(_ context.Context, account domain.
 
 func (s *fakeService) SendPaperOrder(_ context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
 	s.tradingCalls = append(s.tradingCalls, "send-paper")
-	s.submitOrderIn, s.paperDestination = o, dest
-	return s.paperSendResult, s.tradingErr
+	s.submitOrderIn, s.sendDestination = o, dest
+	return s.venueSendResult, s.tradingErr
+}
+
+func (s *fakeService) SendLiveOrder(_ context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	s.tradingCalls = append(s.tradingCalls, "send-live")
+	s.submitOrderIn, s.sendDestination = o, dest
+	return s.venueSendResult, s.tradingErr
 }
 
 type setMcpCall struct {

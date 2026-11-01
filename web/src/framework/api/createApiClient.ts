@@ -29,7 +29,6 @@ export type ApiErrorCode =
   | "trading_mode_mismatch"
   | "destination_ambiguous"
   | "no_destination"
-  | "live_trading_unavailable"
   | "forbidden"
   | "upstream"
   | "terminal_order"
@@ -170,7 +169,6 @@ function asCode(v: unknown): ApiErrorCode {
     case "trading_mode_mismatch":
     case "destination_ambiguous":
     case "no_destination":
-    case "live_trading_unavailable":
     case "forbidden":
     case "upstream":
     case "terminal_order":
@@ -218,7 +216,6 @@ function defaultTranslate(
     trading_mode_mismatch: "The connection uses a different trading mode.",
     destination_ambiguous: "Multiple trading destinations match the request.",
     no_destination: "No trading destination is available.",
-    live_trading_unavailable: "Live trading is unavailable.",
     forbidden: "Access is denied.",
     upstream: "An upstream service is unreachable or refused the request.",
     terminal_order: "The order is in a terminal status.",

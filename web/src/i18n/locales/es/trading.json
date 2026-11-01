@@ -53,7 +53,6 @@
     "chooseVenue": "Elegir plataforma",
     "prepareAccount": "Prepare su cuenta de {{provider}}",
     "mode": "Modo",
-    "liveNote": "La negociación real todavía no está disponible: llegará junto con el token de conexión real.",
     "alpaca": {
       "createAccount": "Cree una cuenta de Alpaca.",
       "signUp": "Registrarse en Alpaca",

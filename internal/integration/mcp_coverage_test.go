@@ -342,6 +342,10 @@ func (s *setMDErrSource) SendPaperOrder(ctx context.Context, o domain.Order, des
 	return backend.VenueSendResult{}, domain.ErrNotImplemented
 }
 
+func (s *setMDErrSource) SendLiveOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return backend.VenueSendResult{}, domain.ErrNotImplemented
+}
+
 func (s *setMDErrSource) CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error) {
 	return domain.Account{}, domain.ErrNotImplemented
 }

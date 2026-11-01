@@ -133,7 +133,6 @@ func TestWriteErrSentinelCodes(t *testing.T) {
 		err    error
 		status int
 	}{
-		{"live_trading_unavailable", domain.ErrLiveTradingUnavailable, 403},
 		{"non_release_archive", domain.ErrNonReleaseArchive, 422},
 		{"non_release_confirmation_required", domain.ErrNonReleaseConfirmation, 403},
 		{"trading_mode_mismatch", domain.ErrTradingModeMismatch, 409},

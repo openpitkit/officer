@@ -2034,7 +2034,6 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrInvalid":                 domain.ErrInvalid,
 		"ErrInvalidPassword":         domain.ErrInvalidPassword,
 		"ErrInvalidRecoveryCode":     domain.ErrInvalidRecoveryCode,
-		"ErrLiveTradingUnavailable":  domain.ErrLiveTradingUnavailable,
 		"ErrLoosening":               domain.ErrLoosening,
 		"ErrNoChange":                domain.ErrNoChange,
 		"ErrNoDestination":           domain.ErrNoDestination,

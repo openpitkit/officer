@@ -1087,6 +1087,27 @@ describe("trading client", () => {
     );
   });
 
+  it("sends a live order to the live endpoint with the paper body and result", async () => {
+    const venueSend = { status: "acknowledged", venueOrder };
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ ...approval, venueSend }),
+    );
+
+    expect(await api().sendLiveOrder(paperBody)).toEqual({
+      ...approval,
+      reasons: [],
+      venueSend,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/send-live",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(paperBody),
+      }),
+    );
+  });
+
   it.each(["refused", "unknown"])(
     "returns a %s venue send without venue acknowledgment",
     async (status) => {
@@ -1223,7 +1244,6 @@ describe("trading client", () => {
       "Multiple trading destinations match the request.",
     ],
     ["no_destination", 409, "No trading destination is available."],
-    ["live_trading_unavailable", 403, "Live trading is unavailable."],
     ["forbidden", 403, "Access is denied."],
     [
       "upstream",

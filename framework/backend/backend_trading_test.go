@@ -366,7 +366,7 @@ func TestTradingCreate(t *testing.T) {
 	}{
 		{name: "enabled", enabled: true, mode: domain.TradingModePaper, provider: " venue ", label: " Paper "},
 		{name: "disabled", mode: domain.TradingModePaper, provider: "venue", label: "Paper"},
-		{name: "live", mode: domain.TradingModeLive, provider: "venue", label: "Paper", wantErr: domain.ErrLiveTradingUnavailable},
+		{name: "live", enabled: true, mode: domain.TradingModeLive, provider: "venue", label: "Live"},
 		{name: "unknown-mode", mode: "other", provider: "venue", label: "Paper", wantErr: domain.ErrInvalid},
 		{name: "unknown-provider", mode: domain.TradingModePaper, provider: "missing", label: "Paper", wantErr: domain.ErrInvalid},
 		{name: "label-required", mode: domain.TradingModePaper, provider: "venue", label: " ", wantErr: domain.ErrInvalid},
@@ -402,8 +402,10 @@ func TestTradingCreate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if created.VenueIdentity != "venue-1" || created.Label != "Paper" || created.Provider != "venue" {
-				t.Fatalf("incorrect created settings: identity=%s label=%s provider=%s", created.VenueIdentity, created.Label, created.Provider)
+			if created.VenueIdentity != "venue-1" || created.Label != strings.TrimSpace(tc.label) ||
+				created.Provider != "venue" || created.Mode != tc.mode {
+				t.Fatalf("incorrect created settings: identity=%s label=%s provider=%s mode=%s",
+					created.VenueIdentity, created.Label, created.Provider, created.Mode)
 			}
 			if created.Credentials != "" || strings.Contains(fmt.Sprintf("%#v", created), "test-secret-value") {
 				t.Fatal("create returned credential values")

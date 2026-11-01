@@ -404,9 +404,15 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 	registerTool(reg, descriptor("send_paper_order", "Send paper order",
 		"Check, hold and send an order to a paper venue. Returns the approval and "+
 			"acknowledged, refused or unknown send outcome. Mutating, protected and "+
-			"disabled by default. send_live_order comes with the live-trading token.",
+			"disabled by default. send_live_order is the live counterpart.",
 		"Check, hold and send an order to a paper venue.",
-		true, true, true, false), sendPaperOrderHandler)
+		true, true, true, false), sendVenueOrderHandler(frameworkmcp.Source.SendPaperOrder))
+	registerTool(reg, descriptor("send_live_order", "Send live order",
+		"Check, hold and send an order to a live venue, with real money. Returns "+
+			"the approval and acknowledged, refused or unknown send outcome. "+
+			"Mutating, protected and disabled by default.",
+		"Check, hold and send an order to a live venue, with real money.",
+		true, true, true, false), sendVenueOrderHandler(frameworkmcp.Source.SendLiveOrder))
 	registerTool(reg, descriptor("get_trading", "Get trading",
 		"Read trading providers and connections. Read-only - credentials are never exposed.",
 		"Read trading providers and connections.", false, false, true, true), getTradingHandler)
@@ -1906,7 +1912,8 @@ func listTradingDestinationsHandler(src frameworkmcp.Source) frameworkmcp.ToolBo
 	}
 }
 
-type sendPaperOrderInput struct {
+// sendVenueOrderInput is the input of both venue sends, paper and live.
+type sendVenueOrderInput struct {
 	ExternalID  string               `json:"id,omitempty" jsonschema:"Optional unique order id; omitted lets the store assign one"`
 	Account     string               `json:"account" jsonschema:"Officer account code"`
 	BaseAsset   string               `json:"baseAsset" jsonschema:"Asset being bought or sold"`
@@ -1915,16 +1922,16 @@ type sendPaperOrderInput struct {
 	AmountKind  string               `json:"amountKind" jsonschema:"quantity or volume"`
 	AmountValue string               `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
 	Price       string               `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
-	Destination sendDestinationInput `json:"destination" jsonschema:"Paper venue destination with an explicit route"`
+	Destination sendDestinationInput `json:"destination" jsonschema:"Venue destination of the tool's mode (paper or live) with an explicit route"`
 }
 
 type sendDestinationInput struct {
-	Connection   string         `json:"connection,omitempty" jsonschema:"Connection id; omit only when one enabled paper destination exists"`
+	Connection   string         `json:"connection,omitempty" jsonschema:"Connection id; omit only when one enabled destination of the tool's mode exists"`
 	VenueAccount string         `json:"venueAccount,omitempty" jsonschema:"Venue account; omitted uses the binding, supplied must match it"`
 	Route        map[string]any `json:"route" jsonschema:"Required venue route JSON object; Alpaca and IB require timeInForce (IB: day, gtc or ioc); Binance requires timeInForce GTC, IOC or FOK for a limit order and an empty object for a market order; eToro uses {} for market or {\"timeInForce\":\"ioc\"} for an IOC limit buy"`
 }
 
-type sendPaperOrderOutput struct {
+type sendVenueOrderOutput struct {
 	SignedApproval  string                `json:"signedApproval"`
 	KeyID           string                `json:"keyId"`
 	OrderExternalID string                `json:"id"`
@@ -1939,58 +1946,70 @@ type venueSendDTO struct {
 	VenueOrder *venueOrderDTO `json:"venueOrder,omitempty"`
 }
 
-func sendPaperOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[sendPaperOrderInput, sendPaperOrderOutput] {
-	return func(ctx context.Context, _ *sdkmcp.ServerSession, in sendPaperOrderInput) (string, sendPaperOrderOutput, error) {
-		if in.Destination.Route == nil {
-			return "", sendPaperOrderOutput{}, fmt.Errorf("destination route must be a JSON object")
+// venueSend is the Source method that pre-checks, holds and sends an order
+// through a connection of one mode: Source.SendPaperOrder or SendLiveOrder.
+type venueSend func(frameworkmcp.Source, context.Context, domain.Order, backend.SendDestination) (backend.VenueSendResult, error)
+
+// sendVenueOrderHandler serves send_paper_order and send_live_order: send
+// fixes the mode; the input, output and text are the same.
+func sendVenueOrderHandler(send venueSend) func(frameworkmcp.Source) frameworkmcp.ToolBody[sendVenueOrderInput, sendVenueOrderOutput] {
+	return func(src frameworkmcp.Source) frameworkmcp.ToolBody[sendVenueOrderInput, sendVenueOrderOutput] {
+		return func(ctx context.Context, _ *sdkmcp.ServerSession, in sendVenueOrderInput) (string, sendVenueOrderOutput, error) {
+			return sendVenueOrder(ctx, src, send, in)
 		}
-		route, err := json.Marshal(in.Destination.Route)
-		if err != nil {
-			return "", sendPaperOrderOutput{}, fmt.Errorf("destination route must be a JSON object")
-		}
-		o := domain.Order{Account: domain.AccountID(in.Account),
-			BaseAsset: in.BaseAsset, QuoteAsset: in.QuoteAsset,
-			Side: domain.OrderSide(in.Side), AmountKind: domain.OrderAmountKind(in.AmountKind),
-			AmountValue: in.AmountValue, Price: in.Price}
-		if in.ExternalID != "" {
-			o.ExternalID, err = domain.ParseExternalID(in.ExternalID)
-			if err != nil {
-				return "", sendPaperOrderOutput{}, err
-			}
-		}
-		dest := backend.SendDestination{VenueAccount: in.Destination.VenueAccount, Route: string(route)}
-		if in.Destination.Connection != "" {
-			dest.Connection, err = domain.ParseExternalID(in.Destination.Connection)
-			if err != nil {
-				return "", sendPaperOrderOutput{}, err
-			}
-		}
-		result, err := src.SendPaperOrder(ctx, o, dest)
-		if err != nil {
-			return "", sendPaperOrderOutput{}, toolError(err)
-		}
-		approval := result.Approval
-		out := sendPaperOrderOutput{
-			SignedApproval: approval.SignedApproval, KeyID: approval.KeyID, OrderExternalID: approval.OrderExternalID,
-			Verdict: approval.Verdict, Reasons: toMCPRejectDTOs(approval.Reasons),
-		}
-		if result.Send != nil {
-			out.VenueSend = &venueSendDTO{Status: result.Send.Status, Error: result.Send.Error}
-			if result.Send.Order != nil {
-				link, err := toVenueOrderDTO(*result.Send.Order)
-				if err != nil {
-					return "", sendPaperOrderOutput{}, toolError(err)
-				}
-				out.VenueSend.VenueOrder = &link
-			}
-		}
-		outcome := "reject"
-		if result.Send != nil {
-			outcome = "accept; venue send " + result.Send.Status
-			if result.Send.Error != "" {
-				outcome += ": " + result.Send.Error
-			}
-		}
-		return fmt.Sprintf("order %s: %s", approval.OrderExternalID, outcome), out, nil
 	}
+}
+
+func sendVenueOrder(ctx context.Context, src frameworkmcp.Source, send venueSend, in sendVenueOrderInput) (string, sendVenueOrderOutput, error) {
+	if in.Destination.Route == nil {
+		return "", sendVenueOrderOutput{}, fmt.Errorf("destination route must be a JSON object")
+	}
+	route, err := json.Marshal(in.Destination.Route)
+	if err != nil {
+		return "", sendVenueOrderOutput{}, fmt.Errorf("destination route must be a JSON object")
+	}
+	o := domain.Order{Account: domain.AccountID(in.Account),
+		BaseAsset: in.BaseAsset, QuoteAsset: in.QuoteAsset,
+		Side: domain.OrderSide(in.Side), AmountKind: domain.OrderAmountKind(in.AmountKind),
+		AmountValue: in.AmountValue, Price: in.Price}
+	if in.ExternalID != "" {
+		o.ExternalID, err = domain.ParseExternalID(in.ExternalID)
+		if err != nil {
+			return "", sendVenueOrderOutput{}, err
+		}
+	}
+	dest := backend.SendDestination{VenueAccount: in.Destination.VenueAccount, Route: string(route)}
+	if in.Destination.Connection != "" {
+		dest.Connection, err = domain.ParseExternalID(in.Destination.Connection)
+		if err != nil {
+			return "", sendVenueOrderOutput{}, err
+		}
+	}
+	result, err := send(src, ctx, o, dest)
+	if err != nil {
+		return "", sendVenueOrderOutput{}, toolError(err)
+	}
+	approval := result.Approval
+	out := sendVenueOrderOutput{
+		SignedApproval: approval.SignedApproval, KeyID: approval.KeyID, OrderExternalID: approval.OrderExternalID,
+		Verdict: approval.Verdict, Reasons: toMCPRejectDTOs(approval.Reasons),
+	}
+	if result.Send != nil {
+		out.VenueSend = &venueSendDTO{Status: result.Send.Status, Error: result.Send.Error}
+		if result.Send.Order != nil {
+			link, err := toVenueOrderDTO(*result.Send.Order)
+			if err != nil {
+				return "", sendVenueOrderOutput{}, toolError(err)
+			}
+			out.VenueSend.VenueOrder = &link
+		}
+	}
+	outcome := "reject"
+	if result.Send != nil {
+		outcome = "accept; venue send " + result.Send.Status
+		if result.Send.Error != "" {
+			outcome += ": " + result.Send.Error
+		}
+	}
+	return fmt.Sprintf("order %s: %s", approval.OrderExternalID, outcome), out, nil
 }

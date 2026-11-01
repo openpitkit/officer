@@ -53,7 +53,6 @@
     "chooseVenue": "Choose venue",
     "prepareAccount": "Prepare your {{provider}} account",
     "mode": "Mode",
-    "liveNote": "Live trading is not available yet: it arrives together with the live connection token.",
     "alpaca": {
       "createAccount": "Create an Alpaca account.",
       "signUp": "Sign up at Alpaca",

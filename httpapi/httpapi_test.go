@@ -163,6 +163,7 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"PUT /signing/config",
 		"POST /orders/submit",
 		"POST /orders/send-paper",
+		"POST /orders/send-live",
 		"POST /orders/drop-copy/submit",
 		"POST /orders/{id}/confirm",
 		"POST /orders/{id}/cancel",

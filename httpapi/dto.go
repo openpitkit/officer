@@ -1184,7 +1184,8 @@ func toServiceDTO(info backend.ServiceInfo) serviceDTO {
 	}
 }
 
-type sendPaperOrderRequestDTO struct {
+// sendVenueOrderRequestDTO is the body of both venue sends, paper and live.
+type sendVenueOrderRequestDTO struct {
 	submitDropCopyOrderRequestDTO
 	Destination sendDestinationDTO `json:"destination"`
 }
@@ -1195,7 +1196,7 @@ type sendDestinationDTO struct {
 	Route        json.RawMessage `json:"route"`
 }
 
-type sendPaperOrderResponseDTO struct {
+type sendVenueOrderResponseDTO struct {
 	signedApprovalDTO
 	VenueSend *venueSendDTO `json:"venueSend,omitempty"`
 }

@@ -213,6 +213,14 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 			"Service.sendOrder), so it takes no exposure a barrier or block refuses " +
 			"and reaches no venue the agent was not given.",
 	},
+	"send_live_order": {
+		reason: "send_paper_order through a live connection: the same full " +
+			"pre-trade pipeline with a missing account refused, and only through a " +
+			"live connection already granted to the account " +
+			"(framework/backend/backend_trading.go: Service.sendOrder), so it takes " +
+			"no exposure a barrier or block refuses and reaches no venue the agent " +
+			"was not given.",
+	},
 	"create_trading_connection": {
 		reason: "The core refuses every connection creation by an agent before the " +
 			"venue is called, as a new connection widens what can be sent " +

@@ -72,7 +72,7 @@ import type {
   TradingDestination,
   VenueOrder,
   VenueSendOutcome,
-  PaperSendResult,
+  VenueSendResult,
   OrderDetail,
   Diagnostic,
   DiagnosticAction,
@@ -3691,29 +3691,51 @@ async function submitOrder(
   return { id: approval.id, approval };
 }
 
-/** Send a paper order without creating an account or fetching order detail. */
-async function sendPaperOrder(
+/** Body of a paper or live venue send. */
+type SendVenueOrderBody = Omit<CreateOrderBody, "mode"> & {
+  destination: {
+    connection?: string;
+    venueAccount?: string;
+    route: Record<string, string>;
+  };
+};
+
+/** POST /orders/send-paper or /orders/send-live: the same body and result. */
+async function sendVenueOrder(
   client: ApiClient,
-  body: Omit<CreateOrderBody, "mode"> & {
-    destination: {
-      connection?: string;
-      venueAccount?: string;
-      route: Record<string, string>;
-    };
-  },
+  mode: TradingMode,
+  body: SendVenueOrderBody,
   signal?: AbortSignal,
-): Promise<PaperSendResult> {
-  const v = await client.request(`${client.baseUrl}/orders/send-paper`, {
+): Promise<VenueSendResult> {
+  const v = await client.request(`${client.baseUrl}/orders/send-${mode}`, {
     method: "POST",
     body,
     signal,
   });
   const o = isObject(v) ? v : {};
-  const result: PaperSendResult = normalizeSignedApproval(v);
+  const result: VenueSendResult = normalizeSignedApproval(v);
   if (o.venueSend !== undefined) {
     result.venueSend = normalizeVenueSendOutcome(o.venueSend);
   }
   return result;
+}
+
+/** Send a paper order without creating an account or fetching order detail. */
+function sendPaperOrder(
+  client: ApiClient,
+  body: SendVenueOrderBody,
+  signal?: AbortSignal,
+): Promise<VenueSendResult> {
+  return sendVenueOrder(client, "paper", body, signal);
+}
+
+/** Send a live order, with real money, the way sendPaperOrder sends a paper one. */
+function sendLiveOrder(
+  client: ApiClient,
+  body: SendVenueOrderBody,
+  signal?: AbortSignal,
+): Promise<VenueSendResult> {
+  return sendVenueOrder(client, "live", body, signal);
 }
 
 /** POST /orders/submit, then fetch the created order for the dashboard table. */
@@ -4803,6 +4825,7 @@ export function createOfficerApi(client: ApiClient) {
     fetchAdjustments: bind(fetchAdjustments),
     submitOrder: bind(submitOrder),
     sendPaperOrder: bind(sendPaperOrder),
+    sendLiveOrder: bind(sendLiveOrder),
     createOrder: bind(createOrder),
     checkOrder: bind(checkOrder),
     fetchOrdersPage: bind(fetchOrdersPage),

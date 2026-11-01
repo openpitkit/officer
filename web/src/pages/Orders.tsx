@@ -510,6 +510,7 @@ function SubmitOrderDialog({
     fetchAccounts,
     fetchTradingDestinations,
     sendPaperOrder,
+    sendLiveOrder,
   } = useOfficerApi();
   const { showsAccounts } = accountScope();
   // While accounts are hidden the field is not rendered, so the default
@@ -860,7 +861,7 @@ function SubmitOrderDialog({
       !isPositiveDecimalString(amountValue) ||
       !isOptionalPositiveDecimalString(price) ||
       amountKind !== "quantity" ||
-      venueMode !== "paper" ||
+      venueMode === "" ||
       selectedDestination === undefined ||
       !selectedDestinationIsSelectable ||
       timeInForceOptions === undefined ||
@@ -875,7 +876,8 @@ function SubmitOrderDialog({
     submitAbortRef.current = controller;
     try {
       const submissionID = externalId.trim();
-      const result = await sendPaperOrder(
+      const send = venueMode === "live" ? sendLiveOrder : sendPaperOrder;
+      const result = await send(
         {
           ...(submissionID ? { id: submissionID } : {}),
           account: account.trim(),
@@ -1090,7 +1092,7 @@ function SubmitOrderDialog({
     tab === "venue"
       ? commonFieldsValid &&
         amountKind === "quantity" &&
-        venueMode === "paper" &&
+        venueMode !== "" &&
         selectedDestinationIsSelectable &&
         timeInForceValid
       : commonFieldsValid && amountKind !== "" && tab !== "";
@@ -1172,10 +1174,6 @@ function SubmitOrderDialog({
               disabled={busy}
             />
           </div>
-
-          {venueMode === "live" && (
-            <p className="text-xs text-muted-lt">{tt("create.liveNote")}</p>
-          )}
 
           {debouncedAccount !== "" &&
             debouncedAccount === account.trim() &&

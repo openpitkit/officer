@@ -861,6 +861,10 @@ func (s *guardSource) SendPaperOrder(ctx context.Context, o domain.Order, dest b
 	return backend.VenueSendResult{}, domain.ErrNotImplemented
 }
 
+func (s *guardSource) SendLiveOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return backend.VenueSendResult{}, domain.ErrNotImplemented
+}
+
 func (s *guardSource) CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error) {
 	return domain.Account{}, domain.ErrNotImplemented
 }

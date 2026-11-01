@@ -67,6 +67,9 @@ type tradingSource struct {
 func (s *tradingSource) SendPaperOrder(_ context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
 	return s.paperSendResult, s.record("send-paper", o, dest)
 }
+func (s *tradingSource) SendLiveOrder(_ context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return s.paperSendResult, s.record("send-live", o, dest)
+}
 func (s *tradingSource) GetTrading(context.Context) (backend.TradingStatus, error) {
 	s.calls = append(s.calls, "get")
 	return s.status, s.snapshotErr
@@ -428,7 +431,7 @@ func TestTradingCredentialsStayWriteOnly(t *testing.T) {
 					input = map[string]any{"provider": "alpaca", "label": "Paper", "mode": "paper", "credentials": input["credentials"], "enabled": false}
 				}
 				if failure == "service" {
-					src.err = fmt.Errorf("venue rejected credential %s: %w", secret, domain.ErrLiveTradingUnavailable)
+					src.err = fmt.Errorf("venue rejected credential %s: %w", secret, domain.ErrTradingModeMismatch)
 				}
 				if failure == "snapshot" {
 					src.snapshotErr = fmt.Errorf("snapshot error %s", secret)
@@ -447,7 +450,7 @@ func TestTradingCredentialsStayWriteOnly(t *testing.T) {
 					requireToolError(t, res.IsError)
 					want := "internal: internal error"
 					if failure == "service" {
-						want = "live_trading_unavailable: live trading unavailable"
+						want = "trading_mode_mismatch: trading mode mismatch"
 					}
 					if got := textContent(res.Content); got != want {
 						t.Fatalf("refusal: %q, want %q", got, want)
@@ -625,7 +628,15 @@ func TestGetOrderVenueShape(t *testing.T) {
 	})
 }
 
-func TestSendPaperOrderWire(t *testing.T) {
+func TestSendVenueOrderWire(t *testing.T) {
+	for _, send := range []struct{ tool, call string }{
+		{"send_paper_order", "send-paper"}, {"send_live_order", "send-live"},
+	} {
+		t.Run(send.tool, func(t *testing.T) { testSendVenueOrderWire(t, send.tool, send.call) })
+	}
+}
+
+func testSendVenueOrderWire(t *testing.T, tool, call string) {
 	for _, status := range []string{"acknowledged", "refused", "unknown", "reject"} {
 		t.Run(status, func(t *testing.T) {
 			src := tradingFixture()
@@ -650,7 +661,7 @@ func TestSendPaperOrderWire(t *testing.T) {
 			input := map[string]any{"id": "order", "account": "desk", "baseAsset": "AAPL", "quoteAsset": "USD",
 				"side": "buy", "amountKind": "quantity", "amountValue": "10", "price": "2",
 				"destination": map[string]any{"connection": "conn", "venueAccount": "remote", "route": map[string]any{"timeInForce": "day"}}}
-			result := callTool[map[string]any](t, src, "send_paper_order", input)
+			result := callTool[map[string]any](t, src, tool, input)
 			if result.IsError {
 				t.Fatal("send result became a tool error")
 			}
@@ -667,8 +678,9 @@ func TestSendPaperOrderWire(t *testing.T) {
 			}
 			if !reflect.DeepEqual(src.arguments, []any{domain.Order{ExternalID: "order", Account: "desk", BaseAsset: "AAPL", QuoteAsset: "USD",
 				Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "10", Price: "2"},
-				backend.SendDestination{Connection: "conn", VenueAccount: "remote", Route: `{"timeInForce":"day"}`}}) {
-				t.Fatalf("paper send arguments = %+v", src.arguments)
+				backend.SendDestination{Connection: "conn", VenueAccount: "remote", Route: `{"timeInForce":"day"}`}}) ||
+				!reflect.DeepEqual(src.calls, []string{call}) {
+				t.Fatalf("%s arguments = %+v, calls = %v", tool, src.arguments, src.calls)
 			}
 		})
 	}
@@ -682,7 +694,7 @@ func TestSendPaperOrderWire(t *testing.T) {
 		t.Run(tc.code, func(t *testing.T) {
 			src := tradingFixture()
 			src.err = tc.err
-			res := callTool[map[string]any](t, src, "send_paper_order", map[string]any{"account": "desk", "baseAsset": "AAPL", "quoteAsset": "USD",
+			res := callTool[map[string]any](t, src, tool, map[string]any{"account": "desk", "baseAsset": "AAPL", "quoteAsset": "USD",
 				"side": "buy", "amountKind": "quantity", "amountValue": "1", "destination": map[string]any{"route": map[string]any{}}})
 			requireToolError(t, res.IsError)
 			if !strings.HasPrefix(textContent(res.Content), tc.code+": ") {
@@ -697,7 +709,7 @@ func TestTradingTypedRefusals(t *testing.T) {
 		err    error
 		prefix string
 	}{
-		{domain.ErrLiveTradingUnavailable, "live_trading_unavailable: "},
+		{domain.ErrTradingModeMismatch, "trading_mode_mismatch: "},
 		{domain.ErrFeeAccountRequired, "fee_account_required: "},
 		{domain.ErrVenueOrderManaged, "venue_order_managed: "},
 	} {

@@ -175,9 +175,6 @@ var (
 	// ErrTerminalOrder marks the remaining Officer safety net for terminal
 	// orders; callers can bypass it with force and route straight to the engine.
 	ErrTerminalOrder = registerSentinel(errors.New("order in terminal status"))
-	// ErrLiveTradingUnavailable marks a live connection refused until the
-	// live-trading token exists.
-	ErrLiveTradingUnavailable = registerSentinel(errors.New("live trading unavailable"))
 	// ErrNonReleaseArchive refuses disposable non-release data in a release build.
 	ErrNonReleaseArchive = registerSentinel(errors.New(
 		"this archive was exported by a non-release (edge, dev or local) build " +

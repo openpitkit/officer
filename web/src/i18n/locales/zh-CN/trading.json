@@ -53,7 +53,6 @@
     "chooseVenue": "选择交易场所",
     "prepareAccount": "准备您的 {{provider}} 账户",
     "mode": "模式",
-    "liveNote": "实盘交易暂不可用：它将与实盘连接令牌一同提供。",
     "alpaca": {
       "createAccount": "创建 Alpaca 账户。",
       "signUp": "注册 Alpaca",

@@ -283,6 +283,8 @@ type Source interface {
 	ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]backend.TradingDestinationStatus, error)
 	// SendPaperOrder checks, holds and sends an order to a paper connection.
 	SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error)
+	// SendLiveOrder checks, holds and sends an order to a live connection.
+	SendLiveOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error)
 	// CommandEnabled reports whether the operator has the named MCP command enabled.
 	CommandEnabled(ctx context.Context, command string) (bool, error)
 	// SubmitOrder runs the pre-trade pipeline and issues a signed approval.
@@ -1226,4 +1228,8 @@ func (s controlPlaneSource) ListTradingDestinations(ctx context.Context, account
 
 func (s controlPlaneSource) SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
 	return s.cp.SendPaperOrder(ctx, o, dest)
+}
+
+func (s controlPlaneSource) SendLiveOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return s.cp.SendLiveOrder(ctx, o, dest)
 }

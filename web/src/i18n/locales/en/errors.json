@@ -10,7 +10,6 @@
     "trading_mode_mismatch": "The connection uses a different trading mode.",
     "destination_ambiguous": "Multiple trading destinations match the request.",
     "no_destination": "No trading destination is available.",
-    "live_trading_unavailable": "Live trading is unavailable.",
     "forbidden": "Access is denied.",
     "upstream": "An upstream service is unreachable or refused the request.",
     "terminal_order": "The order is in a terminal status.",

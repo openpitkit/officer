@@ -48,6 +48,9 @@ const (
 	scopeOwnedOrder   domain.ExternalID = "owned-order"
 	scopeClientGroup                    = "client-desk"
 	scopeConnection   domain.ExternalID = "connection-1"
+	// scopeLiveConnection is the live twin of scopeConnection, granted to the
+	// same account.
+	scopeLiveConnection domain.ExternalID = "connection-live"
 	// scopeClientPolicy is the missing-account policy a client sends and
 	// scopeResolvedPolicy the one the recording scope answers with.
 	scopeClientPolicy   = domain.MissingAccountCreate
@@ -178,9 +181,9 @@ func (scopeTradingRuntime) Send(
 	return domain.VenueOrder{}, nil
 }
 
-// newScopeTestService builds the Officer service over a fake node holding one
-// paper connection granted to scopeResolvedAccount, a fake signer and a venue
-// runtime, with scope as its account scope. The signer is returned so a test
+// newScopeTestService builds the Officer service over a fake node holding a
+// paper and a live connection granted to scopeResolvedAccount, a fake signer
+// and a venue runtime, with scope as its account scope. The signer is returned so a test
 // can seed signed orders through a default-scope service over the same node.
 func newScopeTestService(
 	t *testing.T, scope backend.AccountScope,
@@ -193,9 +196,16 @@ func newScopeTestService(
 			Mode: domain.TradingModePaper, VenueIdentity: "venue-1",
 			Credentials: `{"apiKey":"key-value","apiSecret":"secret-value"}`,
 			Enabled:     true,
+		}, {
+			ExternalID: scopeLiveConnection, Provider: "venue", Label: "Live",
+			Mode: domain.TradingModeLive, VenueIdentity: "venue-2",
+			Credentials: `{"apiKey":"key-value","apiSecret":"secret-value"}`,
+			Enabled:     true,
 		}},
 		tradingAccess: []domain.TradingAccess{{
 			Account: scopeResolvedAccount, Connection: scopeConnection,
+		}, {
+			Account: scopeResolvedAccount, Connection: scopeLiveConnection,
 		}},
 	}
 	signer := &fakeSigner{}
@@ -498,6 +508,26 @@ func accountScopeSites() []scopeSite {
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
 				_, err := svc.SendPaperOrder(ctx, clientOrder(req), backend.SendDestination{
 					Connection: scopeConnection, Route: "{}",
+				})
+				return err
+			},
+			asked: []scopeCall{
+				account(scopeClientAccount),
+				account(scopeResolvedAccount),
+				policy(domain.MissingAccountReject),
+			},
+			reached: []string{
+				`ListTradingAccess "scoped-acc"`,
+				`SubmitOrder "scoped-acc" "reject"`,
+				`GetVenueOrder "order-1"`,
+			},
+		},
+		{
+			// The live send resolves the account exactly as the paper send.
+			name: "SendLiveOrder",
+			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
+				_, err := svc.SendLiveOrder(ctx, clientOrder(req), backend.SendDestination{
+					Connection: scopeLiveConnection, Route: "{}",
 				})
 				return err
 			},

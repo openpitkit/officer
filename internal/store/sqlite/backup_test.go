@@ -3738,33 +3738,47 @@ func TestBackupRestoreUnavailableSealedTradingCredentials(t *testing.T) {
 	}
 }
 
-func TestBackupRestoreRejectsLiveTradingBeforeWrites(t *testing.T) {
-	ctx := context.Background()
-	_, source := newRealmStore(t, "live-trading-source")
-	seedTradingBackupState(t, ctx, source)
-	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
-	if err != nil {
-		t.Fatalf("ExportBackup: %v", err)
-	}
-	archive.Data.TradingConnections[0].Mode = domain.TradingModeLive
+// TestBackupRestoreLiveTrading asserts a live connection restores like a paper
+// one - enabled, with its credentials - whether or not the databases seal them.
+func TestBackupRestoreLiveTrading(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		sealed bool
+	}{
+		{name: "plaintext"},
+		{name: "sealed", sealed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			var opts []Option
+			if test.sealed {
+				opts = append(opts, WithMasterKey(mustStoreMasterKey(t, 0x63)))
+			}
+			_, source := newRealmStoreWithOptions(t, domain.RealmID("live-trading-source-"+test.name), opts...)
+			connection, order := seedTradingBackupState(t, ctx, source)
+			archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+			if err != nil {
+				t.Fatalf("ExportBackup: %v", err)
+			}
+			archive.Data.TradingConnections[0].Mode = domain.TradingModeLive
+			connection.Mode = domain.TradingModeLive
 
-	_, target := newRealmStore(t, "live-trading-target")
-	_, err = target.RestoreBackup(ctx, archive, backup.RestoreOptions{
-		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
-	})
-	if !errors.Is(err, domain.ErrLiveTradingUnavailable) {
-		t.Fatalf("RestoreBackup error = %v, want ErrLiveTradingUnavailable", err)
-	}
-	if !strings.Contains(err.Error(), archive.Data.TradingConnections[0].Label) {
-		t.Fatalf("RestoreBackup error = %q, want connection label", err)
-	}
-	accounts, listErr := target.ListAccounts(ctx)
-	if listErr != nil || len(accounts) != 0 {
-		t.Fatalf("accounts after refused restore = %+v, err=%v", accounts, listErr)
-	}
-	connections, listErr := target.ListTradingConnections(ctx)
-	if listErr != nil || len(connections) != 0 {
-		t.Fatalf("connections after refused restore = %+v, err=%v", connections, listErr)
+			for _, mode := range []backup.RestoreMode{
+				backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing,
+			} {
+				_, target := newRealmStoreWithOptions(t, domain.RealmID("live-trading-target-"+test.name), opts...)
+				summary, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{
+					Scope: backup.Scope{All: true}, Mode: mode,
+				})
+				if err != nil {
+					t.Fatalf("RestoreBackup %s: %v", mode, err)
+				}
+				if len(summary.TradingCredentialsUnavailable) != 0 {
+					t.Fatalf("%s: unavailable trading credentials = %v", mode, summary.TradingCredentialsUnavailable)
+				}
+				assertTradingBackupState(t, ctx, target, connection, order, tradingBackupSecret, true, false)
+			}
+		})
 	}
 }
 

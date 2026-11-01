@@ -812,34 +812,6 @@ func (rt *restoreTx) openArchivedMarketDataCredentials(
 
 // --- Restore: trading -------------------------------------------------------
 
-func (rt *restoreTx) validateAppliedTradingConnections(
-	ctx context.Context, connections []backup.TradingConnection,
-) error {
-	for _, archived := range connections {
-		if archived.Mode != domain.TradingModeLive {
-			continue
-		}
-		if rt.mode == backup.RestoreModeInsertMissing {
-			exists, err := rowExists(
-				ctx, rt.tx,
-				`SELECT 1 FROM trading_connection WHERE external_id = ?`,
-				archived.ExternalID.Bytes(),
-			)
-			if err != nil {
-				return err
-			}
-			if exists {
-				continue
-			}
-		}
-		return fmt.Errorf(
-			"store: restore live trading connection %q: %w",
-			archived.Label, domain.ErrLiveTradingUnavailable,
-		)
-	}
-	return nil
-}
-
 func (rt *restoreTx) restoreTrading(ctx context.Context, data backup.Data) error {
 	for _, archived := range data.TradingConnections {
 		if archived.ExternalID.IsZero() {

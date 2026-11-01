@@ -782,17 +782,13 @@ func TestTradingMCPEndToEnd(t *testing.T) {
 func TestTradingRefusalsEndToEnd(t *testing.T) {
 	f := newTradingE2E(t, false)
 	live := tradingE2ECreateInput("Live", "live")
-	errBody := tradingE2EDecode[struct{ Error struct{ Code string } }](t, f.rest(http.MethodPost, "/trading/connections", live, http.StatusForbidden))
-	if errBody.Error.Code != "live_trading_unavailable" {
-		t.Fatalf("live error code = %s", errBody.Error.Code)
-	}
 	f.rest(http.MethodPut, "/mcp-access/create_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
 	// The agent is refused before its mode is read.
 	f.mcpLoosening("create_trading_connection", live)
 	f.createREST()
 	second := tradingE2ECreateInput("Second", "paper")
 	second["credentials"] = map[string]string{"apiKey": "second-key-marker", "apiSecret": "second-secret-marker"}
-	errBody = tradingE2EDecode[struct{ Error struct{ Code string } }](t,
+	errBody := tradingE2EDecode[struct{ Error struct{ Code string } }](t,
 		f.rest(http.MethodPost, "/trading/connections", second, http.StatusConflict))
 	if errBody.Error.Code != "conflict" {
 		t.Fatalf("duplicate venue error = %s", errBody.Error.Code)
@@ -886,8 +882,15 @@ func (f *tradingE2E) wait(what string, check func() bool) {
 
 func (f *tradingE2E) sendPaper(surface string, input map[string]any, status int, code string) []byte {
 	f.t.Helper()
+	return f.sendVenue(surface, domain.TradingModePaper, input, status, code)
+}
+
+// sendVenue sends over REST (POST /orders/send-<mode>) or MCP
+// (send_<mode>_order) and returns the response body or structured content.
+func (f *tradingE2E) sendVenue(surface string, mode domain.TradingMode, input map[string]any, status int, code string) []byte {
+	f.t.Helper()
 	if surface == "REST" {
-		raw := f.rest(http.MethodPost, "/orders/send-paper", input, status)
+		raw := f.rest(http.MethodPost, "/orders/send-"+string(mode), input, status)
 		if code != "" {
 			got := tradingE2EDecode[struct{ Error struct{ Code string } }](f.t, raw)
 			if got.Error.Code != code {
@@ -896,7 +899,7 @@ func (f *tradingE2E) sendPaper(surface string, input map[string]any, status int,
 		}
 		return raw
 	}
-	result := f.mcp("send_paper_order", input, status != http.StatusCreated)
+	result := f.mcp("send_"+string(mode)+"_order", input, status != http.StatusCreated)
 	if status != http.StatusCreated {
 		if code != "" {
 			text, ok := result.Content[0].(*sdkmcp.TextContent)
@@ -1048,6 +1051,65 @@ func TestTradingSendPaperEndToEnd(t *testing.T) {
 			f.rest(http.MethodGet, "/audit?limit=500", nil, http.StatusOK)
 			f.close()
 			tradingE2ENoSecrets(t, "paper send logs", []byte(f.logs.String()))
+		})
+	}
+}
+
+// TestTradingSendLiveEndToEnd creates a live connection over REST and sends
+// through it on both surfaces against the fake venue: the paper pipeline
+// through a live connection, which the paper send refuses.
+func TestTradingSendLiveEndToEnd(t *testing.T) {
+	for _, surface := range []string{"REST", "MCP"} {
+		t.Run(surface, func(t *testing.T) {
+			f := newTradingE2E(t, true)
+			if surface == "MCP" {
+				result := f.mcp("send_live_order", tradingE2ESendInput(""), true)
+				text, ok := result.Content[0].(*sdkmcp.TextContent)
+				if !ok || !strings.Contains(text.Text, `Command "send_live_order" is disabled in the Pit Officer panel`) {
+					t.Fatal("live send must default to disabled and refuse with the panel notice")
+				}
+			}
+			created := tradingE2EDecode[tradingE2ECreated](t, f.rest(http.MethodPost, "/trading/connections",
+				tradingE2ECreateInput("Live", "live"), http.StatusCreated)).Connection
+			if created.ID == "" || created.Mode != "live" || !created.Enabled || created.VenueIdentity != "paper-account" {
+				t.Fatalf("live connection = %+v", created)
+			}
+			id, path := created.ID, "/trading/connections/"+created.ID
+			f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "AAPL",
+				"baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, http.StatusOK)
+			f.rest(http.MethodPut, path+"/access", map[string]any{"account": "desk"}, http.StatusOK)
+			for _, account := range []string{"desk", "fees"} {
+				f.rest(http.MethodPost, "/accounts/"+account+"/adjustments?missingAccount=reject",
+					map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+						"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
+			}
+			f.rest(http.MethodPut, path+"/fee-account", map[string]any{"account": "fees"}, http.StatusOK)
+			if surface == "MCP" {
+				for _, tool := range []string{"send_paper_order", "send_live_order"} {
+					f.rest(http.MethodPut, "/mcp-access/"+tool, map[string]any{"enabled": true}, http.StatusOK)
+				}
+			}
+			f.sendPaper(surface, tradingE2ESendInput(id), http.StatusConflict, "trading_mode_mismatch")
+			raw := f.sendVenue(surface, domain.TradingModeLive, tradingE2ESendInput(id), http.StatusCreated, "")
+			sent := tradingE2EDecode[struct {
+				ID, Verdict string
+				VenueSend   struct {
+					Status     string
+					VenueOrder struct{ Connection, VenueOrderID string }
+				}
+			}](t, raw)
+			if sent.ID == "" || sent.Verdict != "accept" || sent.VenueSend.Status != "acknowledged" ||
+				sent.VenueSend.VenueOrder.Connection != id || sent.VenueSend.VenueOrder.VenueOrderID != "venue-1" {
+				t.Fatalf("live send acknowledgement = %s", raw)
+			}
+			f.venueMu.Lock()
+			posts := len(f.posts)
+			f.venueMu.Unlock()
+			if posts != 1 {
+				t.Fatalf("venue posts = %d, want 1: the refused paper send must not reach the venue", posts)
+			}
+			f.close()
+			tradingE2ENoSecrets(t, "live send logs", []byte(f.logs.String()))
 		})
 	}
 }

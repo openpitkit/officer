@@ -848,6 +848,10 @@ func (s *customHostSource) SendPaperOrder(ctx context.Context, o domain.Order, d
 	return backend.VenueSendResult{}, domain.ErrNotImplemented
 }
 
+func (s *customHostSource) SendLiveOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return backend.VenueSendResult{}, domain.ErrNotImplemented
+}
+
 func (s *customHostSource) CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error) {
 	return domain.Account{}, domain.ErrNotImplemented
 }

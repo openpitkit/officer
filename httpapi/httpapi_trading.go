@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -510,9 +511,15 @@ func handleListTradingDestinations(svc backend.ControlPlane) http.HandlerFunc {
 	}
 }
 
-func handleSendPaperOrder(svc backend.ControlPlane) http.HandlerFunc {
+// venueSend is the control-plane method that pre-checks, holds and sends an
+// order through a connection of one mode: SendPaperOrder or SendLiveOrder.
+type venueSend func(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error)
+
+// handleSendVenueOrder serves POST /orders/send-paper and /orders/send-live:
+// send fixes the mode; the request and response shapes are the same.
+func handleSendVenueOrder(svc backend.ControlPlane, send venueSend) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req sendPaperOrderRequestDTO
+		var req sendVenueOrderRequestDTO
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
@@ -536,13 +543,13 @@ func handleSendPaperOrder(svc backend.ControlPlane) http.HandlerFunc {
 				return
 			}
 		}
-		result, err := svc.SendPaperOrder(r.Context(), order, dest)
+		result, err := send(r.Context(), order, dest)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
 		approval := result.Approval
-		out := sendPaperOrderResponseDTO{signedApprovalDTO: signedApprovalDTO{
+		out := sendVenueOrderResponseDTO{signedApprovalDTO: signedApprovalDTO{
 			SignedApproval: approval.SignedApproval, KeyID: approval.KeyID,
 			OrderExternalID: approval.OrderExternalID, Verdict: approval.Verdict,
 			Reasons: toOrderRejectDTOs(approval.Reasons),

@@ -79,6 +79,14 @@ func TestOmittedAccountByAccountFeatures(t *testing.T) {
 			},
 		},
 		{
+			"orders.send-live", http.MethodPost, "/orders/send-live",
+			`{` + order + `,"destination":{"route":{}}}`, http.StatusCreated, "",
+			"account id is empty",
+			func(f *fakeService) (domain.AccountID, bool) {
+				return f.submitOrderIn.Account, slices.Contains(f.tradingCalls, "send-live")
+			},
+		},
+		{
 			"trading.access.put", http.MethodPut, tradingPath + "/access",
 			`{"venueAccount":"sub-1"}`, http.StatusOK, "",
 			"account or accountGroup is required",

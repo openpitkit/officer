@@ -114,6 +114,9 @@ var textContentCalls = map[string]textContentCall{
 	"send_paper_order": {textContentTrading, withOrder(map[string]any{
 		"destination": map[string]any{"route": map[string]any{}},
 	})},
+	"send_live_order": {textContentTrading, withOrder(map[string]any{
+		"destination": map[string]any{"route": map[string]any{}},
+	})},
 	"get_trading":            {textContentTrading, map[string]any{}},
 	"get_credential_storage": {textContentControlPlane, map[string]any{}},
 	"create_trading_connection": {textContentTrading, map[string]any{
@@ -186,24 +189,26 @@ var textContentRejects = []domain.OrderReject{
 }
 
 // TestRejectedOrderTextNamesEveryReason holds that the text of a rejected
-// send_paper_order and of a rejected check_order names the outcome and every
+// send_paper_order or send_live_order and of a rejected check_order names the outcome and every
 // reject reason with its code, text and limit values, so a client that hands
 // its model only the text tells the user which limit fired.
 func TestRejectedOrderTextNamesEveryReason(t *testing.T) {
 	t.Parallel()
 	order := withOrder(map[string]any{"amountValue": "0.002"})
-	t.Run("send_paper_order", func(t *testing.T) {
-		t.Parallel()
-		src := tradingFixture()
-		src.paperSendResult.Approval = backend.SignedApproval{
-			OrderExternalID: testOrderEID, Verdict: "reject", Reasons: textContentRejects,
-		}
-		in := maps.Clone(order)
-		in["destination"] = map[string]any{"route": map[string]any{}}
-		res := callTool[map[string]any](t, src, "send_paper_order", in)
-		requireRejectReasonsInText(t, res.IsError, textContent(res.Content),
-			"order "+testOrderEID+": reject", `"verdict":"reject"`)
-	})
+	for _, tool := range []string{"send_paper_order", "send_live_order"} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+			src := tradingFixture()
+			src.paperSendResult.Approval = backend.SignedApproval{
+				OrderExternalID: testOrderEID, Verdict: "reject", Reasons: textContentRejects,
+			}
+			in := maps.Clone(order)
+			in["destination"] = map[string]any{"route": map[string]any{}}
+			res := callTool[map[string]any](t, src, tool, in)
+			requireRejectReasonsInText(t, res.IsError, textContent(res.Content),
+				"order "+testOrderEID+": reject", `"verdict":"reject"`)
+		})
+	}
 	t.Run("check_order", func(t *testing.T) {
 		t.Parallel()
 		src := &fakeSource{checkResult: domain.CheckResult{Rejects: textContentRejects}}

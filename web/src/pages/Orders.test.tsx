@@ -224,6 +224,7 @@ const submitExecutionReportMock = vi.fn();
 const confirmOrderMock = vi.fn();
 const cancelOrderMock = vi.fn();
 const sendPaperOrderMock = vi.fn();
+const sendLiveOrderMock = vi.fn();
 
 const proto = window.HTMLElement.prototype as HTMLElement & {
   hasPointerCapture?: (pointerId: number) => boolean;
@@ -343,6 +344,7 @@ function renderOrders(initialEntry: string) {
         confirmOrder: confirmOrderMock,
         cancelOrder: cancelOrderMock,
         sendPaperOrder: sendPaperOrderMock,
+        sendLiveOrder: sendLiveOrderMock,
       },
     },
   );
@@ -4143,7 +4145,61 @@ describe("Orders venue sending", () => {
     expect(live).toHaveClass("bg-[var(--danger)]");
     expect(live).toBeDisabled();
     await chooseTimeInForce(user, dialog, "DAY - Day");
-    expect(live).toBeDisabled();
+    expect(live).toBeEnabled();
+  });
+
+  it("sends a live order through the live API from the danger button", async () => {
+    const user = userEvent.setup();
+    const liveDestination: TradingDestination = {
+      ...alpacaDestination,
+      connection: "alpaca-live",
+      label: "Live Alpaca",
+      mode: "live",
+      venueAccount: "LA-1",
+    };
+    fetchTradingDestinationsMock.mockImplementation(
+      async (_account: string, mode: string) =>
+        mode === "live" ? [liveDestination] : [alpacaDestination],
+    );
+    sendLiveOrderMock.mockResolvedValue({
+      signedApproval: "live-envelope",
+      keyId: "key-1",
+      id: sampleOrder.id,
+      verdict: "accept",
+      reasons: [],
+      venueSend: { status: "acknowledged", venueOrder: linkedVenueOrder },
+    });
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+    await fillOrderFields(user, dialog);
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Send to venue" }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Live" }));
+    expect(
+      await within(dialog).findByRole("combobox", { name: "Target" }),
+    ).toHaveTextContent(/Live Alpaca.*Alpaca.*LA-1/);
+    await chooseTimeInForce(user, dialog, "DAY - Day");
+    const submit = within(dialog).getByRole("button", {
+      name: "Submit LIVE order",
+    });
+    expect(submit).toHaveClass("bg-[var(--danger)]");
+    await user.click(submit);
+
+    expect(sendLiveOrderMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        destination: {
+          connection: "alpaca-live",
+          venueAccount: "LA-1",
+          route: { timeInForce: "day" },
+        },
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(sendPaperOrderMock).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Sent to Alpaca · live. Venue order venue-123."),
+    ).toHaveClass("border-[var(--ok)]");
   });
 
   it("keeps the existing submit request unchanged while sending is off", async () => {
@@ -4680,11 +4736,6 @@ describe("Orders venue sending", () => {
     ).toHaveAttribute("href", "/trading-connections");
 
     await user.click(within(dialog).getByRole("button", { name: "Live" }));
-    expect(
-      within(dialog).getByText(
-        "Live trading is not available yet: it arrives together with the live connection token.",
-      ),
-    ).toBeInTheDocument();
     expect(
       await within(dialog).findByText(
         "No live targets for account desk-alpha.",

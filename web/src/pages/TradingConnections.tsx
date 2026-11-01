@@ -26,6 +26,7 @@ import type {
   TradingConnection,
   TradingConnectionCheck,
   TradingConnectionState,
+  TradingMode,
   TradingProvider,
   TradingSymbolVerification,
 } from "@/api/types";
@@ -125,6 +126,9 @@ const TRADING_PROVIDER_GUIDES: Record<
   {
     siteUrl?: string;
     docsUrl?: string;
+    /** docsUrl covers paper trading only, so a live connection omits it. */
+    paperDocs?: true;
+    /** Paper preparation steps; the live add dialog shows none. */
     steps?: Array<{
       textKey: string;
       /** The step's text while accounts are hidden, when it differs. */
@@ -175,6 +179,7 @@ const TRADING_PROVIDER_GUIDES: Record<
   alpaca: {
     siteUrl: "https://alpaca.markets",
     docsUrl: "https://docs.alpaca.markets/us/docs/paper-trading",
+    paperDocs: true,
     steps: [
       {
         textKey: "create.alpaca.createAccount",
@@ -215,6 +220,7 @@ const TRADING_PROVIDER_GUIDES: Record<
   binance: {
     siteUrl: "https://www.binance.com",
     docsUrl: "https://testnet.binance.vision/",
+    paperDocs: true,
     steps: [
       {
         textKey: "create.binance.openTestnet",
@@ -322,6 +328,12 @@ type AccountSuggestionLookup = {
 
 type AccessSubjectKind = "account" | "group";
 
+/** IB Gateway's default socket port for each trading mode. */
+const IB_GATEWAY_PORTS: Record<TradingMode, string> = {
+  paper: "4002",
+  live: "4001",
+};
+
 function ibSettingsReady(draft: Record<string, string>): boolean {
   const port = Number(draft.port);
   return (
@@ -387,6 +399,14 @@ function IBConnectionFields({
   );
 }
 
+/** Card links of a connection: a live one never links to paper-only docs. */
+function tradingConnectionLinks(provider: string, mode: TradingMode) {
+  const guide = TRADING_PROVIDER_GUIDES[provider];
+  return mode === "live" && guide?.paperDocs
+    ? { siteUrl: guide.siteUrl }
+    : guide;
+}
+
 function AddTradingConnectionDialog({
   provider,
   credentialStorage,
@@ -405,14 +425,25 @@ function AddTradingConnectionDialog({
   const id = useId();
   const fields = TRADING_PROVIDER_CREDENTIAL_FIELDS.get(provider.type);
   const [label, setLabel] = useState(provider.title);
+  const [mode, setMode] = useState<TradingMode>("paper");
   const [credentialDraft, setCredentialDraft] = useState<
     Record<string, string>
   >(() => Object.fromEntries(fields ? fields.map(({ key }) => [key, ""]) : []));
   const [ibSettings, setIBSettings] = useState({
     host: "127.0.0.1",
-    port: "4002",
+    port: IB_GATEWAY_PORTS.paper,
     clientId: "",
   });
+  // The prefilled gateway port follows the mode; a port the operator typed
+  // stays as typed.
+  const changeMode = (next: TradingMode) => {
+    setMode(next);
+    setIBSettings((draft) =>
+      draft.port === IB_GATEWAY_PORTS[mode]
+        ? { ...draft, port: IB_GATEWAY_PORTS[next] }
+        : draft,
+    );
+  };
   const isIB = provider.type === "ib";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -447,7 +478,7 @@ function AddTradingConnectionDialog({
       const connection = await createTradingConnection({
         provider: provider.type,
         label: label.trim(),
-        mode: "paper",
+        mode,
         credentials,
         enabled: false,
       });
@@ -503,55 +534,57 @@ function AddTradingConnectionDialog({
               <legend>{t("create.mode")}</legend>
             </Label>
             <Segmented
-              value="paper"
+              value={mode}
+              onChange={(value) => changeMode(value as TradingMode)}
               options={[
                 { value: "paper", label: t("mode.paper") },
-                { value: "live", label: t("mode.live"), disabled: true },
+                { value: "live", label: t("mode.live") },
               ]}
             />
-            <p className="text-xs text-muted">{t("create.liveNote")}</p>
           </fieldset>
           <UnsealedKeysWarning storage={credentialStorage} />
-          <div className="flex flex-col gap-y-3">
-            <h2 className="text-sm font-bold">
-              {t("create.prepareAccount", { provider: provider.title })}
-            </h2>
-            {guide?.steps && (
-              <ol className="list-outside list-decimal flex flex-col gap-y-4 pl-5 text-sm">
-                {guide.steps.map((instruction) => (
-                  <li
-                    key={instruction.textKey}
-                    className="flex flex-col gap-y-2 pl-1"
-                  >
-                    <p>
-                      {t(
-                        !accountScope().showsAccounts &&
-                          instruction.singleAccountTextKey !== undefined
-                          ? instruction.singleAccountTextKey
-                          : instruction.textKey,
-                        instruction.values,
+          {mode === "paper" && (
+            <div className="flex flex-col gap-y-3">
+              <h2 className="text-sm font-bold">
+                {t("create.prepareAccount", { provider: provider.title })}
+              </h2>
+              {guide?.steps && (
+                <ol className="list-outside list-decimal flex flex-col gap-y-4 pl-5 text-sm">
+                  {guide.steps.map((instruction) => (
+                    <li
+                      key={instruction.textKey}
+                      className="flex flex-col gap-y-2 pl-1"
+                    >
+                      <p>
+                        {t(
+                          !accountScope().showsAccounts &&
+                            instruction.singleAccountTextKey !== undefined
+                            ? instruction.singleAccountTextKey
+                            : instruction.textKey,
+                          instruction.values,
+                        )}
+                      </p>
+                      {instruction.links.length > 0 && (
+                        <div className="flex flex-wrap gap-3">
+                          {instruction.links.map((link) => (
+                            <a
+                              key={link.labelKey}
+                              href={link.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-accent underline underline-offset-4"
+                            >
+                              {t(link.labelKey)}
+                            </a>
+                          ))}
+                        </div>
                       )}
-                    </p>
-                    {instruction.links.length > 0 && (
-                      <div className="flex flex-wrap gap-3">
-                        {instruction.links.map((link) => (
-                          <a
-                            key={link.labelKey}
-                            href={link.href}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-accent underline underline-offset-4"
-                          >
-                            {t(link.labelKey)}
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            )}
-          </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
           {isIB ? (
             <IBConnectionFields
               id={id}
@@ -1781,7 +1814,7 @@ function ConnectionCard({
         }
         error={connection.error}
         errorTone={connection.state === "degraded" ? "warn" : "danger"}
-        links={TRADING_PROVIDER_GUIDES[connection.provider]}
+        links={tradingConnectionLinks(connection.provider, connection.mode)}
         actions={
           <>
             <Button

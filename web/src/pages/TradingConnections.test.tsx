@@ -762,6 +762,18 @@ describe("Trading connections", () => {
     const paper = await card();
     const live = await card("Alpaca live");
     const unavailable = await card("Alpaca unavailable");
+    // Alpaca's docs link covers paper trading only: a live card omits it.
+    expect(live.getByRole("link", { name: "Provider site" })).toHaveAttribute(
+      "href",
+      "https://alpaca.markets",
+    );
+    expect(
+      live.queryByRole("link", { name: "Provider docs" }),
+    ).not.toBeInTheDocument();
+    expect(paper.getByRole("link", { name: "Provider docs" })).toHaveAttribute(
+      "href",
+      "https://docs.alpaca.markets/us/docs/paper-trading",
+    );
     expect(
       within(paper.getByRole("list", { name: "Setup checklist" })).getAllByText(
         "Not done",
@@ -4032,6 +4044,29 @@ describe("IB trading connections", () => {
     },
   );
 
+  it("prefills the gateway port of the mode until the port is edited", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const dialog = await openIBCreate(user);
+    const port = dialog.getByLabelText("Port");
+    await user.click(dialog.getByRole("button", { name: "Live" }));
+    expect(port).toHaveValue(4001);
+    await user.click(dialog.getByRole("button", { name: "Paper" }));
+    expect(port).toHaveValue(4002);
+    await user.clear(port);
+    await user.type(port, "7496");
+    await user.click(dialog.getByRole("button", { name: "Live" }));
+    expect(port).toHaveValue(7496);
+    await user.click(dialog.getByRole("button", { name: "Create" }));
+    expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+      provider: "ib",
+      label: "Interactive Brokers",
+      mode: "live",
+      enabled: false,
+      credentials: { host: "127.0.0.1", port: 7496 },
+    });
+  });
+
   it("creates IB with an edited host and port", async () => {
     const user = userEvent.setup();
     renderTrading();
@@ -4319,12 +4354,7 @@ describe("Add trading connection dialog", () => {
       "true",
     );
     expect(mode.getByRole("button", { name: "Paper" })).toBeEnabled();
-    expect(mode.getByRole("button", { name: "Live" })).toBeDisabled();
-    expect(
-      dialog.getByText(
-        "Live trading is not available yet: it arrives together with the live connection token.",
-      ),
-    ).toBeInTheDocument();
+    expect(mode.getByRole("button", { name: "Live" })).toBeEnabled();
     for (const name of ["API key", "API secret"]) {
       expect(dialog.getByLabelText(name)).toHaveAttribute("type", "password");
       expect(dialog.getByLabelText(name)).toHaveAttribute(
@@ -4424,6 +4454,49 @@ describe("Add trading connection dialog", () => {
       }
       expect(dialog.getByLabelText("API key")).toBeEnabled();
       expect(dialog.getByLabelText("API secret")).toBeEnabled();
+    },
+  );
+
+  it.each([
+    { sealed: false, warning: true },
+    { sealed: true, warning: false },
+  ])(
+    "creates live without paper steps when credential storage sealed is $sealed",
+    async ({ sealed, warning }) => {
+      const user = userEvent.setup();
+      credentialStorage = storage(sealed);
+      renderTrading();
+      const dialog = await openCreateConnection(user);
+      const mode = within(dialog.getByRole("group", { name: "Mode" }));
+      await user.click(mode.getByRole("button", { name: "Live" }));
+      expect(mode.getByRole("button", { name: "Live" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(
+        dialog.queryByRole("heading", { name: "Prepare your Alpaca account" }),
+      ).not.toBeInTheDocument();
+      expect(dialog.queryByRole("listitem")).not.toBeInTheDocument();
+      // The only link left is the unsealed warning's own.
+      expect(
+        dialog.queryAllByRole("link").map((link) => link.textContent),
+      ).toEqual(warning ? ["How to set a master key"] : []);
+      const warningText = "Keys will be stored unencrypted";
+      if (warning) {
+        expect(dialog.getByRole("alert")).toHaveTextContent(warningText);
+      } else {
+        expect(dialog.queryByText(warningText)).not.toBeInTheDocument();
+      }
+      await user.type(dialog.getByLabelText("API key"), "live-key");
+      await user.type(dialog.getByLabelText("API secret"), "live-secret");
+      await user.click(dialog.getByRole("button", { name: "Create" }));
+      expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+        provider: "alpaca",
+        label: "Alpaca",
+        mode: "live",
+        credentials: { apiKey: "live-key", apiSecret: "live-secret" },
+        enabled: false,
+      });
     },
   );
 

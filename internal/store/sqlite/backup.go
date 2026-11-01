@@ -306,10 +306,6 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 // connection, or a replace-all whose normalized scope includes accounts_groups
 // but not trading while the target holds a trading connection. Positions,
 // risk_limits and audit_log pull accounts_groups into the normalized scope.
-// It returns an error wrapping domain.ErrLiveTradingUnavailable
-// before writing, naming the connection label, when the restore would apply a
-// live-mode trading connection. Insert-missing skips a live connection whose
-// external id already exists.
 func (r *realmStore) RestoreBackup(
 	ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 ) (summary backup.RestoreSummary, err error) {
@@ -487,9 +483,6 @@ func (rt *restoreTx) applyRuntime(section backup.Section, n int) {
 // machine-record foreign keys resolve regardless of which sections the scope
 // selected.
 func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Data) error {
-	if err := rt.validateAppliedTradingConnections(ctx, data.TradingConnections); err != nil {
-		return err
-	}
 	// Replace-all makes each included section equal the archive: before any
 	// insert, delete the in-scope rows the archive does not carry. Children are
 	// removed first (or by FK cascade) so no delete orphans a row or violates a

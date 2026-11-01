@@ -482,7 +482,6 @@ func TestTradingHandlerErrors(t *testing.T) {
 		err                            error
 		status                         int
 	}{
-		{"live", "POST", "/trading/connections", `{"provider":"alpaca","label":"Live","mode":"live","credentials":{"key":"` + tradingSecret + `"},"enabled":true}`, "live_trading_unavailable", domain.ErrLiveTradingUnavailable, 403},
 		{"fee", "PUT", tradingPath + "/access", `{"account":"acc-1"}`, "fee_account_required", domain.ErrFeeAccountRequired, 409},
 		{"fee-group", "PUT", tradingPath + "/access", `{"accountGroup":"desk"}`, "fee_account_required", domain.ErrFeeAccountRequired, 409},
 		{"report", "POST", "/orders/order-1/execution-reports", `{"status":"cancelled"}`, "venue_order_managed", domain.ErrVenueOrderManaged, 409},
@@ -560,41 +559,47 @@ func TestOrderVenueLinkShape(t *testing.T) {
 	}
 }
 
-func TestSendPaperOrderResponse(t *testing.T) {
-	for _, status := range []string{"acknowledged", "refused", "unknown", "reject"} {
-		t.Run(status, func(t *testing.T) {
-			svc := &fakeService{paperSendResult: backend.VenueSendResult{
-				Approval: backend.SignedApproval{SignedApproval: "approval", KeyID: "key",
-					OrderExternalID: "order", Verdict: "accept"}}}
-			want := `{"signedApproval":"approval","keyId":"key","id":"order","verdict":"accept"`
-			if status == "reject" {
-				svc.paperSendResult.Approval.Verdict = "reject"
-				want = strings.Replace(want, `"accept"`, `"reject"`, 1) + `}`
-			} else {
-				svc.paperSendResult.Send = &backend.VenueSend{Status: status}
-				want += `,"venueSend":{"status":"` + status + `"`
-				if status == "acknowledged" {
-					svc.paperSendResult.Send.Order = &domain.VenueOrder{Connection: "conn", Route: `{"timeInForce":"day"}`,
-						ClientOrderID: "client", VenueOrderID: "venue", SendAttempted: true, CreatedAt: time.Unix(0, 0).UTC()}
-					want += `,"venueOrder":{"connection":"conn","venueAccount":"","route":{"timeInForce":"day"},"clientOrderId":"client","venueOrderId":"venue","sendAttempted":true,"createdAt":"1970-01-01T00:00:00Z"}`
-				} else {
-					svc.paperSendResult.Send.Error = "venue reason"
-					want += `,"error":"venue reason"`
-				}
-				want += `}}`
-			}
-			rec := callTrading(t, svc, "/api/v1", "POST", "/orders/send-paper",
-				`{"id":"order","account":"desk","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"10","price":"2","destination":{"connection":"conn","venueAccount":"remote","route":{ "timeInForce": "day" }}}`)
-			assertTradingJSON(t, rec, 201, want)
-			if svc.paperDestination != (backend.SendDestination{Connection: "conn", VenueAccount: "remote", Route: `{"timeInForce":"day"}`}) ||
-				svc.submitOrderIn.ExternalID != "order" || svc.submitOrderIn.Account != "desk" || svc.submitOrderIn.Price != "2" {
-				t.Fatal("paper send input was not delegated")
-			}
-		})
+func TestSendVenueOrderResponse(t *testing.T) {
+	for _, path := range []string{"send-paper", "send-live"} {
+		for _, status := range []string{"acknowledged", "refused", "unknown", "reject"} {
+			t.Run(path+"/"+status, func(t *testing.T) { testSendVenueOrderResponse(t, path, status) })
+		}
 	}
 }
 
-func TestSendPaperOrderErrors(t *testing.T) {
+func testSendVenueOrderResponse(t *testing.T, path, status string) {
+	t.Helper()
+	svc := &fakeService{venueSendResult: backend.VenueSendResult{
+		Approval: backend.SignedApproval{SignedApproval: "approval", KeyID: "key",
+			OrderExternalID: "order", Verdict: "accept"}}}
+	want := `{"signedApproval":"approval","keyId":"key","id":"order","verdict":"accept"`
+	if status == "reject" {
+		svc.venueSendResult.Approval.Verdict = "reject"
+		want = strings.Replace(want, `"accept"`, `"reject"`, 1) + `}`
+	} else {
+		svc.venueSendResult.Send = &backend.VenueSend{Status: status}
+		want += `,"venueSend":{"status":"` + status + `"`
+		if status == "acknowledged" {
+			svc.venueSendResult.Send.Order = &domain.VenueOrder{Connection: "conn", Route: `{"timeInForce":"day"}`,
+				ClientOrderID: "client", VenueOrderID: "venue", SendAttempted: true, CreatedAt: time.Unix(0, 0).UTC()}
+			want += `,"venueOrder":{"connection":"conn","venueAccount":"","route":{"timeInForce":"day"},"clientOrderId":"client","venueOrderId":"venue","sendAttempted":true,"createdAt":"1970-01-01T00:00:00Z"}`
+		} else {
+			svc.venueSendResult.Send.Error = "venue reason"
+			want += `,"error":"venue reason"`
+		}
+		want += `}}`
+	}
+	rec := callTrading(t, svc, "/api/v1", "POST", "/orders/"+path,
+		`{"id":"order","account":"desk","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"10","price":"2","destination":{"connection":"conn","venueAccount":"remote","route":{ "timeInForce": "day" }}}`)
+	assertTradingJSON(t, rec, 201, want)
+	if !reflect.DeepEqual(svc.tradingCalls, []string{path}) ||
+		svc.sendDestination != (backend.SendDestination{Connection: "conn", VenueAccount: "remote", Route: `{"timeInForce":"day"}`}) ||
+		svc.submitOrderIn.ExternalID != "order" || svc.submitOrderIn.Account != "desk" || svc.submitOrderIn.Price != "2" {
+		t.Fatalf("%s input was not delegated: calls %v", path, svc.tradingCalls)
+	}
+}
+
+func TestSendVenueOrderErrors(t *testing.T) {
 	for _, tc := range []struct{ route, code string }{
 		{"", "required"}, {"null", "type"}, {"[]", "type"},
 		{`"{}"`, "type"}, {"42", "type"}, {"true", "type"},
@@ -614,8 +619,8 @@ func TestSendPaperOrderErrors(t *testing.T) {
 			}
 			problem := problems[0].(map[string]any)
 			if problem["pointer"] != "/destination/route" || problem["constraint"] != tc.code ||
-				svc.paperDestination.Route != "" {
-				t.Fatalf("route problem = %v, destination = %+v", problem, svc.paperDestination)
+				svc.sendDestination.Route != "" {
+				t.Fatalf("route problem = %v, destination = %+v", problem, svc.sendDestination)
 			}
 		})
 	}
@@ -631,20 +636,22 @@ func TestSendPaperOrderErrors(t *testing.T) {
 		{fmt.Errorf("venue rule refused: %w", domain.ErrInvalid), 422, "validation"},
 		{domain.ErrUpstream, 502, "upstream"},
 	} {
-		t.Run(tc.code, func(t *testing.T) {
-			svc := &fakeService{tradingErr: tc.err}
-			rec := callTrading(t, svc, "/api/v1", "POST", "/orders/send-paper",
-				`{"account":"desk","destination":{"route":{}}}`)
-			if rec.Code != tc.status || !strings.Contains(rec.Body.String(), `"code":"`+tc.code+`"`) {
-				t.Fatalf("paper send error = %d %s", rec.Code, rec.Body)
-			}
-			if tc.status == 422 && !strings.Contains(rec.Body.String(), "venue rule refused") {
-				t.Fatal("pre-check reason omitted")
-			}
-			if tc.code == "destination_ambiguous" && !strings.Contains(rec.Body.String(), `"candidates"`) {
-				t.Fatal("ambiguity candidates omitted")
-			}
-		})
+		for _, path := range []string{"send-paper", "send-live"} {
+			t.Run(path+"/"+tc.code, func(t *testing.T) {
+				svc := &fakeService{tradingErr: tc.err}
+				rec := callTrading(t, svc, "/api/v1", "POST", "/orders/"+path,
+					`{"account":"desk","destination":{"route":{}}}`)
+				if rec.Code != tc.status || !strings.Contains(rec.Body.String(), `"code":"`+tc.code+`"`) {
+					t.Fatalf("%s error = %d %s", path, rec.Code, rec.Body)
+				}
+				if tc.status == 422 && !strings.Contains(rec.Body.String(), "venue rule refused") {
+					t.Fatal("pre-check reason omitted")
+				}
+				if tc.code == "destination_ambiguous" && !strings.Contains(rec.Body.String(), `"candidates"`) {
+					t.Fatal("ambiguity candidates omitted")
+				}
+			})
+		}
 	}
 }
 
@@ -661,13 +668,24 @@ func TestOpenAPITradingContract(t *testing.T) {
 			}
 		}
 	}
-	if !paths["POST /orders/send-paper"] {
-		t.Fatal("send-paper is missing")
+	for _, send := range []struct{ path, next string }{
+		{"/orders/send-paper", "  /orders/send-live:"},
+		{"/orders/send-live", "  /orders/drop-copy/submit:"},
+	} {
+		if !paths["POST "+send.path] {
+			t.Fatalf("%s is missing", send.path)
+		}
+		block := strings.SplitN(strings.SplitN(spec, "  "+send.path+":", 2)[1], send.next, 2)[0]
+		if !strings.Contains(block, "        \"501\":\n          $ref: \"#/components/responses/NotImplementedError\"") ||
+			!strings.Contains(block, "$ref: \"#/components/schemas/SendVenueOrderRequest\"") ||
+			!strings.Contains(block, "$ref: \"#/components/schemas/SendVenueOrderResponse\"") {
+			t.Fatalf("%s must document the shared body, response and 501 when trading runtime is absent", send.path)
+		}
 	}
-	sendPaper := strings.SplitN(strings.SplitN(spec, "  /orders/send-paper:", 2)[1],
-		"  /orders/drop-copy/submit:", 2)[0]
-	if !strings.Contains(sendPaper, "        \"501\":\n          $ref: \"#/components/responses/NotImplementedError\"") {
-		t.Fatal("send-paper must document 501 when trading runtime is absent")
+	for _, gone := range []string{"live_trading_unavailable", "LiveTradingUnavailable", "live-trading token", "live token"} {
+		if strings.Contains(spec, gone) {
+			t.Fatalf("OpenAPI still documents the removed live refusal: %q", gone)
+		}
 	}
 	restore := strings.SplitN(strings.SplitN(spec, "  /backup/restore:", 2)[1],
 		"  /business-csv/export:", 2)[0]
@@ -677,12 +695,12 @@ func TestOpenAPITradingContract(t *testing.T) {
 	}
 	connections := strings.SplitN(strings.SplitN(spec, "  /trading/connections:", 2)[1],
 		"  /trading/connections/{id}/settings:", 2)[0]
-	if !strings.Contains(connections, "        \"403\":\n          $ref: \"#/components/responses/LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError\"") {
+	if !strings.Contains(connections, "        \"403\":\n          $ref: \"#/components/responses/NonReleaseConfirmationOrForeignRequestError\"") {
 		t.Fatal("POST /trading/connections must document 403 non_release_confirmation_required")
 	}
 	enabled := strings.SplitN(strings.SplitN(spec, "  /trading/connections/{id}/enabled:", 2)[1],
 		"  /trading/connections/{id}/check:", 2)[0]
-	if !strings.Contains(enabled, "        \"403\":\n          $ref: \"#/components/responses/LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError\"") {
+	if !strings.Contains(enabled, "        \"403\":\n          $ref: \"#/components/responses/NonReleaseConfirmationOrForeignRequestError\"") {
 		t.Fatal("PUT /trading/connections/{id}/enabled must document 403 non_release_confirmation_required")
 	}
 	for _, snippet := range []string{
@@ -691,12 +709,12 @@ func TestOpenAPITradingContract(t *testing.T) {
 		"required: [connection, venueAccount, route, clientOrderId, sendAttempted, createdAt]",
 		"required: [symbol, tradable]", "required: [supported, exists, tradable]",
 		"TradingCredentials:\n      type: object", "route:\n          type: object",
-		"enum: [acknowledged, refused, unknown]", "SendPaperOrderRequest:",
-		"SendPaperOrderResponse:", "required: [route]", "/orders/send-live", "comes with the live-trading token.",
+		"enum: [acknowledged, refused, unknown]", "SendVenueOrderRequest:",
+		"SendVenueOrderResponse:", "required: [route]", "operationId: sendLiveOrder",
 		"enum: [paper, live]", "enum: [running, degraded, unavailable, stopped]",
-		"live_trading_unavailable", "non_release_confirmation_required",
+		"non_release_confirmation_required",
 		"nonReleaseConfirmed:",
-		"LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError:",
+		"NonReleaseConfirmationOrForeignRequestError:",
 		"trading_mode_mismatch", "fee_account_required",
 		"venue_order_managed", "no_destination", "destination_ambiguous",
 		"required: [candidates]", "tradingCredentialsUnavailable:",

@@ -220,8 +220,7 @@ paths:
         know.
         The trading runtime stops before restore and restarts afterwards,
         after both success and failure.
-        Trading scope restrictions are described by BackupScope; applying a
-        live-mode connection returns 403 live_trading_unavailable before writing.
+        Trading scope restrictions are described by BackupScope.
         A release build refuses the archive it would restore (archiveFile when
         non-empty, otherwise archive) if marked nonRelease, with 422
         non_release_archive before decoding its data. Such disposable archives
@@ -267,7 +266,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "400":
@@ -4042,22 +4041,87 @@ paths:
         trading_mode_mismatch. A venue pre-check refusal returns 422 with the
         venue's reason. A pre-trade reject returns 201 without venueSend and
         sends nothing. GET /orders/{id} is authoritative; the runtime reconciles
-        any order that reached the send step. The live counterpart
-        /orders/send-live comes with the live-trading token.
+        any order that reached the send step. POST /orders/send-live is the live
+        counterpart.
       tags: [trading]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SendPaperOrderRequest"
+              $ref: "#/components/schemas/SendVenueOrderRequest"
       responses:
         "201":
           description: Order recorded with its approval and optional venue outcome.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SendPaperOrderResponse"
+                $ref: "#/components/schemas/SendVenueOrderResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          description: >-
+            Forbidden destination, the request's Host is not an allowed name
+            (`host_not_allowed`), a browser sent the request from another
+            origin (`origin_not_allowed`), or the request carries the agent
+            token, which is accepted only on `/mcp` (`wrong_token`). Names
+            beyond loopback come from `PIT_OFFICER_ALLOWED_HOSTS`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: >
+            Trading mode mismatch, no destination, ambiguity, duplicate id,
+            disabled connection, disabled instrument or runtime not running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
+  /orders/send-live:
+    post:
+      operationId: sendLiveOrder
+      summary: Check, hold and send an order to a live venue
+      description: >
+        POST /orders/send-paper for live connections: the same checks, hold and
+        send, through a live destination, with real money at the venue.
+        Omitting the connection requires exactly one enabled live destination;
+        ambiguity returns destination_ambiguous with candidates. A paper
+        connection returns trading_mode_mismatch. A pre-trade reject returns
+        201 without venueSend and sends nothing. GET /orders/{id} is
+        authoritative; the runtime reconciles any order that reached the send
+        step.
+      tags: [trading]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendVenueOrderRequest"
+      responses:
+        "201":
+          description: Order recorded with its approval and optional venue outcome.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendVenueOrderResponse"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "401":
@@ -4287,8 +4351,7 @@ paths:
       summary: Create and check a venue connection
       tags: [trading]
       description: >
-        Mode is immutable and must be paper or live. Live creation is refused
-        with live_trading_unavailable until the live token exists. Credentials
+        Mode is immutable and must be paper or live. Credentials
         are a JSON object on input and only key-presence flags on output.
         Credentials the provider refuses before contacting the venue are a 422
         validation error: a key blank after trimming is pointed at by name,
@@ -4318,7 +4381,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError"
+          $ref: "#/components/responses/NonReleaseConfirmationOrForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4364,7 +4427,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4418,7 +4481,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError"
+          $ref: "#/components/responses/NonReleaseConfirmationOrForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4455,7 +4518,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4503,7 +4566,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4540,7 +4603,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4583,7 +4646,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4627,7 +4690,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4682,7 +4745,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4731,7 +4794,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4774,7 +4837,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4804,7 +4867,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignRequestError"
+          $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "502":
@@ -4848,7 +4911,7 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
-          $ref: "#/components/responses/LiveTradingUnavailableOrForeignHostError"
+          $ref: "#/components/responses/ForeignHostError"
         "502":
           $ref: "#/components/responses/UpstreamError"
         "501":
@@ -6004,39 +6067,13 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
-    LiveTradingUnavailableOrForeignHostError:
+    NonReleaseConfirmationOrForeignRequestError:
       description: >-
-        Live trading is refused until the live token exists
-        (`live_trading_unavailable`), the request's `Host` is not a name the
-        server answers to (`host_not_allowed`), or the request carries the
-        agent token, which is accepted only on `/mcp` (`wrong_token`). Names
-        beyond loopback come from `PIT_OFFICER_ALLOWED_HOSTS`.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-
-    LiveTradingUnavailableOrForeignRequestError:
-      description: >-
-        Live trading is refused until the live token exists
-        (`live_trading_unavailable`), the request's `Host` is not a name the
-        server answers to (`host_not_allowed`), a browser sent the request from
-        another origin (`origin_not_allowed`), or the request carries the agent
-        token, which is accepted only on `/mcp` (`wrong_token`). Names beyond
-        loopback come from `PIT_OFFICER_ALLOWED_HOSTS`.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-
-    LiveTradingUnavailableOrNonReleaseConfirmationOrForeignRequestError:
-      description: >-
-        Live trading is refused until the live token exists
-        (`live_trading_unavailable`), the request's `Host` is not a name the
-        server answers to (`host_not_allowed`), a browser sent the request from
-        another origin (`origin_not_allowed`), or the request carries the agent
-        token, which is accepted only on `/mcp` (`wrong_token`). Names beyond
-        loopback come from `PIT_OFFICER_ALLOWED_HOSTS`. A non-release build
+        The request's `Host` is not a name the server answers to
+        (`host_not_allowed`), a browser sent the request from another origin
+        (`origin_not_allowed`), or the request carries the agent token, which
+        is accepted only on `/mcp` (`wrong_token`). Names beyond loopback come
+        from `PIT_OFFICER_ALLOWED_HOSTS`. A non-release build
         enables trading only with the operator's confirmation on the dashboard
         mirror `/app/api/v1` (`non_release_confirmation_required`).
       content:
@@ -6243,7 +6280,7 @@ components:
                 `forbidden`, `host_not_allowed`, `origin_not_allowed`,
                 `unauthorized`, `wrong_token`,
                 `unsupported_media_type`, `reserved_group`, `loosening_refused`,
-                `live_trading_unavailable`, `non_release_archive`,
+                `non_release_archive`,
                 `non_release_confirmation_required`, `trading_mode_mismatch`,
                 `fee_account_required`, `venue_order_managed`, `no_destination`,
                 `destination_ambiguous`, `accounts_not_managed`,
@@ -6520,9 +6557,7 @@ components:
         trading connection. A replace_all whose normalized scope includes
         accounts_groups but not trading is refused with 422 while the target
         holds a trading connection; positions, risk_limits and audit_log pull
-        accounts_groups into the normalized scope. Applying a live-mode
-        connection is refused with 403 live_trading_unavailable before writing;
-        insert_missing skips a live connection whose external id already exists.
+        accounts_groups into the normalized scope.
         A restore that leaves, on a connection without a fee account whose
         provider has unlinked fees, a group grant or grants to more than one
         grantee is refused with
@@ -9325,7 +9360,8 @@ components:
               enum: [immediate, hold]
       unevaluatedProperties: false
 
-    SendPaperOrderRequest:
+    SendVenueOrderRequest:
+      description: Body of POST /orders/send-paper and POST /orders/send-live.
       allOf:
         - $ref: "#/components/schemas/OrderSubmissionRequest"
         - type: object
@@ -9340,7 +9376,7 @@ components:
               properties:
                 connection:
                   $ref: "#/components/schemas/Id"
-                  description: Omit only when one enabled paper destination exists.
+                  description: Omit only when one enabled destination of the send's mode exists.
                 venueAccount:
                   type: string
                   description: Omitted uses the binding; supplied must match it.
@@ -9356,7 +9392,7 @@ components:
               additionalProperties: false
       unevaluatedProperties: false
 
-    SendPaperOrderResponse:
+    SendVenueOrderResponse:
       allOf:
         - $ref: "#/components/schemas/SignedApproval"
         - type: object

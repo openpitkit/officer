@@ -117,7 +117,7 @@ func BinanceProvider() fwtrading.Provider {
 // Credentials are {apiKey, userKey}; one pair identifies one account, so
 // VenueAccounts is false and VenueAccount is empty. Paper mode selects demo
 // trading paths and live mode selects real paths; unknown modes are refused.
-// The backend still refuses live trading. Route JSON is {} for market orders
+// Route JSON is {} for market orders
 // or {"timeInForce":"ioc"} for an IOC limit buy. Symbols are positive decimal
 // instrument ids. Pre-check requires an available real, long, leverage-1
 // configuration for buys; sells close an existing eligible long position.

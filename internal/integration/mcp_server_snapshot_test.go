@@ -338,7 +338,13 @@ func TestServerToolSnapshot(t *testing.T) {
 			description string
 		}{name: "send_paper_order", description: "Check, hold and send an order to a paper venue. Returns the approval and " +
 			"acknowledged, refused or unknown send outcome. Mutating, protected and " +
-			"disabled by default. send_live_order comes with the live-trading token."},
+			"disabled by default. send_live_order is the live counterpart."},
+		struct {
+			name        string
+			description string
+		}{name: "send_live_order", description: "Check, hold and send an order to a live venue, with real money. Returns " +
+			"the approval and acknowledged, refused or unknown send outcome. " +
+			"Mutating, protected and disabled by default."},
 		struct {
 			name        string
 			description string
@@ -407,40 +413,44 @@ func TestServerToolSnapshot(t *testing.T) {
 	for _, got := range list.Tools {
 		gotByName[got.Name] = got
 	}
-	t.Run("paper-send-schema", func(t *testing.T) {
+	t.Run("venue-send-schema", func(t *testing.T) {
 		type schema struct {
 			Type        any                `json:"type"`
 			Description string             `json:"description"`
 			Required    []string           `json:"required"`
 			Properties  map[string]*schema `json:"properties"`
 		}
-		raw, err := json.Marshal(gotByName["send_paper_order"].InputSchema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var input schema
-		if err := json.Unmarshal(raw, &input); err != nil {
-			t.Fatal(err)
-		}
-		dest := input.Properties["destination"]
-		if dest == nil || dest.Type != "object" || dest.Properties["route"] == nil || dest.Properties["route"].Type != "object" {
-			t.Fatal("send destination.route must advertise an object")
-		}
-		for field, property := range dest.Properties {
-			if property.Description == "" {
-				t.Errorf("send destination.%s has no description", field)
+		var schemas []string
+		for _, tool := range []string{"send_paper_order", "send_live_order"} {
+			raw, err := json.Marshal(gotByName[tool].InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			schemas = append(schemas, string(raw))
+			var input schema
+			if err := json.Unmarshal(raw, &input); err != nil {
+				t.Fatal(err)
+			}
+			dest := input.Properties["destination"]
+			if dest == nil || dest.Type != "object" || dest.Properties["route"] == nil || dest.Properties["route"].Type != "object" {
+				t.Fatalf("%s destination.route must advertise an object", tool)
+			}
+			for field, property := range dest.Properties {
+				if property.Description == "" {
+					t.Errorf("%s destination.%s has no description", tool, field)
+				}
+			}
+			for _, name := range input.Required {
+				if name == "id" || name == "price" {
+					t.Fatalf("%s requires optional %s", tool, name)
+				}
+			}
+			if len(dest.Required) != 1 || dest.Required[0] != "route" {
+				t.Fatalf("%s must require route only in destination", tool)
 			}
 		}
-		for _, name := range input.Required {
-			if name == "id" || name == "price" {
-				t.Fatalf("send requires optional %s", name)
-			}
-		}
-		if len(dest.Required) != 1 || dest.Required[0] != "route" {
-			t.Fatal("send must require route only in destination")
-		}
-		if _, ok := gotByName["send_live_order"]; ok {
-			t.Fatal("live send must wait for the live-trading token")
+		if schemas[0] != schemas[1] {
+			t.Fatalf("paper and live sends must take the same input:\n%s\n%s", schemas[0], schemas[1])
 		}
 	})
 	t.Run("venue-route-schema", func(t *testing.T) {
@@ -463,7 +473,7 @@ func TestServerToolSnapshot(t *testing.T) {
 	})
 	t.Run("trading-input-descriptions", func(t *testing.T) {
 		for name, tool := range gotByName {
-			if !strings.Contains(name, "trading") && name != "send_paper_order" {
+			if !strings.Contains(name, "trading") && name != "send_paper_order" && name != "send_live_order" {
 				continue
 			}
 			raw, err := json.Marshal(tool.InputSchema)
@@ -543,7 +553,7 @@ func TestServerToolSnapshot(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"get_order", "submit_order", "send_paper_order", "submit_drop_copy_order", "confirm_execution", "cancel",
+		"get_order", "submit_order", "send_paper_order", "send_live_order", "submit_drop_copy_order", "confirm_execution", "cancel",
 		"report_fill", "set_market_data_instrument",
 	} {
 		tool := gotByName[name]

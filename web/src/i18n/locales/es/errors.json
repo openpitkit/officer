@@ -10,7 +10,6 @@
     "trading_mode_mismatch": "La conexión usa un modo de negociación distinto.",
     "destination_ambiguous": "Varios destinos de negociación coinciden con la solicitud.",
     "no_destination": "No hay ningún destino de negociación disponible.",
-    "live_trading_unavailable": "La negociación real no está disponible.",
     "forbidden": "Acceso denegado.",
     "upstream": "Un servicio externo no está accesible o rechazó la solicitud.",
     "terminal_order": "La orden está en un estado final.",

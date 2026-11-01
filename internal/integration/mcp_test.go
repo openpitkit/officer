@@ -1385,7 +1385,15 @@ func (s *fakeSource) SendPaperOrder(ctx context.Context, o domain.Order, dest ba
 	return backend.VenueSendResult{}, domain.ErrNotImplemented
 }
 
+func (s *fakeSource) SendLiveOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return backend.VenueSendResult{}, domain.ErrNotImplemented
+}
+
 func (s *captureNSource) SendPaperOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return backend.VenueSendResult{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) SendLiveOrder(ctx context.Context, o domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
 	return backend.VenueSendResult{}, domain.ErrNotImplemented
 }
 

@@ -311,6 +311,44 @@ func TestSendPaperOrderAutomaticDestination(t *testing.T) {
 	}
 }
 
+// TestSendLiveOrder holds that SendLiveOrder is SendPaperOrder for live
+// connections: it pre-checks and sends through a granted live connection,
+// named or chosen automatically, and refuses a paper one before any hold.
+func TestSendLiveOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		dest  SendDestination
+		paper bool
+		want  error
+	}{
+		{name: "named", dest: SendDestination{Connection: "connection-1", Route: "{}"}},
+		{name: "automatic", dest: SendDestination{Route: "{}"}},
+		{name: "paper_named", dest: SendDestination{Connection: "connection-1", Route: "{}"}, paper: true, want: domain.ErrTradingModeMismatch},
+		{name: "paper_only", dest: SendDestination{Route: "{}"}, paper: true, want: domain.ErrNoDestination},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, n, rt, _ := newPaperSendTestService(t)
+			if !tc.paper {
+				n.connections[0].Mode = domain.TradingModeLive
+			}
+			got, err := s.SendLiveOrder(systemCtx(), paperSendTestOrder(), tc.dest)
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) || len(rt.preChecks) != 0 {
+					t.Fatalf("live send error = %v, want %v; prechecks = %v", err, tc.want, rt.preChecks)
+				}
+				assertPaperSendNotHeld(t, s, n, rt)
+				return
+			}
+			want := domain.TradingDestination{Connection: "connection-1", VenueAccount: "remote-1", Route: "{}"}
+			if err != nil || got.Send == nil ||
+				!reflect.DeepEqual(rt.preChecks, []domain.TradingDestination{want}) ||
+				!reflect.DeepEqual(rt.sends, []domain.TradingDestination{want}) {
+				t.Fatalf("live send = %+v, err=%v, prechecks=%v sends=%v", got, err, rt.preChecks, rt.sends)
+			}
+		})
+	}
+}
+
 // TestSendPaperOrderThroughGroupGrant sends through a connection the account
 // reaches only by its group's grant, which the store returns whole: the
 // AccountGroup set, the Account empty, the group's venue account bound.

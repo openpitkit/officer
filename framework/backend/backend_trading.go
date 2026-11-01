@@ -279,9 +279,6 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 	c.Credentials = strings.TrimSpace(c.Credentials)
 	c.FeeAccount = domain.AccountID(strings.TrimSpace(string(c.FeeAccount)))
 	c.VenueIdentity = ""
-	if c.Mode == domain.TradingModeLive {
-		return domain.TradingConnection{}, fmt.Errorf("create trading connection: %w", domain.ErrLiveTradingUnavailable)
-	}
 	if !domain.TradingModeSupported(c.Mode) {
 		return domain.TradingConnection{}, domain.ErrInvalid
 	}
@@ -790,6 +787,12 @@ func (s *Service) requireTradingRuntime() error {
 // held, its approval and order id are returned even for an unknown send outcome.
 func (s *Service) SendPaperOrder(ctx context.Context, o domain.Order, dest SendDestination) (VenueSendResult, error) {
 	return s.sendOrder(ctx, o, dest, domain.TradingModePaper)
+}
+
+// SendLiveOrder is SendPaperOrder for live connections: the same pre-check,
+// hold and send, through a connection whose mode is live.
+func (s *Service) SendLiveOrder(ctx context.Context, o domain.Order, dest SendDestination) (VenueSendResult, error) {
+	return s.sendOrder(ctx, o, dest, domain.TradingModeLive)
 }
 
 func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestination, mode domain.TradingMode) (result VenueSendResult, err error) {

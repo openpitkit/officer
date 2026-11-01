@@ -923,8 +923,8 @@ export interface OrderDetail {
   venueOrder?: VenueOrder;
 }
 
-/** Pre-trade approval and optional outcome of a paper order send. */
-export interface PaperSendResult extends SignedApproval {
+/** Pre-trade approval and optional outcome of a paper or live order send. */
+export interface VenueSendResult extends SignedApproval {
   /** Absent when pre-trade validation rejects the order. */
   venueSend?: VenueSendOutcome;
 }

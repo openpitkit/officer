@@ -38,7 +38,7 @@ func TestToolError(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"live", fmt.Errorf("refused: %w", domain.ErrLiveTradingUnavailable), "live_trading_unavailable: live trading unavailable"},
+		{"mode", fmt.Errorf("refused: %w", domain.ErrTradingModeMismatch), "trading_mode_mismatch: trading mode mismatch"},
 		{"managed", fmt.Errorf("refused: %w", domain.ErrVenueOrderManaged), "venue_order_managed: the order is managed by its trading venue"},
 		{"asset", fmt.Errorf("refused: %w", domain.NewAssetMissingError("USDT")), `asset_missing: refused: asset "USDT" does not exist`},
 		{"validation", fmt.Errorf("limit price: %w", domain.ErrInvalid), "validation: limit price: invalid"},

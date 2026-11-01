@@ -175,6 +175,8 @@ type ControlPlane interface {
 	ListTradingDestinations(ctx context.Context, account domain.AccountID, mode domain.TradingMode) ([]TradingDestinationStatus, error)
 	// SendPaperOrder pre-checks, holds, and sends through a paper connection.
 	SendPaperOrder(ctx context.Context, o domain.Order, dest SendDestination) (VenueSendResult, error)
+	// SendLiveOrder pre-checks, holds, and sends through a live connection.
+	SendLiveOrder(ctx context.Context, o domain.Order, dest SendDestination) (VenueSendResult, error)
 	CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error)
 	UpdateGroup(
 		ctx context.Context,
