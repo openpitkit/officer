@@ -78,7 +78,9 @@
     },
     "empty": {
       "title": "Nenhum saldo",
-      "hint": "Use Ajuste para carregar saldos de fundos à vista de uma conta e de um ativo."
+      "hint": "Use Ajuste para carregar saldos de fundos à vista de uma conta e de um ativo.",
+      "noMatching": "Nenhum saldo correspondente",
+      "noMatchingHint": "Nenhum saldo corresponde aos filtros atuais."
     },
     "activeOrdersTitle": "Ordens ativas de {{account}}",
     "activeOrdersTitleUnnamed": "Ordens ativas",

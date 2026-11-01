@@ -344,7 +344,7 @@ describe("Positions video guides", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("hides balance guides on an empty page with a nonzero server total", async () => {
+  it("keeps the pager and hides the empty state and guides on an empty page with a nonzero server total", async () => {
     useBalancesMock.mockImplementation((filters) =>
       ready({ items: filters?.offset ? [] : [balance], total: 101 }),
     );
@@ -354,8 +354,25 @@ describe("Positions video guides", () => {
     const user = userEvent.setup();
     await user.click(screen.getAllByRole("button", { name: "Next" })[0]);
     expect(lastBalanceFilters()?.offset).toBeGreaterThan(0);
-    expect(screen.getByText("No balances")).toBeInTheDocument();
+    expect(screen.queryByText("No balances")).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: "Previous" })[0],
+    ).toBeEnabled();
     expect(screen.queryAllByRole("link", { name: /^Video:/ })).toHaveLength(0);
+  });
+
+  it("shows the no-match state, not the seeding prompt, under a filter", async () => {
+    useBalancesMock.mockReturnValue(readyPage<Balance>([]));
+    await act(async () => {
+      renderPositions("/positions?account=zzz");
+    });
+    expect(screen.getByText("No matching balances")).toBeInTheDocument();
+    expect(screen.queryByText("No balances")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Use Adjust to seed spot-funds balances for an account and asset.",
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it.each([
@@ -397,7 +414,7 @@ describe("Positions video guides", () => {
         });
         if (tab === "positions") {
           expect(lastBalanceFilters()?.availableMode).toBe("gt");
-          expect(screen.getByText("No balances")).toBeInTheDocument();
+          expect(screen.getByText("No matching balances")).toBeInTheDocument();
         } else {
           expect(useAdjustmentsMock.mock.calls.at(-1)?.[0]?.atMode).toBe(
             "after",

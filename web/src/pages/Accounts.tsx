@@ -268,18 +268,11 @@ function countModeFromParam(value: string | null): PositionCountFilterMode {
     : "all";
 }
 
-function countModeNeedsMin(mode: PositionCountFilterMode): boolean {
-  return (
-    mode === "eq" ||
-    mode === "neq" ||
-    mode === "gt" ||
-    mode === "gte" ||
-    mode === "greater_than"
-  );
-}
-
-function countModeNeedsMax(mode: PositionCountFilterMode): boolean {
-  return mode === "lt" || mode === "lte" || mode === "less_than";
+/** A mode that takes one value. The dialog edits that value in the `*Min`
+ *  field for every such mode, "less than" ones included; the request maps it
+ *  onto the bound the mode needs (`positionCountQuery`). */
+function countModeIsSingleValue(mode: PositionCountFilterMode): boolean {
+  return mode !== "all" && mode !== "between";
 }
 
 /** Read the shared `codeMatch` param, defaulting to "contains". */
@@ -354,15 +347,12 @@ function appendAdvancedParams(
   }
   const positionMin = trimmedOrUndefined(filters.positionMin);
   const positionMax = trimmedOrUndefined(filters.positionMax);
-  if (countModeNeedsMin(filters.positionMode) && positionMin !== undefined) {
-    query.set("positionCountMode", filters.positionMode);
-    query.set("positionCountMin", positionMin);
-  } else if (
-    countModeNeedsMax(filters.positionMode) &&
-    positionMax !== undefined
+  if (
+    countModeIsSingleValue(filters.positionMode) &&
+    positionMin !== undefined
   ) {
     query.set("positionCountMode", filters.positionMode);
-    query.set("positionCountMax", positionMax);
+    query.set("positionCountMin", positionMin);
   } else if (
     filters.positionMode === "between" &&
     positionMin !== undefined &&
@@ -375,15 +365,12 @@ function appendAdvancedParams(
   if (entity === "groups") {
     const accountMin = trimmedOrUndefined(filters.accountMin);
     const accountMax = trimmedOrUndefined(filters.accountMax);
-    if (countModeNeedsMin(filters.accountMode) && accountMin !== undefined) {
-      query.set("accountCountMode", filters.accountMode);
-      query.set("accountCountMin", accountMin);
-    } else if (
-      countModeNeedsMax(filters.accountMode) &&
-      accountMax !== undefined
+    if (
+      countModeIsSingleValue(filters.accountMode) &&
+      accountMin !== undefined
     ) {
       query.set("accountCountMode", filters.accountMode);
-      query.set("accountCountMax", accountMax);
+      query.set("accountCountMin", accountMin);
     } else if (
       filters.accountMode === "between" &&
       accountMin !== undefined &&
@@ -581,28 +568,22 @@ function advancedFilterSummary(
     });
   } else if (
     (filters.positionMode === "lt" || filters.positionMode === "less_than") &&
-    max !== undefined
+    min !== undefined
   ) {
     out.push({
       field: "position",
-      text: t("filters.advanced.summary.positionLess", { value: max }),
+      text: t("filters.advanced.summary.positionLess", { value: min }),
     });
-  } else if (countModeNeedsMin(filters.positionMode) && min !== undefined) {
+  } else if (
+    countModeIsSingleValue(filters.positionMode) &&
+    min !== undefined
+  ) {
     out.push({
       field: "position",
       text: t("filters.advanced.summary.text", {
         field: t("filters.advanced.positionLabel"),
         match: t(`common:operators.number.${filters.positionMode}`),
         value: min,
-      }),
-    });
-  } else if (countModeNeedsMax(filters.positionMode) && max !== undefined) {
-    out.push({
-      field: "position",
-      text: t("filters.advanced.summary.text", {
-        field: t("filters.advanced.positionLabel"),
-        match: t(`common:operators.number.${filters.positionMode}`),
-        value: max,
       }),
     });
   } else if (
@@ -627,14 +608,14 @@ function advancedFilterSummary(
     });
   } else if (
     (filters.accountMode === "lt" || filters.accountMode === "less_than") &&
-    accountMax !== undefined
+    accountMin !== undefined
   ) {
     out.push({
       field: "account",
-      text: t("filters.advanced.summary.accountLess", { value: accountMax }),
+      text: t("filters.advanced.summary.accountLess", { value: accountMin }),
     });
   } else if (
-    countModeNeedsMin(filters.accountMode) &&
+    countModeIsSingleValue(filters.accountMode) &&
     accountMin !== undefined
   ) {
     out.push({
@@ -643,18 +624,6 @@ function advancedFilterSummary(
         field: t("filters.advanced.accountLabel"),
         match: t(`common:operators.number.${filters.accountMode}`),
         value: accountMin,
-      }),
-    });
-  } else if (
-    countModeNeedsMax(filters.accountMode) &&
-    accountMax !== undefined
-  ) {
-    out.push({
-      field: "account",
-      text: t("filters.advanced.summary.text", {
-        field: t("filters.advanced.accountLabel"),
-        match: t(`common:operators.number.${filters.accountMode}`),
-        value: accountMax,
       }),
     });
   } else if (
@@ -4000,13 +3969,15 @@ export function Accounts() {
     }
     return filters;
   }, [debouncedGroupCode, groupAdvanced, groupCodeMatch, groupStatus]);
-  const accountsUnfiltered =
+  // The group is kept apart so an empty group alone keeps its own hint.
+  const accountsUnfilteredButGroup =
     accountFilters.code === undefined &&
     accountFilters.status === "all" &&
     accountFilters.positionCountMode === undefined &&
     accountFilters.blockReason === undefined &&
-    accountFilters.group === undefined &&
     accountFilters.venue === undefined;
+  const accountsUnfiltered =
+    accountsUnfilteredButGroup && accountFilters.group === undefined;
   const groupsUnfiltered =
     groupFilters.code === undefined &&
     groupFilters.status === "all" &&
@@ -4618,14 +4589,20 @@ export function Accounts() {
             <TableSkeleton cols={showVenueAccess ? 7 : 6} />
           ) : visibleAccountCount === 0 ? (
             <EmptyState
-              title={t("accounts.empty.title")}
+              title={
+                accountsUnfiltered
+                  ? t("accounts.empty.title")
+                  : t("accounts.empty.noMatching")
+              }
               hint={
-                selectedGroupCode !== null
-                  ? t("accounts.empty.hintFiltered")
-                  : t("accounts.empty.hintEmpty")
+                accountsUnfiltered
+                  ? t("accounts.empty.hintEmpty")
+                  : accountsUnfilteredButGroup
+                    ? t("accounts.empty.hintFiltered")
+                    : t("accounts.empty.noMatchingHint")
               }
               action={
-                selectedGroupCode === null ? (
+                accountsUnfiltered ? (
                   <CreateAccountDialog
                     groupSuggestions={groupSuggestions}
                     onCreated={() => {

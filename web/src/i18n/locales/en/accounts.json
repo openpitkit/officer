@@ -207,7 +207,9 @@
     "empty": {
       "title": "No accounts",
       "hintFiltered": "No accounts are assigned to this group.",
-      "hintEmpty": "Create the first account to start applying risk limits to it."
+      "hintEmpty": "Create the first account to start applying risk limits to it.",
+      "noMatching": "No matching accounts",
+      "noMatchingHint": "No account matches the current filters."
     },
     "currencyCell": {
       "title": "Account currency",

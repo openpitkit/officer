@@ -4611,15 +4611,25 @@ export function Positions() {
                 balancesUnfiltered && (
                   <VideoGuideNotice videos={["whyBalances", "balances"]} />
                 )}
-              {balances.length === 0 ? (
+              {balancesLoad.load.data.total === 0 ? (
                 <EmptyState
-                  title={t("balances.empty.title")}
-                  hint={t("balances.empty.hint")}
+                  title={
+                    balancesUnfiltered
+                      ? t("balances.empty.title")
+                      : t("balances.empty.noMatching")
+                  }
+                  hint={
+                    balancesUnfiltered
+                      ? t("balances.empty.hint")
+                      : t("balances.empty.noMatchingHint")
+                  }
                   action={
-                    <Button size="sm" onClick={openNewAdjust}>
-                      <Plus className="h-3.5 w-3.5" />
-                      {t("actions.adjust")}
-                    </Button>
+                    balancesUnfiltered ? (
+                      <Button size="sm" onClick={openNewAdjust}>
+                        <Plus className="h-3.5 w-3.5" />
+                        {t("actions.adjust")}
+                      </Button>
+                    ) : undefined
                   }
                 />
               ) : (
@@ -4649,7 +4659,7 @@ export function Positions() {
                   setBalancePage(0);
                 }}
               />
-              {balances.length > 0 && balancePager}
+              {balancesLoad.load.data.total > 0 && balancePager}
             </>
           )}
         </>

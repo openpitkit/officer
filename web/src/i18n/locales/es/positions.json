@@ -78,7 +78,9 @@
     },
     "empty": {
       "title": "No hay saldos",
-      "hint": "Use «Ajuste» para cargar saldos de fondos al contado de una cuenta y un activo."
+      "hint": "Use «Ajuste» para cargar saldos de fondos al contado de una cuenta y un activo.",
+      "noMatching": "No hay saldos coincidentes",
+      "noMatchingHint": "Ningún saldo coincide con los filtros actuales."
     },
     "activeOrdersTitle": "Órdenes activas de {{account}}",
     "activeOrdersTitleUnnamed": "Órdenes activas",

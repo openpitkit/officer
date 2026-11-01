@@ -381,6 +381,18 @@ describe("Limits video guides", () => {
     },
   );
 
+  it.each(["account=desk", "accountGroup=desk", "asset=USD", "policy=rate"])(
+    "shows the no-match state, not the first-policy prompt, with filter %s",
+    async (filter) => {
+      useLimitsMock.mockReturnValue(readyPage([]));
+      await act(async () => {
+        renderLimits(`/policies?${filter}`);
+      });
+      expect(screen.getByText("No matching policies")).toBeInTheDocument();
+      expect(screen.queryByText("No policies yet")).not.toBeInTheDocument();
+    },
+  );
+
   it("keeps guides hidden when the cleared account draft has not been applied", async () => {
     await act(async () => {
       renderLimits("/policies?account=zzz");

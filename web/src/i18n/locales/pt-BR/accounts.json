@@ -207,7 +207,9 @@
     "empty": {
       "title": "Nenhuma conta",
       "hintFiltered": "Nenhuma conta está atribuída a este grupo.",
-      "hintEmpty": "Crie a primeira conta para começar a aplicar limites de risco a ela."
+      "hintEmpty": "Crie a primeira conta para começar a aplicar limites de risco a ela.",
+      "noMatching": "Nenhuma conta correspondente",
+      "noMatchingHint": "Nenhuma conta corresponde aos filtros atuais."
     },
     "currencyCell": {
       "title": "Moeda da conta",

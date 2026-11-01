@@ -450,6 +450,59 @@ describe("Accounts video guides", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("prompts for the first account when nothing filters an empty list", async () => {
+    useAccountsMock.mockReturnValue(readyPage<Account>([]));
+    await act(async () => {
+      renderAccounts();
+    });
+    expect(screen.getByText("No accounts")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Create the first account to start applying risk limits to it.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the group hint when the group is the only filter", async () => {
+    useAccountsMock.mockReturnValue(readyPage<Account>([]));
+    await act(async () => {
+      renderAccounts("/accounts?group=equity-desks");
+    });
+    expect(
+      screen.getByText("No accounts are assigned to this group."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Create the first account to start applying risk limits to it.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "code=zzz",
+    "status=blocked",
+    "venue=none",
+    "positionCountMode=lt&positionCountMin=1",
+    "group=equity-desks&status=blocked",
+  ])(
+    "shows the no-match state, not the first-account prompt, with filter %s",
+    async (filter) => {
+      useAccountsMock.mockReturnValue(readyPage<Account>([]));
+      await act(async () => {
+        renderAccounts(`/accounts?${filter}`);
+      });
+      expect(screen.getByText("No matching accounts")).toBeInTheDocument();
+      expect(
+        screen.getByText("No account matches the current filters."),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          "Create the first account to start applying risk limits to it.",
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it.each(["code=zzz", "status=blocked", "venue=none"])(
     "hides the blocking guide with request filter %s",
     async (filter) => {
@@ -3027,6 +3080,45 @@ describe("Accounts business CSV", () => {
       ),
     );
   });
+
+  it.each([
+    [
+      "/accounts?positionCountMode=lt&positionCountMin=1",
+      "pos < 1",
+      "position",
+    ],
+    [
+      "/accounts?tab=groups&accountCountMode=lte&accountCountMin=2",
+      "Account count: At most 2",
+      "account",
+    ],
+  ] as const)(
+    "shows and shares the less-than count filter of %s by its visible value",
+    async (path, chip, field) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      renderAccounts(path);
+      expect(screen.getByText(chip)).toBeInTheDocument();
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: /copy a link to the current filter set/i,
+        }),
+      );
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      const shared = new URL(writeText.mock.calls[0][0]).searchParams;
+      const source = new URL(path, "http://panel").searchParams;
+      expect(shared.get(`${field}CountMode`)).toBe(
+        source.get(`${field}CountMode`),
+      );
+      expect(shared.get(`${field}CountMin`)).toBe(
+        source.get(`${field}CountMin`),
+      );
+      expect(shared.has(`${field}CountMax`)).toBe(false);
+    },
+  );
 
   it("debounces group code filters", async () => {
     vi.useFakeTimers();

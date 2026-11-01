@@ -38,11 +38,14 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 `check-debug` / `check-release` / CI) blocks any violation.
 
 `testdata/` holds rule fixtures: deliberate violations and non-violations
-annotated for `semgrep --test`, one file per rule, named after it:
-`default-domain-status.go`, `locale-latin-words.txt`,
-`locale-english-words.txt`, `file-header-site-link.txt`,
-`panel-code-label.tsx`, `panel-site-link-reuse.tsx` and
-`venue-connector-reuse.go`. A fixture runs only
+annotated for `semgrep --test`, one file per rule that has one, named after
+it: `default-domain-status.go`, `locale-latin-words.txt`,
+`locale-english-words.txt`, `locale-pnl-spelling.txt`,
+`file-header-site-link.txt`, `panel-access-reuse.tsx`,
+`panel-download-reuse.tsx`, `panel-code-label.tsx`,
+`no-legacy-database-probe.go`, `venue-connector-reuse.go`,
+`no-local-secret-redaction.go`,
+`tailwind-v4-utilities.tsx` and `panel-site-link-reuse.tsx`. A fixture runs only
 through its own `--test` line in `check-semgrep`, after the tree scan, so a new
 fixture adds its own line there. A rule with a fixture keeps its fixture out of
 its `paths`, so the tree scan does not report the fixture. The directory is

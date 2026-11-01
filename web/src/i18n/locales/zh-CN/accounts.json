@@ -207,7 +207,9 @@
     "empty": {
       "title": "暂无账户",
       "hintFiltered": "该分组下暂无账户。",
-      "hintEmpty": "创建第一个账户以开始应用风控限制。"
+      "hintEmpty": "创建第一个账户以开始应用风控限制。",
+      "noMatching": "无匹配账户",
+      "noMatchingHint": "当前筛选条件下无匹配账户。"
     },
     "currencyCell": {
       "title": "账户货币",

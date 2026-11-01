@@ -198,6 +198,7 @@ check-semgrep: install-python-tools
     {{ semgrep }} --test --config checks/semgrep/panel-code-label.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-code-label.tsx
     {{ semgrep }} --test --config checks/semgrep/no-legacy-database-probe.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-legacy-database-probe.go
     {{ semgrep }} --test --config checks/semgrep/venue-connector-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/venue-connector-reuse.go
+    {{ semgrep }} --test --config checks/semgrep/no-local-secret-redaction.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-local-secret-redaction.go
     {{ semgrep }} --test --config checks/semgrep/tailwind-v4-utilities.yml --metrics=off --disable-version-check checks/semgrep/testdata/tailwind-v4-utilities.tsx
     {{ semgrep }} --test --config checks/semgrep/panel-site-link-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-site-link-reuse.tsx
 

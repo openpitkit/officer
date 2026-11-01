@@ -78,7 +78,9 @@
     },
     "empty": {
       "title": "No balances",
-      "hint": "Use Adjust to seed spot-funds balances for an account and asset."
+      "hint": "Use Adjust to seed spot-funds balances for an account and asset.",
+      "noMatching": "No matching balances",
+      "noMatchingHint": "No balance matches the current filters."
     },
     "activeOrdersTitle": "Active orders for {{account}}",
     "activeOrdersTitleUnnamed": "Active orders",

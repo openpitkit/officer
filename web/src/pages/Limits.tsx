@@ -821,9 +821,6 @@ export function Limits() {
     setEditing(limit);
     setDialogOpen(true);
   };
-  const accountIsSet = accountFilter.trim().length > 0;
-  const assetIsSet = assetFilter.trim().length > 0;
-  const policyIsSet = policyFilter !== ALL;
   const shareHref = useMemo(() => {
     const query = new URLSearchParams();
     const account = accountFilter.trim();
@@ -999,12 +996,10 @@ export function Limits() {
         (total === 0 ? (
           <EmptyState
             title={
-              accountIsSet || policyIsSet || assetIsSet
-                ? t("empty.noMatching")
-                : t("empty.noPolicies")
+              hasActiveFilters ? t("empty.noMatching") : t("empty.noPolicies")
             }
             hint={
-              accountIsSet || policyIsSet || assetIsSet
+              hasActiveFilters
                 ? t(
                     showsAccounts
                       ? "empty.noMatchingHint"
@@ -1013,7 +1008,7 @@ export function Limits() {
                 : t("empty.noPoliciesHint")
             }
             action={
-              accountIsSet || policyIsSet || assetIsSet ? undefined : (
+              hasActiveFilters ? undefined : (
                 <Button size="sm" onClick={openAdd}>
                   <Plus className="h-3.5 w-3.5" />
                   {t("addPolicy")}
