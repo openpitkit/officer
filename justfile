@@ -199,6 +199,7 @@ check-semgrep: install-python-tools
     {{ semgrep }} --test --config checks/semgrep/no-legacy-database-probe.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-legacy-database-probe.go
     {{ semgrep }} --test --config checks/semgrep/venue-connector-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/venue-connector-reuse.go
     {{ semgrep }} --test --config checks/semgrep/tailwind-v4-utilities.yml --metrics=off --disable-version-check checks/semgrep/testdata/tailwind-v4-utilities.tsx
+    {{ semgrep }} --test --config checks/semgrep/panel-site-link-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-site-link-reuse.tsx
 
 # Lint all.
 [parallel]

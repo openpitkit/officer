@@ -16,14 +16,17 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { ExternalLink } from "lucide-react";
+import type { ReactNode } from "react";
 
 /** A link to an outside page as a small card; it opens in a new tab. */
 export function ExternalLinkCard({
   href,
   label,
+  icon,
 }: {
   href: string;
   label: string;
+  icon?: ReactNode;
 }) {
   return (
     <a
@@ -32,7 +35,10 @@ export function ExternalLinkCard({
       rel="noopener noreferrer"
       className="inline-flex items-center justify-between gap-3 rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-muted-lt transition-colors hover:border-border-hover hover:bg-card-hover-bg hover:text-accent"
     >
-      <span>{label}</span>
+      <span>
+        {icon}
+        {label}
+      </span>
       <ExternalLink className="h-3.5 w-3.5 shrink-0" />
     </a>
   );

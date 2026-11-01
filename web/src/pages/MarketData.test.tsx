@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
@@ -197,6 +197,81 @@ beforeEach(async () => {
   searchMock.mockResolvedValue({ supported: true, matches: [] });
   fetchCredentialStorageMock.mockResolvedValue(storage(true));
   createInstanceMock.mockResolvedValue(ibInstance());
+});
+
+describe("MarketData video guides", () => {
+  it("shows the price source guide with no instances", async () => {
+    fetchMarketDataMock.mockResolvedValue({
+      ...status(ibInstance()),
+      instances: [],
+    });
+    renderMarketDataPage();
+    expect(
+      await screen.findByRole("link", {
+        name: "Video: connecting a price source",
+      }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=7nM26GUgtes");
+  });
+
+  it("hides the price source guide when an instance exists", async () => {
+    renderMarketDataPage();
+    await screen.findByText("IB Gateway");
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the price source guide while loading", async () => {
+    fetchMarketDataMock.mockReturnValue(new Promise(() => {}));
+    await act(async () => {
+      renderMarketDataPage();
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the price source guide on error", async () => {
+    fetchMarketDataMock.mockRejectedValue(new Error("Offline"));
+    renderMarketDataPage();
+    await screen.findByText("Offline");
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the price source guide when empty data becomes stale", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMarketDataMock.mockResolvedValue({
+        ...status(ibInstance()),
+        instances: [],
+      });
+      await act(async () => {
+        renderMarketDataPage();
+      });
+      expect(
+        screen.getByRole("link", {
+          name: "Video: connecting a price source",
+        }),
+      ).toBeInTheDocument();
+      fetchMarketDataMock.mockRejectedValue(new Error("Offline"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(
+        screen.getByRole("status", { name: "Stale data" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("No market-data sources configured"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("link", { name: /^Video:/ }),
+      ).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("MD instrument block texts", () => {

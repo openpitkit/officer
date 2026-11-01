@@ -69,6 +69,7 @@ import {
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
+import { VideoGuideNotice } from "@/components/video/VideoGuideNotice";
 import { RefreshButton } from "@/components/RefreshButton";
 import { StatusDot } from "@/components/StatusDot";
 import {
@@ -3999,6 +4000,21 @@ export function Accounts() {
     }
     return filters;
   }, [debouncedGroupCode, groupAdvanced, groupCodeMatch, groupStatus]);
+  const accountsUnfiltered =
+    accountFilters.code === undefined &&
+    accountFilters.status === "all" &&
+    accountFilters.positionCountMode === undefined &&
+    accountFilters.blockReason === undefined &&
+    accountFilters.group === undefined &&
+    accountFilters.venue === undefined;
+  const groupsUnfiltered =
+    groupFilters.code === undefined &&
+    groupFilters.status === "all" &&
+    groupFilters.positionCountMode === undefined &&
+    groupFilters.accountCountMode === undefined &&
+    groupFilters.notes === undefined &&
+    groupFilters.blockReason === undefined &&
+    groupFilters.venue === undefined;
   const [accountPage, setAccountPage] = useState(0);
   const [accountSize, setAccountSize] = usePersistentPageSize(
     "pit-officer-accounts-page-size",
@@ -4485,6 +4501,10 @@ export function Accounts() {
           ) : (
             <>
               {groupPager}
+              {groupsLoad.state === "ready" &&
+                groupsLoad.error === null &&
+                groupsTotal === 0 &&
+                groupsUnfiltered && <VideoGuideNotice videos={["groups"]} />}
               <GroupsPanel
                 groupRows={pagedGroups}
                 selectedGroupCode={selectedGroupCode}
@@ -4588,6 +4608,10 @@ export function Accounts() {
             accountGlobalToggle={accountGlobalToggle}
           />
           <StaleState load={accountsLoad} reload={reloadAll} />
+          {accountsLoad.state === "ready" &&
+            accountsLoad.error === null &&
+            visibleAccountCount === 0 &&
+            accountsUnfiltered && <VideoGuideNotice videos={["stop"]} />}
           {accountLoadError !== null && accounts === null ? (
             <ErrorState message={accountLoadError} onRetry={reloadAll} />
           ) : pagedAccounts === null ? (

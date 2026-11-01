@@ -18,10 +18,13 @@
 import { useTranslation } from "react-i18next";
 
 import { ExternalLinkCard } from "@/components/ExternalLinkCard";
+import { siteLink } from "@/lib/siteLinks";
 import { cn } from "@/lib/utils";
 
 const PRODUCT_LINKS = [
-  { key: "website", href: "https://officer.openpit.dev?officer" },
+  { key: "website", href: siteLink("officer") },
+  { key: "questions", href: siteLink("officer", "/questions/") },
+  { key: "videoGuides", href: siteLink("officer", "/video-guides/") },
   {
     key: "issues",
     href: "https://github.com/openpitkit/officer/issues?officer",
@@ -30,12 +33,11 @@ const PRODUCT_LINKS = [
     key: "discussions",
     href: "https://github.com/openpitkit/officer/discussions?officer",
   },
-  { key: "openpit", href: "https://openpit.dev?officer" },
+  { key: "openpit", href: siteLink("openpit") },
 ] as const;
 
 /**
- * Officer's website, issue tracker and discussions, and the OpenPit engine,
- * as a grid of link cards.
+ * Officer's sites, guides, community, and the OpenPit engine as link cards.
  */
 export function ProductLinks({ className }: { className?: string }) {
   const { t } = useTranslation();

@@ -97,6 +97,7 @@ import { codeLabel } from "@/i18n/codeLabel";
 import { accountScope } from "@/lib/accountScope";
 import { downloadBlob } from "@/lib/download";
 import { checkSession } from "@/lib/panelSession";
+import { siteLink } from "@/lib/siteLinks";
 
 // This page is the canonical i18n pattern: user-facing text
 // goes through useTranslation with a per-area "service" namespace; shared
@@ -1174,7 +1175,7 @@ function EngineInfoCard({ info }: { info: ServiceInfo }) {
                 {info.engineVersion || tc("value.none")}
               </span>
               <a
-                href="https://openpit.dev?officer"
+                href={siteLink("openpit")}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-xs text-accent hover:underline"

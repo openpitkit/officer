@@ -1,4 +1,19 @@
 {
+  "videoGuide": {
+    "title": "Como esta seção funciona",
+    "video": {
+      "intro": "Vídeo: o que é o Pit Officer",
+      "mcp": "Vídeo: conexão de um agente via MCP",
+      "prices": "Vídeo: conexão de uma fonte de preços",
+      "size": "Vídeo: limite de tamanho de ordem",
+      "rate": "Vídeo: limite de frequência de ordens",
+      "pnl": "Vídeo: interrupção por P&L",
+      "stop": "Vídeo: bloqueio de uma conta",
+      "whyBalances": "Vídeo: por que o Officer precisa dos saldos",
+      "balances": "Vídeo: saldos e movimentações de caixa",
+      "groups": "Vídeo: grupos de contas"
+    }
+  },
   "nonRelease": {
     "banner": "Os dados desta compilação nunca serão migrados.",
     "title": "Selecione o banco de dados desta compilação",
@@ -428,6 +443,8 @@
     "openWelcome": "Abrir o guia inicial",
     "links": {
       "website": "Site do Pit Officer",
+      "questions": "Perguntas antes de deixar uma IA operar",
+      "videoGuides": "Guias em vídeo",
       "issues": "Rastreador de problemas",
       "discussions": "Discussões no GitHub",
       "openpit": "Site do OpenPit"

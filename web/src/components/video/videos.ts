@@ -29,7 +29,9 @@ type Video = {
   readonly captions: readonly string[];
 };
 
-/** The wizard's videos on the OpenPit channel. */
+/**
+ * Panel video guides on the OpenPit channel, for the wizard and section plaques.
+ */
 export const VIDEOS = {
   /** "What is Pit Officer". */
   intro: {
@@ -49,6 +51,46 @@ export const VIDEOS = {
       ru: { id: "n_AWcXqedV0", start: 136 },
     },
     captions: ["zh-CN", "es", "pt-BR"],
+  },
+  /** "Connect a price source". */
+  prices: {
+    cuts: { en: { id: "7nM26GUgtes" } },
+    captions: [],
+  },
+  /** "Order size limit". */
+  size: {
+    cuts: { en: { id: "7-SWHs4UcGw" }, ru: { id: "pVrBefiSrpI" } },
+    captions: [],
+  },
+  /** "Order rate limit". */
+  rate: {
+    cuts: { en: { id: "zvvNHQ7HRYA" }, ru: { id: "ZewFwybR79E" } },
+    captions: [],
+  },
+  /** "Stop on profit and loss". */
+  pnl: {
+    cuts: { en: { id: "IGXd2cSLKwM" }, ru: { id: "LFlWncmjnaM" } },
+    captions: [],
+  },
+  /** "Stop new orders now". */
+  stop: {
+    cuts: { en: { id: "ateQ-i5k-o0" }, ru: { id: "WcZLKGHFFGQ" } },
+    captions: [],
+  },
+  /** "Why Officer needs balances". */
+  whyBalances: {
+    cuts: { en: { id: "na6qjWOZodc" } },
+    captions: [],
+  },
+  /** "Balances and cash movements". */
+  balances: {
+    cuts: { en: { id: "6Dv9wQnFnRM" }, ru: { id: "BRz6M3O_3sU" } },
+    captions: [],
+  },
+  /** "Account groups". */
+  groups: {
+    cuts: { en: { id: "Tv9vqqmw2Kg" } },
+    captions: [],
   },
 } as const satisfies Record<string, Video>;
 

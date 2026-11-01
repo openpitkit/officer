@@ -15,21 +15,21 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
+import { Play } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { ExternalLinkCard } from "@/components/ExternalLinkCard";
-import { videoUrl, type VideoKey } from "@/components/setup/videos";
+import { Notice } from "@/components/Notice";
+import { VideoLink } from "@/components/video/VideoLink";
+import type { VideoKey } from "@/components/video/videos";
 
-/**
- * A link to one of the wizard's videos in the panel language. It is a plain
- * link: nothing is loaded from YouTube until it is opened.
- */
-export function VideoLink({ video }: { video: VideoKey }) {
-  const { t, i18n } = useTranslation("setup");
+/** Guides for a section that has no operator-created records yet. */
+export function VideoGuideNotice({ videos }: { videos: VideoKey[] }) {
+  const { t } = useTranslation("common");
   return (
-    <ExternalLinkCard
-      href={videoUrl(video, i18n.language)}
-      label={t(`video.${video}`)}
-    />
+    <Notice tone="info" icon={Play} title={t("videoGuide.title")}>
+      {videos.map((video) => (
+        <VideoLink key={video} video={video} />
+      ))}
+    </Notice>
   );
 }

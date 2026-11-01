@@ -81,7 +81,7 @@ import {
   type DecisionStep,
   type WizardStep,
 } from "@/components/setup/steps";
-import { VideoLink } from "@/components/setup/VideoLink";
+import { VideoLink } from "@/components/video/VideoLink";
 import { Button } from "@/components/ui/button";
 import { WelcomeIntro } from "@/components/welcome/WelcomeIntro";
 import { WelcomeQuickStart } from "@/components/welcome/WelcomeQuickStart";

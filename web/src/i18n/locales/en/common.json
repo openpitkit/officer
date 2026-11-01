@@ -1,4 +1,19 @@
 {
+  "videoGuide": {
+    "title": "Learn how this section works",
+    "video": {
+      "intro": "Video: what Pit Officer is",
+      "mcp": "Video: connecting an agent over MCP",
+      "prices": "Video: connecting a price source",
+      "size": "Video: order size limit",
+      "rate": "Video: order rate limit",
+      "pnl": "Video: stopping on P&L",
+      "stop": "Video: blocking an account",
+      "whyBalances": "Video: why Officer needs balances",
+      "balances": "Video: balances and cash movements",
+      "groups": "Video: account groups"
+    }
+  },
   "nonRelease": {
     "banner": "Data from this build will never be migrated.",
     "title": "Choose this build's database",
@@ -425,6 +440,8 @@
     "openWelcome": "Open first-run guide",
     "links": {
       "website": "Pit Officer website",
+      "questions": "Questions about letting AI trade",
+      "videoGuides": "Video guides",
       "issues": "Issue tracker",
       "discussions": "GitHub discussions",
       "openpit": "OpenPit website"

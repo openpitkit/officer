@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
 import { ProductLinks } from "@/components/ProductLinks";
 
 describe("ProductLinks", () => {
-  it("links Officer's website, tracker and discussions, and OpenPit", () => {
+  it("links the product sites, guides and community in order", () => {
     render(<ProductLinks />);
 
     expect(
@@ -30,6 +30,11 @@ describe("ProductLinks", () => {
         .map((link) => [link.textContent, link.getAttribute("href")]),
     ).toEqual([
       ["Pit Officer website", "https://officer.openpit.dev?officer"],
+      [
+        "Questions about letting AI trade",
+        "https://officer.openpit.dev/questions/?officer",
+      ],
+      ["Video guides", "https://officer.openpit.dev/video-guides/?officer"],
       ["Issue tracker", "https://github.com/openpitkit/officer/issues?officer"],
       [
         "GitHub discussions",

@@ -481,6 +481,11 @@ describe("Setup", () => {
         ],
         ["Pit Officer website", "https://officer.openpit.dev?officer"],
         [
+          "Questions about letting AI trade",
+          "https://officer.openpit.dev/questions/?officer",
+        ],
+        ["Video guides", "https://officer.openpit.dev/video-guides/?officer"],
+        [
           "Issue tracker",
           "https://github.com/openpitkit/officer/issues?officer",
         ],

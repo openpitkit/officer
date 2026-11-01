@@ -62,6 +62,7 @@ import {
   SortableHeader,
   TimeRangeFilter,
   useOfficerApi,
+  type GlobalAdjustmentsFilter,
   type MissingAccountPolicy,
 } from "@/framework";
 import { codeLabel, sourceLabel } from "@/i18n/codeLabel";
@@ -93,6 +94,7 @@ import {
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
+import { VideoGuideNotice } from "@/components/video/VideoGuideNotice";
 import { RefreshButton } from "@/components/RefreshButton";
 import {
   CsvTransferMenu,
@@ -3582,6 +3584,16 @@ export function Positions() {
     deferredGroup,
   ]);
   const balancesLoad = useBalancesPage(balanceListFilters);
+  const balancesUnfiltered =
+    balanceListFilters.account === undefined &&
+    balanceListFilters.groupCode === undefined &&
+    balanceListFilters.asset === undefined &&
+    balanceListFilters.availableMode === undefined &&
+    balanceListFilters.heldMode === undefined &&
+    balanceListFilters.incomingMode === undefined &&
+    balanceListFilters.averageEntryPriceMode === undefined &&
+    balanceListFilters.realizedPnlMode === undefined &&
+    balanceListFilters.updatedAtMode === undefined;
 
   const deferredSource = sourceFilter === "__all__" ? undefined : sourceFilter;
   const historyAtFrom = localDateTimeFilter(debouncedHistoryAtMin);
@@ -3598,7 +3610,7 @@ export function Positions() {
         : historyAtFrom !== ""
           ? { atMode: historyAtMode, atMin: historyAtFrom }
           : {};
-  const adjustmentsLoad = useAdjustmentsPage({
+  const historyFilters: GlobalAdjustmentsFilter = {
     id: appliedHistoryExternalId.trim() || undefined,
     account: deferredAccount || undefined,
     asset: deferredAsset || undefined,
@@ -3610,7 +3622,16 @@ export function Positions() {
     order: historySort.order,
     limit: historySize,
     offset: historyPage * historySize,
-  });
+  };
+  const adjustmentsLoad = useAdjustmentsPage(historyFilters);
+  const historyUnfiltered =
+    historyFilters.id === undefined &&
+    historyFilters.account === undefined &&
+    historyFilters.asset === undefined &&
+    historyFilters.source === undefined &&
+    historyFilters.type === undefined &&
+    historyFilters.status === undefined &&
+    historyFilters.atMode === undefined;
 
   const [accountSuggestions, setAccountSuggestions] = useState<string[]>([]);
   const [groupSuggestions, setGroupSuggestions] = useState<string[]>([]);
@@ -4585,6 +4606,11 @@ export function Positions() {
           )}
           {balancesLoad.load.state === "ready" && (
             <>
+              {balancesLoad.load.error === null &&
+                balancesLoad.load.data.total === 0 &&
+                balancesUnfiltered && (
+                  <VideoGuideNotice videos={["whyBalances", "balances"]} />
+                )}
               {balances.length === 0 ? (
                 <EmptyState
                   title={t("balances.empty.title")}
@@ -4651,6 +4677,11 @@ export function Positions() {
               onRetry={adjustmentsLoad.reload}
             />
           )}
+          {!unknownTypeParam &&
+            adjustmentsLoad.load.state === "ready" &&
+            adjustmentsLoad.load.error === null &&
+            adjustmentsLoad.load.data.total === 0 &&
+            historyUnfiltered && <VideoGuideNotice videos={["balances"]} />}
           {!unknownTypeParam &&
             adjustmentsLoad.load.state === "ready" &&
             (adjustmentsLoad.load.data.total === 0 ? (

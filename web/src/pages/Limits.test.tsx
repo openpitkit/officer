@@ -15,7 +15,13 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { I18nextProvider } from "react-i18next";
@@ -313,6 +319,108 @@ function answerFundsMode(
   useSpotFundsModeMock.mockReturnValue(poll);
   return reload;
 }
+
+describe("Limits video guides", () => {
+  it.each(["empty", "mode only"])(
+    "shows guides for %s policies",
+    async (variant) => {
+      useLimitsMock.mockReturnValue(
+        readyPage(variant === "empty" ? [] : [modeLimit("enforce")]),
+      );
+      await act(async () => {
+        renderLimits();
+      });
+
+      for (const [name, id] of [
+        ["Video: order size limit", "7-SWHs4UcGw"],
+        ["Video: order rate limit", "zvvNHQ7HRYA"],
+        ["Video: stopping on P&L", "IGXd2cSLKwM"],
+      ]) {
+        expect(screen.getByRole("link", { name })).toHaveAttribute(
+          "href",
+          `https://www.youtube.com/watch?v=${id}`,
+        );
+      }
+      if (variant === "mode only") {
+        expect(policyRow("Funds limit mode")).toBeInTheDocument();
+      }
+    },
+  );
+
+  it("hides guides with a second policy", async () => {
+    useLimitsMock.mockReturnValue(
+      readyPage([modeLimit("enforce"), accountRateLimit("acc-1")]),
+    );
+    await act(async () => {
+      renderLimits();
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides guides for a single operator-created policy", async () => {
+    useLimitsMock.mockReturnValue(readyPage([accountRateLimit("acc-1")]));
+    await act(async () => {
+      renderLimits();
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["account=desk", "accountGroup=desk", "asset=USD", "policy=rate"])(
+    "hides guides with filter %s",
+    async (filter) => {
+      await act(async () => {
+        renderLimits(`/policies?${filter}`);
+      });
+      expect(
+        screen.queryByRole("link", { name: /^Video:/ }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps guides hidden when the cleared account draft has not been applied", async () => {
+    await act(async () => {
+      renderLimits("/policies?account=zzz");
+    });
+    fireEvent.change(screen.getByLabelText("Filter by account"), {
+      target: { value: "" },
+    });
+    expect(
+      latestPolicyFiltersMatching((filters) => filters?.policy === "all")
+        ?.account,
+    ).toBe("zzz");
+    expect(screen.getByText("No matching policies")).toBeInTheDocument();
+    expect(screen.queryAllByRole("link", { name: /^Video:/ })).toHaveLength(0);
+  });
+
+  it.each(["loading", "error", "stale"])(
+    "hides guides while %s",
+    async (state) => {
+      useLimitsMock.mockReturnValue({
+        load:
+          state === "stale"
+            ? {
+                state: "ready",
+                data: { items: [], total: 0 },
+                error: "Offline",
+              }
+            : state === "loading"
+              ? { state: "loading", data: null, error: null }
+              : { state: "error", data: null, error: "Offline" },
+        reload: vi.fn(),
+      });
+      await act(async () => {
+        renderLimits();
+      });
+      expect(
+        screen.queryByRole("link", { name: /^Video:/ }),
+      ).not.toBeInTheDocument();
+    },
+  );
+});
 
 describe("Limits currency warning", () => {
   it("renders the hook's warning above the policy filter bar and table, with no mode card", () => {

@@ -1,4 +1,19 @@
 {
+  "videoGuide": {
+    "title": "了解本节的使用方法",
+    "video": {
+      "intro": "视频：什么是 Pit Officer",
+      "mcp": "视频：通过 MCP 连接智能体",
+      "prices": "视频：连接价格源",
+      "size": "视频：订单规模限制",
+      "rate": "视频：订单频率限制",
+      "pnl": "视频：根据 P&L 停止交易",
+      "stop": "视频：封锁账户",
+      "whyBalances": "视频：Officer 为何需要余额",
+      "balances": "视频：余额与资金变动",
+      "groups": "视频：账户组"
+    }
+  },
   "nonRelease": {
     "banner": "此构建版本的数据永远不会被迁移。",
     "title": "请选择此构建版本的数据库",
@@ -425,6 +440,8 @@
     "openWelcome": "打开首次运行指南",
     "links": {
       "website": "Pit Officer 网站",
+      "questions": "让 AI 交易前，您可能想问的问题",
+      "videoGuides": "视频指南",
       "issues": "问题跟踪",
       "discussions": "GitHub 讨论区",
       "openpit": "OpenPit 网站"

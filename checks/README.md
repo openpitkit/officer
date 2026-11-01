@@ -41,7 +41,8 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 annotated for `semgrep --test`, one file per rule, named after it:
 `default-domain-status.go`, `locale-latin-words.txt`,
 `locale-english-words.txt`, `file-header-site-link.txt`,
-`panel-code-label.tsx` and `venue-connector-reuse.go`. A fixture runs only
+`panel-code-label.tsx`, `panel-site-link-reuse.tsx` and
+`venue-connector-reuse.go`. A fixture runs only
 through its own `--test` line in `check-semgrep`, after the tree scan, so a new
 fixture adds its own line there. A rule with a fixture keeps its fixture out of
 its `paths`, so the tree scan does not report the fixture. The directory is
@@ -159,6 +160,13 @@ negative fixtures run as part of `check-semgrep`.
 `downloadBlob` in `web/src/lib/download.ts`. The rule scans `web/src`, excluding
 that file, and catches an anchor created with `document.createElement("a")`
 whose `download` is then assigned. Its fixtures run as part of `check-semgrep`.
+
+`checks/semgrep/panel-site-link-reuse.yml` keeps links to `officer.openpit.dev`,
+`openpit.dev` and its subdomains built by `siteLink` in `web/src/lib/siteLinks.ts`,
+which adds the `officer` visit marker. The rule scans `web/src`, excluding the
+helper, test files, `web/src/examples/**` and its fixture. Host examples import
+only the published package, so they cannot reach the panel-internal `siteLink`.
+Comments are not read. Its fixture runs as part of `check-semgrep`.
 
 ### Panel code labels
 

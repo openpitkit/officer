@@ -47,6 +47,7 @@ import { useCredentialStorage } from "@/api/useCredentialStorage";
 import { useMarketData } from "@/api/useMarketData";
 import type { LoadState } from "@/api/usePolling";
 import { Page } from "@/components/Page";
+import { VideoGuideNotice } from "@/components/video/VideoGuideNotice";
 import {
   ErrorBanner,
   ErrorState,
@@ -2672,6 +2673,9 @@ export function MarketData() {
       )}
       {load.state === "ready" && (
         <div className="flex flex-col gap-y-4">
+          {load.error === null && load.data.instances.length === 0 && (
+            <VideoGuideNotice videos={["prices"]} />
+          )}
           {load.data.instances.length === 0 && (
             <Card>
               <CardContent className="py-8 text-center text-sm text-muted">

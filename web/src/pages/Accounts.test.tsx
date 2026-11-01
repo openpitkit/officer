@@ -44,6 +44,7 @@ import { useTrading } from "@/api/useTrading";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { ApiError, AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework";
 import i18n from "@/i18n";
+import { setGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { Accounts, CreateAccountDialog } from "@/pages/Accounts";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -417,6 +418,193 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("Accounts video guides", () => {
+  it("shows the blocking guide above unfiltered empty accounts", async () => {
+    useAccountsMock.mockReturnValue(readyPage<Account>([]));
+    await act(async () => {
+      renderAccounts();
+    });
+    expect(
+      screen.getByRole("link", { name: "Video: blocking an account" }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=ateQ-i5k-o0");
+  });
+
+  it("hides the blocking guide when accounts exist", async () => {
+    await act(async () => {
+      renderAccounts();
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the blocking guide for an exact group filter", async () => {
+    useAccountsMock.mockReturnValue(readyPage<Account>([]));
+    await act(async () => {
+      renderAccounts("/accounts?group=equity-desks");
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["code=zzz", "status=blocked", "venue=none"])(
+    "hides the blocking guide with request filter %s",
+    async (filter) => {
+      useAccountsMock.mockReturnValue(readyPage<Account>([]));
+      await act(async () => {
+        renderAccounts(`/accounts?${filter}`);
+      });
+      expect(
+        screen.queryByRole("link", { name: /^Video:/ }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["accounts", "groups"])(
+    "keeps %s guides hidden while a cleared search is still debouncing",
+    async (tab) => {
+      vi.useFakeTimers();
+      try {
+        useAccountsMock.mockImplementation((filters) =>
+          readyPage<Account>(filters?.code ? [] : accounts),
+        );
+        useGroupsMock.mockImplementation((filters) =>
+          filters?.code
+            ? ready({ items: [groups[0]], total: 0 })
+            : readyPage(groups),
+        );
+        await act(async () => {
+          renderAccounts(`/accounts?tab=${tab}&code=zzz`);
+        });
+        expect(
+          screen.queryByRole("link", { name: /^Video:/ }),
+        ).not.toBeInTheDocument();
+
+        fireEvent.change(
+          screen.getByLabelText(
+            tab === "groups" ? /group search/i : /account search/i,
+          ),
+          { target: { value: "" } },
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(299);
+        });
+        const lastFilters =
+          tab === "groups" ? lastGroupFilters : lastAccountFilters;
+        expect(lastFilters()?.code).toBe("zzz");
+        expect(
+          screen.queryByRole("link", { name: /^Video:/ }),
+        ).not.toBeInTheDocument();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        expect(lastFilters()?.code).toBeUndefined();
+        expect(
+          screen.queryByRole("link", { name: /^Video:/ }),
+        ).not.toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("hides the blocking guide for a mirrored global account filter", async () => {
+    useAccountsMock.mockReturnValue(readyPage<Account>([]));
+    try {
+      await act(async () => {
+        renderAccounts();
+        setGlobalAccountFilter("zzz");
+      });
+      await waitFor(() => expect(lastAccountFilters()?.code).toBe("zzz"));
+      expect(
+        screen.queryByRole("link", { name: /^Video:/ }),
+      ).not.toBeInTheDocument();
+    } finally {
+      act(() => setGlobalAccountFilter(""));
+    }
+  });
+
+  it("shows the groups guide when only the pinned Default group exists", async () => {
+    useGroupsMock.mockReturnValue(ready({ items: [groups[0]], total: 0 }));
+    await act(async () => {
+      renderAccounts("/accounts?tab=groups");
+    });
+    expect(
+      screen.getByRole("link", { name: "Video: account groups" }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=Tv9vqqmw2Kg");
+    expect(screen.getByText("Default group")).toBeInTheDocument();
+  });
+
+  it("hides the groups guide when real groups exist", async () => {
+    await act(async () => {
+      renderAccounts("/accounts?tab=groups");
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "code=desk",
+    "status=blocked",
+    "notes=desk",
+    "positionCountMode=lt&positionCountMin=10",
+    "accountCountMode=lte&accountCountMin=10",
+  ])("hides the groups guide with filter %s", async (filter) => {
+    useGroupsMock.mockReturnValue(ready({ items: [groups[0]], total: 0 }));
+    await act(async () => {
+      renderAccounts(`/accounts?tab=groups&${filter}`);
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["accounts", "groups"])("hides %s guides when stale", async (tab) => {
+    const stale = {
+      load: {
+        state: "ready" as const,
+        data: { items: [], total: 0 },
+        error: "Offline",
+      },
+      reload: vi.fn(),
+    };
+    useAccountsMock.mockReturnValue(stale);
+    useGroupsMock.mockReturnValue(stale);
+    await act(async () => {
+      renderAccounts(`/accounts?tab=${tab}`);
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["accounts", "loading"],
+    ["accounts", "error"],
+    ["groups", "loading"],
+    ["groups", "error"],
+  ])("hides %s guides while %s", async (tab, state) => {
+    const poll = {
+      load:
+        state === "loading"
+          ? { state: "loading" as const, data: null, error: null }
+          : { state: "error" as const, data: null, error: "Offline" },
+      reload: vi.fn(),
+    };
+    useAccountsMock.mockReturnValue(poll);
+    useGroupsMock.mockReturnValue(poll);
+    await act(async () => {
+      renderAccounts(`/accounts?tab=${tab}`);
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("DeleteAccountConfirm", () => {

@@ -52,6 +52,7 @@ import {
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
+import { VideoGuideNotice } from "@/components/video/VideoGuideNotice";
 import { SpotFundsCurrencyWarning } from "@/components/SpotFundsCurrencyWarning";
 import { RefreshButton } from "@/components/RefreshButton";
 import { PageSizeSelect, TablePagination } from "@/components/TableControls";
@@ -985,6 +986,15 @@ export function Limits() {
       {load.state === "error" && (
         <ErrorState message={load.error} onRetry={reload} />
       )}
+      {load.state === "ready" &&
+        load.error === null &&
+        !hasActiveFilters &&
+        (total === 0 ||
+          (total === 1 &&
+            rows.length === 1 &&
+            rows[0].policy === "spot_funds_limit_mode")) && (
+          <VideoGuideNotice videos={["size", "rate", "pnl"]} />
+        )}
       {load.state === "ready" &&
         (total === 0 ? (
           <EmptyState

@@ -17,12 +17,31 @@
 
 import { describe, expect, it } from "vitest";
 
-import { videoUrl } from "@/components/setup/videos";
+import { videoUrl, type VideoKey } from "@/components/video/videos";
 import { LOCALE_CODES } from "@/i18n/locales";
 
 const WATCH = "https://www.youtube.com/watch?v=";
 
 describe("videoUrl", () => {
+  it.each<[VideoKey, string, string]>([
+    ["prices", "7nM26GUgtes", "7nM26GUgtes"],
+    ["size", "7-SWHs4UcGw", "pVrBefiSrpI"],
+    ["rate", "zvvNHQ7HRYA", "ZewFwybR79E"],
+    ["pnl", "IGXd2cSLKwM", "LFlWncmjnaM"],
+    ["stop", "ateQ-i5k-o0", "WcZLKGHFFGQ"],
+    ["whyBalances", "na6qjWOZodc", "na6qjWOZodc"],
+    ["balances", "6Dv9wQnFnRM", "BRz6M3O_3sU"],
+    ["groups", "Tv9vqqmw2Kg", "Tv9vqqmw2Kg"],
+  ])("opens the whole %s guide without requesting captions", (key, en, ru) => {
+    expect(LOCALE_CODES.map((code) => videoUrl(key, code))).toEqual([
+      `${WATCH}${en}`,
+      `${WATCH}${ru}`,
+      `${WATCH}${en}`,
+      `${WATCH}${en}`,
+      `${WATCH}${en}`,
+    ]);
+  });
+
   it("opens the intro in every panel language's own cut", () => {
     expect(LOCALE_CODES.map((code) => videoUrl("intro", code))).toEqual([
       `${WATCH}v34IdYhH5so`,

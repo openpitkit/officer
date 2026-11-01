@@ -20,6 +20,7 @@ import { createElement } from "react";
 import type { SpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
 import type { Account, Group, Limit } from "@/api/types";
 import { registerPolicy, registerRowAction, registerScope } from "@/framework";
+import { siteLink } from "@/lib/siteLinks";
 import {
   AccountAuditAction,
   AccountDeleteAction,
@@ -52,7 +53,7 @@ export function registerAppVocabulary(): void {
     allowedScopes: ["broker", "asset", "account", "account_asset"],
     kinds: [{ kind: "max_orders" }, { kind: "window" }],
     catalog: {
-      wikiUrl: "https://wiki.openpit.dev/Policies/?officer#ratelimitpolicy",
+      wikiUrl: siteLink("wiki", "/Policies/", "ratelimitpolicy"),
       fields: [{ key: "max_orders" }, { key: "window" }],
     },
   });
@@ -67,8 +68,7 @@ export function registerAppVocabulary(): void {
     ],
     kinds: [{ kind: "max_quantity" }, { kind: "max_notional" }],
     catalog: {
-      wikiUrl:
-        "https://wiki.openpit.dev/Policies/?officer#ordersizelimitpolicy",
+      wikiUrl: siteLink("wiki", "/Policies/", "ordersizelimitpolicy"),
       fields: [{ key: "max_quantity" }, { key: "max_notional" }],
     },
   });
@@ -92,7 +92,7 @@ export function registerAppVocabulary(): void {
         { kind: "upper_bound" },
       ],
       catalog: {
-        wikiUrl: `https://wiki.openpit.dev/Spot-Funds/?officer#${anchor}`,
+        wikiUrl: siteLink("wiki", "/Spot-Funds/", anchor),
         fields: [
           { key: "currency" },
           { key: "lower_bound" },
@@ -106,7 +106,7 @@ export function registerAppVocabulary(): void {
     allowedScopes: ["global"],
     kinds: [{ kind: "mode" }],
     catalog: {
-      wikiUrl: "https://wiki.openpit.dev/Spot-Funds/?officer#funds-limit-mode",
+      wikiUrl: siteLink("wiki", "/Spot-Funds/", "funds-limit-mode"),
       fields: [{ key: "mode" }],
     },
   });

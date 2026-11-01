@@ -75,10 +75,6 @@
     "warning": "Entregue ao agente somente este token - nunca o token de API nem a senha do painel: com eles, o agente contorna os limites do MCP.",
     "later": "Conectar depois"
   },
-  "video": {
-    "intro": "Vídeo: o que é o Pit Officer",
-    "mcp": "Vídeo: conexão de um agente via MCP"
-  },
   "done": {
     "title": "O Officer está configurado",
     "lead": "Suas escolhas e onde cada uma fica agora.",

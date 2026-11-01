@@ -15,7 +15,13 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import {
@@ -309,6 +315,227 @@ beforeEach(async () => {
     value: vi.fn(),
   });
   HTMLAnchorElement.prototype.click = () => {};
+});
+
+describe("Positions video guides", () => {
+  it("shows both balance guides above empty balances", async () => {
+    useBalancesMock.mockReturnValue(readyPage<Balance>([]));
+    await act(async () => {
+      renderPositions();
+    });
+    expect(screen.getByText("No balances")).toBeInTheDocument();
+    for (const [name, id] of [
+      ["Video: why Officer needs balances", "na6qjWOZodc"],
+      ["Video: balances and cash movements", "6Dv9wQnFnRM"],
+    ]) {
+      expect(screen.getByRole("link", { name })).toHaveAttribute(
+        "href",
+        `https://www.youtube.com/watch?v=${id}`,
+      );
+    }
+  });
+
+  it("hides balance guides when a balance exists", async () => {
+    await act(async () => {
+      renderPositions();
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides balance guides on an empty page with a nonzero server total", async () => {
+    useBalancesMock.mockImplementation((filters) =>
+      ready({ items: filters?.offset ? [] : [balance], total: 101 }),
+    );
+    await act(async () => {
+      renderPositions();
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    expect(lastBalanceFilters()?.offset).toBeGreaterThan(0);
+    expect(screen.getByText("No balances")).toBeInTheDocument();
+    expect(screen.queryAllByRole("link", { name: /^Video:/ })).toHaveLength(0);
+  });
+
+  it.each([
+    ["positions", "availableMode=gt&availableMin=1"],
+    ["history", "atMin=2026-01-01T12%3A00"],
+  ])(
+    "keeps %s guides hidden while a cleared range is still debouncing",
+    async (tab, filter) => {
+      vi.useFakeTimers();
+      try {
+        useBalancesMock.mockImplementation((filters) =>
+          readyPage<Balance>(filters?.availableMode ? [] : [balance]),
+        );
+        useAdjustmentsMock.mockImplementation((filters) =>
+          readyPage<Adjustment>(
+            filters?.atMode
+              ? []
+              : [
+                  acceptedAdjustment({
+                    type: "deposit",
+                    asset: "USD",
+                    balance: { mode: "absolute", value: "10" },
+                  }),
+                ],
+          ),
+        );
+        await act(async () => {
+          renderPositions(`/positions?tab=${tab}&${filter}`);
+        });
+        expect(screen.queryAllByRole("link", { name: /^Video:/ })).toHaveLength(
+          0,
+        );
+
+        fireEvent.click(
+          screen.getByRole("button", { name: /clear all filters/i }),
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(299);
+        });
+        if (tab === "positions") {
+          expect(lastBalanceFilters()?.availableMode).toBe("gt");
+          expect(screen.getByText("No balances")).toBeInTheDocument();
+        } else {
+          expect(useAdjustmentsMock.mock.calls.at(-1)?.[0]?.atMode).toBe(
+            "after",
+          );
+          expect(screen.getByText("No adjustments")).toBeInTheDocument();
+        }
+        expect(screen.queryAllByRole("link", { name: /^Video:/ })).toHaveLength(
+          0,
+        );
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        if (tab === "positions") {
+          expect(lastBalanceFilters()?.availableMode).toBeUndefined();
+          expect(screen.queryByText("No balances")).not.toBeInTheDocument();
+        } else {
+          expect(
+            useAdjustmentsMock.mock.calls.at(-1)?.[0]?.atMode,
+          ).toBeUndefined();
+          expect(screen.queryByText("No adjustments")).not.toBeInTheDocument();
+        }
+        expect(screen.queryAllByRole("link", { name: /^Video:/ })).toHaveLength(
+          0,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    "asset=USD",
+    "account=desk",
+    "group=desk",
+    "availableMode=gt&availableMin=1",
+  ])("hides balance guides with filter %s", async (filter) => {
+    useBalancesMock.mockReturnValue(readyPage<Balance>([]));
+    await act(async () => {
+      renderPositions(`/positions?${filter}`);
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows only the cash movements guide above empty history", async () => {
+    await act(async () => {
+      renderPositions("/positions?tab=history");
+    });
+    expect(screen.getByText("No adjustments")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Video: balances and cash movements" }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=6Dv9wQnFnRM");
+    expect(
+      screen.queryByRole("link", { name: "Video: why Officer needs balances" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides history guides when an adjustment exists", async () => {
+    useAdjustmentsMock.mockReturnValue(
+      readyPage([
+        acceptedAdjustment({
+          type: "deposit",
+          asset: "USD",
+          balance: { mode: "absolute", value: "10" },
+        }),
+      ]),
+    );
+    await act(async () => {
+      renderPositions("/positions?tab=history");
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "asset=USD",
+    "account=desk",
+    "source=mcp",
+    "type=deposit",
+    "status=rejected",
+    "id=movement-1",
+    "atMin=2026-01-01T12%3A00",
+  ])("hides history guides with filter %s", async (filter) => {
+    await act(async () => {
+      renderPositions(`/positions?tab=history&${filter}`);
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["positions", "history"])(
+    "hides %s guides when stale",
+    async (tab) => {
+      const stale = {
+        load: {
+          state: "ready" as const,
+          data: { items: [], total: 0 },
+          error: "Offline",
+        },
+        reload: vi.fn(),
+      };
+      useBalancesMock.mockReturnValue(stale);
+      useAdjustmentsMock.mockReturnValue(stale);
+      await act(async () => {
+        renderPositions(`/positions?tab=${tab}`);
+      });
+      expect(
+        screen.queryByRole("link", { name: /^Video:/ }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ["positions", "loading"],
+    ["positions", "error"],
+    ["history", "loading"],
+    ["history", "error"],
+  ])("hides %s guides while %s", async (tab, state) => {
+    const poll = {
+      load:
+        state === "loading"
+          ? { state: "loading" as const, data: null, error: null }
+          : { state: "error" as const, data: null, error: "Offline" },
+      reload: vi.fn(),
+    };
+    useBalancesMock.mockReturnValue(poll);
+    useAdjustmentsMock.mockReturnValue(poll);
+    await act(async () => {
+      renderPositions(`/positions?tab=${tab}`);
+    });
+    expect(
+      screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("Positions adjustment panel", () => {
