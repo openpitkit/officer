@@ -78,6 +78,20 @@ func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) doma
 	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
 }
 
+// setSpotFundsLimitModeDetail renders a change of the Spot Funds limit-mode
+// meta-policy, e.g. "Limit set: spot_funds_limit_mode (global)
+// mode=track_only".
+func setSpotFundsLimitModeDetail(mode domain.SpotFundsLimitMode) domain.AuditDetail {
+	target := LimitTarget{
+		Policy: domain.PolicySpotFundsLimitMode,
+		Scope:  domain.ScopeGlobal,
+	}
+	fields := append(axesFields(target),
+		domain.AuditDetailField{Name: "mode", Value: string(mode)},
+	)
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
+}
+
 // deleteLimitDetail renders a barrier deletion as a short audit detail.
 func deleteLimitDetail(target LimitTarget) domain.AuditDetail {
 	return domain.NewAuditDetail(

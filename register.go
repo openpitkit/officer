@@ -84,7 +84,50 @@ func (d setupDecisions) AccountModeChosen(ctx context.Context) (bool, error) {
 	return accountmode.Chosen(ctx, d.node)
 }
 
+// FundsLimitModeChosen reads the stored rows, where the Spot Funds limit-mode
+// meta-policy row is present only once a mode was stored.
+func (d setupDecisions) FundsLimitModeChosen(ctx context.Context) (bool, error) {
+	limits, err := d.node.ListLimits(ctx, "")
+	if err != nil {
+		return false, err
+	}
+	return len(limits.SpotFundsLimitModes) != 0, nil
+}
+
 func (d setupDecisions) CredentialsSealed() bool { return d.node.CredentialsSealed() }
+
+// fundsLimitModePutRoute stores the Spot Funds limit mode, the decision
+// FundsLimitModeChosen reads.
+const fundsLimitModePutRoute = "limits.spot-funds-limit-mode.put"
+
+// serialiseWithSetup wraps the handler of route id in routes so that, while
+// first-run setup is open, it runs inside gate, as accountmode.ApplyDuringSetup
+// stores the account mode: a write and its rollback, when the engine refuses
+// it, finish before setup can complete and read the decision. Once setup is
+// complete the handler runs alone. A route id absent from routes is a
+// composition defect and panics.
+func serialiseWithSetup(routes *httpx.RouteRegistry, id string, gate accountmode.SetupGate) {
+	all := routes.Routes()
+	i := slices.IndexFunc(all, func(route httpx.Route) bool { return route.ID == id })
+	if i < 0 {
+		panic(fmt.Sprintf("officer: route %q is not registered", id))
+	}
+	route := all[i]
+	next := route.Handler
+	route.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := gate.WhileInSetup(func() error {
+			next.ServeHTTP(w, r)
+			return nil
+		})
+		switch {
+		case errors.Is(err, domain.ErrSetupComplete):
+			next.ServeHTTP(w, r)
+		case err != nil:
+			httpx.WriteErr(w, err)
+		}
+	})
+	routes.Register(route)
+}
 
 // Register populates b with the Pit Officer concrete implementations built
 // from cfg. The composition serves domain.DefaultRealm through one local node.
@@ -206,6 +249,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		svc fwbackend.ControlPlane, logs httpx.LogSource,
 	) frameworkapp.RouteConfig {
 		config := httpapi.RouteConfig(svc, logs, sealReports)
+		serialiseWithSetup(config.Routes, fundsLimitModePutRoute, accessService)
 		for _, route := range accountmode.Routes(svc, accountScope, accessService) {
 			config.Routes.Register(route)
 		}

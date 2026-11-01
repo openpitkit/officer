@@ -152,6 +152,8 @@ func RegisterRoutes(
 	register(registry, "limits.spot-funds-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisRealized))
 	register(registry, "limits.spot-funds-unrealized-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-unrealized-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisUnrealized))
 	register(registry, "limits.spot-funds-total-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-total-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisTotal))
+	registerDuringSetup(registry, "limits.spot-funds-limit-mode.get", http.MethodGet, "/limits/spot-funds-limit-mode", handleGetSpotFundsLimitMode(svc))
+	registerDuringSetup(registry, "limits.spot-funds-limit-mode.put", http.MethodPut, "/limits/spot-funds-limit-mode", handlePutSpotFundsLimitMode(svc))
 	register(registry, "limits.delete", http.MethodDelete, "/limits", handleDeleteLimit(svc))
 
 	register(registry, "audit.list.get", http.MethodGet, "/audit", handleListAudit(svc))

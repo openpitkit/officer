@@ -47,6 +47,9 @@
     "get_limits": {
       "description": "List configured risk barriers, optionally filtered by account."
     },
+    "get_spot_funds_limit_mode": {
+      "description": "Read the global Spot Funds limit mode and the accounts a P&L bound blocks for want of a currency."
+    },
     "get_audit": {
       "description": "Read recent control-plane audit-log entries."
     },
@@ -66,7 +69,7 @@
       "description": "Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons); changes no state."
     },
     "set_limit": {
-      "description": "Tighten a risk barrier: add one or make it stricter; loosening and removal are refused."
+      "description": "Tighten a risk barrier: add one or make it stricter, or switch Spot Funds back to Check funds; loosening and removal are refused."
     },
     "submit_order": {
       "description": "Submit an order intent through pre-trade and obtain an approval envelope."

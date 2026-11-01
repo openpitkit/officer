@@ -1322,6 +1322,15 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 	if err := restoreValidationError(validateRestoredSigningKeys(data.SigningKeys)); err != nil {
 		return err
 	}
+	for _, entry := range data.Settings {
+		if entry.Key == domain.SettingKeySpotFundsLimitMode {
+			if err := restoreValidationError(domain.ValidateSpotFundsLimitMode(
+				domain.SpotFundsLimitMode(entry.Value),
+			)); err != nil {
+				return fmt.Errorf("store: restore setting %q: %w", entry.Key, err)
+			}
+		}
+	}
 	for command, enabled := range data.McpAccess {
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM mcp_access WHERE command = ?`, command)
 		if err != nil {

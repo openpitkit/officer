@@ -34,10 +34,13 @@ import {
   fetchSetup,
   isSetupComplete,
   putSetupProgress,
+  SETUP_STEPS,
   type SetupCompleteRequest,
   type SetupState,
   type SetupStep,
 } from "@/api/setup";
+import { useSpotFundsLimitMode } from "@/api/spotFundsLimitMode";
+import type { SpotFundsLimitMode } from "@/api/types";
 import { useCredentialStorage } from "@/api/useCredentialStorage";
 import type { LoadState } from "@/api/usePolling";
 import { AccessModePanel } from "@/components/AccessModePanel";
@@ -46,14 +49,17 @@ import { errMessage } from "@/components/AccountDialogs";
 import { ConnectAgent } from "@/components/ConnectAgent";
 import { Notice } from "@/components/Notice";
 import {
+  CompactStaleState,
   ErrorBanner,
   FullScreenError,
   FullScreenLoading,
+  LoadingStatus,
 } from "@/components/PageStates";
 import {
   SigningKeysPanel,
   useSigningKeysPanel,
 } from "@/components/SigningKeysPanel";
+import { SpotFundsModeCards } from "@/components/SpotFundsModeCards";
 import { StandaloneTopBar } from "@/components/StandaloneTopBar";
 import { useStartupAdmit } from "@/components/StartupGate";
 import {
@@ -92,7 +98,7 @@ const LOADING: LoadState<SetupState> = {
 
 /** Whether the server keeps `step` as the position the wizard resumes at. */
 function isStored(step: WizardStep): step is SetupStep {
-  return step !== "agent" && step !== "done";
+  return (SETUP_STEPS as readonly WizardStep[]).includes(step);
 }
 
 /**
@@ -198,20 +204,21 @@ type StepView = {
 };
 
 /**
- * The seven steps, over the stored setup state in the first run and over the
- * settings in force in the review. It holds the account mode and credential
- * storage polls and one signing keys controller for the whole wizard: the
- * steps embed them, and the rail and the summary read them.
+ * The eight steps, over the stored setup state in the first run and over the
+ * settings in force in the review. It holds the account mode, funds limit mode
+ * and credential storage polls and one signing keys controller for the whole
+ * wizard: the steps embed them, and the rail and the summary read them.
  */
 function Wizard({ pass }: { pass: WizardPass }) {
   const { t } = useTranslation("setup");
   const { t: tc } = useTranslation();
   const { t: ts } = useTranslation("service");
   const client = useApiClient();
-  const { restartService } = useOfficerApi();
+  const { restartService, putLimit } = useOfficerApi();
   const admit = useStartupAdmit();
   const navigate = useNavigate();
   const accountPoll = useAccountMode();
+  const fundsPoll = useSpotFundsLimitMode();
   const { load: storage } = useCredentialStorage();
   // Whether a master key seals the stored secrets, once the storage answers.
   const sealed = storage.state === "ready" && storage.data.credentialsSealed;
@@ -250,6 +257,8 @@ function Wizard({ pass }: { pass: WizardPass }) {
     pass.kind === "review" ? pass.accessMode : "token",
   );
   const [accessAck, setAccessAck] = useState(false);
+  // Null until the operator picks one: the first run preselects no mode.
+  const [fundsPick, setFundsPick] = useState<SpotFundsLimitMode | null>(null);
 
   // A completed setup leaves the database unsealed only by a decline, which
   // the review knows once the storage answers.
@@ -258,6 +267,12 @@ function Wizard({ pass }: { pass: WizardPass }) {
     accountPoll.load.state === "ready" ? accountPoll.load.data : null;
   const accountsStored =
     accounts !== null && accounts.mode !== null && !accounts.restartRequired;
+  const funds = fundsPoll.load.state === "ready" ? fundsPoll.load.data : null;
+  // The first run shows the stored mode, none before a row is stored; the
+  // review shows the mode in force, which no row leaves at Check funds.
+  const fundsShown =
+    funds === null || (!review && !funds.stored) ? null : funds.mode;
+  const fundsChoice = fundsPick ?? fundsShown;
   // A sealed database wins over a pick and over a recorded decline. The
   // review shows no choice until the storage answers.
   const encryption: EncryptionChoice | null =
@@ -282,6 +297,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
       section: tc("nav.service"),
       tab: ts("tabs.accountMode"),
     }),
+    funds: tc("nav.policies"),
     encryption: security,
     signing: tc("nav.signingKeys"),
     access: security,
@@ -336,16 +352,17 @@ function Wizard({ pass }: { pass: WizardPass }) {
     }
   };
 
-  // In the first run the position moves on before the page starts afresh -
+  // In the first run the position is stored before the page starts afresh -
   // `afresh` restarts Officer, after which the startup gate reloads the page,
-  // or reloads it itself - so the wizard resumes at the encryption step. No
-  // move starts from here on.
+  // or reloads it itself - so the wizard resumes at the accounts step: the
+  // server does not store the funds check that follows it. No move starts
+  // from here on.
   const resumeAfter = async (afresh: () => Promise<void> | void) => {
     busy.current = true;
     setMoving(true);
     try {
       if (pass.kind === "firstRun") {
-        await putSetupProgress(client, "encryption");
+        await putSetupProgress(client, "accounts");
       }
       await afresh();
     } catch (err) {
@@ -426,6 +443,8 @@ function Wizard({ pass }: { pass: WizardPass }) {
     switch (id) {
       case "accounts":
         return accounts?.mode ? ts(`accountMode.modes.${accounts.mode}`) : null;
+      case "funds":
+        return fundsShown === null ? null : t(`funds.rail.${fundsShown}`);
       case "encryption":
         if (ahead(index)) {
           return null;
@@ -503,10 +522,63 @@ function Wizard({ pass }: { pass: WizardPass }) {
               ? { where: places.accounts }
               : { note: t("accounts.saveFirst") }),
             back: () => void go("welcome"),
-            next: () => void go("encryption"),
+            next: () => void go("funds"),
             nextDisabled: !review && !accountsStored,
           },
         };
+      case "funds": {
+        // The review shows the mode in force and takes no decision here: the
+        // mode changes on the Policies page.
+        const pick = review ? null : fundsPick;
+        return {
+          title: t("funds.title"),
+          lead: t("funds.lead"),
+          body: (
+            <div className="flex flex-col gap-y-4">
+              {funds !== null && (
+                <SpotFundsModeCards
+                  label={t("funds.title")}
+                  value={fundsChoice}
+                  onChange={setFundsPick}
+                  disabled={moving || review}
+                />
+              )}
+              {fundsPoll.load.state === "loading" && <LoadingStatus />}
+              {fundsPoll.load.state === "error" && (
+                <ErrorBanner message={fundsPoll.load.error} />
+              )}
+              <CompactStaleState load={fundsPoll.load} />
+            </div>
+          ),
+          footer: {
+            ...(review || fundsChoice !== null
+              ? { where: places.funds }
+              : { note: t("funds.chooseFirst") }),
+            back: () => void go("accounts"),
+            // Continue stores a picked mode that is not stored yet.
+            next: () =>
+              void go(
+                "encryption",
+                pick !== null && pick !== fundsShown
+                  ? async () => {
+                      await putLimit(
+                        {
+                          policy: "spot_funds_limit_mode",
+                          scope: "global",
+                          account: "",
+                          asset: "",
+                          values: { mode: pick },
+                        },
+                        "reject",
+                      );
+                      fundsPoll.reload();
+                    }
+                  : undefined,
+              ),
+            nextDisabled: !review && fundsChoice === null,
+          },
+        };
+      }
       case "encryption":
         return {
           title: t("encryption.title"),
@@ -528,7 +600,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
           ),
           footer: {
             where: places.encryption,
-            back: () => void go("accounts"),
+            back: () => void go("funds"),
             // The review takes no decision here.
             next: () =>
               void go(
@@ -637,6 +709,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
             <>
               <DoneSummary
                 accounts={accountPoll.load}
+                funds={fundsPoll.load}
                 storage={storage}
                 signing={signing}
                 accessMode={accessMode}

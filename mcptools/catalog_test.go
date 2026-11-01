@@ -62,6 +62,15 @@ func TestCatalogParity(t *testing.T) {
 			DefaultEnabled:   true,
 		},
 		{
+			Name:             "get_spot_funds_limit_mode",
+			Title:            "Get Spot Funds limit mode",
+			AgentDescription: "Read the global Spot Funds limit mode and the accounts a P&L bound blocks for want of a currency.",
+			Mutating:         false,
+			Protective:       false,
+			Implemented:      true,
+			DefaultEnabled:   true,
+		},
+		{
 			Name:             "get_order",
 			Title:            "Get order",
 			AgentDescription: "Read one order by id with its approval envelope and fills.",
@@ -127,7 +136,7 @@ func TestCatalogParity(t *testing.T) {
 		{
 			Name:             "set_limit",
 			Title:            "Set limit",
-			AgentDescription: "Tighten a risk barrier: add one or make it stricter; loosening and removal are refused.",
+			AgentDescription: "Tighten a risk barrier: add one or make it stricter, or switch Spot Funds back to Check funds; loosening and removal are refused.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,
@@ -325,6 +334,7 @@ func TestImplementedDescriptorOrder(t *testing.T) {
 		"health",
 		"get_account_state",
 		"get_limits",
+		"get_spot_funds_limit_mode",
 		"get_order",
 		"get_audit",
 		"list_orders",

@@ -818,6 +818,74 @@ func assertOneAccountSubmitSchema(t *testing.T, handler http.Handler) {
 	}
 }
 
+// fakeSetupGate is a SetupGate whose setup state the test sets; inside reports
+// whether fn is running under the gate.
+type fakeSetupGate struct {
+	err    error
+	inside bool
+}
+
+func (g *fakeSetupGate) WhileInSetup(fn func() error) error {
+	if g.err != nil {
+		return g.err
+	}
+	g.inside = true
+	defer func() { g.inside = false }()
+	return fn()
+}
+
+// TestSerialiseWithSetup pins the setup-time wrap of a setup decision's write
+// route: during setup the handler runs inside the gate, so setup cannot
+// complete between the write and its rollback; after setup it runs alone; a
+// gate failure answers the error without running it; an unknown route panics.
+func TestSerialiseWithSetup(t *testing.T) {
+	const id = "decision.put"
+	serve := func(t *testing.T, gate *fakeSetupGate) (ran, underGate bool, status int) {
+		t.Helper()
+		routes := &httpx.RouteRegistry{}
+		routes.Register(httpx.Route{
+			ID: id, Method: http.MethodPut, Pattern: "/decision",
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				ran, underGate = true, gate.inside
+				w.WriteHeader(http.StatusNoContent)
+			}),
+		})
+		serialiseWithSetup(routes, id, gate)
+		rec := httptest.NewRecorder()
+		routes.Routes()[0].Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/decision", nil))
+		return ran, underGate, rec.Code
+	}
+
+	t.Run("during setup", func(t *testing.T) {
+		ran, underGate, status := serve(t, &fakeSetupGate{})
+		if !ran || !underGate || status != http.StatusNoContent {
+			t.Fatalf("ran=%v underGate=%v status=%d, want the handler run under the gate, 204",
+				ran, underGate, status)
+		}
+	})
+	t.Run("after setup", func(t *testing.T) {
+		ran, underGate, status := serve(t, &fakeSetupGate{err: fmt.Errorf("done: %w", domain.ErrSetupComplete)})
+		if !ran || underGate || status != http.StatusNoContent {
+			t.Fatalf("ran=%v underGate=%v status=%d, want the handler run alone, 204",
+				ran, underGate, status)
+		}
+	})
+	t.Run("gate failure", func(t *testing.T) {
+		ran, _, status := serve(t, &fakeSetupGate{err: errors.New("access: unknown access mode")})
+		if ran || status != http.StatusInternalServerError {
+			t.Fatalf("ran=%v status=%d, want no handler run and 500", ran, status)
+		}
+	})
+	t.Run("unknown route", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("serialiseWithSetup of an unknown route did not panic")
+			}
+		}()
+		serialiseWithSetup(&httpx.RouteRegistry{}, id, &fakeSetupGate{})
+	})
+}
+
 // TestRegisterRouteBaseline pins the route manifest of the assembled serve
 // handler: the open access mode; every v1 route - the httpapi registry, the
 // account-mode routes, then the lifecycle routes the serve wrapper adds - as api
@@ -932,6 +1000,8 @@ func TestRegisterRouteBaseline(t *testing.T) {
 		"PUT /app/api/v1/signing/config",
 		"GET /app/api/v1/account-mode",
 		"PUT /app/api/v1/account-mode",
+		"GET /app/api/v1/limits/spot-funds-limit-mode",
+		"PUT /app/api/v1/limits/spot-funds-limit-mode",
 		"POST /app/api/v1/service/restart",
 		"GET /app/api/v1/session",
 		"GET /app/api/v1/setup",
@@ -2058,11 +2128,21 @@ func TestRegisterFirstRun(t *testing.T) {
 				t.Fatalf("fresh setup state = %s, want welcome with no encryption decision", rec.Body)
 			}
 			call(http.MethodPut, "/app/api/v1/setup/progress", `{"step":"accounts"}`, http.StatusNoContent)
+			assertNoFundsLimitMode := func() {
+				t.Helper()
+				rec := call(http.MethodGet, "/app/api/v1/limits/spot-funds-limit-mode", "", http.StatusOK)
+				const want = `{"mode":"enforce","stored":false,"accountsWithoutCurrency":[]}`
+				if strings.TrimSpace(rec.Body.String()) != want {
+					t.Fatalf("funds limit mode during setup = %s, want %s", rec.Body, want)
+				}
+			}
+			assertNoFundsLimitMode()
 			rec = call(http.MethodPost, "/app/api/v1/setup/complete",
 				`{"access":"open","acknowledged":true}`, http.StatusConflict)
-			if !strings.Contains(rec.Body.String(), "account mode") ||
-				!strings.Contains(rec.Body.String(), "encryption") {
-				t.Fatalf("completion without decisions = %s, want both missing decisions", rec.Body)
+			for _, name := range []string{"account mode", "funds limit mode", "encryption"} {
+				if !strings.Contains(rec.Body.String(), name) {
+					t.Fatalf("completion without decisions = %s, want missing %s", rec.Body, name)
+				}
 			}
 			accounts := accountmode.Request{Mode: accountmode.ModeMulti}
 			if mode == "open" {
@@ -2123,6 +2203,7 @@ func TestRegisterFirstRun(t *testing.T) {
 			if strings.TrimSpace(rec.Body.String()) != `{"step":"welcome","encryptionDeclinedAt":null}` {
 				t.Fatalf("setup after reset = %s, want welcome with no encryption decision", rec.Body)
 			}
+			assertNoFundsLimitMode()
 		})
 	}
 }
@@ -2304,6 +2385,10 @@ func (e *fakeEngine) ConfigurePolicy(
 	engine.LimitSet,
 ) (engine.PolicyConfigurationResult, error) {
 	return engine.PolicyConfigurationResult{}, nil
+}
+
+func (e *fakeEngine) SetSpotFundsTrackOnly(context.Context, bool) error {
+	return nil
 }
 
 func (*fakeEngine) AddAccountResolverEntry(domain.Account) error { return nil }

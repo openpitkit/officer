@@ -69,10 +69,21 @@ func (n *localNode) listLimits(
 	if err != nil {
 		return AccountLimits{}, fmt.Errorf("list spot funds pnl-bounds limits: %w", err)
 	}
+	var modes []domain.LimitSpotFundsLimitMode
+	if account == "" {
+		mode, stored, err := n.storedSpotFundsLimitModeRow(ctx)
+		if err != nil {
+			return AccountLimits{}, fmt.Errorf("list spot funds limit mode: %w", err)
+		}
+		if stored {
+			modes = append(modes, domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: mode})
+		}
+	}
 	return AccountLimits{
 		RateLimits:               rate,
 		OrderSizeLimits:          orderSize,
 		SpotFundsPnlBoundsLimits: spotFundsPnlBounds,
+		SpotFundsLimitModes:      modes,
 	}, nil
 }
 
@@ -487,10 +498,15 @@ func (n *localNode) resolvedSpotFundsPnlBounds(
 // store on engine-apply failure, and audits the action. It returns a replacement
 // market-data sink only when the policy change had to rebuild the engine. A
 // tighten-only caller is refused outright, since removing a barrier only
-// loosens.
+// loosens. The Spot Funds limit-mode meta-policy is the exception: it has no
+// engine barrier, and its removal restores Enforce, which only tightens
+// (deleteSpotFundsLimitMode).
 func (n *localNode) DeleteLimit(
 	ctx context.Context, target LimitTarget, caller domain.Caller,
 ) (marketdata.Sink, error) {
+	if target.Policy == domain.PolicySpotFundsLimitMode {
+		return nil, n.deleteSpotFundsLimitMode(ctx, target, caller)
+	}
 	if caller.TightenOnly() {
 		return nil, fmt.Errorf(
 			"delete limit: removing a barrier only loosens: %w", domain.ErrLoosening,

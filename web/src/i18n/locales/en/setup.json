@@ -9,6 +9,7 @@
     "steps": {
       "welcome": "Welcome",
       "accounts": "Accounts",
+      "funds": "Funds check",
       "encryption": "Encryption",
       "signing": "Signing",
       "access": "Access",
@@ -29,6 +30,15 @@
     "title": "How many accounts will you use?",
     "lead": "With one account, Officer acts on it only and the panel shows no account fields. The mode can be changed later on the Service page.",
     "saveFirst": "Save the mode to continue."
+  },
+  "funds": {
+    "title": "Check funds before an order?",
+    "lead": "Officer refuses an order that needs more funds than the account holds, or lets it pass and keeps the accounting. Every policy you set applies in both modes. The mode can be changed later on the Policies page.",
+    "chooseFirst": "Choose a mode to continue.",
+    "rail": {
+      "enforce": "On",
+      "track_only": "Off"
+    }
   },
   "encryption": {
     "title": "Seal stored keys with a master key?",

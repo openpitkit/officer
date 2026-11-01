@@ -98,20 +98,22 @@ func TestDeclineEncryptionRefusesSealedDatabase(t *testing.T) {
 	}
 }
 
-func TestCompleteSetupRequiresBothDecisions(t *testing.T) {
+func TestCompleteSetupRequiresEveryDecision(t *testing.T) {
 	for _, mode := range []Mode{ModeOpen, ModeToken} {
 		for _, tc := range []struct {
-			name           string
-			chosen, sealed bool
-			missing        []string
+			name                        string
+			chosen, fundsChosen, sealed bool
+			missing                     []string
 		}{
-			{"both missing", false, false, []string{"account mode", "encryption"}},
-			{"encryption missing", true, false, []string{"encryption"}},
-			{"account mode missing", false, true, []string{"account mode"}},
+			{"all missing", false, false, false, []string{"account mode", "funds limit mode", "encryption"}},
+			{"encryption missing", true, true, false, []string{"encryption"}},
+			{"account mode missing", false, true, true, []string{"account mode"}},
+			{"funds limit mode missing", true, false, true, []string{"funds limit mode"}},
 		} {
 			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
 				h := newSetupHarness(t)
-				h.decisions.chosen, h.decisions.sealed = tc.chosen, tc.sealed
+				h.decisions.chosen, h.decisions.fundsChosen, h.decisions.sealed =
+					tc.chosen, tc.fundsChosen, tc.sealed
 				id, err := h.service.CompleteSetup(panelCtx(), mode, firstPassword, true)
 				if !errors.Is(err, domain.ErrConflict) {
 					t.Fatalf("CompleteSetup = %v, want conflict for missing decisions", err)
@@ -121,7 +123,7 @@ func TestCompleteSetupRequiresBothDecisions(t *testing.T) {
 						t.Errorf("completion conflict = %q, want missing %s", err.Error(), name)
 					}
 				}
-				for _, name := range []string{"account mode", "encryption"} {
+				for _, name := range []string{"account mode", "funds limit mode", "encryption"} {
 					if !slices.Contains(tc.missing, name) && strings.Contains(err.Error(), name) {
 						t.Errorf("completion conflict names already-made decision %s", name)
 					}
@@ -144,6 +146,19 @@ func TestSetupDecisionReadFailure(t *testing.T) {
 	}
 	if h.service.Mode() != ModeSetup || h.store.hasPassword() {
 		t.Fatal("failed account mode read changed access")
+	}
+}
+
+func TestSetupFundsLimitModeReadFailure(t *testing.T) {
+	h := newSetupHarness(t)
+	h.decisions.chosen = true
+	failure := errors.New("funds limit mode unavailable")
+	h.decisions.fundsErr = failure
+	if _, err := h.service.CompleteSetup(panelCtx(), ModeToken, firstPassword, false); !errors.Is(err, failure) {
+		t.Fatalf("CompleteSetup error = %v, want the funds limit mode failure", err)
+	}
+	if h.service.Mode() != ModeSetup || h.store.hasPassword() {
+		t.Fatal("failed funds limit mode read changed access")
 	}
 }
 
@@ -392,21 +407,23 @@ func TestSetupRoutesConflicts(t *testing.T) {
 	router := setupRouter(t, h)
 	call := panelCall{method: "POST", path: "/setup/complete", body: `{"access":"open","acknowledged":true}`}
 	for _, tc := range []struct {
-		chosen, sealed bool
-		missing        []string
+		chosen, fundsChosen, sealed bool
+		missing                     []string
 	}{
-		{false, false, []string{"account mode", "encryption"}},
-		{true, false, []string{"encryption"}},
-		{false, true, []string{"account mode"}},
+		{false, false, false, []string{"account mode", "funds limit mode", "encryption"}},
+		{true, true, false, []string{"encryption"}},
+		{false, true, true, []string{"account mode"}},
+		{true, false, true, []string{"funds limit mode"}},
 	} {
-		h.decisions.chosen, h.decisions.sealed = tc.chosen, tc.sealed
+		h.decisions.chosen, h.decisions.fundsChosen, h.decisions.sealed =
+			tc.chosen, tc.fundsChosen, tc.sealed
 		rec := expectRefusal(t, router, call, 409, "conflict", "")
 		for _, name := range tc.missing {
 			if !strings.Contains(rec.Body.String(), name) {
 				t.Errorf("completion conflict does not name %s", name)
 			}
 		}
-		for _, name := range []string{"account mode", "encryption"} {
+		for _, name := range []string{"account mode", "funds limit mode", "encryption"} {
 			if !slices.Contains(tc.missing, name) && strings.Contains(rec.Body.String(), name) {
 				t.Errorf("completion conflict names already-made decision %s", name)
 			}

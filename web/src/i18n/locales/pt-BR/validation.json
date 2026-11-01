@@ -27,6 +27,7 @@
     },
     "positiveDecimal": "{{kind}} deve ser um número decimal positivo",
     "decimal": "{{kind}} deve ser um número decimal",
+    "mode": "modo de limite de fundos desconhecido",
     "unknown": "tipo desconhecido {{kind}}"
   },
   "limit": {
@@ -45,7 +46,8 @@
     "orderSizeSettlementNoQuantity": "um escopo de ativo de liquidação não pode incluir max_quantity",
     "pnlCurrencyRequired": "{{policy}} exige uma moeda",
     "pnlRequires": "{{policy}} exige lower_bound ou upper_bound",
-    "pnlBoundOrder": "lower_bound deve ser <= upper_bound"
+    "pnlBoundOrder": "lower_bound deve ser <= upper_bound",
+    "modeRequired": "escolha um modo de limite de fundos"
   },
   "password": {
     "mismatch": "As senhas não coincidem."

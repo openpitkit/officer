@@ -699,6 +699,47 @@ func configureSpotFundsPnlBounds(
 	return fwengine.PolicyConfigurationResult{AccountBlocks: blocks}, nil
 }
 
+// SetSpotFundsTrackOnly sets the global Spot Funds limit mode on the live
+// engine: TrackOnly when trackOnly, otherwise Enforce. It runs in an exclusive
+// section under the engine lock, like the P&L-bounds retune.
+func (e *openPitEngine) SetSpotFundsTrackOnly(ctx context.Context, trackOnly bool) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("engine: configure cancelled: %w", err)
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.running {
+		return fmt.Errorf("engine: configure on stopped engine")
+	}
+
+	// Past the cancellation check the change proceeds, so a request cancelled
+	// while the lanes stop does not leave the caller unsure whether the mode
+	// changed.
+	return fwengine.RunExclusive(
+		context.WithoutCancel(ctx), e.async,
+		func(driver asyncengine.Driver) error {
+			return configureSpotFundsLimitMode(driver.Configure(), trackOnly)
+		},
+	)
+}
+
+// configureSpotFundsLimitMode sets the global limit mode of the Spot Funds
+// policy through configurator: TrackOnly when trackOnly, otherwise Enforce.
+// The build and the live change both set the mode through it.
+func configureSpotFundsLimitMode(
+	configurator configure.Configurator, trackOnly bool,
+) error {
+	mode := policies.SpotFundsLimitModeEnforce
+	if trackOnly {
+		mode = policies.SpotFundsLimitModeTrackOnly
+	}
+	if err := configurator.SpotFundsGlobalLimitMode(nameSpotFunds, mode); err != nil {
+		return fmt.Errorf("engine: configure spot funds limit mode: %w", err)
+	}
+	return nil
+}
+
 // AppliedAccountAdjustmentBatch maps the canonical SDK batch result back to
 // the request order without performing another engine operation.
 func (e *openPitEngine) AppliedAccountAdjustmentBatch(
@@ -1074,6 +1115,13 @@ func buildEngine(
 		return nil, nil, nil, nil, false, err
 	}
 	if err := applyBlocks(eng, snap.Accounts); err != nil {
+		return releaseOnErr(err)
+	}
+	// The mode is set on every build, Enforce included, so a rebuild always
+	// matches the stored setting rather than whatever the SDK starts with.
+	if err := configureSpotFundsLimitMode(
+		eng.Configure(), snap.SpotFundsTrackOnly,
+	); err != nil {
 		return releaseOnErr(err)
 	}
 	// Every axis is configured while no account holds anything yet. A rebuilt

@@ -30,7 +30,8 @@ import {
   putSetupProgress,
   type SetupState,
 } from "@/api/setup";
-import type { CredentialStorage } from "@/api/types";
+import { useSpotFundsLimitMode } from "@/api/spotFundsLimitMode";
+import type { CredentialStorage, SpotFundsLimitMode } from "@/api/types";
 import { useCredentialStorage } from "@/api/useCredentialStorage";
 import type { LoadState } from "@/api/usePolling";
 import { ApiError } from "@/framework";
@@ -72,6 +73,10 @@ vi.mock("@/api/accountMode", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/api/accountMode")>()),
   useAccountMode: vi.fn(),
 }));
+vi.mock("@/api/spotFundsLimitMode", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/spotFundsLimitMode")>()),
+  useSpotFundsLimitMode: vi.fn(),
+}));
 vi.mock("@/api/useSigningKeys");
 vi.mock("@/api/useCredentialStorage");
 
@@ -91,6 +96,7 @@ const EXPOSED_SECRETS =
 const TITLES = {
   welcome: "Set up Pit Officer",
   accounts: "How many accounts will you use?",
+  funds: "Check funds before an order?",
   encryption: "Seal stored keys with a master key?",
   signing: "Sign Officer's decisions?",
   access: "Who may use Officer?",
@@ -116,6 +122,23 @@ function mockAccountMode(state: AccountModeState) {
     load: { state: "ready", data: state, error: null },
     reload: vi.fn(),
   });
+}
+
+/**
+ * Makes the funds limit mode poll answer `mode`, with the policy row stored
+ * or not, and returns the poll's reload.
+ */
+function mockFundsMode(mode: SpotFundsLimitMode, stored: boolean) {
+  const reload = vi.fn();
+  vi.mocked(useSpotFundsLimitMode).mockReturnValue({
+    load: {
+      state: "ready",
+      data: { mode, stored, accountsWithoutCurrency: [] },
+      error: null,
+    },
+    reload,
+  });
+  return reload;
 }
 
 function mockStorage(sealed: boolean, resealedSecrets = 0) {
@@ -184,6 +207,7 @@ function renderAtSetup(
   const restartService = vi
     .fn<() => Promise<void>>()
     .mockResolvedValue(undefined);
+  const putLimit = vi.fn().mockResolvedValue(undefined);
   const fetchMock = serving({
     [`GET ${API}/access/tokens/agent`]: () =>
       jsonResponse({ token: AGENT_TOKEN }),
@@ -202,12 +226,13 @@ function renderAtSetup(
       fetch: fetchMock as unknown as typeof fetch,
       api: {
         restartService,
+        putLimit,
         fetchAccounts: vi.fn().mockResolvedValue([]),
         setESignEnabled: vi.fn().mockResolvedValue(undefined),
       },
     },
   );
-  return { restartService };
+  return { restartService, putLimit };
 }
 
 function heading(name: string) {
@@ -286,6 +311,7 @@ beforeEach(async () => {
   // The startup gate loads the scope of a process that runs several accounts.
   setAccountScope({ accounts: true, account: "" });
   mockAccountMode(accountMode());
+  mockFundsMode("enforce", true);
   mockStorage(true);
   mockReady({
     keys: [
@@ -306,8 +332,8 @@ describe("Setup", () => {
     renderSetup({ step: "signing" });
 
     await heading(TITLES.signing);
-    expect(screen.getByText("Step 4 of 7")).toBeInTheDocument();
-    for (const name of ["Welcome", "Accounts", "Encryption"]) {
+    expect(screen.getByText("Step 5 of 8")).toBeInTheDocument();
+    for (const name of ["Welcome", "Accounts", "Funds check", "Encryption"]) {
       expect(railStep(name)).toBeEnabled();
     }
     expect(railStep("Signing")).toHaveAttribute("aria-current", "step");
@@ -315,6 +341,7 @@ describe("Setup", () => {
       expect(railStep(name)).toBeDisabled();
     }
     expect(railStep("Accounts")).toHaveTextContent("Several accounts");
+    expect(railStep("Funds check")).toHaveTextContent(/On$/);
     expect(railStep("Encryption")).toHaveTextContent("Master key");
 
     await user.click(railStep("Encryption"));
@@ -341,11 +368,16 @@ describe("Setup", () => {
     expect(fetchSetup).toHaveBeenCalledTimes(2);
   });
 
-  it("stores the previous step on Back", async () => {
+  it("stores the previous step on Back, past the funds check", async () => {
     const user = userEvent.setup();
     renderSetup({ step: "encryption" });
 
     await heading(TITLES.encryption);
+    await user.click(screen.getByRole("button", { name: "Back" }));
+
+    // The server does not store the funds check as a position.
+    await heading(TITLES.funds);
+    expect(putSetupProgress).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Back" }));
 
     await heading(TITLES.accounts);
@@ -555,7 +587,7 @@ describe("Setup", () => {
         reload.mockReset();
       });
 
-      it("stores the encryption step, then reloads with no restart", async () => {
+      it("stores the accounts step, then reloads with no restart", async () => {
         const user = userEvent.setup();
         mockAccountMode(accountMode({ mode: null, live: true }));
         const write = held();
@@ -567,10 +599,12 @@ describe("Setup", () => {
 
         await saveOneAccount(user);
 
+        // The reload resumes at the accounts step, so the funds check after
+        // it is not skipped.
         await waitFor(() =>
           expect(putSetupProgress).toHaveBeenCalledWith(
             expect.anything(),
-            "encryption",
+            "accounts",
           ),
         );
         expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -589,7 +623,7 @@ describe("Setup", () => {
         expect(putSetupProgress).toHaveBeenCalledTimes(1);
       });
 
-      it("does not reload when storing the encryption step fails", async () => {
+      it("does not reload when storing the accounts step fails", async () => {
         const user = userEvent.setup();
         mockAccountMode(accountMode({ mode: null, live: true }));
         vi.mocked(putSetupProgress).mockRejectedValueOnce(
@@ -608,6 +642,159 @@ describe("Setup", () => {
         expect(reload).not.toHaveBeenCalled();
         expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
       });
+    });
+  });
+
+  describe("funds", () => {
+    const LIMIT = {
+      policy: "spot_funds_limit_mode",
+      scope: "global",
+      account: "",
+      asset: "",
+    };
+
+    /** Opens the funds check from the accounts step, as the wizard reaches it. */
+    async function openFunds(user: UserEvent) {
+      await heading(TITLES.accounts);
+      await user.click(next());
+      await heading(TITLES.funds);
+    }
+
+    it("preselects no mode and keeps Continue disabled until one is picked", async () => {
+      const user = userEvent.setup();
+      mockFundsMode("enforce", false);
+      renderSetup({ step: "accounts" });
+
+      await openFunds(user);
+      expect(putSetupProgress).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("radio", { name: /^Check funds/ }),
+      ).not.toBeChecked();
+      expect(
+        screen.getByRole("radio", { name: /^Accounting without blocking/ }),
+      ).not.toBeChecked();
+      expect(next()).toBeDisabled();
+      expect(
+        screen.getByText("Choose a mode to continue."),
+      ).toBeInTheDocument();
+      expect(railStep("Funds check")).not.toHaveTextContent(/(On|Off)$/);
+
+      await user.click(
+        screen.getByRole("radio", { name: /^Accounting without blocking/ }),
+      );
+
+      expect(next()).toBeEnabled();
+      expect(screen.getByText("Change later: Policies")).toBeInTheDocument();
+    });
+
+    it("stores the picked mode on Continue, then the encryption step", async () => {
+      const user = userEvent.setup();
+      const reload = mockFundsMode("enforce", false);
+      const { putLimit } = renderSetup({ step: "accounts" });
+
+      await openFunds(user);
+      await user.click(
+        screen.getByRole("radio", { name: /^Accounting without blocking/ }),
+      );
+      await user.click(next());
+
+      await heading(TITLES.encryption);
+      expect(putLimit).toHaveBeenCalledTimes(1);
+      expect(putLimit).toHaveBeenCalledWith(
+        { ...LIMIT, values: { mode: "track_only" } },
+        "reject",
+      );
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(putSetupProgress).toHaveBeenCalledTimes(1);
+      expect(putSetupProgress).toHaveBeenCalledWith(
+        expect.anything(),
+        "encryption",
+      );
+    });
+
+    it("stores Check funds when it is picked over no stored row", async () => {
+      const user = userEvent.setup();
+      mockFundsMode("enforce", false);
+      const { putLimit } = renderSetup({ step: "accounts" });
+
+      await openFunds(user);
+      await user.click(screen.getByRole("radio", { name: /^Check funds/ }));
+      await user.click(next());
+
+      await heading(TITLES.encryption);
+      expect(putLimit).toHaveBeenCalledWith(
+        { ...LIMIT, values: { mode: "enforce" } },
+        "reject",
+      );
+    });
+
+    it("stays when the save fails and shows the error", async () => {
+      const user = userEvent.setup();
+      mockFundsMode("enforce", false);
+      const { putLimit } = renderSetup({ step: "accounts" });
+      putLimit.mockRejectedValueOnce(
+        new ApiError("store write rejected", "internal", 500),
+      );
+
+      await openFunds(user);
+      await user.click(screen.getByRole("radio", { name: /^Check funds/ }));
+      await user.click(next());
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "store write rejected",
+      );
+      expect(
+        screen.getByRole("heading", { level: 1, name: TITLES.funds }),
+      ).toBeInTheDocument();
+      expect(putSetupProgress).not.toHaveBeenCalled();
+    });
+
+    it("shows the stored mode and moves on without storing it again", async () => {
+      const user = userEvent.setup();
+      mockFundsMode("track_only", true);
+      const { putLimit } = renderSetup({ step: "accounts" });
+
+      await openFunds(user);
+      expect(
+        screen.getByRole("radio", { name: /^Accounting without blocking/ }),
+      ).toBeChecked();
+      // The rail answers the step's question: the funds check is off.
+      expect(railStep("Funds check")).toHaveTextContent(/Off$/);
+      await user.click(next());
+
+      await heading(TITLES.encryption);
+      expect(putLimit).not.toHaveBeenCalled();
+    });
+
+    it("stores the other mode picked over a stored one", async () => {
+      const user = userEvent.setup();
+      mockFundsMode("track_only", true);
+      const { putLimit } = renderSetup({ step: "accounts" });
+
+      await openFunds(user);
+      await user.click(screen.getByRole("radio", { name: /^Check funds/ }));
+      await user.click(next());
+
+      await heading(TITLES.encryption);
+      expect(putLimit).toHaveBeenCalledTimes(1);
+      expect(putLimit).toHaveBeenCalledWith(
+        { ...LIMIT, values: { mode: "enforce" } },
+        "reject",
+      );
+    });
+
+    it("shows a failed load and no cards", async () => {
+      const user = userEvent.setup();
+      vi.mocked(useSpotFundsLimitMode).mockReturnValue({
+        load: { state: "error", data: null, error: "database is locked" },
+        reload: vi.fn(),
+      });
+      renderSetup({ step: "accounts" });
+
+      await openFunds(user);
+      expect(screen.getByText("database is locked")).toBeInTheDocument();
+      expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+      expect(next()).toBeDisabled();
     });
   });
 
@@ -1132,7 +1319,13 @@ describe("Setup", () => {
     renderSetup({ step: "access" });
 
     await finishWithToken(user);
-    for (const name of ["Welcome", "Accounts", "Encryption", "Signing"]) {
+    for (const name of [
+      "Welcome",
+      "Accounts",
+      "Funds check",
+      "Encryption",
+      "Signing",
+    ]) {
       expect(railStep(name)).toBeDisabled();
     }
     expect(
@@ -1141,10 +1334,11 @@ describe("Setup", () => {
     await user.click(screen.getByRole("button", { name: "Connect later" }));
 
     await heading(TITLES.done);
-    expect(screen.getByText("Step 7 of 7")).toBeInTheDocument();
+    expect(screen.getByText("Step 8 of 8")).toBeInTheDocument();
     for (const name of [
       "Welcome",
       "Accounts",
+      "Funds check",
       "Encryption",
       "Signing",
       "Access",
@@ -1157,6 +1351,9 @@ describe("Setup", () => {
       screen.getByRole("row", {
         name: "Accounts Several accounts Service › Account mode",
       }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("row", { name: "Funds check Check funds Policies" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("row", {
@@ -1189,6 +1386,7 @@ describe("SetupReview", () => {
   const STEPS = [
     "Welcome",
     "Accounts",
+    "Funds check",
     "Encryption",
     "Signing",
     "Access",
@@ -1208,7 +1406,7 @@ describe("SetupReview", () => {
     renderReview("open");
 
     await heading(TITLES.welcome);
-    expect(screen.getByText("Step 1 of 7")).toBeInTheDocument();
+    expect(screen.getByText("Step 1 of 8")).toBeInTheDocument();
     expect(
       screen.queryByText("Officer is closed until setup is finished"),
     ).not.toBeInTheDocument();
@@ -1231,6 +1429,7 @@ describe("SetupReview", () => {
       expect(railStep(name, GUIDE)).toBeEnabled();
     }
     expect(railStep("Accounts", GUIDE)).toHaveTextContent("Several accounts");
+    expect(railStep("Funds check", GUIDE)).toHaveTextContent(/On$/);
     expect(railStep("Encryption", GUIDE)).toHaveTextContent("Master key");
     expect(railStep("Signing", GUIDE)).toHaveTextContent("On");
     expect(railStep("Access", GUIDE)).toHaveTextContent("No token");
@@ -1249,6 +1448,7 @@ describe("SetupReview", () => {
     await user.click(next());
     for (const title of [
       TITLES.accounts,
+      TITLES.funds,
       TITLES.encryption,
       TITLES.signing,
       TITLES.access,
@@ -1262,6 +1462,31 @@ describe("SetupReview", () => {
     expect(
       screen.getAllByRole("button", { name: "Open the panel" }),
     ).toHaveLength(1);
+    expectNoSetupRequest();
+  });
+
+  it("shows the funds mode in force with the choice locked", async () => {
+    const user = userEvent.setup();
+    // A database set up before the funds check has no row: Check funds holds.
+    mockFundsMode("enforce", false);
+    const { putLimit } = renderReview("open");
+
+    await heading(TITLES.welcome);
+    expect(railStep("Funds check", GUIDE)).toHaveTextContent(/On$/);
+    await user.click(railStep("Funds check", GUIDE));
+
+    await heading(TITLES.funds);
+    const enforce = screen.getByRole("radio", { name: /^Check funds/ });
+    expect(enforce).toBeChecked();
+    expect(enforce).toBeDisabled();
+    expect(
+      screen.getByRole("radio", { name: /^Accounting without blocking/ }),
+    ).toBeDisabled();
+    expect(screen.getByText("Change later: Policies")).toBeInTheDocument();
+    await user.click(next());
+
+    await heading(TITLES.encryption);
+    expect(putLimit).not.toHaveBeenCalled();
     expectNoSetupRequest();
   });
 
@@ -1496,7 +1721,7 @@ describe("SetupReview", () => {
     ).toBeInTheDocument();
     await user.click(next());
 
-    await heading(TITLES.encryption);
+    await heading(TITLES.funds);
     expectNoSetupRequest();
   });
 
@@ -1504,7 +1729,7 @@ describe("SetupReview", () => {
     renderReview("open", {}, "/setup#security");
 
     await heading(TITLES.access);
-    expect(screen.getByText("Step 5 of 7")).toBeInTheDocument();
+    expect(screen.getByText("Step 6 of 8")).toBeInTheDocument();
   });
 
   it("embeds the access section of Service › Security", async () => {

@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 
 	"go.openpit.dev/officer/framework/domain"
 )
@@ -75,6 +76,14 @@ func (r *memoryRealm) GetSetting(
 
 func (r *memoryRealm) SetSetting(_ context.Context, key, value string) error {
 	r.settings[key] = value
+	return nil
+}
+
+func (r *memoryRealm) DeleteSetting(_ context.Context, key string) error {
+	if _, ok := r.settings[key]; !ok {
+		return fmt.Errorf("setting %q: %w", key, domain.ErrNotFound)
+	}
+	delete(r.settings, key)
 	return nil
 }
 

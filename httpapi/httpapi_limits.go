@@ -26,6 +26,45 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
+// handleGetSpotFundsLimitMode handles GET /api/v1/limits/spot-funds-limit-mode.
+func handleGetSpotFundsLimitMode(svc backend.ControlPlane) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		state, err := svc.SpotFundsLimitMode(r.Context())
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, httpx.ToSpotFundsLimitModeDTO(state))
+	}
+}
+
+// handlePutSpotFundsLimitMode handles PUT /api/v1/limits/spot-funds-limit-mode.
+// The body is the Spot Funds limit-mode meta-policy, global only; the backend
+// validates and sets it. It has no account axis, so there is no missingAccount
+// query parameter.
+func handlePutSpotFundsLimitMode(svc backend.ControlPlane) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req httpx.SpotFundsLimitModeLimitDTO
+		if !httpx.DecodeBody(w, r, &req) {
+			return
+		}
+		limit := httpx.FromSpotFundsLimitModeLimitDTO(req)
+		if err := svc.PutSpotFundsLimitMode(r.Context(), limit); err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		persisted, err := httpx.PersistedSpotFundsLimitMode(r.Context(), svc)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		stored := httpx.ToSpotFundsLimitModeLimitDTO(persisted)
+		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{
+			SpotFundsLimitMode: &stored,
+		})
+	}
+}
+
 func handleListLimits(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := policyListFilterFromQuery(r.URL.Query())

@@ -759,6 +759,10 @@ func (e *fakeEngine) ConfigurePolicy(
 	return engine.PolicyConfigurationResult{}, nil
 }
 
+func (e *fakeEngine) SetSpotFundsTrackOnly(context.Context, bool) error {
+	return nil
+}
+
 func (*fakeEngine) AddAccountResolverEntry(domain.Account) error { return nil }
 func (*fakeEngine) AddAssetResolverEntry(domain.Asset) error     { return nil }
 func (*fakeEngine) AddGroupResolverEntry(domain.AccountGroup) error {
@@ -909,5 +913,13 @@ func (s *customHostSource) PutOrderSizeLimit(ctx context.Context, limit domain.L
 }
 
 func (s *customHostSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *customHostSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
+	return domain.SpotFundsLimitModeState{}, domain.ErrNotImplemented
+}
+
+func (s *customHostSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
 	return domain.ErrNotImplemented
 }

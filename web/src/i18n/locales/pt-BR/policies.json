@@ -1,4 +1,21 @@
 {
+  "spotFundsMode": {
+    "modes": {
+      "enforce": {
+        "title": "Verificar fundos",
+        "description": "Uma ordem que exige mais fundos do que a conta possui é rejeitada. Ao voltar para este modo, os saldos são mantidos como estão, inclusive os negativos, e as ordens que exigem fundos contra eles são rejeitadas."
+      },
+      "track_only": {
+        "title": "Contabilidade sem bloqueios",
+        "description": "As ordens são aceitas a partir de zero e contabilizadas; apenas a rejeição por fundos insuficientes deixa de valer. Os saldos e as posições podem ficar negativos. A contabilidade e todas as políticas que você definir - pisos e tetos de P&L, frequência e tamanho de ordem - continuam funcionando e continuam interrompendo a negociação. A contabilidade começa em zero - apenas as ordens que passam pelo Officer contam; as posições da plataforma não são importadas."
+      }
+    },
+    "loadError": "Não foi possível carregar o modo de limites de Spot Funds",
+    "withoutCurrency": {
+      "title": "Pisos e tetos de P&L bloqueiam contas sem moeda",
+      "detail": "Um piso ou teto de P&L bloqueia estas contas porque elas não têm moeda e seu P&L não pode ser calculado. Defina uma moeda na conta ou no grupo dela."
+    }
+  },
   "title": "Políticas",
   "intro": "Barreiras relacionais de políticas de risco, mantidas no plano de controle e aplicadas ao motor OpenPit por política. Cada linha é uma barreira para um alvo.",
   "addPolicy": "Adicionar política",
@@ -78,6 +95,7 @@
     "rateLimitFootnote": "Tanto o máx. de ordens quanto a janela são obrigatórios.",
     "atLeastOneFootnote": "É necessário pelo menos um valor.",
     "pnlBoundsFootnote": "São necessários a moeda e pelo menos um piso ou teto de P&L.",
+    "modeFootnote": "É necessário escolher um modo.",
     "fxFailSafeNote": "Proteção contra falha de FX: uma conta sob controle de P&L é bloqueada quando falta um dado obrigatório, por exemplo uma cotação FX necessária para avaliar o P&L realizado na moeda da conta. FX só é exigido quando necessário, não para ativos que já estão na moeda da conta nem para contas fora do controle de P&L.",
     "positionFailSafeNote": "Proteção contra falha de preço: uma conta sob controle de P&L é bloqueada quando falta um dado obrigatório, por exemplo o preço atual de um ativo em carteira ou uma cotação FX necessária para avaliar a posição aberta na moeda da conta. FX só é exigido quando necessário, não para ativos que já estão na moeda da conta nem para contas fora do controle de P&L.",
     "save": "Salvar"

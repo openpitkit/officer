@@ -19,6 +19,7 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -33,6 +34,7 @@ import (
 	fwengine "go.openpit.dev/officer/framework/engine"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/accountmode"
 )
@@ -199,6 +201,7 @@ func TestSetLimitRateOnControlPlane(t *testing.T) {
 		"spotFundsPnlBoundsLimits":           []any{},
 		"spotFundsUnrealizedPnlBoundsLimits": []any{},
 		"spotFundsTotalPnlBoundsLimits":      []any{},
+		"spotFundsLimitModes":                []any{},
 	}})
 }
 
@@ -509,6 +512,251 @@ func TestSetLimitDisabledChangesNothing(t *testing.T) {
 		t.Fatalf("switch off set_limit: %v", err)
 	}
 	disabled(broker(5), stored)
+}
+
+// requireSpotFundsLimitMode fails the test unless the service stores want as
+// the Spot Funds limit mode.
+func requireSpotFundsLimitMode(t *testing.T, service *backend.Service, want domain.SpotFundsLimitMode) {
+	t.Helper()
+	state, err := service.SpotFundsLimitMode(systemCtx())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Mode != want {
+		t.Fatalf("stored Spot Funds limit mode = %q, want %q", state.Mode, want)
+	}
+}
+
+// putSpotFundsLimitMode sets the Spot Funds limit-mode meta-policy as the
+// operator.
+func putSpotFundsLimitMode(t *testing.T, service *backend.Service, mode domain.SpotFundsLimitMode) {
+	t.Helper()
+	if err := service.PutSpotFundsLimitMode(systemCtx(), domain.LimitSpotFundsLimitMode{
+		Scope: domain.ScopeGlobal, Mode: mode,
+	}); err != nil {
+		t.Fatalf("put Spot Funds limit mode %s: %v", mode, err)
+	}
+}
+
+// spotFundsLimitModeDriver drives set_limit with the spot_funds_limit_mode
+// policy and reads the meta-policy back from the unified policy list, where
+// it is one global row while a mode is stored.
+func spotFundsLimitModeDriver(
+	t *testing.T, service *backend.Service, src frameworkmcp.Source,
+) setLimitDriver[domain.LimitSpotFundsLimitMode] {
+	return setLimitDriver[domain.LimitSpotFundsLimitMode]{
+		t: t, src: src,
+		stored: func() []domain.LimitSpotFundsLimitMode {
+			kind := store.PolicyKindSpotFundsLimitMode
+			page, err := service.ListPolicyRows(systemCtx(), store.PolicyListFilter{Kind: &kind})
+			if err != nil {
+				t.Fatalf("list policy rows: %v", err)
+			}
+			var out []domain.LimitSpotFundsLimitMode
+			for _, row := range page.Rows {
+				out = append(out, *row.SpotFundsLimitMode)
+			}
+			return out
+		},
+		body: func(limit domain.LimitSpotFundsLimitMode) map[string]any {
+			return map[string]any{"spotFundsLimitMode": httpx.ToSpotFundsLimitModeLimitDTO(limit)}
+		},
+	}
+}
+
+// spotFundsLimitModeIn is the set_limit arguments for the meta-policy.
+func spotFundsLimitModeIn(mode string) map[string]any {
+	return map[string]any{"policy": "spot_funds_limit_mode", "scope": "global", "mode": mode}
+}
+
+// TestGetSpotFundsLimitModeOnControlPlane drives get_spot_funds_limit_mode
+// through the control-plane Source of a service: it requires enforce on a
+// fresh service and track_only after the operator changes the mode, with no
+// accounts blocked for want of a currency in either response.
+func TestGetSpotFundsLimitModeOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	for _, mode := range []domain.SpotFundsLimitMode{
+		domain.SpotFundsLimitModeEnforce, domain.SpotFundsLimitModeTrackOnly,
+	} {
+		if mode == domain.SpotFundsLimitModeTrackOnly {
+			putSpotFundsLimitMode(t, service, mode)
+		}
+		wire := callToolOK(t, src, "get_spot_funds_limit_mode", map[string]any{})
+		// The fresh service stores no row; the operator's change stores one.
+		assertResultBody(t, wire, map[string]any{
+			"mode":                    string(mode),
+			"stored":                  mode == domain.SpotFundsLimitModeTrackOnly,
+			"accountsWithoutCurrency": []string{},
+		})
+	}
+}
+
+// TestSetLimitSpotFundsLimitModeOnControlPlane drives set_limit with the
+// spot_funds_limit_mode policy through the control-plane Source of a service,
+// as an agent. On a fresh service the agent may store enforce, the mode an
+// absent row already means; after the operator stores track_only the agent's
+// switch back to enforce succeeds, answers REST's body and is listed as the
+// one global row, which get_limits carries beside the other barriers.
+func TestSetLimitSpotFundsLimitModeOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	mode := spotFundsLimitModeDriver(t, service, src)
+	const text = "spot_funds_limit_mode global set"
+	enforce := domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce}
+
+	mode.accepts(spotFundsLimitModeIn("enforce"), text, enforce)
+	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
+	mode.accepts(spotFundsLimitModeIn("enforce"), text, enforce)
+	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
+
+	wire := callToolOK(t, src, "get_limits", map[string]any{})
+	assertResultBody(t, wire, map[string]any{"limits": map[string]any{
+		"rateLimits":                         []any{},
+		"orderSizeLimits":                    []any{},
+		"spotFundsPnlBoundsLimits":           []any{},
+		"spotFundsUnrealizedPnlBoundsLimits": []any{},
+		"spotFundsTotalPnlBoundsLimits":      []any{},
+		"spotFundsLimitModes":                []httpx.SpotFundsLimitModeLimitDTO{httpx.ToSpotFundsLimitModeLimitDTO(enforce)},
+	}})
+}
+
+// TestSetLimitSpotFundsLimitModeRefusesLooseningOnControlPlane drives
+// set_limit with the spot_funds_limit_mode policy through the control-plane
+// Source of a service: the core refuses an agent's switch from enforce to
+// track_only with loosening_refused, both with no row stored and with enforce
+// stored, and the mode stays enforce. This is the tighten-only registry's
+// proof that set_limit cannot loosen the mode.
+func TestSetLimitSpotFundsLimitModeRefusesLooseningOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	mode := spotFundsLimitModeDriver(t, service, src)
+	mode.refuses(spotFundsLimitModeIn("track_only"), "loosening_refused")
+	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
+
+	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
+	enforce := domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce}
+	mode.refuses(spotFundsLimitModeIn("track_only"), "loosening_refused", enforce)
+	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
+}
+
+// TestSetLimitSpotFundsLimitModeRefusesInvalidOnControlPlane drives set_limit
+// with the spot_funds_limit_mode policy through the control-plane Source of a
+// service: an unsupported or absent mode and a scope other than global return
+// the core's validation errors, every field the meta-policy does not carry -
+// an axis or another policy's value, sent empty as well - is refused by the
+// tool, the mode field is refused for every other policy, and none of the
+// calls stores a row.
+func TestSetLimitSpotFundsLimitModeRefusesInvalidOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	mode := spotFundsLimitModeDriver(t, service, src)
+	unsupported := callTool[map[string]any](t, src, "set_limit", spotFundsLimitModeIn("unsupported"))
+	requireToolError(t, unsupported.IsError)
+	if text := textContent(unsupported.Content); text != `validation: mode "unsupported" must be "enforce" or "track_only": invalid` {
+		t.Fatalf("unsupported mode = %q, want core validation naming the mode", text)
+	}
+	absent := spotFundsLimitModeIn("")
+	delete(absent, "mode")
+	missing := callTool[map[string]any](t, src, "set_limit", absent)
+	requireToolError(t, missing.IsError)
+	if text := textContent(missing.Content); text != "validation: mode is required: invalid" {
+		t.Fatalf("absent mode = %q, want core refusal of required mode", text)
+	}
+	for _, scope := range []any{"account", "broker", ""} {
+		args := spotFundsLimitModeIn("enforce")
+		args["scope"] = scope
+		mode.refuses(args, "validation")
+	}
+	for _, field := range []string{
+		"account", "asset", "accountGroup", "windowMs", "maxOrders",
+		"maxQuantity", "maxNotional", "currency", "lowerBound", "upperBound",
+	} {
+		values := []any{"1", ""}
+		if field == "windowMs" || field == "maxOrders" {
+			values = []any{1, 0}
+		}
+		for _, value := range values {
+			args := spotFundsLimitModeIn("enforce")
+			args[field] = value
+			res := callTool[map[string]any](t, src, "set_limit", args)
+			want := "validation: " + field + " is not a field of policy spot_funds_limit_mode"
+			if text := textContent(res.Content); !res.IsError || !strings.HasPrefix(text, want) {
+				t.Fatalf("set_limit with %s=%v = %q (tool error %t), want %q", field, value, text, res.IsError, want)
+			}
+		}
+	}
+	for _, in := range []map[string]any{
+		{"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 10, "mode": "enforce"},
+		{"policy": "order_size_limit", "scope": "broker", "maxQuantity": "5", "mode": ""},
+	} {
+		res := callTool[map[string]any](t, src, "set_limit", in)
+		if text := textContent(res.Content); !res.IsError ||
+			!strings.HasPrefix(text, "validation: mode is not a field of policy "+in["policy"].(string)) {
+			t.Fatalf("set_limit %v = %q (tool error %t), want mode refused", in, text, res.IsError)
+		}
+	}
+	if got := mode.stored(); len(got) != 0 {
+		t.Fatalf("refused calls stored %+v, want no row", got)
+	}
+	requireNoLimits(t, service)
+}
+
+// TestSetLimitSpotFundsLimitModeDisabledChangesNothing drives set_limit with
+// the spot_funds_limit_mode policy through the control-plane Source of a
+// service as it ships and after the operator enables the tool, uses it and
+// disables it again: each disabled switch from track_only to enforce returns
+// the panel's notice as a tool error and leaves track_only stored.
+func TestSetLimitSpotFundsLimitModeDisabledChangesNothing(t *testing.T) {
+	t.Parallel()
+	target, _ := newLocalNode(t)
+	service := newOfficerService(t, target, nil, nil)
+	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
+	src := frameworkmcp.SourceFor(service)
+	res := callTool[map[string]any](t, src, "set_limit", spotFundsLimitModeIn("enforce"))
+	requireDisabledNotice(t, res.IsError, res.Content, "set_limit")
+	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
+
+	if err := service.SetMcpAccess(systemCtx(), "set_limit", true); err != nil {
+		t.Fatal(err)
+	}
+	wire := callToolOK(t, src, "set_limit", spotFundsLimitModeIn("enforce"))
+	assertResultBody(t, wire, map[string]any{
+		"spotFundsLimitMode": map[string]any{"scope": "global", "mode": "enforce"},
+	})
+	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
+	if err := service.SetMcpAccess(systemCtx(), "set_limit", false); err != nil {
+		t.Fatal(err)
+	}
+	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
+	res = callTool[map[string]any](t, src, "set_limit", spotFundsLimitModeIn("enforce"))
+	requireDisabledNotice(t, res.IsError, res.Content, "set_limit")
+	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
+}
+
+// TestDeleteSpotFundsLimitModeOnControlPlane removes the meta-policy row
+// through the service as an agent would reach it: a tighten-only caller may
+// remove a stored track_only, which restores enforce and lists no row, and a
+// second removal answers like an absent barrier.
+func TestDeleteSpotFundsLimitModeOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	mode := spotFundsLimitModeDriver(t, service, src)
+	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
+	agent := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourceMCP, Principal: domain.PrincipalOperator,
+	})
+	target := node.LimitTarget{Policy: domain.PolicySpotFundsLimitMode, Scope: domain.ScopeGlobal}
+	if err := service.DeleteLimit(agent, target); err != nil {
+		t.Fatalf("agent delete of the mode row: %v", err)
+	}
+	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
+	if got := mode.stored(); len(got) != 0 {
+		t.Fatalf("rows after delete = %+v, want none", got)
+	}
+	if err := service.DeleteLimit(agent, target); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("second delete = %v, want ErrNotFound", err)
+	}
 }
 
 // oneAccountControlPlaneTools builds the Officer service over a local node in

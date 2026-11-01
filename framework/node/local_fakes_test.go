@@ -101,6 +101,12 @@ type fakeEngine struct {
 	configureErr  error
 	accountPnlErr error
 
+	// spotFundsTrackOnlyCalls records every successful SetSpotFundsTrackOnly
+	// argument in order; spotFundsTrackOnlyErr, when set, is returned instead
+	// and records nothing.
+	spotFundsTrackOnlyCalls []bool
+	spotFundsTrackOnlyErr   error
+
 	failConfigure          bool
 	failAdjustment         bool
 	failSubmit             bool
@@ -890,6 +896,14 @@ func (e *fakeEngine) ConfigurePolicy(
 	return engine.PolicyConfigurationResult{
 		AccountBlocks: e.configureBlocks,
 	}, nil
+}
+
+func (e *fakeEngine) SetSpotFundsTrackOnly(_ context.Context, trackOnly bool) error {
+	if e.spotFundsTrackOnlyErr != nil {
+		return e.spotFundsTrackOnlyErr
+	}
+	e.spotFundsTrackOnlyCalls = append(e.spotFundsTrackOnlyCalls, trackOnly)
+	return nil
 }
 
 func (e *fakeEngine) materializeFakeAccountAdjustmentBatch(

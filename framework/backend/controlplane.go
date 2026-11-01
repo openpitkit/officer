@@ -115,6 +115,18 @@ type ControlPlane interface {
 		limit domain.LimitSpotFundsPnlBounds,
 		missing domain.MissingAccountPolicy,
 	) error
+	// SpotFundsLimitMode returns the effective global mode and the visible
+	// accounts without an effective currency to which a Spot Funds P&L bound
+	// applies, under the caller resolved from ctx.
+	SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error)
+	// PutSpotFundsLimitMode sets the Spot Funds limit-mode meta-policy
+	// (domain.PolicySpotFundsLimitMode, global only) under the caller resolved
+	// from ctx. A tighten-only caller is refused Enforce to TrackOnly with
+	// domain.ErrLoosening.
+	PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error
+	// DeleteLimit removes the addressed barrier under the caller resolved from
+	// ctx. Removing the Spot Funds limit-mode meta-policy restores Enforce and
+	// is allowed to a tighten-only caller.
 	DeleteLimit(ctx context.Context, target node.LimitTarget) error
 	ListAudit(ctx context.Context, count int) ([]domain.AuditRow, error)
 	ListAuditFiltered(
@@ -129,7 +141,9 @@ type ControlPlane interface {
 	// SetSetting upserts one realm-wide setting under the caller resolved from
 	// ctx. The key is a code constant owned by one consumer, never client
 	// input; domain.SettingKeyNoESign is reserved for the signing configuration
-	// (SetNoESign) and is refused here.
+	// (SetNoESign), and domain.SettingKeySpotFundsLimitMode for the Spot Funds
+	// limit-mode meta-policy (PutSpotFundsLimitMode, DeleteLimit). Both are
+	// refused here.
 	SetSetting(ctx context.Context, key, value string) error
 	CommandEnabled(ctx context.Context, command string) (bool, error)
 	ListMarketData(ctx context.Context) (MarketDataStatus, error)

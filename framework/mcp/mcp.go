@@ -219,6 +219,14 @@ type Source interface {
 		limit domain.LimitSpotFundsPnlBounds,
 		missing domain.MissingAccountPolicy,
 	) error
+	// SpotFundsLimitMode returns the global Spot Funds limit mode and the
+	// visible accounts a P&L bound blocks for want of a currency.
+	SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error)
+	// PutSpotFundsLimitMode sets the Spot Funds limit-mode meta-policy
+	// (domain.PolicySpotFundsLimitMode, global only) live. A tighten-only
+	// caller (an agent) is refused the switch from enforce to track_only with
+	// domain.ErrLoosening.
+	PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error
 	// ListAudit returns the most recent n audit rows.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
 	// ListAuditFiltered returns the most recent n audit rows matching the filter.
@@ -1059,6 +1067,14 @@ func (s controlPlaneSource) PutSpotFundsPnlBoundsLimit(
 	missing domain.MissingAccountPolicy,
 ) error {
 	return s.cp.PutSpotFundsPnlBoundsLimit(ctx, limit, missing)
+}
+
+func (s controlPlaneSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
+	return s.cp.SpotFundsLimitMode(ctx)
+}
+
+func (s controlPlaneSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
+	return s.cp.PutSpotFundsLimitMode(ctx, limit)
 }
 
 func (s controlPlaneSource) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error) {

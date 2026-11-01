@@ -269,6 +269,47 @@ func TestValidateAdjustmentType(t *testing.T) {
 	}
 }
 
+// TestValidateSettingWriteKey pins which keys the generic realm-setting writer
+// refuses: an empty key, and each key reserved for its owner's dedicated path,
+// named in the refusal. Every other key stays writable.
+func TestValidateSettingWriteKey(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"example_key", "spot_funds", "no_esign_extra"} {
+		if err := domain.ValidateSettingWriteKey(key); err != nil {
+			t.Errorf("ValidateSettingWriteKey(%q) = %v, want nil", key, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		key        string
+		constraint string
+		want       string
+	}{
+		{"", "required", "setting key is empty"},
+		{domain.SettingKeyNoESign, "reserved", "the signing configuration"},
+		// The wire key itself, so a renamed constant cannot slip past.
+		{"spot_funds_limit_mode", "reserved", "the Spot Funds limit-mode configuration"},
+	} {
+		t.Run("err/"+tc.key, func(t *testing.T) {
+			t.Parallel()
+			err := domain.ValidateSettingWriteKey(tc.key)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ValidateSettingWriteKey(%q) = %v, want ErrInvalid", tc.key, err)
+			}
+			if got := domain.ValidationPointer(err); got != "/key" {
+				t.Fatalf("ValidationPointer = %q, want %q", got, "/key")
+			}
+			if got := domain.ValidationConstraint(err); got != tc.constraint {
+				t.Fatalf("ValidationConstraint = %q, want %q", got, tc.constraint)
+			}
+			if msg := err.Error(); !strings.Contains(msg, tc.want) {
+				t.Fatalf("error %q does not contain %q", msg, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateTitle(t *testing.T) {
 	t.Parallel()
 

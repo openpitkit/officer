@@ -30,8 +30,9 @@ import (
 	"go.openpit.dev/officer/internal/apitest"
 )
 
-// CompleteOpen chooses accounts and encryption, then completes setup in open
-// mode. A sealed database already has its encryption decision.
+// CompleteOpen chooses accounts, the funds limit mode and encryption, then
+// completes setup in open mode. A sealed database already has its encryption
+// decision.
 func CompleteOpen(t testing.TB, handler http.Handler, accounts accountmode.Request, sealed bool) {
 	t.Helper()
 	decide(t, handler, accounts, sealed)
@@ -40,7 +41,8 @@ func CompleteOpen(t testing.TB, handler http.Handler, accounts accountmode.Reque
 }
 
 // CompleteToken completes setup in token mode and returns the issued session
-// cookie. It chooses accounts and declines encryption on an unsealed database.
+// cookie. It chooses accounts and the funds limit mode, and declines encryption
+// on an unsealed database.
 func CompleteToken(
 	t testing.TB, handler http.Handler, accounts accountmode.Request, password string,
 ) *http.Cookie {
@@ -67,6 +69,10 @@ func decide(t testing.TB, handler http.Handler, accounts accountmode.Request, se
 		t.Fatal(err)
 	}
 	request(t, handler, http.MethodPut, "/account-mode", string(body), http.StatusOK)
+	// Enforce is the mode a database without the row runs in, so choosing it
+	// keeps the behaviour the tests expect.
+	request(t, handler, http.MethodPut, "/limits/spot-funds-limit-mode",
+		`{"scope":"global","mode":"enforce"}`, http.StatusOK)
 	if !sealed {
 		request(t, handler, http.MethodPut, "/setup/encryption",
 			`{"encryption":"none","acknowledged":true}`, http.StatusNoContent)

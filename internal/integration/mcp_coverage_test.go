@@ -405,3 +405,11 @@ func (s *setMDErrSource) PutOrderSizeLimit(ctx context.Context, limit domain.Lim
 func (s *setMDErrSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
+
+func (s *setMDErrSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
+	return domain.SpotFundsLimitModeState{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
+	return domain.ErrNotImplemented
+}

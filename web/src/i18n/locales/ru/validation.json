@@ -27,6 +27,7 @@
     },
     "positiveDecimal": "{{kind}} должен быть положительным десятичным числом",
     "decimal": "{{kind}} должен быть десятичным числом",
+    "mode": "неизвестный режим лимита средств",
     "unknown": "неизвестный тип {{kind}}"
   },
   "limit": {
@@ -45,7 +46,8 @@
     "orderSizeSettlementNoQuantity": "скоп расчётного актива не должен содержать max_quantity",
     "pnlCurrencyRequired": "{{policy}} требует указать валюту",
     "pnlRequires": "{{policy}} требует lower_bound или upper_bound",
-    "pnlBoundOrder": "lower_bound должен быть <= upper_bound"
+    "pnlBoundOrder": "lower_bound должен быть <= upper_bound",
+    "modeRequired": "выберите режим лимита средств"
   },
   "password": {
     "mismatch": "Пароли не совпадают."

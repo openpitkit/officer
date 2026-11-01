@@ -23,6 +23,7 @@ import {
   useState,
 } from "react";
 import type { KeyboardEvent } from "react";
+import type { TFunction } from "i18next";
 import { ExternalLink, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -35,6 +36,7 @@ import type {
   SortOrder,
 } from "@/api/types";
 import { useLimitsPage } from "@/api/useLimits";
+import { useSpotFundsLimitMode } from "@/api/spotFundsLimitMode";
 import { isSpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
 import {
   getPolicyCatalogEntry,
@@ -50,6 +52,7 @@ import {
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
+import { SpotFundsCurrencyWarning } from "@/components/SpotFundsCurrencyWarning";
 import { RefreshButton } from "@/components/RefreshButton";
 import { PageSizeSelect, TablePagination } from "@/components/TableControls";
 import { ValueChips } from "@/components/ValueChips";
@@ -119,6 +122,7 @@ const POLICY_FILTER_KIND: Record<Exclude<PolicyFilter, "all">, string> = {
   spot_funds_unrealized_pnl_bounds:
     "spot_funds_unrealized_pnl_bounds_kill_switch",
   spot_funds_total_pnl_bounds: "spot_funds_total_pnl_bounds_kill_switch",
+  spot_funds_limit_mode: "spot_funds_limit_mode",
 };
 
 const POLICY_FILTERS: Exclude<PolicyFilter, "all">[] = [
@@ -127,6 +131,7 @@ const POLICY_FILTERS: Exclude<PolicyFilter, "all">[] = [
   "spot_funds_pnl_bounds",
   "spot_funds_unrealized_pnl_bounds",
   "spot_funds_total_pnl_bounds",
+  "spot_funds_limit_mode",
 ];
 
 function policyFilterFromParams(params: URLSearchParams): PolicyFilter {
@@ -201,6 +206,18 @@ function policyRowHref(limit: Limit): string {
   }
   query.set("policy", limit.policy);
   return `/policies?${query.toString()}`;
+}
+
+/** The values a row's chips show: the funds limit mode reads as its localized
+ *  name, never the wire value; every other kind shows its values as stored. */
+function chipValues(limit: Limit, t: TFunction): Record<string, string> {
+  if (limit.policy !== "spot_funds_limit_mode") {
+    return limit.values;
+  }
+  return {
+    ...limit.values,
+    mode: t(`spotFundsMode.modes.${limit.values.mode}.title`),
+  };
 }
 
 function DeleteConfirm({
@@ -475,7 +492,7 @@ function PoliciesTable({
                 )}
               </TableCell>
               <TableCell>
-                <ValueChips values={limit.values} />
+                <ValueChips values={chipValues(limit, t)} />
               </TableCell>
               <TableCell className="text-right">
                 {!readOnly && (
@@ -511,6 +528,7 @@ function PoliciesTable({
 }
 
 export function Limits() {
+  const spotFundsMode = useSpotFundsLimitMode();
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
   const officerApi = useOfficerApi();
@@ -676,10 +694,14 @@ export function Limits() {
     spotFundsUnrealizedPnlBoundsCount,
     spotFundsTotalPnlBoundsCount,
   ]);
+  // The without-currency warning depends on the mode row and on the P&L
+  // bounds, so a put or delete from this page refreshes it with the lists.
+  const reloadWarning = spotFundsMode.reload;
   const reloadLimits = useCallback(() => {
     reload();
     reloadPolicyCounts();
-  }, [reload, reloadPolicyCounts]);
+    reloadWarning();
+  }, [reload, reloadPolicyCounts, reloadWarning]);
 
   const [accountSuggestions, setAccountSuggestions] = useState<Account[]>([]);
   const [accountGroupSuggestions, setAccountGroupSuggestions] = useState<
@@ -860,6 +882,8 @@ export function Limits() {
     >
       <p className="text-xs text-muted-lt">{t("intro")}</p>
 
+      <SpotFundsCurrencyWarning poll={spotFundsMode} />
+
       <FilterBar
         active={hasActiveFilters}
         activeLabel={tc("filters.active")}
@@ -1038,6 +1062,7 @@ export function Limits() {
         requiresEngineRebuild={
           deleteTarget !== null &&
           !isSpotFundsPnlPolicy(deleteTarget.policy) &&
+          deleteTarget.policy !== "spot_funds_limit_mode" &&
           policyCounts[deleteTarget.policy] !== undefined &&
           policyCounts[deleteTarget.policy] <= 1
         }

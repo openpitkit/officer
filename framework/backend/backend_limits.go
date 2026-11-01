@@ -29,6 +29,38 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+// SpotFundsLimitMode returns the global mode with accounts narrowed to the
+// caller's visibility.
+func (s *Service) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return domain.SpotFundsLimitModeState{}, err
+	}
+	state, err := s.node.SpotFundsLimitMode(ctx)
+	if err != nil {
+		return domain.SpotFundsLimitModeState{}, err
+	}
+	state.AccountsWithoutCurrency = slices.DeleteFunc(
+		slices.Clone(state.AccountsWithoutCurrency),
+		func(code domain.AccountID) bool { return s.scope.Visible(caller, code) != nil },
+	)
+	return state, nil
+}
+
+// PutSpotFundsLimitMode sets the Spot Funds limit-mode meta-policy under the
+// context's caller. The meta-policy is global only and has no axis, so there
+// is no account to resolve or scope.
+func (s *Service) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := limit.Validate(); err != nil {
+		return err
+	}
+	return s.node.SetSpotFundsLimitMode(ctx, limit.Mode, caller)
+}
+
 // ListLimits returns the typed barriers that reference account. An empty
 // account returns all barriers. A named account is an exact account input, so
 // the account scope resolves it before the node reads its barriers. The result

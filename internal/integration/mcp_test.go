@@ -56,6 +56,11 @@ type fakeSource struct {
 	checkErr      error
 	setMDCalls    []setMDCall
 
+	spotFundsLimitMode       domain.SpotFundsLimitModeState
+	spotFundsLimitModeErr    error
+	putSpotFundsLimitModes   []domain.LimitSpotFundsLimitMode
+	putSpotFundsLimitModeErr error
+
 	// accountFeatures is what AccountFeatures reports; the zero value is the
 	// default composition's (backend.EveryAccount), where clients see accounts.
 	accountFeatures backend.AccountFeatures
@@ -741,6 +746,64 @@ func TestGetLimitsSourceFailure(t *testing.T) {
 	requireToolError(t, res.IsError)
 	if got := textContent(res.Content); got != "internal: internal error" {
 		t.Errorf("unexpected error text: %q", got)
+	}
+}
+
+// -- get_spot_funds_limit_mode / set_limit spot_funds_limit_mode --
+
+func TestGetSpotFundsLimitModeMapsSourceState(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{spotFundsLimitMode: domain.SpotFundsLimitModeState{
+		Mode:                    domain.SpotFundsLimitModeTrackOnly,
+		Stored:                  true,
+		AccountsWithoutCurrency: []domain.AccountID{"desk-a", "desk-b"},
+	}}
+	wire := callToolOK(t, src, "get_spot_funds_limit_mode", map[string]any{})
+	assertResultBody(t, wire, map[string]any{
+		"mode": "track_only", "stored": true, "accountsWithoutCurrency": []string{"desk-a", "desk-b"},
+	})
+}
+
+func TestSpotFundsLimitModeSourceFailures(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{
+		spotFundsLimitModeErr:    fmt.Errorf("read unavailable"),
+		putSpotFundsLimitModeErr: fmt.Errorf("write unavailable"),
+	}
+	for name, in := range map[string]map[string]any{
+		"get_spot_funds_limit_mode": {},
+		"set_limit":                 {"policy": "spot_funds_limit_mode", "scope": "global", "mode": "enforce"},
+	} {
+		res := callTool[map[string]any](t, src, name, in)
+		requireToolError(t, res.IsError)
+		if text := textContent(res.Content); text != "internal: internal error" {
+			t.Errorf("%s source failure = %q, want internal: internal error", name, text)
+		}
+	}
+}
+
+// TestSetLimitSpotFundsLimitModeForwardsVerbatim proves set_limit hands the
+// meta-policy's scope and mode to the source verbatim, leaving validation to
+// the core, and answers the stored row the source reads back, not the one
+// sent.
+func TestSetLimitSpotFundsLimitModeForwardsVerbatim(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"enforce", "track_only", " enforce ", "unsupported", ""} {
+		src := &fakeSource{limits: node.AccountLimits{
+			SpotFundsLimitModes: []domain.LimitSpotFundsLimitMode{
+				{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce},
+			},
+		}}
+		wire := callToolOK(t, src, "set_limit", map[string]any{
+			"policy": "spot_funds_limit_mode", "scope": "global", "mode": mode,
+		})
+		assertResultBody(t, wire, map[string]any{
+			"spotFundsLimitMode": map[string]any{"scope": "global", "mode": "enforce"},
+		})
+		want := domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitMode(mode)}
+		if len(src.putSpotFundsLimitModes) != 1 || src.putSpotFundsLimitModes[0] != want {
+			t.Fatalf("mode %q delegated as %+v, want one verbatim call", mode, src.putSpotFundsLimitModes)
+		}
 	}
 }
 
@@ -1515,5 +1578,22 @@ func (s *fakeSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domai
 }
 
 func (s *captureNSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *fakeSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
+	return s.spotFundsLimitMode, s.spotFundsLimitModeErr
+}
+
+func (s *fakeSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
+	s.putSpotFundsLimitModes = append(s.putSpotFundsLimitModes, limit)
+	return s.putSpotFundsLimitModeErr
+}
+
+func (s *captureNSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
+	return domain.SpotFundsLimitModeState{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
 	return domain.ErrNotImplemented
 }

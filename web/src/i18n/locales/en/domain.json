@@ -4,7 +4,8 @@
     "order_size_limit": "Order size limit",
     "spot_funds_pnl_bounds_kill_switch": "Realized P&L Kill Switch",
     "spot_funds_unrealized_pnl_bounds_kill_switch": "Unrealized P&L Kill Switch",
-    "spot_funds_total_pnl_bounds_kill_switch": "Total P&L Kill Switch"
+    "spot_funds_total_pnl_bounds_kill_switch": "Total P&L Kill Switch",
+    "spot_funds_limit_mode": "Funds limit mode"
   },
   "scope": {
     "broker": "Broker",
@@ -69,6 +70,10 @@
     "spot_funds_total_pnl_bounds_kill_switch": {
       "label": "Total Profit and Loss Kill Switch",
       "description": "Uses engine-computed total profit and loss (P&L) in the account currency: realized P&L plus the unrealized P&L of the account's positions at the current market price. Once the P&L leaves its bounds, the next order is rejected and the account is blocked."
+    },
+    "spot_funds_limit_mode": {
+      "label": "Funds limit mode",
+      "description": "Decides for every account whether Officer checks funds before an order. With no row stored, the mode is Check funds."
     }
   },
   "policyField": {
@@ -132,6 +137,12 @@
       "upper_bound": {
         "label": "upper bound",
         "hint": "decimal, e.g. 500"
+      }
+    },
+    "spot_funds_limit_mode": {
+      "mode": {
+        "label": "mode",
+        "hint": "applies at once"
       }
     }
   }

@@ -73,6 +73,20 @@ func (r *realmStore) SetSetting(ctx context.Context, key, value string) error {
 	return nil
 }
 
+// DeleteSetting removes the realm-wide setting stored under key. Returns
+// domain.ErrNotFound when absent.
+func (r *realmStore) DeleteSetting(ctx context.Context, key string) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(ctx, `DELETE FROM setting WHERE key = ?`, key)
+	if err != nil {
+		return fmt.Errorf("store: delete setting: %w", err)
+	}
+	return notFoundIfNoRows(res, "setting", key)
+}
+
 // --- MCP access control -----------------------------------------------------
 
 // ListMcpAccess returns the stored per-command MCP enable/disable overrides,

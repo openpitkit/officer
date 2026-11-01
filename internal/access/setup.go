@@ -26,10 +26,13 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// SetupDecisions reads the choices owned by the account and credential components.
+// SetupDecisions reads the choices owned by the account, limit and credential
+// components.
 type SetupDecisions interface {
 	// AccountModeChosen reports a stored, non-null account-mode choice.
 	AccountModeChosen(ctx context.Context) (bool, error)
+	// FundsLimitModeChosen reports a stored Spot Funds limit-mode policy row.
+	FundsLimitModeChosen(ctx context.Context) (bool, error)
 	// CredentialsSealed reports whether the master key is in effect.
 	CredentialsSealed() bool
 }
@@ -98,8 +101,8 @@ func (s *Service) DeclineEncryption(ctx context.Context, acknowledged bool) erro
 	return s.store.DeclineEncryption(ctx, s.now())
 }
 
-// CompleteSetup enters open or token mode once account mode and encryption
-// have been decided. Token mode returns the new browser session id.
+// CompleteSetup enters open or token mode once account mode, the funds limit
+// mode and encryption have been decided. Token mode returns the new browser session id.
 func (s *Service) CompleteSetup(
 	ctx context.Context, mode Mode, password string, acknowledged bool,
 ) (string, error) {
@@ -130,6 +133,10 @@ func (s *Service) CompleteSetup(
 	if err != nil {
 		return "", fmt.Errorf("access: read account mode choice: %w", err)
 	}
+	fundsChosen, err := s.decisions.FundsLimitModeChosen(ctx)
+	if err != nil {
+		return "", fmt.Errorf("access: read funds limit mode choice: %w", err)
+	}
 	state, err := s.store.SetupState(ctx)
 	if err != nil {
 		return "", err
@@ -137,6 +144,9 @@ func (s *Service) CompleteSetup(
 	var missing []string
 	if !chosen {
 		missing = append(missing, "account mode")
+	}
+	if !fundsChosen {
+		missing = append(missing, "funds limit mode")
 	}
 	if !s.decisions.CredentialsSealed() && state.EncryptionDeclinedAt == nil {
 		missing = append(missing, "encryption")

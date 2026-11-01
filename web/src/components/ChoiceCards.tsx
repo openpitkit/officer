@@ -53,8 +53,8 @@ export function ChoiceCards<Choice extends string>({
   /** The accessible name of the group. */
   label: string;
   options: readonly ChoiceCard<Choice>[];
-  /** The selected option. */
-  value: Choice;
+  /** The selected option, or null while nothing is chosen yet. */
+  value: Choice | null;
   onChange: (value: Choice) => void;
   disabled?: boolean;
 }) {

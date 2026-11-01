@@ -4,7 +4,8 @@
     "order_size_limit": "Límite de tamaño de orden",
     "spot_funds_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L realizado",
     "spot_funds_unrealized_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L no realizado",
-    "spot_funds_total_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L total"
+    "spot_funds_total_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L total",
+    "spot_funds_limit_mode": "Modo de límite de fondos"
   },
   "scope": {
     "broker": "Bróker",
@@ -69,6 +70,10 @@
     "spot_funds_total_pnl_bounds_kill_switch": {
       "label": "Interruptor de emergencia por pérdidas y ganancias totales",
       "description": "Utiliza las pérdidas y ganancias (P&L) totales que calcula el motor en la moneda de la cuenta: el P&L realizado más el P&L no realizado de las posiciones de la cuenta al precio de mercado actual. Cuando el P&L sale de sus límites, se rechaza la siguiente orden y se bloquea la cuenta."
+    },
+    "spot_funds_limit_mode": {
+      "label": "Modo de límite de fondos",
+      "description": "Decide para todas las cuentas si Officer comprueba los fondos antes de una orden. Si no hay ninguna fila guardada, el modo es «Comprobar fondos»."
     }
   },
   "policyField": {
@@ -132,6 +137,12 @@
       "upper_bound": {
         "label": "límite superior",
         "hint": "decimal, p. ej., 500"
+      }
+    },
+    "spot_funds_limit_mode": {
+      "mode": {
+        "label": "modo",
+        "hint": "se aplica de inmediato"
       }
     }
   }

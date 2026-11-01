@@ -27,6 +27,7 @@
     },
     "positiveDecimal": "{{kind}} must be a positive decimal",
     "decimal": "{{kind}} must be a decimal",
+    "mode": "unknown funds limit mode",
     "unknown": "unknown kind {{kind}}"
   },
   "limit": {
@@ -45,7 +46,8 @@
     "orderSizeSettlementNoQuantity": "a settlement-asset scope must not carry max_quantity",
     "pnlCurrencyRequired": "{{policy}} requires currency",
     "pnlRequires": "{{policy}} requires lower_bound or upper_bound",
-    "pnlBoundOrder": "lower_bound must be <= upper_bound"
+    "pnlBoundOrder": "lower_bound must be <= upper_bound",
+    "modeRequired": "choose a funds limit mode"
   },
   "password": {
     "mismatch": "The passwords do not match."

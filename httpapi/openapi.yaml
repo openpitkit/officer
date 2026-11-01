@@ -3093,7 +3093,12 @@ paths:
         Returns the typed limit barriers (rate, order-size, P&L-bounds, and
         SpotFunds P&L-bounds)
         flattened into one sorted, paged policy list. Barriers reference accounts
-        by code; no surrogate or engine id is involved.
+        by code; no surrogate or engine id is involved. The stored Spot Funds
+        limit mode is one more row of kind `spot_funds_limit_mode` on the
+        `global` scope, listed only while a mode is stored; with no row the
+        mode is `enforce`. Having no account, account group or asset, it is
+        dropped by those filters; in single-account mode it is listed like
+        any other global barrier.
       tags: [limits]
       parameters:
         - name: account
@@ -3125,7 +3130,7 @@ paths:
           description: Filter by policy kind.
           schema:
             type: string
-            enum: [all, rate, order_size, spot_funds_pnl_bounds, spot_funds_unrealized_pnl_bounds, spot_funds_total_pnl_bounds]
+            enum: [all, rate, order_size, spot_funds_pnl_bounds, spot_funds_unrealized_pnl_bounds, spot_funds_total_pnl_bounds, spot_funds_limit_mode]
             default: all
         - name: sort
           in: query
@@ -3173,7 +3178,11 @@ paths:
         When the server runs in single-account mode the account may be omitted
         and defaults to that account; naming any other account is refused with
         422 (constraint `single_account_mode`). Account groups are not
-        accepted in single-account mode.
+        accepted in single-account mode. Policy `spot_funds_limit_mode` takes
+        the `global` scope and no axis: deleting it removes the stored Spot
+        Funds limit mode, so the mode is `enforce` again, applied live without
+        an engine rebuild. Unlike a barrier, it may be deleted by an agent too,
+        as that only tightens; with no mode stored the answer is 404.
       tags: [limits]
       parameters:
         - name: policy
@@ -3182,7 +3191,7 @@ paths:
           description: Risk policy whose barrier should be deleted.
           schema:
             type: string
-            enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch]
+            enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch, spot_funds_limit_mode]
         - name: scope
           in: query
           required: true
@@ -3474,6 +3483,80 @@ paths:
           $ref: "#/components/responses/AccountMissingError"
         "501":
           $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /limits/spot-funds-limit-mode:
+    get:
+      operationId: getSpotFundsLimitMode
+      summary: Read the global Spot Funds limit mode
+      description: >
+        The Officer-level policy `spot_funds_limit_mode`, one global value for
+        every account. With no row stored the effective mode is `enforce`,
+        the documented default, and `stored` is false.
+        `accountsWithoutCurrency` contains codes of visible accounts without
+        an effective currency to which a Spot Funds P&L bound applies. Their
+        P&L halts, so the bound blocks them.
+      tags: [limits]
+      responses:
+        "200":
+          description: Effective mode and visible accounts affected by missing currency.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpotFundsLimitModeState"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignHostError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+    put:
+      operationId: putSpotFundsLimitMode
+      summary: Upsert the Spot Funds limit-mode policy
+      description: >
+        Stores the Officer-level policy `spot_funds_limit_mode` on the
+        `global` scope, the only one it takes, and applies it to every
+        account live, without a restart or an engine rebuild. It is not an
+        engine policy and carries no account, account group or asset; a body
+        naming one is refused with 422. Switching back to `enforce` resets no
+        balance; orders that need funds against a negative balance are refused
+        again. This route takes no tighten-only caller; an agent is one, and
+        MCP `set_limit` refuses its switch from `enforce` to `track_only`
+        with `loosening_refused`.
+        Returns the mode read back as stored, without the no-currency list.
+      tags: [limits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpotFundsLimitModeLimit"
+      responses:
+        "200":
+          description: Mode persisted and applied live; returns the stored mode.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [spotFundsLimitMode]
+                properties:
+                  spotFundsLimitMode:
+                    $ref: "#/components/schemas/SpotFundsLimitModeLimit"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
@@ -7993,9 +8076,57 @@ components:
           description: >
             Upper P&L bound - exact decimal string; empty when unset. Written as
             lowerBound must be.
+    SpotFundsLimitMode:
+      type: string
+      enum: [enforce, track_only]
+      default: enforce
+      description: >
+        The value of the Officer-level policy `spot_funds_limit_mode`, one
+        global value for every account; with no row stored the effective mode
+        is `enforce`, the documented default. `enforce` refuses
+        an order that lacks funds or holdings. `track_only` does not refuse on
+        funds but records every hold, so balances and positions may go negative.
+        P&L bounds, rate and order-size barriers still apply in both modes, and
+        a P&L bound still halts trading on breach. Switching back to `enforce`
+        resets no balance; orders that need funds against a negative balance
+        are refused again.
+
+    SpotFundsLimitModeState:
+      type: object
+      additionalProperties: false
+      required: [mode, stored, accountsWithoutCurrency]
+      properties:
+        mode:
+          $ref: "#/components/schemas/SpotFundsLimitMode"
+        stored:
+          type: boolean
+          description: >
+            Whether the `spot_funds_limit_mode` row is stored. False means no
+            row, and `mode` is `enforce` by default.
+        accountsWithoutCurrency:
+          type: array
+          description: >
+            Codes of visible accounts without an effective currency to which
+            a Spot Funds P&L bound applies. Their P&L halts, so the bound blocks
+            them. Always a non-null array.
+          items:
+            type: string
+
+    SpotFundsLimitModeLimit:
+      type: object
+      additionalProperties: false
+      required: [scope, mode]
+      properties:
+        scope:
+          type: string
+          enum: [global]
+          description: The only scope of the Spot Funds limit-mode policy.
+        mode:
+          $ref: "#/components/schemas/SpotFundsLimitMode"
+
     AccountLimits:
       type: object
-      required: [rateLimits, orderSizeLimits, spotFundsPnlBoundsLimits, spotFundsUnrealizedPnlBoundsLimits, spotFundsTotalPnlBoundsLimits]
+      required: [rateLimits, orderSizeLimits, spotFundsPnlBoundsLimits, spotFundsUnrealizedPnlBoundsLimits, spotFundsTotalPnlBoundsLimits, spotFundsLimitModes]
       properties:
         rateLimits:
           type: array
@@ -8022,6 +8153,14 @@ components:
           description: SpotFunds total P&L-bounds barriers (always a non-null array).
           items:
             $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+        spotFundsLimitModes:
+          type: array
+          description: >
+            The stored row of the global Spot Funds limit-mode meta-policy:
+            one item while a mode is stored, none otherwise, and always none
+            in a list narrowed to an account (always a non-null array).
+          items:
+            $ref: "#/components/schemas/SpotFundsLimitModeLimit"
 
     Policy:
       type: object
@@ -8035,7 +8174,7 @@ components:
         kind:
           type: string
           description: Policy kind discriminator.
-          enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch]
+          enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch, spot_funds_limit_mode]
         scope:
           $ref: "#/components/schemas/LimitScope"
         account:
@@ -8050,8 +8189,9 @@ components:
         values:
           type: object
           description: >
-            Kind-specific values: exactly one of rate, orderSize, or
-            spotFundsPnlBounds is present, matching kind.
+            Kind-specific values: exactly one of rate, orderSize,
+            spotFundsPnlBounds or spotFundsLimitMode is present, matching
+            kind.
           properties:
             rate:
               type: object
@@ -8100,6 +8240,15 @@ components:
                   description: >
                     Upper P&L bound - exact decimal string; empty when unset.
                     Plain notation only, as in SpotFundsPnlBoundsLimit.
+            spotFundsLimitMode:
+              type: object
+              description: >
+                Value payload for kind spot_funds_limit_mode, the Officer-level
+                policy on the global scope.
+              required: [mode]
+              properties:
+                mode:
+                  $ref: "#/components/schemas/SpotFundsLimitMode"
     # Audit
 
     AuditEntry:

@@ -57,6 +57,10 @@ type AccountLimits struct {
 	// SpotFundsPnlBoundsLimits are the matching SpotFunds self-computed
 	// P&L-bounds barriers.
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
+	// SpotFundsLimitModes is the stored row of the Officer-level Spot Funds
+	// limit-mode meta-policy, none while no mode is stored. The row is
+	// global, so a list narrowed to an account never carries it.
+	SpotFundsLimitModes []domain.LimitSpotFundsLimitMode
 }
 
 // LimitTarget addresses a single typed barrier for deletion: the policy it
@@ -283,9 +287,26 @@ type Node interface {
 		caller domain.Caller,
 	) (marketdata.Sink, error)
 
+	// SpotFundsLimitMode reads the effective global mode and accounts without
+	// currency affected by P&L bounds from the store, without changing the engine
+	// or filtering account visibility.
+	SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error)
+
+	// SetSpotFundsLimitMode persists the global mode of the Spot Funds
+	// limit-mode meta-policy (domain.PolicySpotFundsLimitMode), applies it to
+	// the live engine, and audits it as a set_limit. A tighten-only caller
+	// cannot switch from Enforce to TrackOnly.
+	SetSpotFundsLimitMode(
+		ctx context.Context, mode domain.SpotFundsLimitMode, caller domain.Caller,
+	) error
+
 	// DeleteLimit removes the addressed barrier from the store, reconfigures the
 	// named policy from the persisted full barrier set, audits the action, and
 	// returns a replacement market-data sink only when the engine was rebuilt.
+	// A tighten-only caller is refused, since removing a barrier only loosens.
+	// The Spot Funds limit-mode meta-policy is the exception: its removal
+	// deletes the stored mode and applies Enforce to the live engine without a
+	// rebuild, which only tightens, so a tighten-only caller may make it.
 	DeleteLimit(
 		ctx context.Context, target LimitTarget, caller domain.Caller,
 	) (marketdata.Sink, error)
@@ -607,7 +628,8 @@ type Node interface {
 	// access it has no engine side-effect. The key is a code constant owned by
 	// one consumer, never client input. An empty key, or a key reserved for its
 	// owner's dedicated write path (domain.SettingKeyNoESign belongs to the
-	// signing configuration), is rejected with an error wrapping
+	// signing configuration; domain.SettingKeySpotFundsLimitMode belongs to
+	// SetSpotFundsLimitMode and DeleteLimit), is rejected with an error wrapping
 	// domain.ErrInvalid and nothing is written or audited.
 	SetSetting(ctx context.Context, key, value string, caller domain.Caller) error
 

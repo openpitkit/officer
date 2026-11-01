@@ -175,6 +175,7 @@
     "currency": "валюта",
     "lower_bound": "нижняя граница",
     "upper_bound": "верхняя граница",
+    "mode": "режим",
     "reservationRemainder": "остаток резерва",
     "overfill": "переисполнение",
     "preReportReserveQty": "резерв до отчёта",

@@ -9,6 +9,7 @@
     "steps": {
       "welcome": "Bienvenida",
       "accounts": "Cuentas",
+      "funds": "Comprobación de fondos",
       "encryption": "Cifrado",
       "signing": "Firma",
       "access": "Acceso",
@@ -29,6 +30,15 @@
     "title": "¿Cuántas cuentas va a usar?",
     "lead": "Con una sola cuenta, Officer actúa solo sobre ella y el panel no muestra campos de cuenta. El modo puede cambiarse más tarde en la página Servicio.",
     "saveFirst": "Guarde el modo para continuar."
+  },
+  "funds": {
+    "title": "¿Comprobar los fondos antes de una orden?",
+    "lead": "Officer rechaza una orden que necesita más fondos de los que tiene la cuenta, o la deja pasar y mantiene la contabilidad. Todas las políticas que defina se aplican en ambos modos. El modo puede cambiarse más tarde en la página Políticas.",
+    "chooseFirst": "Elija un modo para continuar.",
+    "rail": {
+      "enforce": "Activada",
+      "track_only": "Desactivada"
+    }
   },
   "encryption": {
     "title": "¿Cifrar las claves almacenadas con una clave maestra?",

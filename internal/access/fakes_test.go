@@ -509,13 +509,19 @@ type harness struct {
 }
 
 type fakeSetupDecisions struct {
-	chosen bool
-	sealed bool
-	err    error
+	chosen      bool
+	fundsChosen bool
+	sealed      bool
+	err         error
+	fundsErr    error
 }
 
 func (d *fakeSetupDecisions) AccountModeChosen(context.Context) (bool, error) {
 	return d.chosen, d.err
+}
+
+func (d *fakeSetupDecisions) FundsLimitModeChosen(context.Context) (bool, error) {
+	return d.fundsChosen, d.fundsErr
 }
 
 func (d *fakeSetupDecisions) CredentialsSealed() bool { return d.sealed }
@@ -532,12 +538,15 @@ func (f *fakeStore) seedSetup() {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{
-		t:         t,
-		store:     newFakeStore(),
-		auditor:   &fakeAuditor{},
-		clock:     &fakeClock{now: start},
-		out:       &bytes.Buffer{},
-		decisions: &fakeSetupDecisions{},
+		t:       t,
+		store:   newFakeStore(),
+		auditor: &fakeAuditor{},
+		clock:   &fakeClock{now: start},
+		out:     &bytes.Buffer{},
+		// The funds limit mode starts chosen so the tests of the other
+		// decisions need not make it; TestCompleteSetupRequiresEveryDecision
+		// covers its absence.
+		decisions: &fakeSetupDecisions{fundsChosen: true},
 	}
 	service, err := New(h.store, h.auditor, h.out, h.decisions)
 	if err != nil {

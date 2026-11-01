@@ -41,6 +41,13 @@ const (
 	// owns it and writes it only through the signing configuration, so the
 	// generic realm-setting writer refuses it (ValidateSettingWriteKey).
 	SettingKeyNoESign = "no_esign"
+	// SettingKeySpotFundsLimitMode holds the global Spot Funds limit mode; its
+	// values are the SpotFundsLimitMode wire values. An absent key means the
+	// mode was never set and is SpotFundsLimitModeEnforce, the documented
+	// default and the SDK's zero value. The Spot Funds limit-mode configuration
+	// owns it and writes it only through its dedicated path, so the generic
+	// realm-setting writer refuses it (ValidateSettingWriteKey).
+	SettingKeySpotFundsLimitMode = "spot_funds_limit_mode"
 )
 
 // ValidateSettingKey returns an error wrapping ErrInvalid when key cannot name
@@ -55,18 +62,25 @@ func ValidateSettingKey(key string) error {
 // ValidateSettingWriteKey returns an error wrapping ErrInvalid when key cannot
 // be written through the generic realm-setting writer: it must pass
 // ValidateSettingKey and must not be a key reserved for its owner's dedicated
-// write path. SettingKeyNoESign is reserved for the signing configuration.
+// write path. SettingKeyNoESign is reserved for the signing configuration and
+// SettingKeySpotFundsLimitMode for the Spot Funds limit-mode configuration.
 func ValidateSettingWriteKey(key string) error {
 	if err := ValidateSettingKey(key); err != nil {
 		return err
 	}
-	if key == SettingKeyNoESign {
-		return invalidField("/key", "reserved", fmt.Errorf(
-			"setting key %q is written only through the signing configuration: %w",
-			key, ErrInvalid,
-		))
+	var path string
+	switch key {
+	case SettingKeyNoESign:
+		path = "the signing configuration"
+	case SettingKeySpotFundsLimitMode:
+		path = "the Spot Funds limit-mode configuration"
+	default:
+		// Every key no owner reserves belongs to the generic writer.
+		return nil
 	}
-	return nil
+	return invalidField("/key", "reserved", fmt.Errorf(
+		"setting key %q is written only through %s: %w", key, path, ErrInvalid,
+	))
 }
 
 var sentinelErrors []error
@@ -389,6 +403,12 @@ const (
 	// PolicySpotFundsTotalPnlBoundsKillSwitch bounds the account's realized
 	// plus unrealized P&L; see SpotFundsPnlAxisTotal.
 	PolicySpotFundsTotalPnlBoundsKillSwitch = "spot_funds_total_pnl_bounds_kill_switch"
+	// PolicySpotFundsLimitMode is an Officer-level meta-policy, not an engine
+	// (SDK) policy: it tells Officer whether Spot Funds checks the funds limit.
+	// Its one global value is the SpotFundsLimitMode stored under
+	// SettingKeySpotFundsLimitMode; no stored value means
+	// SpotFundsLimitModeEnforce.
+	PolicySpotFundsLimitMode = "spot_funds_limit_mode"
 )
 
 // Scope identifiers.

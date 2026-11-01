@@ -17,8 +17,22 @@
 
 import { SETUP_STEPS } from "@/api/setup";
 
-/** The wizard's steps in order: the five the server stores, then two more. */
-export const WIZARD_STEPS = [...SETUP_STEPS, "agent", "done"] as const;
+const [welcome, accounts, ...afterAccounts] = SETUP_STEPS;
+
+/**
+ * The wizard's steps in order: the five the server stores, with the funds
+ * check after the accounts step, then two more. The server stores the
+ * position only at its own steps: not at the funds check, whose decision is
+ * the stored funds limit mode, nor at the two steps after completion.
+ */
+export const WIZARD_STEPS = [
+  welcome,
+  accounts,
+  "funds",
+  ...afterAccounts,
+  "agent",
+  "done",
+] as const;
 
 export type WizardStep = (typeof WIZARD_STEPS)[number];
 

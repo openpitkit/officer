@@ -154,9 +154,19 @@ func SpotFundsPnlAxisOf(policy string) (SpotFundsPnlAxis, bool) {
 	return "", false
 }
 
-// allowedScopes maps each policy to its permitted scopes. It is the engine
-// mapping the typed validators enforce; only the storage shape changed when the
-// EAV table became three typed barriers.
+// LimitSpotFundsLimitMode is the value of the Officer meta-policy
+// PolicySpotFundsLimitMode: whether Spot Funds refuses an order on funds. It
+// is global only and carries no account, asset or account-group axis.
+type LimitSpotFundsLimitMode struct {
+	// Scope is the scope of the meta-policy; ScopeGlobal is the only one.
+	Scope LimitScope
+	// Mode is the Spot Funds limit mode.
+	Mode SpotFundsLimitMode
+}
+
+// allowedScopes maps each policy to its permitted scopes. For the engine
+// policies it is the engine mapping the typed validators enforce; the Officer
+// meta-policy PolicySpotFundsLimitMode is global only.
 var allowedScopes = map[string][]LimitScope{
 	PolicyRateLimit: {ScopeBroker, ScopeAsset, ScopeAccount, ScopeAccountAsset},
 	PolicyOrderSizeLimit: {
@@ -175,6 +185,7 @@ var allowedScopes = map[string][]LimitScope{
 	PolicySpotFundsTotalPnlBoundsKillSwitch: {
 		ScopeGlobal, ScopeAccountGroup, ScopeAccount,
 	},
+	PolicySpotFundsLimitMode: {ScopeGlobal},
 }
 
 // Validate checks the rate barrier against the engine mapping: an allowed scope
@@ -301,6 +312,17 @@ func (l LimitSpotFundsPnlBounds) Validate() error {
 		return err
 	}
 	return nil
+}
+
+// Validate checks the Spot Funds limit-mode meta-policy: the global scope,
+// the only one allowed, and a recognised mode.
+func (l LimitSpotFundsLimitMode) Validate() error {
+	if err := ValidateLimitScopeAndAxes(
+		PolicySpotFundsLimitMode, l.Scope, "", "", "",
+	); err != nil {
+		return err
+	}
+	return ValidateSpotFundsLimitMode(l.Mode)
 }
 
 // ValidateLimitScopeAndAxes checks that scope is allowed for policy and that the
@@ -552,6 +574,91 @@ func (l LimitSpotFundsPnlBounds) NoLooserThan(ref LimitSpotFundsPnlBounds) error
 	return boundNoLooserThan(
 		"upper_bound", l.UpperBound, ref.UpperBound, false,
 	)
+}
+
+// SpotFundsLimitMode is the global mode of the Spot Funds policy, one setting
+// for the whole realm. Enforce refuses an order whose hold exceeds the
+// available funds. TrackOnly records the hold even into negative available and
+// refuses nothing on funds, while every other policy check and the Spot Funds
+// P&L barrier stay in force.
+type SpotFundsLimitMode string
+
+const (
+	// SpotFundsLimitModeEnforce refuses an order whose hold exceeds the
+	// available funds. It is the documented default and the SDK's zero value.
+	SpotFundsLimitModeEnforce SpotFundsLimitMode = "enforce"
+	// SpotFundsLimitModeTrackOnly records every hold, letting available go
+	// negative, and refuses nothing on funds.
+	SpotFundsLimitModeTrackOnly SpotFundsLimitMode = "track_only"
+)
+
+// ValidateSpotFundsLimitMode returns an error wrapping ErrInvalid when mode is
+// empty or is not a recognised SpotFundsLimitMode value.
+func ValidateSpotFundsLimitMode(mode SpotFundsLimitMode) error {
+	switch mode {
+	case SpotFundsLimitModeEnforce, SpotFundsLimitModeTrackOnly:
+		return nil
+	case "":
+		return invalidField("/mode", "required", fmt.Errorf("mode is required: %w", ErrInvalid))
+	default:
+		return invalidField(
+			"/mode", "unsupported_value",
+			fmt.Errorf(
+				"mode %q must be %q or %q: %w",
+				string(mode), SpotFundsLimitModeEnforce, SpotFundsLimitModeTrackOnly, ErrInvalid,
+			),
+		)
+	}
+}
+
+// ParseSpotFundsLimitMode validates a wire value of the Spot Funds limit mode
+// and returns the typed mode.
+func ParseSpotFundsLimitMode(value string) (SpotFundsLimitMode, error) {
+	mode := SpotFundsLimitMode(value)
+	if err := ValidateSpotFundsLimitMode(mode); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
+// NoLooserThan returns nil when the Spot Funds limit mode m is at least as
+// strict as prev, the mode it would replace: TrackOnly refuses nothing on
+// funds that Enforce refuses, so only Enforce to TrackOnly loosens, and that
+// returns an error wrapping ErrLoosening that names both modes. Either side
+// that is not a valid SpotFundsLimitMode returns an error wrapping ErrInvalid
+// that names the side and describes the validation failure. The caller maps
+// an absent setting to SpotFundsLimitModeEnforce before calling.
+func (m SpotFundsLimitMode) NoLooserThan(prev SpotFundsLimitMode) error {
+	for _, side := range []struct {
+		name string
+		mode SpotFundsLimitMode
+	}{{"mode", m}, {"current mode", prev}} {
+		if err := ValidateSpotFundsLimitMode(side.mode); err != nil {
+			return fmt.Errorf("%s: %w", side.name, err)
+		}
+	}
+	if prev == SpotFundsLimitModeEnforce && m == SpotFundsLimitModeTrackOnly {
+		return fmt.Errorf(
+			"mode %s stops refusing on funds what the current %s refuses: %w",
+			m, prev, ErrLoosening,
+		)
+	}
+	return nil
+}
+
+// SpotFundsLimitModeState reports the global Spot Funds mode and accounts
+// affected by P&L bounds without an effective currency.
+type SpotFundsLimitModeState struct {
+	// Mode is the effective global mode. An absent setting means Enforce,
+	// the documented default.
+	Mode SpotFundsLimitMode
+	// Stored is whether the meta-policy row is stored; false means no row and
+	// Mode is Enforce by default.
+	Stored bool
+	// AccountsWithoutCurrency lists, by code, accounts without an effective
+	// currency to which a Spot Funds P&L bound applies. Their P&L halts and
+	// the bound blocks them; the panel warns without changing that behavior.
+	AccountsWithoutCurrency []AccountID
 }
 
 // InAccountCurrency returns nil when the adjustment r adjusts currency, the

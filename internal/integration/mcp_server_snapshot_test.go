@@ -66,6 +66,19 @@ func TestServerToolSnapshot(t *testing.T) {
 				"secrets, no order-flow control.",
 		},
 		{
+			name: "get_spot_funds_limit_mode",
+			description: "Return the global Spot Funds limit mode and the accounts a Spot Funds " +
+				"P&L bound blocks for want of a currency. mode is enforce, which refuses an " +
+				"order that lacks funds or holdings, or track_only, which does not refuse on " +
+				"funds but records every hold, so balances and positions may go negative; " +
+				"until first set the mode is enforce. stored is whether the spot_funds_limit_mode " +
+				"policy row is stored; false means no row and the default enforce. " +
+				"P&L bounds, rate and order-size barriers " +
+				"apply in both modes. accountsWithoutCurrency lists the visible accounts " +
+				"with no effective realized P&L currency that a Spot Funds P&L bound applies " +
+				"to: their P&L halts, so the bound blocks them. Read-only - no secrets, no order-flow control.",
+		},
+		{
 			name: "get_order",
 			description: "Return one order addressed by its id: its " +
 				"status, its 1:1 signed approval (when issued), and its fills with " +
@@ -134,10 +147,11 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "set_limit",
 			description: "Create a risk barrier, or make the one stored at the same " +
 				"address stricter, and return it as stored. policy names the kind - " +
-				"rate_limit, order_size_limit, or one of the P&L-bound kill " +
+				"rate_limit, order_size_limit, one of the P&L-bound kill " +
 				"switches spot_funds_pnl_bounds_kill_switch (realized P&L), " +
 				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
-				"spot_funds_total_pnl_bounds_kill_switch (total P&L) - " +
+				"spot_funds_total_pnl_bounds_kill_switch (total P&L), or " +
+				"spot_funds_limit_mode - " +
 				"and the other arguments are that kind's fields; a field of another " +
 				"kind is refused with validation. Anything that loosens risk is " +
 				"refused with loosening_refused and changes nothing. A barrier that " +
@@ -154,9 +168,18 @@ func TestServerToolSnapshot(t *testing.T) {
 				"currency of, and no looser than, the bound it takes over from: for " +
 				"a group the global bound, for an account the bound that applies to " +
 				"it now. The first order-size barrier is refused while any " +
-				"rate-limit barrier is configured. No barrier can be removed. " +
-				"Mutates Officer control-plane config; protected and disabled by " +
-				"default.",
+				"rate-limit barrier is configured. spot_funds_limit_mode is the " +
+				"Officer policy that decides whether Spot Funds checks funds, on the " +
+				"global scope only, with the one field mode: enforce (Check funds) " +
+				"refuses an order that lacks funds or holdings; track_only (Accounting " +
+				"without blocking) does not refuse on funds but records every hold, so " +
+				"balances and positions may go negative. Until first set the mode is " +
+				"enforce; the switch to track_only is refused with loosening_refused, " +
+				"and the switch to enforce resets no balance. P&L bounds, rate and " +
+				"order-size barriers apply in both modes. No barrier can be removed; " +
+				"to switch Spot Funds back to Check funds, set spot_funds_limit_mode " +
+				"with mode enforce. Mutates Officer control-plane config; protected " +
+				"and disabled by default.",
 		},
 		{
 			name: "create_account",

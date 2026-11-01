@@ -123,16 +123,23 @@ type policyPnlBoundsValuesDTO struct {
 	UpperBound string `json:"upperBound"`
 }
 
+// policyLimitModeValuesDTO is the value payload of the Spot Funds limit-mode
+// meta-policy row.
+type policyLimitModeValuesDTO struct {
+	Mode string `json:"mode"`
+}
+
 // policyValuesDTO is the heterogeneous value payload of a policy row: exactly
-// one of the four sub-objects is present, matching the row's kind. The common
+// one of the sub-objects is present, matching the row's kind. The common
 // scope/account/asset axes live on policyDTO, not here.
 type policyValuesDTO struct {
 	Rate               *policyRateValuesDTO      `json:"rate,omitempty"`
 	OrderSize          *policyOrderSizeValuesDTO `json:"orderSize,omitempty"`
 	SpotFundsPnlBounds *policyPnlBoundsValuesDTO `json:"spotFundsPnlBounds,omitempty"`
+	SpotFundsLimitMode *policyLimitModeValuesDTO `json:"spotFundsLimitMode,omitempty"`
 }
 
-// policyDTO is the wire shape of one typed barrier flattened into the unified
+// policyDTO is the wire shape of one policy flattened into the unified
 // policy list. The kind discriminator selects which member of values is set;
 // the scope/account/accountGroup/asset axes are shared across all kinds.
 type policyDTO struct {
@@ -234,6 +241,10 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 			Currency:   row.SpotFundsPnlBounds.Currency,
 			LowerBound: row.SpotFundsPnlBounds.LowerBound,
 			UpperBound: row.SpotFundsPnlBounds.UpperBound,
+		}
+	case row.SpotFundsLimitMode != nil:
+		dto.Values.SpotFundsLimitMode = &policyLimitModeValuesDTO{
+			Mode: string(row.SpotFundsLimitMode.Mode),
 		}
 	}
 	return dto

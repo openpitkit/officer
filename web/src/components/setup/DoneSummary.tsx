@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 
 import type { AccessMode } from "@/api/access";
 import type { AccountModeState } from "@/api/accountMode";
+import type { SpotFundsLimitModeState } from "@/api/spotFundsLimitMode";
 import type { CredentialStorage } from "@/api/types";
 import type { LoadState } from "@/api/usePolling";
 import {
@@ -50,6 +51,7 @@ import { cn } from "@/lib/utils";
  */
 export function DoneSummary({
   accounts,
+  funds,
   storage,
   signing,
   accessMode,
@@ -57,6 +59,8 @@ export function DoneSummary({
 }: {
   /** The polled account mode. */
   accounts: LoadState<AccountModeState>;
+  /** The polled funds limit mode. */
+  funds: LoadState<SpotFundsLimitModeState>;
   /** The polled credential storage. */
   storage: LoadState<CredentialStorage>;
   signing: ReturnType<typeof useSigningKeysPanel>;
@@ -66,15 +70,17 @@ export function DoneSummary({
 }) {
   const { t } = useTranslation("setup");
   const { t: ts } = useTranslation("service");
+  const { t: tp } = useTranslation("policies");
   // The polls retry by themselves, so a failed one shows its error until
   // the next answer.
-  for (const load of [accounts, signing.load, storage]) {
+  for (const load of [accounts, funds, signing.load, storage]) {
     if (load.state === "error") {
       return <ErrorBanner message={load.error} />;
     }
   }
   if (
     accounts.state !== "ready" ||
+    funds.state !== "ready" ||
     signing.load.state !== "ready" ||
     storage.state !== "ready"
   ) {
@@ -99,6 +105,13 @@ export function DoneSummary({
           : accountModeValue(ts, mode === "multi", account),
       load: accounts,
       flagged: false,
+    },
+    {
+      id: "funds",
+      choice: tp(`spotFundsMode.modes.${funds.data.mode}.title`),
+      load: funds,
+      // Without the funds check an order is not refused for lack of funds.
+      flagged: funds.data.mode === "track_only",
     },
     {
       id: "encryption",

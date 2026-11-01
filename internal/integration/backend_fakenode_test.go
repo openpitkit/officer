@@ -79,12 +79,14 @@ type fakeNode struct {
 	checkResult domain.CheckResult
 	checkProbes []domain.OrderProbe
 
-	mcpAccess        map[string]bool
-	setMcpAccessCall []setMcpAccessCall
-	settings         map[string]string
-	setSettingCalls  []setSettingCall
-	mdInstances      []domain.MarketDataInstance
-	mdInstruments    map[string][]domain.MarketDataInstrument
+	mcpAccess                  map[string]bool
+	setMcpAccessCall           []setMcpAccessCall
+	settings                   map[string]string
+	setSettingCalls            []setSettingCall
+	spotFundsLimitMode         domain.SpotFundsLimitModeState
+	setSpotFundsLimitModeCalls []setSpotFundsLimitModeCall
+	mdInstances                []domain.MarketDataInstance
+	mdInstruments              map[string][]domain.MarketDataInstrument
 
 	backupArchive           backup.Archive
 	backupScope             backup.Scope
@@ -348,6 +350,11 @@ type setMcpAccessCall struct {
 type setSettingCall struct {
 	key    string
 	value  string
+	caller domain.Caller
+}
+
+type setSpotFundsLimitModeCall struct {
+	mode   domain.SpotFundsLimitMode
 	caller domain.Caller
 }
 
@@ -1460,6 +1467,19 @@ func (n *fakeNode) SetMcpAccess(
 func (n *fakeNode) Setting(_ context.Context, key string) (string, bool, error) {
 	value, ok := n.settings[key]
 	return value, ok, nil
+}
+
+func (n *fakeNode) SpotFundsLimitMode(_ context.Context) (domain.SpotFundsLimitModeState, error) {
+	return n.spotFundsLimitMode, nil
+}
+
+func (n *fakeNode) SetSpotFundsLimitMode(
+	_ context.Context, mode domain.SpotFundsLimitMode, caller domain.Caller,
+) error {
+	n.setSpotFundsLimitModeCalls = append(n.setSpotFundsLimitModeCalls,
+		setSpotFundsLimitModeCall{mode: mode, caller: caller})
+	n.spotFundsLimitMode.Mode = mode
+	return nil
 }
 
 func (n *fakeNode) SetSetting(

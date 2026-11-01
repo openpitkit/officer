@@ -106,8 +106,14 @@ The address 127.0.0.1 means your own computer, so other computers cannot reach
 the panel.
 
 The first time, the panel opens the first-run setup at
-<http://127.0.0.1:8787/setup>. It has seven steps: welcome, accounts,
-encryption, approval signing, access, connecting your AI agent, and done.
+<http://127.0.0.1:8787/setup>. It has eight steps: welcome, accounts, funds
+check, encryption, approval signing, access, connecting your AI agent, and
+done.
+
+The funds check step decides whether Officer refuses an order that needs more
+funds than the account holds - Check funds - or lets it pass and keeps the
+accounting - Accounting without blocking. The setup does not finish until one
+is chosen; the mode can be changed later on the Policies page.
 
 The access step decides how software on this computer gets in. With an access
 token - a secret that software must show - the REST API and MCP, described

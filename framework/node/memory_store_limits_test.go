@@ -88,6 +88,30 @@ func (r *memoryRealm) ListPolicyRows(
 			})
 		}
 	}
+	// The Spot Funds limit-mode meta-policy is one global row with no axis,
+	// present only while its setting holds a value, as the SQLite union lists it.
+	if raw, ok := r.settings[domain.SettingKeySpotFundsLimitMode]; ok &&
+		wantKind(store.PolicyKindSpotFundsLimitMode) &&
+		(filter.Scope == "" || filter.Scope == domain.ScopeGlobal) &&
+		restrictionMatches(filter.Restriction, "") &&
+		textMatches(filter.Account, "") &&
+		textMatches(filter.AccountGroup, "") &&
+		textMatches(filter.Asset, "") {
+		mode, err := domain.ParseSpotFundsLimitMode(raw)
+		if err != nil {
+			return store.PolicyListPage{}, fmt.Errorf(
+				"setting %q holds invalid stored value %q",
+				domain.SettingKeySpotFundsLimitMode, raw,
+			)
+		}
+		out = append(out, store.PolicyListRow{
+			Kind:  store.PolicyKindSpotFundsLimitMode,
+			Scope: domain.ScopeGlobal,
+			SpotFundsLimitMode: &domain.LimitSpotFundsLimitMode{
+				Scope: domain.ScopeGlobal, Mode: mode,
+			},
+		})
+	}
 	sortPolicyRows(out, filter.Sort)
 	total := len(out)
 	out = pageRows(out, filter.Page)

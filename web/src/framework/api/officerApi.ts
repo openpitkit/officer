@@ -130,7 +130,11 @@ import {
   SPOT_FUNDS_PNL_POLICY_IDS,
   isSpotFundsPnlPolicy,
 } from "../../api/spotFundsPnlPolicies";
-import { ADJUSTMENT_TYPES } from "../registries/vocabulary";
+import {
+  ADJUSTMENT_TYPES,
+  isSpotFundsLimitMode,
+  type SpotFundsLimitMode,
+} from "../registries/vocabulary";
 import { isRfc3339Time } from "./rfc3339";
 
 type Json = Record<string, unknown>;
@@ -977,10 +981,24 @@ function normalizePolicyKind(v: unknown): Policy["kind"] {
     case "spot_funds_pnl_bounds_kill_switch":
     case "spot_funds_unrealized_pnl_bounds_kill_switch":
     case "spot_funds_total_pnl_bounds_kill_switch":
+    case "spot_funds_limit_mode":
       return v;
     default:
       return "rate_limit";
   }
+}
+
+/** Read the mode of a spot_funds_limit_mode value; a missing or unknown mode
+ *  is a malformed response, never a default. */
+function requireSpotFundsLimitMode(obj: Json): SpotFundsLimitMode {
+  const mode = requireStringField(obj, "Spot Funds limit mode", "mode", "Mode");
+  if (!isSpotFundsLimitMode(mode)) {
+    throw new ApiError(
+      `Spot Funds limit mode "${mode}" in the API response is unknown`,
+      "internal",
+    );
+  }
+  return mode;
 }
 
 /** Normalize one policyDTO from the unified GET /limits list. */
@@ -1035,6 +1053,17 @@ function normalizePolicy(v: unknown): Policy {
       upperBound: asString(
         pick(spotFundsPnlBounds, "upperBound", "UpperBound", "upper_bound"),
       ),
+    };
+  }
+  const spotFundsLimitMode = pick(
+    values,
+    "spotFundsLimitMode",
+    "SpotFundsLimitMode",
+    "spot_funds_limit_mode",
+  );
+  if (isObject(spotFundsLimitMode)) {
+    policy.values.spotFundsLimitMode = {
+      mode: requireSpotFundsLimitMode(spotFundsLimitMode),
     };
   }
   return policy;
@@ -1092,6 +1121,16 @@ function policyToLimit(policy: Policy): Limit {
         },
       };
     }
+    case "spot_funds_limit_mode": {
+      const modeValues = policy.values.spotFundsLimitMode;
+      if (modeValues === undefined) {
+        throw new ApiError(
+          "Spot Funds limit mode is missing from the API response",
+          "internal",
+        );
+      }
+      return { ...base, values: { mode: modeValues.mode } };
+    }
   }
 }
 
@@ -1121,6 +1160,18 @@ function limitMaxOrders(limit: Limit): number {
   return value;
 }
 
+function limitSpotFundsMode(limit: Limit): SpotFundsLimitMode {
+  const mode = limit.values.mode;
+  if (!isSpotFundsLimitMode(mode)) {
+    throw new ApiError(
+      'Spot Funds limit mode must be "enforce" or "track_only"',
+      "validation",
+      400,
+    );
+  }
+  return mode;
+}
+
 function limitEndpointBody(
   client: ApiClient,
   limit: Limit,
@@ -1147,6 +1198,13 @@ function limitEndpointBody(
     };
   }
   switch (limit.policy) {
+    case "spot_funds_limit_mode":
+      // A global Officer policy: no account axis, so never a missingAccount
+      // query, whatever the caller passed.
+      return {
+        path: `${client.baseUrl}/limits/spot-funds-limit-mode`,
+        body: { scope: limit.scope, mode: limitSpotFundsMode(limit) },
+      };
     case "rate_limit":
       return {
         path: `${client.baseUrl}/limits/rate${query}`,
@@ -1219,6 +1277,30 @@ function normalizePutLimitResponse(policy: string, v: unknown): Limit {
           normalizeOrderSizeLimit(pick(o, "orderSizeLimit", "OrderSizeLimit")),
         ],
       });
+    case "spot_funds_limit_mode": {
+      const body = pick(o, "spotFundsLimitMode", "SpotFundsLimitMode");
+      if (!isObject(body)) {
+        throw new ApiError(
+          "Spot Funds limit mode is missing from the API response",
+          "internal",
+        );
+      }
+      return policyToLimit({
+        kind: policy,
+        scope: requireStringField(
+          body,
+          "Spot Funds limit mode scope",
+          "scope",
+          "Scope",
+        ),
+        account: "",
+        accountGroup: "",
+        asset: "",
+        values: {
+          spotFundsLimitMode: { mode: requireSpotFundsLimitMode(body) },
+        },
+      });
+    }
     default:
       return normalizeLimit(pick(o, "limit", "Limit"));
   }

@@ -114,6 +114,35 @@ func TestLocalNode_SetSettingRefusesSigningOwnedKey(t *testing.T) {
 	}
 }
 
+func TestLocalNode_SetSettingRefusesSpotFundsLimitModeKey(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, realm := newTestNode(t, eng)
+	ctx := context.Background()
+	key := domain.SettingKeySpotFundsLimitMode
+	if _, ok, err := realm.GetSetting(ctx, key); err != nil || ok {
+		t.Fatalf("%s before = ok %v, err %v; want absent", key, ok, err)
+	}
+
+	err := n.SetSetting(ctx, key, string(domain.SpotFundsLimitModeTrackOnly), testCaller)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetSetting %s error = %v, want ErrInvalid", key, err)
+	}
+	if pointer, constraint := domain.ValidationPointer(err), domain.ValidationConstraint(err); pointer != "/key" || constraint != "reserved" {
+		t.Fatalf("SetSetting %s pointer, constraint = %q, %q; want %q, %q", key, pointer, constraint, "/key", "reserved")
+	}
+
+	if value, ok, err := realm.GetSetting(ctx, key); err != nil || ok {
+		t.Fatalf("%s after refused write = %q, %v, %v; want absent", key, value, ok, err)
+	}
+	if rows := setSettingAuditRows(t, ctx, realm); len(rows) != 0 {
+		t.Fatalf("set_setting audit after refused write = %+v, want none", rows)
+	}
+	if len(eng.spotFundsTrackOnlyCalls) != 0 {
+		t.Fatalf("engine limit-mode calls after refused write = %v, want none", eng.spotFundsTrackOnlyCalls)
+	}
+}
+
 func TestLocalNode_SetSettingRejectedWhileRestarting(t *testing.T) {
 	t.Parallel()
 	n, realm := newTestNode(t, newFakeEngine())

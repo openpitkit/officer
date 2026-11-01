@@ -98,6 +98,7 @@ rules:
         | rate_limit | order_size_limit | spot_funds_pnl_bounds_kill_switch
         | max_orders | max_quantity | max_notional | window
         | lower_bound | upper_bound | alg
+        | enforce | track_only
         # Trading jargon with no established translation.
         | drop-copy | Drop-copy | DROP-COPY
         # Example codes an operator types.

@@ -15,8 +15,10 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Limits group of the SQLite store: one typed table per policy
-// (limit_rate, limit_order_size, limit_spot_funds_pnl_bound).
+// Limits group of the SQLite store: one typed table per engine policy
+// (limit_rate, limit_order_size, limit_spot_funds_pnl_bound). The Officer
+// Spot Funds limit-mode meta-policy is a realm setting (settings.go), listed
+// with the barriers by the unified policy list.
 // Each row is keyed by its natural composite; there is no external id and no
 // surrogate id outward. Account, asset, and account group are present only for
 // policies and scopes that carry them; an empty code means the NULL axis
@@ -38,13 +40,15 @@ import (
 	fwstore "go.openpit.dev/officer/framework/store"
 )
 
-// --- Unified policy list (flattens the three barrier tables) -----------------
+// --- Unified policy list (the barrier tables and the meta-policy setting) ----
 
-// policyUnion projects the typed barrier tables onto one common shape so
-// they can be sorted, filtered, and paged together. Columns absent for a given
-// barrier kind are NULL; stable_id is the kind-prefixed surrogate id, unique
-// across the union, used as the deterministic sort tiebreak. The dictionary
-// codes come from the same LEFT JOINs the per-kind reads use.
+// policyUnion projects the typed barrier tables and the Officer meta-policy
+// setting onto one common shape so they can be sorted, filtered, and paged
+// together. Columns absent for a given kind are NULL; stable_id is the
+// kind-prefixed surrogate id, unique across the union, used as the
+// deterministic sort tiebreak. The dictionary codes come from the same LEFT
+// JOINs the per-kind reads use. The Spot Funds limit-mode meta-policy is one
+// global row with no axis, present only while its setting holds a value.
 const policyUnion = `
 SELECT 'rate_limit' AS kind, lr.scope AS scope,
        a.code AS account_code, NULL AS account_group_code,
@@ -52,6 +56,7 @@ SELECT 'rate_limit' AS kind, lr.scope AS scope,
        lr.max_orders AS max_orders, lr.window AS window,
        NULL AS max_quantity, NULL AS max_notional,
 	       NULL AS lower_bound, NULL AS upper_bound,
+       NULL AS mode,
        'rate_limit:' || lr.id AS stable_id
 FROM limit_rate lr
 LEFT JOIN account a   ON a.id   = lr.account_id
@@ -63,6 +68,7 @@ SELECT 'order_size_limit' AS kind, los.scope AS scope,
        NULL AS max_orders, NULL AS window,
        los.max_quantity AS max_quantity, los.max_notional AS max_notional,
 	       NULL AS lower_bound, NULL AS upper_bound,
+       NULL AS mode,
        'order_size_limit:' || los.id AS stable_id
 FROM limit_order_size los
 LEFT JOIN account a   ON a.id   = los.account_id
@@ -79,14 +85,26 @@ SELECT CASE lsfpb.axis
        NULL AS max_orders, NULL AS window,
        NULL AS max_quantity, NULL AS max_notional,
 	       lsfpb.lower_bound AS lower_bound, lsfpb.upper_bound AS upper_bound,
+       NULL AS mode,
        'spot_funds_pnl_bounds_kill_switch:' || lsfpb.id AS stable_id
 FROM limit_spot_funds_pnl_bound lsfpb
 LEFT JOIN account       a  ON a.id  = lsfpb.account_id
 LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id
-JOIN asset               c  ON c.id  = lsfpb.currency_asset_id`
+JOIN asset               c  ON c.id  = lsfpb.currency_asset_id
+UNION ALL
+SELECT 'spot_funds_limit_mode' AS kind, 'global' AS scope,
+       NULL AS account_code, NULL AS account_group_code,
+       NULL AS asset_code, NULL AS currency_code,
+       NULL AS max_orders, NULL AS window,
+       NULL AS max_quantity, NULL AS max_notional,
+       NULL AS lower_bound, NULL AS upper_bound,
+       s.value AS mode,
+       'spot_funds_limit_mode:global' AS stable_id
+FROM setting s
+WHERE s.key = '` + domain.SettingKeySpotFundsLimitMode + `'`
 
-// ListPolicyRows returns the typed barrier tables flattened into one sorted,
-// paged list with the pre-paging total. It applies filters in SQL and
+// ListPolicyRows returns the typed barrier tables and the meta-policy setting
+// flattened into one sorted, paged list with the pre-paging total. It applies filters in SQL and
 // reconstructs each row's typed value from the projected columns.
 func (r *realmStore) ListPolicyRows(
 	ctx context.Context, filter fwstore.PolicyListFilter,
@@ -112,7 +130,7 @@ func (r *realmStore) ListPolicyRows(
 	query := `SELECT kind, scope, account_code, account_group_code,
 		       asset_code, currency_code,
 	       max_orders, window, max_quantity, max_notional,
-	       lower_bound, upper_bound` + from + policyListOrderBy(filter.Sort)
+	       lower_bound, upper_bound, mode` + from + policyListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
@@ -227,12 +245,13 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 		maxQuantity                   sql.NullString
 		maxNotional                   sql.NullString
 		lowerBound, upperBound        sql.NullString
+		mode                          sql.NullString
 	)
 	if err := rows.Scan(
 		&kind, &scope, &accountCode, &accountGroupCode,
 		&assetCode, &currencyCode,
 		&maxOrders, &windowStr, &maxQuantity, &maxNotional,
-		&lowerBound, &upperBound,
+		&lowerBound, &upperBound, &mode,
 	); err != nil {
 		return fwstore.PolicyListRow{}, fmt.Errorf("store: scan policy row: %w", err)
 	}
@@ -285,6 +304,20 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 			Currency:     currencyCode.String,
 			LowerBound:   lowerBound.String,
 			UpperBound:   upperBound.String,
+		}
+	case fwstore.PolicyKindSpotFundsLimitMode:
+		parsed, err := domain.ParseSpotFundsLimitMode(mode.String)
+		if err != nil {
+			// An unknown stored value is corruption, not caller input: discard
+			// the parse error's validation chain.
+			return fwstore.PolicyListRow{}, fmt.Errorf(
+				"store: setting %q holds invalid stored value %q",
+				domain.SettingKeySpotFundsLimitMode, mode.String,
+			)
+		}
+		row.SpotFundsLimitMode = &domain.LimitSpotFundsLimitMode{
+			Scope: scope,
+			Mode:  parsed,
 		}
 	default:
 		return fwstore.PolicyListRow{}, fmt.Errorf(

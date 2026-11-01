@@ -19,10 +19,12 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +33,267 @@ import (
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+func TestGetSpotFundsLimitMode(t *testing.T) {
+	trackOnly := domain.SpotFundsLimitModeState{Mode: domain.SpotFundsLimitModeTrackOnly, Stored: true}
+	for _, tc := range []struct {
+		name     string
+		state    domain.SpotFundsLimitModeState
+		accounts []domain.AccountID
+		want     string
+	}{
+		{"accounts", trackOnly, []domain.AccountID{"acc-1"},
+			`{"mode":"track_only","stored":true,"accountsWithoutCurrency":["acc-1"]}`},
+		{"nil accounts", trackOnly, nil,
+			`{"mode":"track_only","stored":true,"accountsWithoutCurrency":[]}`},
+		{"no row", domain.SpotFundsLimitModeState{Mode: domain.SpotFundsLimitModeEnforce}, nil,
+			`{"mode":"enforce","stored":false,"accountsWithoutCurrency":[]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := tc.state
+			state.AccountsWithoutCurrency = tc.accounts
+			svc := &fakeService{spotFundsLimitModeState: state}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/limits/spot-funds-limit-mode", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			if got := strings.TrimSpace(rec.Body.String()); got != tc.want {
+				t.Fatalf("body = %s, want %s", got, tc.want)
+			}
+			if svc.spotFundsLimitModeGetCalls != 1 {
+				t.Fatalf("get calls = %d, want 1", svc.spotFundsLimitModeGetCalls)
+			}
+		})
+	}
+}
+
+// TestPutSpotFundsLimitMode proves the put takes the meta-policy body,
+// forwards it verbatim, and answers the value read back under its own key,
+// while a field the body does not carry, an axis among them, is refused before
+// the service.
+func TestPutSpotFundsLimitMode(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		body        string
+		wantStatus  int
+		wantCalls   int
+		wantPointer string
+	}{
+		{"track only", `{"scope":"global","mode":"track_only"}`, http.StatusOK, 1, ""},
+		{"unknown field", `{"scope":"global","mode":"track_only","extra":true}`, http.StatusUnprocessableEntity, 0, "/extra"},
+		{"account axis", `{"scope":"global","mode":"track_only","account":"acc-1"}`, http.StatusUnprocessableEntity, 0, "/account"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/spot-funds-limit-mode", strings.NewReader(tc.body)))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if svc.spotFundsLimitModePutCalls != tc.wantCalls {
+				t.Fatalf("put calls = %d, want %d", svc.spotFundsLimitModePutCalls, tc.wantCalls)
+			}
+			if tc.wantStatus == http.StatusUnprocessableEntity {
+				m := bodyMap(t, rec.Result())
+				errObj, _ := m["error"].(map[string]any)
+				if errObj["code"] != "validation" || errObj["message"] != "unknown field in request body" {
+					t.Fatalf("want unknown %s validation problem, got %+v", tc.wantPointer, errObj)
+				}
+				problems, _ := m["errors"].([]any)
+				if len(problems) != 1 {
+					t.Fatalf("problems = %v, want one", problems)
+				}
+				problem, _ := problems[0].(map[string]any)
+				if problem["pointer"] != tc.wantPointer || problem["constraint"] != "unknown_field" {
+					t.Fatalf("want unknown %s validation detail, got %+v", tc.wantPointer, problem)
+				}
+				if svc.listLimitsCalls != 0 {
+					t.Fatalf("refused put read the stored row: list calls = %d", svc.listLimitsCalls)
+				}
+				return
+			}
+			want := domain.LimitSpotFundsLimitMode{
+				Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
+			}
+			if svc.spotFundsLimitModePut != want {
+				t.Fatalf("put = %+v, want %+v", svc.spotFundsLimitModePut, want)
+			}
+			if svc.listLimitsCalls != 1 || svc.spotFundsLimitModeGetCalls != 0 {
+				t.Fatalf("read-back = (list %d, effective %d), want the stored row read once",
+					svc.listLimitsCalls, svc.spotFundsLimitModeGetCalls)
+			}
+			const wantBody = `{"spotFundsLimitMode":{"scope":"global","mode":"track_only"}}`
+			if got := strings.TrimSpace(rec.Body.String()); got != wantBody {
+				t.Fatalf("body = %s, want %s", got, wantBody)
+			}
+		})
+	}
+}
+
+// TestPutSpotFundsLimitModeAnswersReadBack proves the put answers the stored
+// row it reads back, not the body it was sent, and answers the absent-barrier
+// status when no row is stored after the put.
+func TestPutSpotFundsLimitModeAnswersReadBack(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stored     []domain.LimitSpotFundsLimitMode
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			"stored row", []domain.LimitSpotFundsLimitMode{{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce}},
+			http.StatusOK, `{"spotFundsLimitMode":{"scope":"global","mode":"enforce"}}`,
+		},
+		{"no row", nil, http.StatusNotFound, `{"error":{"code":"not_found","message":"not found"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &readBackModeService{fakeService: &fakeService{}, stored: tc.stored}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/spot-funds-limit-mode",
+				strings.NewReader(`{"scope":"global","mode":"track_only"}`)))
+			if rec.Code != tc.wantStatus || strings.TrimSpace(rec.Body.String()) != tc.wantBody {
+				t.Fatalf("status = %d, body = %s; want %d %s", rec.Code, rec.Body.String(), tc.wantStatus, tc.wantBody)
+			}
+		})
+	}
+}
+
+// readBackModeService stores a put but reads back its own fixed rows, so an
+// answer that echoes the body instead of the stored row is caught.
+type readBackModeService struct {
+	*fakeService
+	stored []domain.LimitSpotFundsLimitMode
+}
+
+func (s *readBackModeService) ListLimits(context.Context, domain.AccountID) (node.AccountLimits, error) {
+	return node.AccountLimits{SpotFundsLimitModes: s.stored}, nil
+}
+
+func TestSpotFundsLimitModeErrors(t *testing.T) {
+	accountScope := domain.LimitSpotFundsLimitMode{
+		Scope: domain.ScopeAccount, Mode: domain.SpotFundsLimitModeEnforce,
+	}.Validate()
+	for _, tc := range []struct {
+		name           string
+		method         string
+		body           string
+		err            error
+		wantStatus     int
+		wantCode       string
+		wantPointer    string
+		wantConstraint string
+	}{
+		{"required", http.MethodPut, `{"scope":"global","mode":""}`, domain.ValidateSpotFundsLimitMode(""), http.StatusUnprocessableEntity, "validation", "/mode", "required"},
+		{"absent", http.MethodPut, `{"scope":"global"}`, domain.ValidateSpotFundsLimitMode(""), http.StatusUnprocessableEntity, "validation", "/mode", "required"},
+		{"unsupported", http.MethodPut, `{"scope":"global","mode":"unknown"}`, domain.ValidateSpotFundsLimitMode("unknown"), http.StatusUnprocessableEntity, "validation", "/mode", "unsupported_value"},
+		{"account scope", http.MethodPut, `{"scope":"account","mode":"enforce"}`, accountScope, http.StatusUnprocessableEntity, "validation", "/scope", "enum"},
+		{"loosening", http.MethodPut, `{"scope":"global","mode":"track_only"}`, fmt.Errorf("mode change: %w", domain.ErrLoosening), http.StatusForbidden, "loosening_refused", "", ""},
+		{"restarting", http.MethodPut, `{"scope":"global","mode":"track_only"}`, fmt.Errorf("mode change: %w", domain.ErrEngineRestarting), http.StatusServiceUnavailable, "engine_restarting", "", ""},
+		{"read error", http.MethodGet, "", fmt.Errorf("mode read: %w", domain.ErrEngineRestarting), http.StatusServiceUnavailable, "engine_restarting", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{putSpotFundsLimitModeErr: tc.err, spotFundsLimitModeErr: tc.err}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(tc.method, "/api/v1/limits/spot-funds-limit-mode", strings.NewReader(tc.body)))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			m := bodyMap(t, rec.Result())
+			if tc.wantPointer != "" {
+				problems, _ := m["errors"].([]any)
+				if len(problems) != 1 {
+					t.Fatalf("problems = %v, want one", problems)
+				}
+				problem, _ := problems[0].(map[string]any)
+				if problem["code"] != tc.wantCode || problem["pointer"] != tc.wantPointer || problem["constraint"] != tc.wantConstraint {
+					t.Fatalf("problem = %v, want %s at %s (%s)", problem, tc.wantCode, tc.wantPointer, tc.wantConstraint)
+				}
+			} else {
+				problem, _ := m["error"].(map[string]any)
+				if problem["code"] != tc.wantCode {
+					t.Fatalf("code = %v, want %s", problem["code"], tc.wantCode)
+				}
+			}
+			if tc.method == http.MethodPut {
+				var req httpx.SpotFundsLimitModeLimitDTO
+				if err := json.Unmarshal([]byte(tc.body), &req); err != nil {
+					t.Fatal(err)
+				}
+				if svc.spotFundsLimitModePutCalls != 1 || svc.spotFundsLimitModePut != httpx.FromSpotFundsLimitModeLimitDTO(req) {
+					t.Fatalf("service write = (%d, %+v), want (1, %+v)", svc.spotFundsLimitModePutCalls, svc.spotFundsLimitModePut, req)
+				}
+				if svc.listLimitsCalls != 0 {
+					t.Fatalf("failed put read the stored row back: list calls = %d", svc.listLimitsCalls)
+				}
+			}
+		})
+	}
+}
+
+// TestPutSpotFundsLimitModeReadBackError proves a failed read-back after a
+// stored put answers the read's error, not a stale body.
+func TestPutSpotFundsLimitModeReadBackError(t *testing.T) {
+	svc := &fakeService{listLimErr: fmt.Errorf("limits read: %w", domain.ErrEngineRestarting)}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/spot-funds-limit-mode",
+		strings.NewReader(`{"scope":"global","mode":"enforce"}`)))
+	if rec.Code != http.StatusServiceUnavailable || svc.spotFundsLimitModePutCalls != 1 {
+		t.Fatalf("status = %d, put calls = %d; want 503 after one put", rec.Code, svc.spotFundsLimitModePutCalls)
+	}
+}
+
+// TestDeleteSpotFundsLimitMode proves DELETE /limits removes the meta-policy
+// row like any barrier: 204 on success, and the absent-barrier status when no
+// mode is stored.
+func TestDeleteSpotFundsLimitMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{"stored", nil, http.StatusNoContent},
+		{"absent", fmt.Errorf("setting %q: %w", domain.SettingKeySpotFundsLimitMode, domain.ErrNotFound), http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{delLimErr: tc.err}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete,
+				"/api/v1/limits?policy=spot_funds_limit_mode&scope=global", nil))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			want := node.LimitTarget{Policy: domain.PolicySpotFundsLimitMode, Scope: domain.ScopeGlobal}
+			if svc.deleteLimitTarget != want {
+				t.Fatalf("delete target = %+v, want %+v", svc.deleteLimitTarget, want)
+			}
+		})
+	}
+}
 
 func TestListLimits(t *testing.T) {
 	svc := &fakeService{
@@ -127,6 +390,38 @@ func TestListLimitsSpotFundsPnlBoundsValues(t *testing.T) {
 		spotFunds["lowerBound"] != "-1000.50" ||
 		spotFunds["upperBound"] != "5000.25" {
 		t.Fatalf("unexpected spot-funds values: %v", spotFunds)
+	}
+}
+
+// TestListLimitsSpotFundsLimitModeRow proves the meta-policy row is listed as
+// one global row with no axis and its mode under values.spotFundsLimitMode,
+// and that ?policy=spot_funds_limit_mode selects its kind.
+func TestListLimitsSpotFundsLimitModeRow(t *testing.T) {
+	svc := &fakeService{
+		policyRows: []store.PolicyListRow{{
+			Kind:  store.PolicyKindSpotFundsLimitMode,
+			Scope: domain.ScopeGlobal,
+			SpotFundsLimitMode: &domain.LimitSpotFundsLimitMode{
+				Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
+			},
+		}},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/limits?policy=spot_funds_limit_mode", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.policyFilter.Kind == nil || *svc.policyFilter.Kind != store.PolicyKindSpotFundsLimitMode {
+		t.Fatalf("filter kind = %v, want spot_funds_limit_mode", svc.policyFilter.Kind)
+	}
+	const want = `{"policies":[{"kind":"spot_funds_limit_mode","scope":"global","account":"",` +
+		`"accountGroup":"","asset":"","values":{"spotFundsLimitMode":{"mode":"track_only"}}}],"total":1}`
+	if got := strings.TrimSpace(rec.Body.String()); got != want {
+		t.Fatalf("body = %s, want %s", got, want)
 	}
 }
 
@@ -768,6 +1063,9 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-1",
 				Currency: "USD", LowerBound: "-1000", UpperBound: "5000"},
 		},
+		SpotFundsLimitModes: []domain.LimitSpotFundsLimitMode{
+			{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly},
+		},
 	}
 	b, err := json.Marshal(httpx.ToAccountLimitsDTO(limits))
 	if err != nil {
@@ -813,5 +1111,12 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 	}
 	if spotFundsPnl["currency"] != "USD" {
 		t.Fatalf("SpotFundsPnlBoundsLimitDTO currency = %v, want USD", spotFundsPnl["currency"])
+	}
+	modes, _ := m["spotFundsLimitModes"].([]any)
+	if len(modes) != 1 {
+		t.Fatalf("want 1 spot funds limit mode, got %v", m["spotFundsLimitModes"])
+	}
+	if mode := modes[0].(map[string]any); mode["scope"] != "global" || mode["mode"] != "track_only" {
+		t.Fatalf("SpotFundsLimitModeLimitDTO = %v, want global track_only", mode)
 	}
 }

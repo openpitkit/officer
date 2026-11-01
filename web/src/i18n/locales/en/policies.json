@@ -1,4 +1,21 @@
 {
+  "spotFundsMode": {
+    "modes": {
+      "enforce": {
+        "title": "Check funds",
+        "description": "Refuses an order that needs more funds than the account holds. Switching back to this mode keeps balances as they are, including negative balances, and refuses orders that need funds against them."
+      },
+      "track_only": {
+        "title": "Accounting without blocking",
+        "description": "Orders pass from zero and are accounted; only the refusal for insufficient funds is lifted. Balances and positions may go negative. Accounting and every policy you set - P&L bounds, rate and order size - keep working and still stop trading. Accounting starts from zero - only orders through Officer count; venue positions are not imported."
+      }
+    },
+    "loadError": "Could not load Spot Funds limit mode",
+    "withoutCurrency": {
+      "title": "P&L bounds block accounts without a currency",
+      "detail": "A P&L bound blocks these accounts because they have no currency, so their P&L cannot be counted. Set a currency on the account or its group."
+    }
+  },
   "title": "Policies",
   "intro": "Relational risk-policy barriers persisted in the control plane and applied to the OpenPit engine per policy. Each row is one barrier for a target.",
   "addPolicy": "Add policy",
@@ -78,6 +95,7 @@
     "rateLimitFootnote": "Both max orders and window are required.",
     "atLeastOneFootnote": "At least one value is required.",
     "pnlBoundsFootnote": "Currency and at least one P&L bound are required.",
+    "modeFootnote": "A mode is required.",
     "fxFailSafeNote": "FX fail-safe: an account under P&L control is blocked when a required input is missing, for example an FX quote needed to value realized P&L in the account currency. FX is required only when needed, not for assets already in the account currency and not for accounts outside P&L control.",
     "positionFailSafeNote": "Price fail-safe: an account under P&L control is blocked when a required input is missing, for example the current price of a held asset or an FX quote needed to value the open position in the account currency. FX is required only when needed, not for assets already in the account currency and not for accounts outside P&L control.",
     "save": "Save"

@@ -175,6 +175,7 @@
     "currency": "moeda",
     "lower_bound": "piso",
     "upper_bound": "teto",
+    "mode": "modo",
     "reservationRemainder": "reserva restante",
     "overfill": "execução excedente",
     "preReportReserveQty": "reserva anterior ao relatório",

@@ -765,6 +765,10 @@ func (e *realGateEngine) ConfigurePolicy(
 ) (engine.PolicyConfigurationResult, error) {
 	return engine.PolicyConfigurationResult{}, nil
 }
+
+func (e *realGateEngine) SetSpotFundsTrackOnly(context.Context, bool) error {
+	return nil
+}
 func (*realGateEngine) SpotFundsAccountPnlAssignment(
 	pnl string,
 	haltReason domain.PnlHaltReason,

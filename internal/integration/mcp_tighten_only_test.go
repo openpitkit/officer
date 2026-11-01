@@ -55,8 +55,16 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 			"is configured, as its engine rebuild resets every rate window " +
 			"(framework/node/local_limits.go: PutRateLimit, guardTightenOnlyOrderSize, " +
 			"guardTightenOnlySpotFundsPnlBounds, through the NoLooserThan methods of " +
-			"framework/domain/limits.go); the tool removes no barrier.",
-		proof: TestSetLimitRateOnControlPlane,
+			"framework/domain/limits.go), and the Spot Funds limit-mode switch from " +
+			"enforce to track_only, as it lifts the funds refusal for every account " +
+			"(framework/node/local_spot_funds_limit_mode.go: SetSpotFundsLimitMode, " +
+			"through framework/domain/limits.go: SpotFundsLimitMode.NoLooserThan); " +
+			"the tool removes no barrier.",
+		proof: func(t *testing.T) {
+			t.Parallel()
+			t.Run("rate limit", TestSetLimitRateOnControlPlane)
+			t.Run("spot funds limit mode", TestSetLimitSpotFundsLimitModeRefusesLooseningOnControlPlane)
+		},
 	},
 	"create_account": {
 		reason: "The core refuses every account creation by an agent, as a new " +

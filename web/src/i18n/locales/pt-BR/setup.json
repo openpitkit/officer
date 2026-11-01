@@ -9,6 +9,7 @@
     "steps": {
       "welcome": "Boas-vindas",
       "accounts": "Contas",
+      "funds": "Verificação de fundos",
       "encryption": "Criptografia",
       "signing": "Assinatura",
       "access": "Acesso",
@@ -29,6 +30,15 @@
     "title": "Quantas contas você vai usar?",
     "lead": "Com uma conta, o Officer atua somente nela e o painel não exibe campos de conta. O modo pode ser alterado depois na página Serviço.",
     "saveFirst": "Salve o modo para continuar."
+  },
+  "funds": {
+    "title": "Verificar os fundos antes de uma ordem?",
+    "lead": "O Officer recusa uma ordem que precisa de mais fundos do que a conta possui, ou a deixa passar e mantém a contabilidade. Todas as políticas que você definir se aplicam nos dois modos. O modo pode ser alterado depois na página Políticas.",
+    "chooseFirst": "Escolha um modo para continuar.",
+    "rail": {
+      "enforce": "Ativada",
+      "track_only": "Desativada"
+    }
   },
   "encryption": {
     "title": "Criptografar as chaves armazenadas com uma chave mestra?",

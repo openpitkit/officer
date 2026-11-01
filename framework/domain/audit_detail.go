@@ -315,6 +315,7 @@ var auditDetailFieldNames = map[string]bool{
 	"currency":             true,
 	"lower_bound":          true,
 	"upper_bound":          true,
+	"mode":                 true,
 	"reservationRemainder": true,
 	"overfill":             true,
 	"preReportReserveQty":  true,

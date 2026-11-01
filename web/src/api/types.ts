@@ -19,7 +19,10 @@
 // in api/client.ts so the UI does not depend on the JSON casing the Go handler
 // emits.
 
-import type { AdjustmentType } from "../framework/registries/vocabulary";
+import type {
+  AdjustmentType,
+  SpotFundsLimitMode,
+} from "../framework/registries/vocabulary";
 
 // --- Legacy types (status/health endpoint, kept for backward compatibility) ---
 
@@ -289,7 +292,8 @@ export type PolicyKind =
   | "order_size_limit"
   | "spot_funds_pnl_bounds_kill_switch"
   | "spot_funds_unrealized_pnl_bounds_kill_switch"
-  | "spot_funds_total_pnl_bounds_kill_switch";
+  | "spot_funds_total_pnl_bounds_kill_switch"
+  | "spot_funds_limit_mode";
 
 /** Rate-limit barrier values (window in ms, integer order cap). */
 export interface PolicyRateValues {
@@ -310,11 +314,17 @@ export interface PolicyPnlBoundsValues {
   upperBound: string;
 }
 
+/** Funds-check mode of the Officer-level spot_funds_limit_mode policy. */
+export interface PolicySpotFundsLimitModeValues {
+  mode: SpotFundsLimitMode;
+}
+
 /** Discriminated value carrier: exactly one member is present per `kind`. */
 export interface PolicyValues {
   rate?: PolicyRateValues;
   orderSize?: PolicyOrderSizeValues;
   spotFundsPnlBounds?: PolicyPnlBoundsValues;
+  spotFundsLimitMode?: PolicySpotFundsLimitModeValues;
 }
 
 /** One policy row from the unified, paged GET /limits list (the policyDTO wire
@@ -335,7 +345,8 @@ export type PolicyFilter =
   | "order_size"
   | "spot_funds_pnl_bounds"
   | "spot_funds_unrealized_pnl_bounds"
-  | "spot_funds_total_pnl_bounds";
+  | "spot_funds_total_pnl_bounds"
+  | "spot_funds_limit_mode";
 
 /** Filter options accepted by the unified, paged GET /limits list. */
 export interface PolicyListFilters extends PageRequest, SortSpec {
@@ -413,6 +424,9 @@ export interface AdjustmentRejected {
 
 /** What an adjustment books; declared with ADJUSTMENT_TYPES, its one source. */
 export type { AdjustmentType };
+
+/** The funds-check mode; declared with SPOT_FUNDS_LIMIT_MODES, its one source. */
+export type { SpotFundsLimitMode };
 
 /** The request body captured on an adjustment record. */
 export interface AdjustmentRequest {

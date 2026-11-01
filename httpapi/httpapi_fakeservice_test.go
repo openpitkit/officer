@@ -145,6 +145,16 @@ type fakeService struct {
 	auditErr              error
 	groupErr              error
 
+	spotFundsLimitModeState    domain.SpotFundsLimitModeState
+	spotFundsLimitModeErr      error
+	spotFundsLimitModeGetCalls int
+	spotFundsLimitModePut      domain.LimitSpotFundsLimitMode
+	spotFundsLimitModePutCalls int
+	putSpotFundsLimitModeErr   error
+	// listLimitsCalls counts ListLimits reads, the route a stored barrier is
+	// read back by.
+	listLimitsCalls int
+
 	// Captured account writes, so a test can prove a rejected request changed
 	// nothing. The account fixtures themselves stay untouched.
 	createdAccounts    []domain.Account
@@ -520,6 +530,7 @@ func (f *fakeService) DeleteAccount(
 	return f.stateErr
 }
 func (f *fakeService) ListLimits(_ context.Context, _ domain.AccountID) (node.AccountLimits, error) {
+	f.listLimitsCalls++
 	return f.limits, f.listLimErr
 }
 func (f *fakeService) ListPolicyRows(
@@ -545,6 +556,24 @@ func (f *fakeService) PutOrderSizeLimit(
 	f.missingAccount = missing
 	return f.putLimErr
 }
+func (f *fakeService) SpotFundsLimitMode(_ context.Context) (domain.SpotFundsLimitModeState, error) {
+	f.spotFundsLimitModeGetCalls++
+	return f.spotFundsLimitModeState, f.spotFundsLimitModeErr
+}
+
+// PutSpotFundsLimitMode records the put and, unless it is told to fail,
+// stores the row, so a read-back answers it.
+func (f *fakeService) PutSpotFundsLimitMode(_ context.Context, limit domain.LimitSpotFundsLimitMode) error {
+	f.spotFundsLimitModePut = limit
+	f.spotFundsLimitModePutCalls++
+	if f.putSpotFundsLimitModeErr != nil {
+		return f.putSpotFundsLimitModeErr
+	}
+	f.spotFundsLimitModeState.Mode = limit.Mode
+	f.limits.SpotFundsLimitModes = []domain.LimitSpotFundsLimitMode{limit}
+	return nil
+}
+
 func (f *fakeService) PutSpotFundsPnlBoundsLimit(
 	_ context.Context,
 	l domain.LimitSpotFundsPnlBounds,

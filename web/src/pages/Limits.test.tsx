@@ -22,8 +22,12 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Limit, PolicyListFilters } from "@/api/types";
+import type { Limit, PolicyListFilters, SpotFundsLimitMode } from "@/api/types";
 import { useLimitsPage } from "@/api/useLimits";
+import {
+  useSpotFundsLimitMode,
+  type SpotFundsLimitModeState,
+} from "@/api/spotFundsLimitMode";
 import type { PollingResult } from "@/api/usePolling";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { renderWithApi as render } from "@/test/apiClient";
@@ -44,6 +48,7 @@ vi.mock("@/api/usePreMigrationBackups", () => ({
     reload: () => {},
   }),
 }));
+vi.mock("@/api/spotFundsLimitMode", () => ({ useSpotFundsLimitMode: vi.fn() }));
 // SensitiveDataBanner polls GET /credential-storage.
 vi.mock("@/api/useCredentialStorage", () => ({
   useCredentialStorage: () => ({
@@ -174,6 +179,7 @@ vi.mock("@/components/ui/select", async () => {
 });
 
 const useLimitsMock = vi.mocked(useLimitsPage);
+const useSpotFundsModeMock = vi.mocked(useSpotFundsLimitMode);
 const fetchAccountsMock = vi.fn();
 const fetchAssetsMock = vi.fn();
 const fetchGroupsMock = vi.fn();
@@ -262,11 +268,237 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await i18n.changeLanguage("en");
   useLimitsMock.mockReturnValue(readyPage());
+  useSpotFundsModeMock.mockReturnValue({
+    load: {
+      state: "ready",
+      data: { mode: "enforce", stored: false, accountsWithoutCurrency: [] },
+      error: null,
+    },
+    reload: vi.fn(),
+  });
   fetchAccountsMock.mockResolvedValue([]);
   fetchAssetsMock.mockResolvedValue([]);
   fetchGroupsMock.mockResolvedValue([]);
   putLimitMock.mockResolvedValue(undefined);
   deleteLimitMock.mockResolvedValue(undefined);
+});
+
+/** The global funds limit mode policy row as GET /limits lists it. */
+function modeLimit(mode: SpotFundsLimitMode): Limit {
+  return {
+    policy: "spot_funds_limit_mode",
+    scope: "global",
+    account: "",
+    accountGroup: "",
+    asset: "",
+    values: { mode },
+  };
+}
+
+/** Make the funds-mode hook answer `mode` with `accountsWithoutCurrency`, and
+ *  return the reload it hands the page. */
+function answerFundsMode(
+  mode: SpotFundsLimitMode,
+  accountsWithoutCurrency: string[],
+) {
+  const reload = vi.fn();
+  const poll: PollingResult<SpotFundsLimitModeState> = {
+    load: {
+      state: "ready",
+      data: { mode, stored: true, accountsWithoutCurrency },
+      error: null,
+    },
+    reload,
+  };
+  useSpotFundsModeMock.mockReturnValue(poll);
+  return reload;
+}
+
+describe("Limits currency warning", () => {
+  it("renders the hook's warning above the policy filter bar and table, with no mode card", () => {
+    answerFundsMode("track_only", ["desk-a"]);
+    useLimitsMock.mockReturnValue(readyPage([accountRateLimit("desk-a")]));
+    renderLimits();
+
+    expect(useSpotFundsModeMock).toHaveBeenCalled();
+    const warning = screen.getByText(
+      "P&L bounds block accounts without a currency",
+    );
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
+    expect(screen.queryByText("Spot Funds limit mode")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "desk-a" })).toHaveAttribute(
+      "href",
+      "/accounts?code=desk-a&codeMatch=exact",
+    );
+    const filter = screen.getByLabelText("Filter by account");
+    const table = screen.getByRole("table");
+    for (const later of [filter, table]) {
+      expect(
+        warning.compareDocumentPosition(later) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+  });
+
+  it("passes the hook's load failure and retry to the warning", async () => {
+    const user = userEvent.setup();
+    const reload = vi.fn();
+    useSpotFundsModeMock.mockReturnValue({
+      load: { state: "error", data: null, error: "mode unavailable" },
+      reload,
+    });
+    renderLimits();
+
+    expect(
+      screen.getByText("Could not load Spot Funds limit mode"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("mode unavailable")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the warning after a policy is saved from the dialog", async () => {
+    const user = userEvent.setup();
+    const reload = answerFundsMode("enforce", []);
+    renderLimits();
+
+    const dialog = await openAddDialog(user);
+    await chooseInDialog(user, dialog, 0, "Funds limit mode");
+    await user.click(
+      within(dialog).getByRole("radio", {
+        name: "Accounting without blocking",
+      }),
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
+
+    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+
+  it("refreshes the warning after a policy is deleted", async () => {
+    const user = userEvent.setup();
+    const reload = answerFundsMode("track_only", ["desk-a"]);
+    useLimitsMock.mockReturnValue(readyPage([modeLimit("track_only")]));
+    renderLimits();
+
+    const confirm = await openDeleteConfirm(user, "Funds limit mode");
+    await user.click(within(confirm).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(deleteLimitMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("Limits funds limit mode policy", () => {
+  it.each([
+    ["enforce", "Check funds"],
+    ["track_only", "Accounting without blocking"],
+  ] as const)(
+    "shows the localized name of the %s mode, never the wire value",
+    (mode, name) => {
+      useLimitsMock.mockReturnValue(readyPage([modeLimit(mode)]));
+      renderLimits();
+
+      const row = within(policyRow("Funds limit mode"));
+      expect(row.getByText("mode")).toBeInTheDocument();
+      expect(row.getByText(name)).toBeInTheDocument();
+      expect(row.queryByText(mode)).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps the chips of the other kinds as stored", () => {
+    useLimitsMock.mockReturnValue(readyPage([accountRateLimit("acc-1")]));
+    renderLimits();
+
+    const row = within(policyRow("Rate limit"));
+    expect(row.getByText("max_orders")).toBeInTheDocument();
+    expect(row.getByText("100")).toBeInTheDocument();
+    expect(row.getByText("1s")).toBeInTheDocument();
+    expect(row.queryByText("mode")).not.toBeInTheDocument();
+  });
+
+  it("filters by the funds limit mode without polling its count", async () => {
+    const user = userEvent.setup();
+    renderLimits();
+
+    // The mode never rebuilds the engine, so no rebuild warning reads its
+    // count and the page does not ask for it.
+    expect(
+      latestPolicyFiltersMatching(
+        (filters) =>
+          filters?.policy === "spot_funds_limit_mode" && filters.limit === 1,
+      ),
+    ).toBeUndefined();
+
+    const policyField = screen.getByText("Filter by policy").parentElement;
+    if (!policyField) {
+      throw new Error("policy filter field not found");
+    }
+    await user.click(within(policyField).getByRole("combobox"));
+    await user.click(screen.getByRole("option", { name: "Funds limit mode" }));
+
+    expect(
+      latestPolicyFiltersMatching(
+        (filters) =>
+          filters?.policy === "spot_funds_limit_mode" && filters.limit !== 1,
+      ),
+    ).toEqual(expect.objectContaining({ policy: "spot_funds_limit_mode" }));
+    expect(
+      screen.getByText(/whether Officer checks funds before an order/),
+    ).toBeInTheDocument();
+  });
+
+  it("accepts the funds limit mode filter from the URL", () => {
+    renderLimits("/policies?policy=spot_funds_limit_mode");
+
+    expect(
+      latestPolicyFiltersMatching(
+        (filters) =>
+          filters?.policy === "spot_funds_limit_mode" && filters.limit !== 1,
+      ),
+    ).toEqual(expect.objectContaining({ policy: "spot_funds_limit_mode" }));
+  });
+
+  it("warns of an engine rebuild when the last rate limit is deleted", async () => {
+    const user = userEvent.setup();
+    useLimitsMock.mockReturnValue(readyPage([accountRateLimit("acc-1")]));
+    renderLimits();
+
+    const confirm = await openDeleteConfirm(user, "Rate limit");
+
+    expect(
+      within(confirm).getByText(/rebuilds the risk engine/),
+    ).toBeInTheDocument();
+  });
+
+  it("deletes the only row of the mode without the engine-rebuild warning", async () => {
+    const user = userEvent.setup();
+    useLimitsMock.mockReturnValue(readyPage([modeLimit("track_only")]));
+    renderLimits();
+
+    const confirm = await openDeleteConfirm(user, "Funds limit mode");
+    expect(
+      within(confirm).getByText(
+        "This removes the Funds limit mode barrier on Global.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(confirm).queryByText(/rebuilds the risk engine/),
+    ).not.toBeInTheDocument();
+    await user.click(within(confirm).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(deleteLimitMock).toHaveBeenCalledWith({
+        policy: "spot_funds_limit_mode",
+        scope: "global",
+        account: "",
+        accountGroup: "",
+        asset: "",
+      }),
+    );
+  });
 });
 
 describe("Limits identity filters", () => {
@@ -961,6 +1193,122 @@ async function openDeleteConfirm(
   );
   return screen.findByRole("alertdialog", { name: "Delete policy barrier?" });
 }
+
+describe("LimitDialog funds limit mode", () => {
+  async function openModeDialog(user: ReturnType<typeof userEvent.setup>) {
+    renderLimits();
+    const dialog = await openAddDialog(user);
+    await chooseInDialog(user, dialog, 0, "Funds limit mode");
+    return dialog;
+  }
+
+  it("offers only the global scope and no account, group or asset field", async () => {
+    const user = userEvent.setup();
+    const dialog = await openModeDialog(user);
+
+    const scope = within(dialog).getAllByRole("combobox")[1];
+    expect(scope).toHaveTextContent("global");
+    await user.click(scope);
+    expect(within(dialog).getAllByRole("option")).toHaveLength(1);
+    expect(
+      within(dialog).getByRole("option", { name: "Global" }),
+    ).toBeInTheDocument();
+    for (const field of ["Account", "Account group", "Asset"]) {
+      expect(within(dialog).queryByLabelText(field)).not.toBeInTheDocument();
+    }
+  });
+
+  it("preselects no mode and refuses to save until one is chosen", async () => {
+    const user = userEvent.setup();
+    const dialog = await openModeDialog(user);
+
+    const group = within(dialog).getByRole("radiogroup", { name: "mode" });
+    const radios = within(group).getAllByRole("radio");
+    expect(radios).toHaveLength(2);
+    for (const radio of radios) {
+      expect(radio).not.toBeChecked();
+    }
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "choose a funds limit mode",
+    );
+    expect(within(dialog).getByText("A mode is required.")).toBeInTheDocument();
+    const add = within(dialog).getByRole("button", { name: "Add policy" });
+    expect(add).toBeDisabled();
+    await user.click(add);
+    expect(putLimitMock).not.toHaveBeenCalled();
+
+    await user.click(within(group).getByRole("radio", { name: "Check funds" }));
+    expect(add).toBeEnabled();
+  });
+
+  it("saves the chosen mode as a global row without a rebuild confirmation", async () => {
+    const user = userEvent.setup();
+    const dialog = await openModeDialog(user);
+
+    await user.click(
+      within(dialog).getByRole("radio", {
+        name: "Accounting without blocking",
+      }),
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Rebuild and apply" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(putLimitMock).toHaveBeenCalledWith(
+        {
+          policy: "spot_funds_limit_mode",
+          scope: "global",
+          account: "",
+          accountGroup: "",
+          asset: "",
+          values: { mode: "track_only" },
+        },
+        "reject",
+      ),
+    );
+  });
+
+  it("preselects the stored mode on edit, locks policy and scope and saves a change", async () => {
+    const user = userEvent.setup();
+    renderLimitDialog(modeLimit("track_only"));
+
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByRole("radio", {
+        name: "Accounting without blocking",
+      }),
+    ).toBeChecked();
+    expect(
+      within(dialog).getByRole("radio", { name: "Check funds" }),
+    ).not.toBeChecked();
+    for (const combobox of within(dialog).getAllByRole("combobox")) {
+      expect(combobox).toBeDisabled();
+    }
+
+    await user.click(
+      within(dialog).getByRole("radio", { name: "Check funds" }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(putLimitMock).toHaveBeenCalledWith(
+        {
+          policy: "spot_funds_limit_mode",
+          scope: "global",
+          account: "",
+          accountGroup: "",
+          asset: "",
+          values: { mode: "enforce" },
+        },
+        "reject",
+      ),
+    );
+  });
+});
 
 describe("Limits with accounts shown", () => {
   it("shows the account column, filter and global toggle", () => {

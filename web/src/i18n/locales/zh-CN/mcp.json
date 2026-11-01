@@ -47,6 +47,9 @@
     "get_limits": {
       "description": "列出已配置的风险屏障，可按账户过滤。"
     },
+    "get_spot_funds_limit_mode": {
+      "description": "读取全局 Spot Funds 限额模式，以及因未设置货币而被 P&L 边界封锁的账户。"
+    },
     "get_audit": {
       "description": "读取控制面近期审计日志条目。"
     },
@@ -66,7 +69,7 @@
       "description": "对订单执行非变更性的交易前模拟校验（通过/拒绝 + 原因），不改变任何状态。"
     },
     "set_limit": {
-      "description": "收紧风险屏障：新增屏障或使其更严格；放宽和删除操作将被拒绝。"
+      "description": "收紧风险屏障：新增屏障或使其更严格，或将 Spot Funds 切换回“检查资金”模式；放宽和删除操作将被拒绝。"
     },
     "submit_order": {
       "description": "通过交易前校验提交订单意向，并获取批准信封。"

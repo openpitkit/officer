@@ -27,6 +27,7 @@
     },
     "positiveDecimal": "{{kind}} 必须为正小数",
     "decimal": "{{kind}} 必须为小数",
+    "mode": "未知的资金限额模式",
     "unknown": "未知类型 {{kind}}"
   },
   "limit": {
@@ -45,7 +46,8 @@
     "orderSizeSettlementNoQuantity": "结算资产范围不得携带 max_quantity",
     "pnlCurrencyRequired": "{{policy}} 需要指定货币",
     "pnlRequires": "{{policy}} 需要指定 lower_bound 或 upper_bound",
-    "pnlBoundOrder": "lower_bound 必须 <= upper_bound"
+    "pnlBoundOrder": "lower_bound 必须 <= upper_bound",
+    "modeRequired": "请选择资金限额模式"
   },
   "password": {
     "mismatch": "两次输入的密码不一致。"

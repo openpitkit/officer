@@ -44,9 +44,11 @@ import {
   useOfficerApi,
   type MissingAccountPolicy,
 } from "@/framework";
+import { isSpotFundsLimitMode } from "@/framework/registries/vocabulary";
 import { Autocomplete } from "@/components/Autocomplete";
 import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import { ErrorBanner } from "@/components/PageStates";
+import { SpotFundsModeCards } from "@/components/SpotFundsModeCards";
 import { accountScope } from "@/lib/accountScope";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -342,6 +344,7 @@ export function LimitDialog({
 
   const isEdit = editing !== null;
   const isSpotFundsPnl = isSpotFundsPnlPolicy(form.policy);
+  const isSpotFundsMode = form.policy === "spot_funds_limit_mode";
   const currencySuggestionResult = useAssetCodeSuggestions(
     form.values.currency ?? "",
     open && isSpotFundsPnl,
@@ -488,6 +491,7 @@ export function LimitDialog({
   const requiresEngineRebuild =
     !isEdit &&
     !isSpotFundsPnl &&
+    !isSpotFundsMode &&
     policyCount !== undefined &&
     policyCount === 0;
 
@@ -558,7 +562,7 @@ export function LimitDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {isEdit ? t("dialog.editTitle") : t("dialog.addTitle")}
@@ -723,14 +727,32 @@ export function LimitDialog({
                 const fieldHint = catalogHint || kindHint(t, form.policy, kind);
                 const isDuration = kind === "window";
                 const isCurrency = kind === "currency";
+                const isMode = kind === "mode";
+                const chosenMode = form.values[kind];
                 const currencyValidationError =
                   isCurrency &&
                   (validation?.key === "limit.pnlCurrencyRequired" ||
                     validation?.key.startsWith("asset."));
                 return (
                   <div key={kind} className="flex flex-col gap-y-1.5">
-                    <Label htmlFor={`kind-${kind}`}>{fieldLabel}</Label>
-                    {isDuration ? (
+                    <Label htmlFor={isMode ? undefined : `kind-${kind}`}>
+                      {fieldLabel}
+                    </Label>
+                    {isMode ? (
+                      <>
+                        <SpotFundsModeCards
+                          label={fieldLabel}
+                          value={
+                            isSpotFundsLimitMode(chosenMode) ? chosenMode : null
+                          }
+                          onChange={(mode) => setValue(kind, mode)}
+                          disabled={busy}
+                        />
+                        <p className="text-[0.6875rem] text-muted">
+                          {fieldHint}
+                        </p>
+                      </>
+                    ) : isDuration ? (
                       <DurationPicker
                         id={`kind-${kind}`}
                         value={form.values[kind] ?? ""}
@@ -788,7 +810,9 @@ export function LimitDialog({
                   ? t("dialog.rateLimitFootnote")
                   : isSpotFundsPnl
                     ? t("dialog.pnlBoundsFootnote")
-                    : t("dialog.atLeastOneFootnote")}
+                    : isSpotFundsMode
+                      ? t("dialog.modeFootnote")
+                      : t("dialog.atLeastOneFootnote")}
               </p>
             </div>
 

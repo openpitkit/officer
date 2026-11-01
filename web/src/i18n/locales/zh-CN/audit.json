@@ -175,6 +175,7 @@
     "currency": "货币",
     "lower_bound": "下限",
     "upper_bound": "上限",
+    "mode": "模式",
     "reservationRemainder": "剩余预留",
     "overfill": "超额成交",
     "preReportReserveQty": "报告前预留数量",

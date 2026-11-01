@@ -175,6 +175,7 @@
     "currency": "currency",
     "lower_bound": "lower bound",
     "upper_bound": "upper bound",
+    "mode": "mode",
     "reservationRemainder": "reservation remainder",
     "overfill": "overfill",
     "preReportReserveQty": "pre-report reserve",

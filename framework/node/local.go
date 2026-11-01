@@ -249,10 +249,10 @@ func (n *localNode) fatalPostCommitAudit(
 // fatal-shutdown hook, identifying the subject by its operator-facing code
 // (subjectKind is "account", "asset", "group", or "policy") rather than the
 // engine surrogate. The admin block, group, asset, and limit paths use it so
-// the diagnostic never resolves or emits the DB/engine account id; the audit row
-// itself already stores code and title only. Like fatalPostEnginePersistence
-// this is the straight-to-fatal cascade: the engine mutation committed and
-// its audit trail is now lost.
+// the diagnostic never resolves or emits the DB/engine account id; the audit
+// row itself already stores code and title only. Like
+// fatalPostEnginePersistence, this is the straight-to-fatal cascade: the engine
+// mutation committed and its audit trail is now lost.
 func (n *localNode) fatalPostEngineAuditByCode(
 	operation, subjectKind, code string, err error,
 ) error {
@@ -338,9 +338,11 @@ func (n *localNode) reconcileEngineAfterFailure(
 
 // loadSnapshot reads the full engine seed from the bound realm: accounts (with
 // their blocked state and group membership), the complete typed barrier set,
-// groups, and balances. It returns the assembled snapshot and the counts summary
-// for the hydrate audit detail. It runs once at NewLocalNode and again on every
-// administrative engine rebuild.
+// groups, balances, and the global Spot Funds limit mode, read from
+// domain.SettingKeySpotFundsLimitMode, where an absent key means Enforce. It
+// returns the assembled snapshot and the counts summary for the hydrate audit
+// detail. It runs once at NewLocalNode and again on every administrative
+// engine rebuild.
 func (n *localNode) loadSnapshot(
 	ctx context.Context,
 ) (engine.Snapshot, domain.AuditDetail, error) {
@@ -379,6 +381,10 @@ func (n *localNode) loadSnapshot(
 	if err != nil {
 		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load balances for build: %w", err)
 	}
+	spotFundsLimitMode, err := n.storedSpotFundsLimitMode(ctx)
+	if err != nil {
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load spot funds limit mode for build: %w", err)
+	}
 
 	snap := engine.Snapshot{
 		Assets:                   assets,
@@ -388,6 +394,7 @@ func (n *localNode) loadSnapshot(
 		SpotFundsPnlBoundsLimits: spotFundsPnlBoundsLimits,
 		Groups:                   groups,
 		Balances:                 balances,
+		SpotFundsTrackOnly:       spotFundsLimitMode == domain.SpotFundsLimitModeTrackOnly,
 	}
 	barriers := len(rateLimits) + len(orderSizeLimits) + len(spotFundsPnlBoundsLimits)
 	counts := domain.NewAuditDetail(domain.AuditDetailHydrate, domain.AuditDetailParams{
@@ -524,40 +531,64 @@ func (n *localNode) RestoreBackup(
 	normalizedScope := effectiveRestoreScope(
 		opts.Scope, archive.Manifest.Sections,
 	)
-	// Take the lane before asset classification and hold it until the restore
-	// finishes or upgrades to the exclusive restart gate below, so a concurrent
-	// dictionary change cannot invalidate the classification. A non-runtime
-	// restore keeps the lane for its whole duration, and a long one blocks every
-	// account lane once identity publication waits: that writer stops new readers.
-	_, endLane, err := n.beginLane()
+	// Settings scopes exclude account lanes before asset classification because
+	// they can change the live Spot Funds limit mode. Other scopes take a lane
+	// and either keep it or upgrade through a restart reservation. Neither path
+	// lets dictionary changes invalidate classification before the restore commits.
+	settingsScope := !backup.TouchesRuntime(normalizedScope) &&
+		normalizedScope.Included(backup.SectionGeneralSettings)
+	var endGate func()
+	var err error
+	if settingsScope {
+		err = n.beginLivePolicyConfiguration()
+		endGate = n.endLivePolicyConfiguration
+	} else {
+		_, endGate, err = n.beginLane()
+	}
 	if err != nil {
 		return backup.RestoreSummary{}, n.currentMarketDataSink(), err
 	}
 	addsAssets, err := restoreAddsAssets(ctx, archive.Data.Assets, n.realm)
 	if err != nil {
-		endLane()
+		endGate()
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),
 			fmt.Errorf("check restore asset additions: %w", err)
 	}
 	runtimeScope := backup.TouchesRuntime(normalizedScope) || addsAssets
 	if runtimeScope {
-		// Reserve restart ownership before waiting for the exclusive gates. A
-		// concurrent rebuild must reject instead of reserving restarting while this
-		// restore commits and then forcing a fatal post-commit collision. The
+		// Reserve restart ownership before committing. A concurrent rebuild must
+		// reject instead of reserving restarting while this restore commits and
+		// then forcing a fatal post-commit collision. The
 		// reservation does not itself require an engine replacement: expressible
 		// deltas still publish into the current engine below.
-		// beginEngineRestartFromLane consumes endLane on both outcomes.
-		if err := n.beginEngineRestartFromLane(endLane); err != nil {
+		if settingsScope {
+			if !n.restarting.CompareAndSwap(false, true) {
+				endGate()
+				return backup.RestoreSummary{}, n.currentMarketDataSink(), fmt.Errorf(
+					"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+					domain.ErrEngineRestarting,
+				)
+			}
+		} else if err := n.beginEngineRestartFromLane(endGate); err != nil {
+			// beginEngineRestartFromLane consumes endGate on both outcomes.
 			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
 		}
 		defer n.endEngineRestart()
+	} else if settingsScope {
+		defer endGate()
 	} else {
 		if err := n.beginMutation(); err != nil {
-			endLane()
+			endGate()
 			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
 		}
-		defer endLane()
+		defer endGate()
 		defer n.endMutation()
+	}
+
+	beforeMode, err := n.storedSpotFundsLimitMode(ctx)
+	if err != nil {
+		return backup.RestoreSummary{}, n.currentMarketDataSink(),
+			fmt.Errorf("read spot funds limit mode before restore: %w", err)
 	}
 
 	var beforeRuntime restoreRuntimeSnapshot
@@ -600,6 +631,15 @@ func (n *localNode) RestoreBackup(
 			durableCtx, rollback, normalizedScope,
 			opts.TradingProviderRequiresFeeAccount, cause,
 		)
+	}
+
+	afterMode, err := n.storedSpotFundsLimitMode(durableCtx)
+	if err != nil {
+		return backup.RestoreSummary{}, n.currentMarketDataSink(),
+			failAfterCommit(
+				"read spot funds limit mode after committed backup restore",
+				fmt.Errorf("read restored spot funds limit mode: %w", err),
+			)
 	}
 
 	var afterRuntime restoreRuntimeSnapshot
@@ -664,6 +704,18 @@ func (n *localNode) RestoreBackup(
 		}
 	}
 
+	if beforeMode != afterMode && !plan.rebuild {
+		if err := n.currentEngine().SetSpotFundsTrackOnly(
+			durableCtx, afterMode == domain.SpotFundsLimitModeTrackOnly,
+		); err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(),
+				failAfterCommit(
+					"apply restored spot funds limit mode",
+					fmt.Errorf("apply restored spot funds limit mode %q: %w", afterMode, err),
+				)
+		}
+	}
+
 	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action: domain.AuditActionRestoreBackup,
 		Detail: domain.NewAuditDetail(domain.AuditDetailRestoreBackup, domain.AuditDetailParams{
@@ -671,6 +723,17 @@ func (n *localNode) RestoreBackup(
 			"restoreMode": string(opts.Mode),
 		}),
 	}); err != nil {
+		if !runtimeScope && beforeMode != afterMode {
+			if rollbackErr := n.currentEngine().SetSpotFundsTrackOnly(
+				durableCtx, beforeMode == domain.SpotFundsLimitModeTrackOnly,
+			); rollbackErr != nil {
+				return backup.RestoreSummary{}, n.currentMarketDataSink(),
+					n.fatalReconciliation(
+						"rollback spot funds limit mode after restore audit failure",
+						errors.Join(err, rollbackErr),
+					)
+			}
+		}
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),
 			failAfterCommit(
 				"audit committed backup restore",
@@ -1045,10 +1108,7 @@ func (n *localNode) rollbackStore(
 			errors.Join(err, fmt.Errorf("rollback restore backup: %w", restoreErr)),
 		)
 	}
-	// rollbackStore only runs for a non-runtime restore, so the engine was
-	// never touched and the restore had already committed before the final
-	// audit write failed; the rollback above restored the prior scoped store
-	// state, but the commit itself makes this a post-commit failure rather
-	// than a caller fault.
+	// The prior scoped store state is restored, but the forward commit makes
+	// this a post-commit failure rather than a caller fault.
 	return internalPostCommitNodeMutationError(err)
 }

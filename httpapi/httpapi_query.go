@@ -916,6 +916,9 @@ func policyKindFromQuery(q url.Values) (*store.PolicyKind, error) {
 	case "spot_funds_total_pnl_bounds":
 		kind := store.PolicyKindSpotFundsTotalPnlBounds
 		return &kind, nil
+	case "spot_funds_limit_mode":
+		kind := store.PolicyKindSpotFundsLimitMode
+		return &kind, nil
 	default:
 		return nil, fmt.Errorf("invalid policy")
 	}

@@ -4,7 +4,8 @@
     "order_size_limit": "订单规模限制",
     "spot_funds_pnl_bounds_kill_switch": "已实现 P&L 熔断开关",
     "spot_funds_unrealized_pnl_bounds_kill_switch": "未实现 P&L 熔断开关",
-    "spot_funds_total_pnl_bounds_kill_switch": "总 P&L 熔断开关"
+    "spot_funds_total_pnl_bounds_kill_switch": "总 P&L 熔断开关",
+    "spot_funds_limit_mode": "资金限额模式"
   },
   "scope": {
     "broker": "经纪商",
@@ -69,6 +70,10 @@
     "spot_funds_total_pnl_bounds_kill_switch": {
       "label": "总盈亏熔断开关",
       "description": "使用引擎在账户币种中计算的总盈亏（P&L）：已实现 P&L 加上按当前市场价格计算的账户持仓未实现 P&L。P&L 超出上下限后，下一笔订单将被拒绝，账户将被封锁。"
+    },
+    "spot_funds_limit_mode": {
+      "label": "资金限额模式",
+      "description": "对所有账户决定 Officer 是否在订单发出前检查资金。未保存任何行时，模式为“检查资金”。"
     }
   },
   "policyField": {
@@ -132,6 +137,12 @@
       "upper_bound": {
         "label": "上限",
         "hint": "小数，如 500"
+      }
+    },
+    "spot_funds_limit_mode": {
+      "mode": {
+        "label": "模式",
+        "hint": "立即生效"
       }
     }
   }

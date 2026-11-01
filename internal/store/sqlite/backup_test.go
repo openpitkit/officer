@@ -3000,6 +3000,90 @@ func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestBackupRestoreRejectsInvalidSpotFundsLimitModeAndRollsBack(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []backup.RestoreMode{
+		backup.RestoreModeInsertMissing,
+		backup.RestoreModeOverwrite,
+		backup.RestoreModeReplaceAll,
+	} {
+		for _, value := range []string{"garbage", "", " track_only", "ENFORCE"} {
+			t.Run(string(mode)+"/"+value, func(t *testing.T) {
+				ctx := context.Background()
+				_, realm := newTestStore(t)
+				if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "track_only"); err != nil {
+					t.Fatalf("SetSetting: %v", err)
+				}
+				before := snapshotBackupData(t, ctx, realm)
+				scope := backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}}
+				archive := backup.NewArchive(
+					time.Now().UTC(), "test",
+					backup.RealmLabel{Code: string(domain.DefaultRealm)}, scope,
+					backup.Data{
+						McpAccess: map[string]bool{"submit_order": true},
+						Settings: []backup.SettingEntry{
+							{Key: "unrelated-setting", Value: "changed"},
+							{Key: domain.SettingKeySpotFundsLimitMode, Value: value},
+						},
+					}, backup.CredentialFormPlaintext,
+				)
+				_, err := realm.RestoreBackup(ctx, archive, backup.RestoreOptions{
+					Scope: scope, Mode: mode,
+				})
+				if !errors.Is(err, domain.ErrInvalid) {
+					t.Fatalf("RestoreBackup = %v, want ErrInvalid for mode %q", err, value)
+				}
+				want := `restore setting "` + domain.SettingKeySpotFundsLimitMode + `"`
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("RestoreBackup error = %q, want context %q", err, want)
+				}
+				stored, ok, err := realm.GetSetting(ctx, domain.SettingKeySpotFundsLimitMode)
+				if err != nil || !ok || stored != "track_only" {
+					t.Fatalf("mode after rejected restore = %q, %v, %v; want track_only, true, nil", stored, ok, err)
+				}
+				if after := snapshotBackupData(t, ctx, realm); !reflect.DeepEqual(after, before) {
+					t.Fatalf("database changed after rejected mode restore:\n before=%+v\n after=%+v", before, after)
+				}
+			})
+		}
+	}
+}
+
+func TestBackupRestoreValidSpotFundsLimitModeAndOtherSettings(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"enforce", "track_only"} {
+		t.Run(value, func(t *testing.T) {
+			ctx := context.Background()
+			_, realm := newTestStore(t)
+			if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "enforce"); err != nil {
+				t.Fatalf("SetSetting: %v", err)
+			}
+			scope := backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}}
+			settings := []backup.SettingEntry{
+				{Key: domain.SettingKeySpotFundsLimitMode, Value: value},
+				{Key: "unrelated-setting", Value: "garbage"},
+				{Key: "empty-setting", Value: ""},
+			}
+			archive := backup.NewArchive(
+				time.Now().UTC(), "test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)}, scope,
+				backup.Data{Settings: settings}, backup.CredentialFormPlaintext,
+			)
+			if _, err := realm.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: scope, Mode: backup.RestoreModeOverwrite,
+			}); err != nil {
+				t.Fatalf("RestoreBackup: %v", err)
+			}
+			for _, setting := range settings {
+				stored, ok, err := realm.GetSetting(ctx, setting.Key)
+				if err != nil || !ok || stored != setting.Value {
+					t.Fatalf("restored setting %q = %q, %v, %v; want %q, true, nil", setting.Key, stored, ok, err, setting.Value)
+				}
+			}
+		})
+	}
+}
+
 func TestBackupRestoreReplaceAllKeepsLiveOnlyAccountInSelectedGroup(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)

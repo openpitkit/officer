@@ -147,6 +147,16 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		true,
 	), getLimitsHandler)
 	registerTool(reg, descriptor(
+		getSpotFundsLimitModeToolName,
+		"Get Spot Funds limit mode",
+		getSpotFundsLimitModeToolDescription,
+		"Read the global Spot Funds limit mode and the accounts a P&L bound blocks for want of a currency.",
+		false,
+		false,
+		true,
+		true,
+	), getSpotFundsLimitModeHandler)
+	registerTool(reg, descriptor(
 		getOrderToolName,
 		"Get order",
 		getOrderToolDescription,
@@ -220,7 +230,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		setLimitToolName,
 		"Set limit",
 		setLimitToolDescription,
-		"Tighten a risk barrier: add one or make it stricter; loosening and removal are refused.",
+		"Tighten a risk barrier: add one or make it stricter, or switch Spot Funds back to Check funds; loosening and removal are refused.",
 		true,
 		true,
 		true,
@@ -852,7 +862,7 @@ func accountBlock(
 
 func limitsCount(l node.AccountLimits) int {
 	return len(l.RateLimits) + len(l.OrderSizeLimits) +
-		len(l.SpotFundsPnlBoundsLimits)
+		len(l.SpotFundsPnlBoundsLimits) + len(l.SpotFundsLimitModes)
 }
 
 func toAuditDTO(row domain.AuditRow) auditDTO {

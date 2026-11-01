@@ -208,7 +208,8 @@ The four setup routes take no credentials in `setup`:
   a sealed database takes precedence over a stored refusal.
 - `POST /setup/complete` - `{"access": "open", "acknowledged": true}` or
   `{"access": "token", "password": "..."}`; `204`. Completion requires an
-  account mode choice and either a sealed database or a recorded refusal of
+  account mode choice, a stored `spot_funds_limit_mode` row (see Spot Funds
+  limit mode), and either a sealed database or a recorded refusal of
   encryption; missing decisions answer `409` `conflict` with a message naming
   them. `token` sets the panel password, issues both tokens and sets the session
   cookie. The response carries no token values; the session can read them
@@ -225,7 +226,8 @@ In `setup`, `GET /build`, `GET /session` and these four routes answer without
 credentials.
 The other panel access routes answer `503` `setup_required`, including the
 public sign-in and both recovery routes. The panel mirror also admits the
-routes marked `duringSetup`: account-mode reads and choices, service restart,
+routes marked `duringSetup`: account-mode reads and choices, Spot Funds
+limit-mode reads and choices, service restart,
 credential-storage status, the account list, signing-key generation, import,
 list and public-key reads, and signing-config reads and changes. Every other
 route on the mirror answers `503` `setup_required`.
@@ -314,8 +316,12 @@ the same currency. A new account-tier order-size cap must be no looser than
 the asset-tier cap it overrides, a new account or group bound no looser than,
 and in the currency of, the bound it takes over from, and the first order-size
 barrier is refused while a rate-limit barrier is configured, as installing it
-rebuilds the engine and so resets every rate window. Trading and market data
-may only be narrowed: `grant_trading_access`, `create_trading_connection`,
+rebuilds the engine and so resets every rate window.
+`set_limit` with policy `spot_funds_limit_mode` is refused for the switch to
+`track_only`, as the engine then stops refusing orders on funds; the switch to
+`enforce` passes.
+Trading and market data may only be narrowed: `grant_trading_access`,
+`create_trading_connection`,
 `set_trading_instrument`, `delete_trading_instrument`,
 `set_trading_fee_account` and `clear_trading_fee_account` are always refused,
 as are an enable through `set_trading_connection_enabled` or
@@ -380,8 +386,9 @@ Each of these tools makes the core call of one REST operation:
   `PUT /groups/{code}`, `DELETE /groups/{code}`;
 - `set_limit`: `PUT /limits/rate`, `PUT /limits/order-size`,
   `PUT /limits/spot-funds-pnl-bounds`,
-  `PUT /limits/spot-funds-unrealized-pnl-bounds` or
-  `PUT /limits/spot-funds-total-pnl-bounds`, by its `policy` argument;
+  `PUT /limits/spot-funds-unrealized-pnl-bounds`,
+  `PUT /limits/spot-funds-total-pnl-bounds` or
+  `PUT /limits/spot-funds-limit-mode`, by its `policy` argument;
 - `report_fill`: `POST /orders/{id}/execution-reports`.
 
 All thirteen are mutating and protective and ship disabled. The path code or id
@@ -393,7 +400,10 @@ as its `adjustment` argument, and `set_limit` takes the body of its policy's
 with `validation`. `get_limits` and `get_account_state` answer every barrier
 with those fields, so a rate barrier's window is `windowMs` in integer
 milliseconds, as `set_limit` takes it, in place of the `window` duration string
-they answered before. The `update_*` tools replace the code and title,
+they answered before. `get_limits` without an account also answers the stored
+Spot Funds limit-mode row in `spotFundsLimitModes`; the row is global, so a
+list narrowed to an account, `get_account_state` among them, never carries it.
+The `update_*` tools replace the code and title,
 `update_asset` also the asset class, as `PUT` does.
 
 Arguments reach the core as given, and the core decides every value rule, the
@@ -408,11 +418,11 @@ A tool answers the body its REST operation answers: `{"account": ...}`,
 `{"asset": ...}`, `{"group": ...}`, `{"adjustment": ...}`, `{"rateLimit": ...}`,
 `{"orderSizeLimit": ...}`, `{"spotFundsPnlBoundsLimit": ...}`,
 `{"spotFundsUnrealizedPnlBoundsLimit": ...}`,
-`{"spotFundsTotalPnlBoundsLimit": ...}` or the execution-report body. A delete,
-which REST answers without a body, answers its own input. An adjustment the
-engine rejects, such as one whose resulting balance leaves its bounds, is
-recorded and answered with its `rejected` outcome, as REST answers it; one that
-changes nothing answers `{}`, where REST answers 204.
+`{"spotFundsTotalPnlBoundsLimit": ...}`, `{"mode": ...}` or the
+execution-report body. A delete, which REST answers without a body, answers its
+own input. An adjustment the engine rejects, such as one whose resulting balance
+leaves its bounds, is recorded and answered with its `rejected` outcome, as REST
+answers it; one that changes nothing answers `{}`, where REST answers 204.
 
 `report_fill` leaves a report on a drop-copy order unattested; a report on an
 ordinary order is attested, and signed unless eSign-off is set. REST's `force`
@@ -523,6 +533,58 @@ An unrealized or total P&L bound needs a price for every asset the account
 holds: an order of an account that holds an asset without a price is rejected
 and blocks the account, as the realized bound does when it cannot calculate the
 P&L.
+
+## Spot Funds limit mode
+
+The Officer-level policy `spot_funds_limit_mode` decides whether the Spot Funds
+policy refuses an order for lack of funds or holdings. It is not an engine
+policy: Officer stores it and applies it to the running engine. It takes the
+`global` scope only and covers every account; there is no per-account or
+per-group mode. With no row stored the effective mode is `enforce`, the
+documented default. First-run setup completes only once the row is stored; a
+database set up before that requirement may have none.
+
+- `enforce` refuses an order that lacks funds or holdings.
+- `track_only` does not refuse on funds but records every hold, so balances and
+  positions may go negative: an account trades from zero without prepared
+  balances. P&L bounds, rate and order-size barriers apply in both modes, and a
+  P&L bound still halts trading on breach.
+
+`GET /limits/spot-funds-limit-mode` answers
+`{mode, stored, accountsWithoutCurrency}`. `stored` is whether the row is
+stored; with none, `mode` is `enforce`. `accountsWithoutCurrency` is always an
+array: the codes of visible accounts
+without an effective currency to which a Spot Funds P&L bound applies. Their
+P&L halts, so the bound blocks them. The panel shows them as a warning while the
+mode is `track_only`.
+
+`PUT /limits/spot-funds-limit-mode` takes `{scope, mode}` with scope `global`,
+applies it live without a restart or an engine rebuild, and answers
+`{"spotFundsLimitMode": {scope, mode}}` read back as stored, without the
+no-currency list. A body naming an account, account group or asset is refused
+with 422. Switching back to `enforce` resets no balance; orders that need funds
+against a negative balance are refused again.
+
+`GET /limits` lists a stored mode as one row of kind `spot_funds_limit_mode` on
+the `global` scope, with `values.spotFundsLimitMode.mode`;
+`policy=spot_funds_limit_mode` selects it alone.
+`DELETE /limits?policy=spot_funds_limit_mode&scope=global` removes it, so the
+mode is `enforce` again, and answers `204`, or `404` when no mode is stored.
+
+Like every policy, it is tighten-only for an agent (an MCP caller): the switch
+from `enforce` to `track_only` is refused with `loosening_refused`, while the
+switch to `enforce` and the delete, which also restores `enforce`, pass.
+
+The stored mode is what every later engine build takes, a restart and a backup
+restore included: the mode travels with the backup's general settings, and a
+restore applies it to the running engine.
+
+The panel lists it on the Policies page as one global policy row, with the
+values "Check funds" (`enforce`) and "Accounting without blocking"
+(`track_only`). The MCP tool `get_spot_funds_limit_mode` follows the REST
+`GET`, and `set_limit` with policy `spot_funds_limit_mode` and the one field
+`mode` follows the `PUT`; the switch to `track_only` is refused through MCP
+(see MCP tools).
 
 ## Single-account mode
 

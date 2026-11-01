@@ -63,6 +63,34 @@ type SpotFundsPnlBoundsLimitDTO struct {
 	UpperBound   string `json:"upperBound"`
 }
 
+// SpotFundsLimitModeDTO is the global Spot Funds mode, whether its meta-policy
+// row is stored, and the visible accounts without an effective currency
+// affected by a P&L bound. AccountsWithoutCurrency is always a non-nil JSON
+// array.
+type SpotFundsLimitModeDTO struct {
+	Mode                    string   `json:"mode"`
+	Stored                  bool     `json:"stored"`
+	AccountsWithoutCurrency []string `json:"accountsWithoutCurrency"`
+}
+
+// SpotFundsLimitModeLimitDTO is the wire shape of the Spot Funds limit-mode
+// meta-policy: its scope, global only, and its mode.
+type SpotFundsLimitModeLimitDTO struct {
+	Scope string `json:"scope"`
+	Mode  string `json:"mode"`
+}
+
+// ToSpotFundsLimitModeDTO maps the domain mode state onto its wire shape.
+func ToSpotFundsLimitModeDTO(state domain.SpotFundsLimitModeState) SpotFundsLimitModeDTO {
+	accounts := make([]string, 0, len(state.AccountsWithoutCurrency))
+	for _, code := range state.AccountsWithoutCurrency {
+		accounts = append(accounts, string(code))
+	}
+	return SpotFundsLimitModeDTO{
+		Mode: string(state.Mode), Stored: state.Stored, AccountsWithoutCurrency: accounts,
+	}
+}
+
 // PutLimitResultDTO is the answer of a limit put: the barrier as stored, under
 // the key of its kind. Exactly one field is set.
 type PutLimitResultDTO struct {
@@ -71,6 +99,7 @@ type PutLimitResultDTO struct {
 	SpotFundsPnlBoundsLimit           *SpotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimit,omitempty"`
 	SpotFundsUnrealizedPnlBoundsLimit *SpotFundsPnlBoundsLimitDTO `json:"spotFundsUnrealizedPnlBoundsLimit,omitempty"`
 	SpotFundsTotalPnlBoundsLimit      *SpotFundsPnlBoundsLimitDTO `json:"spotFundsTotalPnlBoundsLimit,omitempty"`
+	SpotFundsLimitMode                *SpotFundsLimitModeLimitDTO `json:"spotFundsLimitMode,omitempty"`
 }
 
 // AccountLimitsDTO is the per-policy view of typed barriers, an account's or
@@ -82,6 +111,7 @@ type AccountLimitsDTO struct {
 	SpotFundsPnlBoundsLimits           []SpotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimits"`
 	SpotFundsUnrealizedPnlBoundsLimits []SpotFundsPnlBoundsLimitDTO `json:"spotFundsUnrealizedPnlBoundsLimits"`
 	SpotFundsTotalPnlBoundsLimits      []SpotFundsPnlBoundsLimitDTO `json:"spotFundsTotalPnlBoundsLimits"`
+	SpotFundsLimitModes                []SpotFundsLimitModeLimitDTO `json:"spotFundsLimitModes"`
 }
 
 // FromRateLimitDTO maps a wire rate-limit body onto the domain barrier. A
@@ -133,6 +163,25 @@ func FromSpotFundsPnlBoundsLimitDTO(
 		LowerBound:   dto.LowerBound,
 		UpperBound:   dto.UpperBound,
 	}
+}
+
+// FromSpotFundsLimitModeLimitDTO maps a wire Spot Funds limit-mode body onto
+// the domain meta-policy, verbatim; the domain validates it.
+func FromSpotFundsLimitModeLimitDTO(
+	dto SpotFundsLimitModeLimitDTO,
+) domain.LimitSpotFundsLimitMode {
+	return domain.LimitSpotFundsLimitMode{
+		Scope: domain.LimitScope(dto.Scope),
+		Mode:  domain.SpotFundsLimitMode(dto.Mode),
+	}
+}
+
+// ToSpotFundsLimitModeLimitDTO maps a domain.LimitSpotFundsLimitMode onto the
+// wire DTO.
+func ToSpotFundsLimitModeLimitDTO(
+	l domain.LimitSpotFundsLimitMode,
+) SpotFundsLimitModeLimitDTO {
+	return SpotFundsLimitModeLimitDTO{Scope: string(l.Scope), Mode: string(l.Mode)}
 }
 
 // ToRateLimitDTO maps a domain.LimitRate onto the wire DTO.
@@ -190,12 +239,17 @@ func ToAccountLimitsDTO(limits node.AccountLimits) AccountLimitsDTO {
 	for _, l := range limits.SpotFundsPnlBoundsLimits {
 		spotFundsPnls[l.Axis] = append(spotFundsPnls[l.Axis], ToSpotFundsPnlBoundsLimitDTO(l))
 	}
+	modes := make([]SpotFundsLimitModeLimitDTO, 0, len(limits.SpotFundsLimitModes))
+	for _, l := range limits.SpotFundsLimitModes {
+		modes = append(modes, ToSpotFundsLimitModeLimitDTO(l))
+	}
 	return AccountLimitsDTO{
 		RateLimits:                         rates,
 		OrderSizeLimits:                    sizes,
 		SpotFundsPnlBoundsLimits:           spotFundsPnls[domain.SpotFundsPnlAxisRealized],
 		SpotFundsUnrealizedPnlBoundsLimits: spotFundsPnls[domain.SpotFundsPnlAxisUnrealized],
 		SpotFundsTotalPnlBoundsLimits:      spotFundsPnls[domain.SpotFundsPnlAxisTotal],
+		SpotFundsLimitModes:                modes,
 	}
 }
 
@@ -223,6 +277,22 @@ func ToPutSpotFundsPnlBoundsLimitResultDTO(
 type LimitReader interface {
 	AccountFeatures() backend.AccountFeatures
 	ListLimits(ctx context.Context, account domain.AccountID) (node.AccountLimits, error)
+}
+
+// PersistedSpotFundsLimitMode reads back the stored row of the Spot Funds
+// limit-mode meta-policy, global only. It answers domain.ErrNotFound when no
+// mode is stored.
+func PersistedSpotFundsLimitMode(
+	ctx context.Context, svc LimitReader,
+) (domain.LimitSpotFundsLimitMode, error) {
+	limits, err := svc.ListLimits(ctx, "")
+	if err != nil {
+		return domain.LimitSpotFundsLimitMode{}, err
+	}
+	if len(limits.SpotFundsLimitModes) == 0 {
+		return domain.LimitSpotFundsLimitMode{}, domain.ErrNotFound
+	}
+	return limits.SpotFundsLimitModes[0], nil
 }
 
 // storedLimitAccount is the account a barrier put with account is stored

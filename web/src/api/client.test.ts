@@ -2423,6 +2423,202 @@ describe("limits client", () => {
       accountGroup: "desk-alpha",
     });
   });
+
+  describe("funds limit mode policy", () => {
+    const modePolicy = {
+      kind: "spot_funds_limit_mode",
+      scope: "global",
+      account: "",
+      accountGroup: "",
+      asset: "",
+      values: { spotFundsLimitMode: { mode: "track_only" } },
+    };
+
+    it("serializes the funds limit mode policy filter", async () => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ policies: [], total: 0 }),
+      );
+
+      const { fetchPoliciesPage } = api();
+      await fetchPoliciesPage({ policy: "spot_funds_limit_mode" });
+
+      const calledUrl = new URL(
+        String(vi.mocked(fetch).mock.calls[0][0]),
+        "http://test",
+      );
+      expect(calledUrl.pathname).toBe("/app/api/v1/limits");
+      expect(Object.fromEntries(calledUrl.searchParams.entries())).toEqual({
+        policy: "spot_funds_limit_mode",
+      });
+    });
+
+    it("flattens the global mode row of the typed list", async () => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ policies: [modePolicy], total: 1 }),
+      );
+
+      const { fetchLimits } = api();
+
+      await expect(fetchLimits()).resolves.toEqual([
+        {
+          policy: "spot_funds_limit_mode",
+          scope: "global",
+          account: "",
+          accountGroup: "",
+          asset: "",
+          values: { mode: "track_only" },
+        },
+      ]);
+    });
+
+    it.each([
+      [
+        "a missing value",
+        { ...modePolicy, values: {} },
+        "Spot Funds limit mode is missing from the API response",
+      ],
+      [
+        "a value without a mode",
+        { ...modePolicy, values: { spotFundsLimitMode: {} } },
+        "Spot Funds limit mode is missing from the API response",
+      ],
+      [
+        "an unknown mode",
+        {
+          ...modePolicy,
+          values: { spotFundsLimitMode: { mode: "always_allow" } },
+        },
+        'Spot Funds limit mode "always_allow" in the API response is unknown',
+      ],
+    ])("rejects a list row with %s", async (_case, policy, message) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ policies: [policy], total: 1 }),
+      );
+
+      const { fetchLimits } = api();
+
+      await expect(fetchLimits()).rejects.toThrow(message);
+    });
+
+    it("puts the mode to its own endpoint with no missingAccount query", async () => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          spotFundsLimitMode: { scope: "global", mode: "track_only" },
+        }),
+      );
+
+      const { putLimit } = api();
+      const limit = await putLimit(
+        {
+          policy: "spot_funds_limit_mode",
+          scope: "global",
+          account: "",
+          asset: "",
+          values: { mode: "track_only" },
+        },
+        "create",
+      );
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [
+        string,
+        RequestInit,
+      ];
+      expect(url).toBe("/app/api/v1/limits/spot-funds-limit-mode");
+      expect(init.method).toBe("PUT");
+      expect(JSON.parse(String(init.body))).toEqual({
+        scope: "global",
+        mode: "track_only",
+      });
+      expect(limit).toEqual({
+        policy: "spot_funds_limit_mode",
+        scope: "global",
+        account: "",
+        accountGroup: "",
+        asset: "",
+        values: { mode: "track_only" },
+      });
+    });
+
+    it.each([
+      ["no mode", {}],
+      ["an unknown mode", { mode: "always_allow" }],
+    ])("refuses to send %s", async (_case, values) => {
+      const { putLimit } = api();
+
+      await expect(
+        putLimit(
+          {
+            policy: "spot_funds_limit_mode",
+            scope: "global",
+            account: "",
+            asset: "",
+            values,
+          },
+          "reject",
+        ),
+      ).rejects.toThrow(
+        'Spot Funds limit mode must be "enforce" or "track_only"',
+      );
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        "no mode row",
+        {},
+        "Spot Funds limit mode is missing from the API response",
+      ],
+      [
+        "no mode",
+        { spotFundsLimitMode: { scope: "global" } },
+        "Spot Funds limit mode is missing from the API response",
+      ],
+      [
+        "no scope",
+        { spotFundsLimitMode: { mode: "enforce" } },
+        "Spot Funds limit mode scope is missing from the API response",
+      ],
+    ])("rejects a put answer with %s", async (_case, body, message) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(body));
+
+      const { putLimit } = api();
+
+      await expect(
+        putLimit(
+          {
+            policy: "spot_funds_limit_mode",
+            scope: "global",
+            account: "",
+            asset: "",
+            values: { mode: "enforce" },
+          },
+          "reject",
+        ),
+      ).rejects.toThrow(message);
+    });
+
+    it("deletes the global row with no empty axis parameter", async () => {
+      vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+
+      const { deleteLimit } = api();
+      await deleteLimit({
+        policy: "spot_funds_limit_mode",
+        scope: "global",
+        account: "",
+        accountGroup: "",
+        asset: "",
+      });
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [
+        string,
+        RequestInit,
+      ];
+      expect(url).toBe(
+        "/app/api/v1/limits?policy=spot_funds_limit_mode&scope=global",
+      );
+      expect(init.method).toBe("DELETE");
+    });
+  });
 });
 
 describe("append-only list clients", () => {

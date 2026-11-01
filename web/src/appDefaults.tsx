@@ -101,6 +101,15 @@ export function registerAppVocabulary(): void {
       },
     });
   }
+  registerPolicy({
+    id: "spot_funds_limit_mode",
+    allowedScopes: ["global"],
+    kinds: [{ kind: "mode" }],
+    catalog: {
+      wikiUrl: "https://wiki.openpit.dev/Spot-Funds/?officer#funds-limit-mode",
+      fields: [{ key: "mode" }],
+    },
+  });
 }
 
 /** Register the built-in row actions used by the default pages. */

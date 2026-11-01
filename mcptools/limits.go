@@ -32,6 +32,38 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
+const getSpotFundsLimitModeToolName = "get_spot_funds_limit_mode"
+
+const getSpotFundsLimitModeToolDescription = "Return the global Spot Funds limit mode " +
+	"and the accounts a Spot Funds P&L bound blocks for want of a currency. " +
+	"mode is enforce, which refuses an order that lacks funds or holdings, or " +
+	"track_only, which does not refuse on funds but records every hold, so " +
+	"balances and positions may go negative; until first set the mode is enforce. " +
+	"stored is whether the spot_funds_limit_mode policy row is stored; false " +
+	"means no row and the default enforce. " +
+	"P&L bounds, rate and order-size barriers apply in both modes. " +
+	"accountsWithoutCurrency lists the visible accounts with no effective " +
+	"realized P&L currency that a Spot Funds P&L bound applies to: their P&L " +
+	"halts, so the bound blocks them. Read-only - no secrets, no order-flow control."
+
+type getSpotFundsLimitModeInput struct{}
+
+func getSpotFundsLimitModeHandler(
+	src frameworkmcp.Source,
+) frameworkmcp.ToolBody[getSpotFundsLimitModeInput, httpx.SpotFundsLimitModeDTO] {
+	return func(
+		ctx context.Context,
+		_ *sdkmcp.ServerSession,
+		_ getSpotFundsLimitModeInput,
+	) (string, httpx.SpotFundsLimitModeDTO, error) {
+		state, err := src.SpotFundsLimitMode(ctx)
+		if err != nil {
+			return "", httpx.SpotFundsLimitModeDTO{}, toolError(err)
+		}
+		return fmt.Sprintf("Spot Funds limit mode: %s", state.Mode), httpx.ToSpotFundsLimitModeDTO(state), nil
+	}
+}
+
 // The limit tool maps its flat JSON arguments onto the limit put REST makes
 // for the policy they name: the fields are that put's body and reach the core
 // verbatim, missingAccount only with a named account, as REST reads its query
@@ -43,11 +75,11 @@ const setLimitToolName = "set_limit"
 
 const setLimitToolDescription = "Create a risk barrier, or make the one " +
 	"stored at the same address stricter, and return it as stored. policy " +
-	"names the kind - rate_limit, order_size_limit, or one of the P&L-bound " +
+	"names the kind - rate_limit, order_size_limit, one of the P&L-bound " +
 	"kill switches spot_funds_pnl_bounds_kill_switch (realized P&L), " +
 	"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
-	"spot_funds_total_pnl_bounds_kill_switch (total P&L) - and the other " +
-	"arguments are that " +
+	"spot_funds_total_pnl_bounds_kill_switch (total P&L), or " +
+	"spot_funds_limit_mode - and the other arguments are that " +
 	"kind's fields; a field of another kind is refused with validation. " +
 	"Anything that loosens risk is refused with loosening_refused and changes " +
 	"nothing. A barrier that replaces the one at its address must be no " +
@@ -62,14 +94,23 @@ const setLimitToolDescription = "Create a risk barrier, or make the one " +
 	"bound must be in the currency of, and no looser than, the bound it takes " +
 	"over from: for a group the global bound, for an account the bound that " +
 	"applies to it now. The first order-size barrier is refused while any " +
-	"rate-limit barrier is configured. No barrier can be removed. Mutates " +
+	"rate-limit barrier is configured. spot_funds_limit_mode is the Officer " +
+	"policy that decides whether Spot Funds checks funds, on the global scope " +
+	"only, with the one field mode: enforce (Check funds) refuses an order " +
+	"that lacks funds or holdings; track_only (Accounting without blocking) " +
+	"does not refuse on funds but records every hold, so balances and " +
+	"positions may go negative. Until first set the mode is enforce; the " +
+	"switch to track_only is refused with loosening_refused, and the switch " +
+	"to enforce resets no balance. P&L bounds, rate and order-size barriers " +
+	"apply in both modes. No barrier can be removed; to switch Spot Funds back " +
+	"to Check funds, set spot_funds_limit_mode with mode enforce. Mutates " +
 	"Officer control-plane config; protected and disabled by default."
 
 // setLimitInput is the REST body of the named policy's put, flattened next to
 // the policy, with REST's missingAccount query value.
 type setLimitInput struct {
-	Policy         string `json:"policy" jsonschema:"Barrier kind: rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch or spot_funds_total_pnl_bounds_kill_switch"`
-	Scope          string `json:"scope" jsonschema:"Barrier scope: broker, asset, account or account_asset for rate_limit; broker, underlying_asset, settlement_asset, account_underlying_asset or account_settlement_asset for order_size_limit; global, account_group or account for the P&L-bound kill switches"`
+	Policy         string `json:"policy" jsonschema:"Barrier kind: rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch or spot_funds_limit_mode"`
+	Scope          string `json:"scope" jsonschema:"Barrier scope: broker, asset, account or account_asset for rate_limit; broker, underlying_asset, settlement_asset, account_underlying_asset or account_settlement_asset for order_size_limit; global, account_group or account for the P&L-bound kill switches; global for spot_funds_limit_mode"`
 	Account        string `json:"account,omitempty" jsonschema:"Account code, for a scope with an account axis; omitted otherwise"`
 	Asset          string `json:"asset,omitempty" jsonschema:"rate_limit and order_size_limit: asset code, for a scope with an asset axis - the underlying asset for a quantity cap, the settlement asset for a notional cap; omitted otherwise"`
 	AccountGroup   string `json:"accountGroup,omitempty" jsonschema:"P&L-bound kill switches: account group code, for the account_group scope"`
@@ -80,6 +121,7 @@ type setLimitInput struct {
 	Currency       string `json:"currency,omitempty" jsonschema:"P&L-bound kill switches: code of an existing asset that denominates both bounds"`
 	LowerBound     string `json:"lowerBound,omitempty" jsonschema:"P&L-bound kill switches: lower P&L bound as an exact decimal string in plain notation, without an exponent"`
 	UpperBound     string `json:"upperBound,omitempty" jsonschema:"P&L-bound kill switches: upper P&L bound, written as lowerBound is; at least one bound is set"`
+	Mode           string `json:"mode,omitempty" jsonschema:"spot_funds_limit_mode: enforce (Check funds) or track_only (Accounting without blocking); the switch from enforce to track_only is refused with loosening_refused"`
 	MissingAccount string `json:"missingAccount,omitempty" jsonschema:"Needed when account is named: create or reject; for an account that does not exist yet, create is refused for an agent with loosening_refused, and reject fails the call instead; ignored otherwise"`
 	// keys are the argument names the call sent, as it spelled them.
 	keys []string
@@ -115,7 +157,9 @@ func (in setLimitInput) sent(name string) bool {
 }
 
 // refuseForeignFields refuses an argument of another policy than the one in
-// names, sent with any value, as no body of that policy carries it.
+// names, sent with any value, as no body of that policy carries it. The Spot
+// Funds limit-mode meta-policy carries no axis, so even account is foreign to
+// it.
 func (in setLimitInput) refuseForeignFields() error {
 	rate := domain.PolicyRateLimit
 	size := domain.PolicyOrderSizeLimit
@@ -124,10 +168,12 @@ func (in setLimitInput) refuseForeignFields() error {
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch,
 	}
+	mode := domain.PolicySpotFundsLimitMode
 	for _, field := range []struct {
 		name     string
 		policies []string
 	}{
+		{"account", append([]string{rate, size}, bounds...)},
 		{"asset", []string{rate, size}},
 		{"accountGroup", bounds},
 		{"windowMs", []string{rate}},
@@ -137,6 +183,7 @@ func (in setLimitInput) refuseForeignFields() error {
 		{"currency", bounds},
 		{"lowerBound", bounds},
 		{"upperBound", bounds},
+		{"mode", []string{mode}},
 	} {
 		if in.sent(field.name) && !slices.Contains(field.policies, in.Policy) {
 			return domain.NewValidationError(
@@ -170,14 +217,17 @@ func setLimitHandler(
 			domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 			domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
 			put = putSpotFundsPnlBoundsLimit
+		case domain.PolicySpotFundsLimitMode:
+			put = putSpotFundsLimitMode
 		default:
 			return "", httpx.PutLimitResultDTO{}, toolError(domain.NewValidationError(
 				"/policy", "unsupported_value", fmt.Sprintf(
-					"policy %q must be %q, %q, %q, %q or %q", in.Policy,
+					"policy %q must be %q, %q, %q, %q, %q or %q", in.Policy,
 					domain.PolicyRateLimit, domain.PolicyOrderSizeLimit,
 					domain.PolicySpotFundsPnlBoundsKillSwitch,
 					domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 					domain.PolicySpotFundsTotalPnlBoundsKillSwitch,
+					domain.PolicySpotFundsLimitMode,
 				),
 			))
 		}
@@ -257,4 +307,23 @@ func putSpotFundsPnlBoundsLimit(
 		return httpx.PutLimitResultDTO{}, err
 	}
 	return httpx.ToPutSpotFundsPnlBoundsLimitResultDTO(stored)
+}
+
+// putSpotFundsLimitMode sets the Spot Funds limit-mode meta-policy. It has no
+// account axis, so missingAccount is ignored, as on a global P&L bound.
+func putSpotFundsLimitMode(
+	ctx context.Context, src frameworkmcp.Source, in setLimitInput,
+) (httpx.PutLimitResultDTO, error) {
+	limit := httpx.FromSpotFundsLimitModeLimitDTO(httpx.SpotFundsLimitModeLimitDTO{
+		Scope: in.Scope, Mode: in.Mode,
+	})
+	if err := src.PutSpotFundsLimitMode(ctx, limit); err != nil {
+		return httpx.PutLimitResultDTO{}, err
+	}
+	stored, err := httpx.PersistedSpotFundsLimitMode(ctx, src)
+	if err != nil {
+		return httpx.PutLimitResultDTO{}, err
+	}
+	dto := httpx.ToSpotFundsLimitModeLimitDTO(stored)
+	return httpx.PutLimitResultDTO{SpotFundsLimitMode: &dto}, nil
 }

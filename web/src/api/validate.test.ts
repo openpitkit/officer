@@ -203,3 +203,60 @@ describe("validateLimit", () => {
     ).toBeNull();
   });
 });
+
+describe("validateLimit for the funds limit mode", () => {
+  const modeLimit = (
+    overrides: Partial<Parameters<typeof validateLimit>[0]> = {},
+  ) => ({
+    policy: "spot_funds_limit_mode",
+    scope: "global",
+    account: "",
+    asset: "",
+    values: { mode: "track_only" },
+    ...overrides,
+  });
+
+  it.each(["enforce", "track_only"])("accepts the %s mode", (mode) => {
+    expect(validateLimit(modeLimit({ values: { mode } }))).toBeNull();
+  });
+
+  it("requires a mode", () => {
+    expect(validateLimit(modeLimit({ values: {} }))).toEqual({
+      key: "limit.modeRequired",
+    });
+    expect(validateLimit(modeLimit({ values: { mode: "  " } }))).toEqual({
+      key: "limit.modeRequired",
+    });
+  });
+
+  it("rejects an unknown mode", () => {
+    expect(
+      validateLimit(modeLimit({ values: { mode: "always_allow" } })),
+    ).toEqual({ key: "kind.mode" });
+  });
+
+  it.each(["broker", "account", "account_group", "asset"])(
+    "allows only the global scope, not %s",
+    (scope) => {
+      expect(validateLimit(modeLimit({ scope }))).toEqual({
+        key: "limit.scopeNotAllowed",
+        values: { scope, policy: "spot_funds_limit_mode" },
+      });
+    },
+  );
+
+  it("carries no account, asset or account group", () => {
+    expect(validateLimit(modeLimit({ account: "acc-1" }))).toEqual({
+      key: "limit.scopeNoAccount",
+      values: { scope: "global" },
+    });
+    expect(validateLimit(modeLimit({ asset: "USD" }))).toEqual({
+      key: "limit.scopeNoAsset",
+      values: { scope: "global" },
+    });
+    expect(validateLimit(modeLimit({ accountGroup: "desk-a" }))).toEqual({
+      key: "limit.policyNoAccountGroup",
+      values: { policy: "spot_funds_limit_mode" },
+    });
+  });
+});

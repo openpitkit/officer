@@ -149,6 +149,25 @@ export const ADJUSTMENT_TYPES = [
  *  ADJUSTMENT_TYPES so the union and the list cannot drift apart. */
 export type AdjustmentType = (typeof ADJUSTMENT_TYPES)[number];
 
+/** Every Spot Funds limit mode, in the order the panel offers them. */
+export const SPOT_FUNDS_LIMIT_MODES = ["enforce", "track_only"] as const;
+
+/** The value of the Officer-level spot_funds_limit_mode policy (mirrors
+ *  domain.SpotFundsLimitMode): enforce refuses an order the funds cannot
+ *  cover, track_only accounts without that refusal. Derived from
+ *  SPOT_FUNDS_LIMIT_MODES so the union and the list cannot drift apart. */
+export type SpotFundsLimitMode = (typeof SPOT_FUNDS_LIMIT_MODES)[number];
+
+/** True when value is one of SPOT_FUNDS_LIMIT_MODES. */
+export function isSpotFundsLimitMode(
+  value: unknown,
+): value is SpotFundsLimitMode {
+  return (
+    typeof value === "string" &&
+    (SPOT_FUNDS_LIMIT_MODES as readonly string[]).includes(value)
+  );
+}
+
 export function adjustmentTypeLabel(t: TFunction, id: AdjustmentType): string {
   return t(`domain:adjustmentType.${id}`);
 }

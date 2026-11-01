@@ -24,6 +24,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -846,6 +847,108 @@ func TestListPolicyRowsSortAndPage(t *testing.T) {
 	}
 	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder[2:]) {
 		t.Fatalf("page 1 = %v, want %v", got, wantOrder[2:])
+	}
+}
+
+// TestListPolicyRowsSpotFundsLimitModeRow holds that the stored Spot Funds
+// limit mode is one global row of the policy list while it is stored and none
+// while it is not: it carries its typed value, takes part in the kind and
+// scope filters, is dropped by an account, account-group or asset filter and
+// by an account restriction that keeps no unowned row, and counts in the
+// total, sort and paging like any other global barrier.
+func TestListPolicyRowsSpotFundsLimitModeRow(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+	list := func(filter fwstore.PolicyListFilter) fwstore.PolicyListPage {
+		t.Helper()
+		page, err := rs.ListPolicyRows(ctx, filter)
+		if err != nil {
+			t.Fatalf("ListPolicyRows(%+v): %v", filter, err)
+		}
+		return page
+	}
+	kind := fwstore.PolicyKindSpotFundsLimitMode
+	if page := list(fwstore.PolicyListFilter{Kind: &kind}); page.Total != 0 || len(page.Rows) != 0 {
+		t.Fatalf("mode rows with no stored mode = %+v, want none", page)
+	}
+
+	if err := rs.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, string(domain.SpotFundsLimitModeTrackOnly)); err != nil {
+		t.Fatalf("SetSetting(mode): %v", err)
+	}
+	const modeRow = "spot_funds_limit_mode|"
+	all := []string{"order_size_limit|acc-1", "rate_limit|acc-1", "rate_limit|acc-2", modeRow}
+	page := list(fwstore.PolicyListFilter{})
+	if page.Total != 4 || !equalStrings(policyKeys(page.Rows), all) {
+		t.Fatalf("all rows = %v total %d, want %v total 4", policyKeys(page.Rows), page.Total, all)
+	}
+	row := page.Rows[3]
+	want := domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly}
+	if row.Scope != domain.ScopeGlobal || row.SpotFundsLimitMode == nil || *row.SpotFundsLimitMode != want ||
+		row.Rate != nil || row.OrderSize != nil || row.SpotFundsPnlBounds != nil {
+		t.Fatalf("mode row = %+v, want only the mode payload %+v", row, want)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter fwstore.PolicyListFilter
+		want   []string
+	}{
+		{"kind", fwstore.PolicyListFilter{Kind: &kind}, []string{modeRow}},
+		{"global scope", fwstore.PolicyListFilter{Scope: domain.ScopeGlobal}, []string{modeRow}},
+		{
+			"account scope", fwstore.PolicyListFilter{Scope: domain.ScopeAccount},
+			[]string{"rate_limit|acc-1", "rate_limit|acc-2"},
+		},
+		{
+			"account", fwstore.PolicyListFilter{Account: fwstore.ExactTextMatcher("acc-1")},
+			[]string{"order_size_limit|acc-1", "rate_limit|acc-1"},
+		},
+		{
+			"asset", fwstore.PolicyListFilter{Asset: fwstore.ExactTextMatcher("AAPL")},
+			[]string{"order_size_limit|acc-1"},
+		},
+		{"account group", fwstore.PolicyListFilter{AccountGroup: fwstore.ExactTextMatcher("desk")}, nil},
+		{
+			"restriction", fwstore.PolicyListFilter{Restriction: domain.AccountRestriction{Account: "acc-1"}},
+			[]string{"order_size_limit|acc-1", "rate_limit|acc-1"},
+		},
+		{
+			"restriction with unowned rows",
+			fwstore.PolicyListFilter{Restriction: domain.AccountRestriction{Account: "acc-1", IncludeUnowned: true}},
+			[]string{"order_size_limit|acc-1", "rate_limit|acc-1", modeRow},
+		},
+		{
+			"page", fwstore.PolicyListFilter{Page: fwstore.PageSpec{Limit: 2, Offset: 2}},
+			[]string{"rate_limit|acc-2", modeRow},
+		},
+		{
+			"sort descending", fwstore.PolicyListFilter{Sort: fwstore.SortSpec{Column: "policy", Descending: true}},
+			[]string{modeRow, "rate_limit|acc-2", "rate_limit|acc-1", "order_size_limit|acc-1"},
+		},
+	} {
+		page := list(tc.filter)
+		wantTotal := len(tc.want)
+		if !tc.filter.Page.Empty() {
+			wantTotal = 4
+		}
+		if got := policyKeys(page.Rows); !equalStrings(got, tc.want) || page.Total != wantTotal {
+			t.Fatalf("%s: rows %v total %d, want %v total %d", tc.name, got, page.Total, tc.want, wantTotal)
+		}
+	}
+
+	if err := rs.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "bogus"); err != nil {
+		t.Fatalf("SetSetting(bogus): %v", err)
+	}
+	_, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{})
+	if err == nil || errors.Is(err, domain.ErrInvalid) ||
+		!strings.Contains(err.Error(), domain.SettingKeySpotFundsLimitMode) {
+		t.Fatalf("list over a corrupt mode = %v, want a store fault naming the setting", err)
+	}
+
+	if err := rs.DeleteSetting(ctx, domain.SettingKeySpotFundsLimitMode); err != nil {
+		t.Fatalf("DeleteSetting(mode): %v", err)
+	}
+	if page := list(fwstore.PolicyListFilter{}); page.Total != 3 || !equalStrings(policyKeys(page.Rows), all[:3]) {
+		t.Fatalf("rows after delete = %v total %d, want %v", policyKeys(page.Rows), page.Total, all[:3])
 	}
 }
 

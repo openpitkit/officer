@@ -53,12 +53,12 @@ function renderChoice({
   disabled,
 }: {
   options?: readonly ChoiceCard<Place>[];
-  initial?: Place;
+  initial?: Place | null;
   disabled?: boolean;
 } = {}) {
   const onChange = vi.fn();
   function Controlled() {
-    const [value, setValue] = useState<Place>(initial);
+    const [value, setValue] = useState<Place | null>(initial);
     return (
       <ChoiceCards
         label="Where to keep the files"
@@ -108,6 +108,21 @@ describe("ChoiceCards", () => {
     expect(radio("A server")).toBeChecked();
     expect(radio("This computer")).not.toBeChecked();
     expect(radio("The cloud")).not.toBeChecked();
+  });
+
+  it("checks no card while nothing is chosen, then the clicked one", async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderChoice({ initial: null });
+
+    for (const radioInput of screen.getAllByRole("radio")) {
+      expect(radioInput).not.toBeChecked();
+    }
+    expect(onChange).not.toHaveBeenCalled();
+
+    await user.click(radio("A server"));
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("server");
+    expect(radio("A server")).toBeChecked();
   });
 
   it("selects a card clicked anywhere on it", async () => {

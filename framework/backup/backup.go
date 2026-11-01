@@ -673,11 +673,16 @@ func Filename(createdAt time.Time) string {
 		createdAt.UTC().Format("20060102T150405Z") + ".json"
 }
 
-// RuntimeSection reports whether restoring section changes live runtime state.
-// The accounts+groups, positions, risk-limits and market-data sections are
-// projected into the live engine; general settings, activity history and
-// the audit log are observational. A runtime delta can usually be published
-// online and does not by itself imply an engine replacement.
+// RuntimeSection reports whether section participates in runtime restore
+// classification and engine restart reservation. The accounts+groups,
+// positions, risk-limits and market-data sections project into the live engine.
+// A runtime delta can usually be published online without replacing the engine.
+//
+// General settings remain outside this classification and use store rollback
+// on failure. They carry the Spot Funds limit mode
+// (domain.SettingKeySpotFundsLimitMode), which the node applies online after
+// commit with account lanes excluded. Activity history and the audit log are
+// observational.
 //
 // The shared support dictionaries (asset classes, assets, principals) are NOT a
 // runtime section: they travel with every restore for foreign-key resolution.
@@ -696,9 +701,12 @@ func RuntimeSection(section Section) bool {
 	}
 }
 
-// TouchesRuntime reports whether restoring scope can change live runtime state.
-// The node uses this to select its synchronization gate. The backend plans any
-// market-data-manager lifecycle separately from the actual configuration delta.
+// TouchesRuntime reports whether scope includes a RuntimeSection.
+// The node uses this for gate selection and runtime classification. General
+// settings reserve no engine restart and retain store rollback on failure;
+// their Spot Funds limit mode is applied online after commit with account
+// lanes excluded. The backend plans any market-data-manager lifecycle separately
+// from the actual configuration delta.
 //
 // It evaluates the sections carried in scope as given. Passed the caller's raw
 // requested scope it answers "did the caller ask for a runtime section"; passed

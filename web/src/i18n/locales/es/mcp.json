@@ -47,6 +47,9 @@
     "get_limits": {
       "description": "Listar las barreras de riesgo configuradas, con filtro opcional por cuenta."
     },
+    "get_spot_funds_limit_mode": {
+      "description": "Leer el modo global de límites de Spot Funds y las cuentas que un límite de P&L bloquea por falta de moneda."
+    },
     "get_audit": {
       "description": "Leer las entradas recientes del registro de auditoría del plano de control."
     },
@@ -66,7 +69,7 @@
       "description": "Ejecutar una simulación pre-negociación sin efectos para una orden (aprobación/rechazo + motivos); no modifica ningún estado."
     },
     "set_limit": {
-      "description": "Endurecer una barrera de riesgo: añadir una o hacerla más estricta; la relajación y la eliminación se rechazan."
+      "description": "Endurecer una barrera de riesgo: añadir una o hacerla más estricta, o devolver Spot Funds al modo Comprobar fondos; la relajación y la eliminación se rechazan."
     },
     "submit_order": {
       "description": "Enviar una intención de orden a través del control pre-negociación y obtener un sobre de aprobación."

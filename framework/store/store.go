@@ -894,9 +894,10 @@ type AssetClassListPage struct {
 	Total int
 }
 
-// PolicyKind discriminates the typed limit barriers flattened into the
-// unified policy list. Its string values match the engine policy constants in
-// the domain package (domain.PolicyRateLimit and siblings).
+// PolicyKind discriminates the policies flattened into the unified policy
+// list: the typed engine barriers and the Officer meta-policy. Its string
+// values match the policy constants in the domain package
+// (domain.PolicyRateLimit and siblings).
 type PolicyKind string
 
 const (
@@ -913,6 +914,11 @@ const (
 	// PolicyKindSpotFundsTotalPnlBounds is the SpotFunds total P&L bounds
 	// kill-switch barrier.
 	PolicyKindSpotFundsTotalPnlBounds PolicyKind = "spot_funds_total_pnl_bounds_kill_switch"
+	// PolicyKindSpotFundsLimitMode is the Officer meta-policy that decides
+	// whether Spot Funds checks the funds limit, not an engine policy. Its one
+	// global row is listed only while domain.SettingKeySpotFundsLimitMode holds
+	// a value.
+	PolicyKindSpotFundsLimitMode PolicyKind = "spot_funds_limit_mode"
 )
 
 // PolicyListFilter narrows the unified policy-list read. Account mirrors the
@@ -937,9 +943,9 @@ type PolicyListFilter struct {
 	Restriction domain.AccountRestriction
 }
 
-// PolicyListRow is one barrier flattened into the common policy shape: the kind
-// discriminator, the (scope, account, asset) composite all three barriers share,
-// and exactly one populated typed value matching Kind. The money and size fields
+// PolicyListRow is one policy flattened into the common policy shape: the kind
+// discriminator, the (scope, account, asset) composite every kind shares, and
+// exactly one populated typed value matching Kind. The money and size fields
 // stay on the domain value types, never collapsed to a float.
 type PolicyListRow struct {
 	Kind               PolicyKind
@@ -950,6 +956,7 @@ type PolicyListRow struct {
 	Rate               *domain.LimitRate
 	OrderSize          *domain.LimitOrderSize
 	SpotFundsPnlBounds *domain.LimitSpotFundsPnlBounds
+	SpotFundsLimitMode *domain.LimitSpotFundsLimitMode
 }
 
 // PolicyListPage is a paged policy-list result with the total matching count
@@ -1971,6 +1978,10 @@ type RealmStore interface {
 
 	// SetSetting upserts the value of the realm-wide setting stored under key.
 	SetSetting(ctx context.Context, key, value string) error
+
+	// DeleteSetting removes the realm-wide setting stored under key. Returns
+	// domain.ErrNotFound when absent.
+	DeleteSetting(ctx context.Context, key string) error
 
 	// --- MCP access control ---
 

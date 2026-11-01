@@ -77,16 +77,17 @@ func withOrder(extra map[string]any) map[string]any {
 // textContentCalls holds a successful call of every command of the Officer MCP
 // catalogue.
 var textContentCalls = map[string]textContentCall{
-	"health":            {textContentFake, map[string]any{}},
-	"get_account_state": {textContentFake, map[string]any{"account": textContentAccount}},
-	"get_limits":        {textContentFake, map[string]any{}},
-	"get_order":         {textContentFake, map[string]any{"id": testOrderEID}},
-	"get_audit":         {textContentFake, map[string]any{}},
-	"list_orders":       {textContentLists, map[string]any{}},
-	"list_trades":       {textContentLists, map[string]any{}},
-	"list_accounts":     {textContentLists, map[string]any{}},
-	"list_groups":       {textContentLists, map[string]any{}},
-	"check_order":       {textContentFake, textContentOrder},
+	"health":                    {textContentFake, map[string]any{}},
+	"get_account_state":         {textContentFake, map[string]any{"account": textContentAccount}},
+	"get_limits":                {textContentFake, map[string]any{}},
+	"get_spot_funds_limit_mode": {textContentControlPlane, map[string]any{}},
+	"get_order":                 {textContentFake, map[string]any{"id": testOrderEID}},
+	"get_audit":                 {textContentFake, map[string]any{}},
+	"list_orders":               {textContentLists, map[string]any{}},
+	"list_trades":               {textContentLists, map[string]any{}},
+	"list_accounts":             {textContentLists, map[string]any{}},
+	"list_groups":               {textContentLists, map[string]any{}},
+	"check_order":               {textContentFake, textContentOrder},
 	"set_limit": {textContentControlPlane, map[string]any{
 		"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1",
 	}},

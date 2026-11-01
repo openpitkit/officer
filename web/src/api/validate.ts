@@ -30,11 +30,13 @@ import {
   type Policy,
   type Scope,
 } from "@/api/vocabulary";
+import { isSpotFundsLimitMode } from "@/framework/registries/vocabulary";
 
 const MAX_ACCOUNT_LEN = 64;
 const MAX_ASSET_LEN = 32;
 const MAX_ORDERS_CAP = 1e9;
 const MAX_WINDOW_HOURS = 24;
+const SPOT_FUNDS_LIMIT_MODE_POLICY = "spot_funds_limit_mode";
 
 /**
  * A localizable validation failure. `key` names a key in the `validation`
@@ -255,6 +257,8 @@ export function validateKindValue(
     }
     case "currency":
       return validateAsset(value);
+    case "mode":
+      return isSpotFundsLimitMode(value) ? null : { key: "kind.mode" };
     default:
       return { key: "kind.unknown", values: { kind } };
   }
@@ -351,6 +355,10 @@ export function validateLimit(limit: Limit): FieldError | null {
       kinds.includes("lower_bound") || kinds.includes("upper_bound");
     if (!hasBound) {
       return { key: "limit.pnlRequires", values: { policy } };
+    }
+  } else if (policy === SPOT_FUNDS_LIMIT_MODE_POLICY) {
+    if (!kinds.includes("mode")) {
+      return { key: "limit.modeRequired" };
     }
   }
 

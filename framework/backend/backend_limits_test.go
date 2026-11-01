@@ -20,9 +20,12 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/node"
@@ -31,8 +34,160 @@ import (
 type limitTestNode struct {
 	node.Node
 
-	deleteCalls int
-	putCalls    int
+	deleteCalls    int
+	putCalls       int
+	modeState      domain.SpotFundsLimitModeState
+	modeErr        error
+	modeReadCalls  int
+	modeWriteCalls int
+	modeWrite      domain.SpotFundsLimitMode
+	modeCaller     domain.Caller
+	modeWriteErr   error
+}
+
+func (n *limitTestNode) SpotFundsLimitMode(context.Context) (domain.SpotFundsLimitModeState, error) {
+	n.modeReadCalls++
+	return n.modeState, n.modeErr
+}
+
+func (n *limitTestNode) SetSpotFundsLimitMode(_ context.Context, mode domain.SpotFundsLimitMode, caller domain.Caller) error {
+	n.modeWriteCalls++
+	n.modeWrite, n.modeCaller = mode, caller
+	return n.modeWriteErr
+}
+
+type limitModeTestScope struct{ EveryAccount }
+
+func (limitModeTestScope) Visible(_ domain.Caller, code domain.AccountID) error {
+	if code == "acc-2" {
+		return fmt.Errorf("hidden account: %w", domain.ErrNotFound)
+	}
+	return nil
+}
+
+func TestServiceSpotFundsLimitModeVisibility(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		scope AccountScope
+		want  []domain.AccountID
+	}{
+		{"filtered", limitModeTestScope{}, []domain.AccountID{"acc-1", "acc-3"}},
+		{"every account", EveryAccount{}, []domain.AccountID{"acc-1", "acc-2", "acc-3"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := []domain.AccountID{"acc-1", "acc-2", "acc-3"}
+			n := &limitTestNode{modeState: domain.SpotFundsLimitModeState{
+				Mode:                    domain.SpotFundsLimitModeTrackOnly,
+				AccountsWithoutCurrency: slices.Clone(original),
+			}}
+			svc := newLimitTestService(t, n)
+			svc.scope = tc.scope
+			state, err := svc.SpotFundsLimitMode(systemCtx())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Mode != domain.SpotFundsLimitModeTrackOnly {
+				t.Fatalf("mode = %q, want track_only", state.Mode)
+			}
+			if !slices.Equal(state.AccountsWithoutCurrency, tc.want) {
+				t.Fatalf("accounts = %v, want %v", state.AccountsWithoutCurrency, tc.want)
+			}
+			if !slices.Equal(n.modeState.AccountsWithoutCurrency, original) {
+				t.Fatalf("node accounts mutated = %v, want %v", n.modeState.AccountsWithoutCurrency, original)
+			}
+			if n.modeReadCalls != 1 {
+				t.Fatalf("node read calls = %d, want 1", n.modeReadCalls)
+			}
+		})
+	}
+}
+
+func TestServiceSpotFundsLimitModeReadError(t *testing.T) {
+	t.Parallel()
+	wantErr := errors.New("mode read failed")
+	n := &limitTestNode{modeErr: wantErr}
+	_, err := newLimitTestService(t, n).SpotFundsLimitMode(systemCtx())
+	if err != wantErr {
+		t.Fatalf("error = %v, want unchanged node error %v", err, wantErr)
+	}
+	if n.modeReadCalls != 1 {
+		t.Fatalf("node read calls = %d, want 1", n.modeReadCalls)
+	}
+}
+
+func TestServiceSpotFundsLimitModeRequiresCaller(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, wantErr := auth.CallerFromContext(ctx)
+	n := &limitTestNode{}
+	svc := newLimitTestService(t, n)
+	_, readErr := svc.SpotFundsLimitMode(ctx)
+	writeErr := svc.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{
+		Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
+	})
+	for _, err := range []error{readErr, writeErr} {
+		if err == nil || err.Error() != wantErr.Error() || !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("error = %v, want auth error %v", err, wantErr)
+		}
+	}
+	if n.modeReadCalls != 0 || n.modeWriteCalls != 0 {
+		t.Fatalf("missing caller reached node: reads=%d writes=%d", n.modeReadCalls, n.modeWriteCalls)
+	}
+}
+
+func TestServicePutSpotFundsLimitModeForwardsCaller(t *testing.T) {
+	t.Parallel()
+	caller := domain.Caller{Source: domain.SourceMCP, Principal: "mode-test"}
+	ctx := auth.ContextWithCaller(context.Background(), caller)
+	for _, wantErr := range []error{nil, domain.ErrLoosening} {
+		n := &limitTestNode{modeWriteErr: wantErr}
+		svc := newLimitTestService(t, n)
+		svc.scope = limitModeTestScope{}
+		err := svc.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{
+			Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
+		})
+		if err != wantErr {
+			t.Fatalf("error = %v, want unchanged node error %v", err, wantErr)
+		}
+		if n.modeWriteCalls != 1 || n.modeWrite != domain.SpotFundsLimitModeTrackOnly || n.modeCaller != caller {
+			t.Fatalf("node write = (%d, %q, %+v), want (1, track_only, %+v)", n.modeWriteCalls, n.modeWrite, n.modeCaller, caller)
+		}
+	}
+}
+
+// TestServicePutSpotFundsLimitModeValidatesBeforeNode proves the meta-policy
+// is global only and needs a recognised mode, and that a refused value never
+// reaches the node.
+func TestServicePutSpotFundsLimitModeValidatesBeforeNode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		limit   domain.LimitSpotFundsLimitMode
+		pointer string
+	}{
+		{"no scope", domain.LimitSpotFundsLimitMode{Mode: domain.SpotFundsLimitModeEnforce}, "/scope"},
+		{"account scope", domain.LimitSpotFundsLimitMode{
+			Scope: domain.ScopeAccount, Mode: domain.SpotFundsLimitModeEnforce,
+		}, "/scope"},
+		{"broker scope", domain.LimitSpotFundsLimitMode{
+			Scope: domain.ScopeBroker, Mode: domain.SpotFundsLimitModeEnforce,
+		}, "/scope"},
+		{"no mode", domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal}, "/mode"},
+		{"unknown mode", domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: "relaxed"}, "/mode"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			n := &limitTestNode{}
+			err := newLimitTestService(t, n).PutSpotFundsLimitMode(systemCtx(), tc.limit)
+			if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != tc.pointer {
+				t.Fatalf("error = %v, pointer = %q; want ErrInvalid at %s", err, domain.ValidationPointer(err), tc.pointer)
+			}
+			if n.modeWriteCalls != 0 {
+				t.Fatalf("invalid meta-policy reached node: writes=%d", n.modeWriteCalls)
+			}
+		})
+	}
 }
 
 func (n *limitTestNode) DeleteLimit(
@@ -172,6 +327,30 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 				Account: "acc-1",
 			},
 			valid: true,
+		},
+		{
+			name: "spot funds limit mode global",
+			target: node.LimitTarget{
+				Policy: domain.PolicySpotFundsLimitMode,
+				Scope:  domain.ScopeGlobal,
+			},
+			valid: true,
+		},
+		{
+			name: "spot funds limit mode account",
+			target: node.LimitTarget{
+				Policy:  domain.PolicySpotFundsLimitMode,
+				Scope:   domain.ScopeAccount,
+				Account: "acc-1",
+			},
+		},
+		{
+			name: "spot funds limit mode global with asset",
+			target: node.LimitTarget{
+				Policy: domain.PolicySpotFundsLimitMode,
+				Scope:  domain.ScopeGlobal,
+				Asset:  "USD",
+			},
 		},
 		{
 			name: "global with account",

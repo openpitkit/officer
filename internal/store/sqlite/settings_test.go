@@ -23,7 +23,10 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"go.openpit.dev/officer/framework/domain"
 )
 
 func TestMcpAccessRoundTrip(t *testing.T) {
@@ -102,5 +105,29 @@ func TestSettingRoundTrip(t *testing.T) {
 	v, ok, _ = rs.GetSetting(ctx, "unset_key")
 	if !ok || v != "x" {
 		t.Fatalf("unset_key after set = %q ok=%v, want x true", v, ok)
+	}
+}
+
+// TestDeleteSetting removes a stored key, which then reads as absent, and
+// answers domain.ErrNotFound for a key that holds no value, so a removal of
+// nothing is told apart from a removal that happened.
+func TestDeleteSetting(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if err := rs.SetSetting(ctx, "unset_key", "x"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if err := rs.DeleteSetting(ctx, "unset_key"); err != nil {
+		t.Fatalf("DeleteSetting(stored): %v", err)
+	}
+	if v, ok, err := rs.GetSetting(ctx, "unset_key"); err != nil || ok {
+		t.Fatalf("GetSetting after delete = %q ok=%v err=%v, want absent", v, ok, err)
+	}
+	if err := rs.DeleteSetting(ctx, "unset_key"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteSetting(absent) = %v, want ErrNotFound", err)
+	}
+	// Another key is untouched by the removal.
+	if v, ok, err := rs.GetSetting(ctx, "no_esign"); err != nil || !ok || v != "1" {
+		t.Fatalf("no_esign after delete = %q ok=%v err=%v, want 1", v, ok, err)
 	}
 }
