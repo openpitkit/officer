@@ -383,6 +383,12 @@ const (
 	PolicyRateLimit                    = "rate_limit"
 	PolicyOrderSizeLimit               = "order_size_limit"
 	PolicySpotFundsPnlBoundsKillSwitch = "spot_funds_pnl_bounds_kill_switch"
+	// PolicySpotFundsUnrealizedPnlBoundsKillSwitch bounds the account's
+	// unrealized P&L at current prices; see SpotFundsPnlAxisUnrealized.
+	PolicySpotFundsUnrealizedPnlBoundsKillSwitch = "spot_funds_unrealized_pnl_bounds_kill_switch"
+	// PolicySpotFundsTotalPnlBoundsKillSwitch bounds the account's realized
+	// plus unrealized P&L; see SpotFundsPnlAxisTotal.
+	PolicySpotFundsTotalPnlBoundsKillSwitch = "spot_funds_total_pnl_bounds_kill_switch"
 )
 
 // Scope identifiers.

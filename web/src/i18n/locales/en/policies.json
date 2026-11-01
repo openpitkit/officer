@@ -77,8 +77,9 @@
     "values": "Values",
     "rateLimitFootnote": "Both max orders and window are required.",
     "atLeastOneFootnote": "At least one value is required.",
-    "pnlBoundsFootnote": "Currency and at least one PnL bound are required.",
-    "fxFailSafeNote": "FX fail-safe: an account under PnL control is blocked when a required input is missing, for example an FX quote needed to value realized PnL in the account currency. FX is required only when needed, not for assets already in the account currency and not for accounts outside PnL control.",
+    "pnlBoundsFootnote": "Currency and at least one P&L bound are required.",
+    "fxFailSafeNote": "FX fail-safe: an account under P&L control is blocked when a required input is missing, for example an FX quote needed to value realized P&L in the account currency. FX is required only when needed, not for assets already in the account currency and not for accounts outside P&L control.",
+    "positionFailSafeNote": "Price fail-safe: an account under P&L control is blocked when a required input is missing, for example the current price of a held asset or an FX quote needed to value the open position in the account currency. FX is required only when needed, not for assets already in the account currency and not for accounts outside P&L control.",
     "save": "Save"
   },
   "duration": {

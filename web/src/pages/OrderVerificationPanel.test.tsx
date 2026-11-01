@@ -570,7 +570,7 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
     expect(screen.getByText("equity-desks")).toBeInTheDocument();
     expect(screen.getByText("Limit")).toBeInTheDocument();
     expect(screen.getByText("nonce-exec-1")).toBeInTheDocument();
-    expect(screen.getByText("PnL kill switch triggered")).toBeInTheDocument();
+    expect(screen.getByText("P&L kill switch triggered")).toBeInTheDocument();
     expect(screen.getByText("account")).toBeInTheDocument();
     expect(screen.getByText("daily_loss")).toBeInTheDocument();
     expect(screen.getAllByText("Buy")).toHaveLength(2);
@@ -590,7 +590,7 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
     expect(screen.getByText("Block 1")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "desk-alpha · PnL kill switch triggered · Daily loss threshold reached · limit=-1000",
+        "desk-alpha · P&L kill switch triggered · Daily loss threshold reached · limit=-1000",
       ),
     ).toBeInTheDocument();
   });
@@ -725,7 +725,7 @@ describe("OrderVerificationPanel - accounts", () => {
     expect(screen.getByText("equity-desks")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "desk-alpha · PnL kill switch triggered · Daily loss limit · limit=-1000",
+        "desk-alpha · P&L kill switch triggered · Daily loss limit · limit=-1000",
       ),
     ).toBeInTheDocument();
   });
@@ -741,7 +741,7 @@ describe("OrderVerificationPanel - accounts", () => {
     expect(screen.getByText("Block 1")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "PnL kill switch triggered · Daily loss limit · limit=-1000",
+        "P&L kill switch triggered · Daily loss limit · limit=-1000",
       ),
     ).toBeInTheDocument();
 

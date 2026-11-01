@@ -378,8 +378,10 @@ Each of these tools makes the core call of one REST operation:
   `PUT /assets/{code}`, `DELETE /assets/{code}`;
 - `create_group`, `update_group`, `delete_group`: `POST /groups`,
   `PUT /groups/{code}`, `DELETE /groups/{code}`;
-- `set_limit`: `PUT /limits/rate`, `PUT /limits/order-size` or
-  `PUT /limits/spot-funds-pnl-bounds`, by its `policy` argument;
+- `set_limit`: `PUT /limits/rate`, `PUT /limits/order-size`,
+  `PUT /limits/spot-funds-pnl-bounds`,
+  `PUT /limits/spot-funds-unrealized-pnl-bounds` or
+  `PUT /limits/spot-funds-total-pnl-bounds`, by its `policy` argument;
 - `report_fill`: `POST /orders/{id}/execution-reports`.
 
 All thirteen are mutating and protective and ship disabled. The path code or id
@@ -404,12 +406,13 @@ retryable `engine_restarting` - except that the default group `-` given as
 
 A tool answers the body its REST operation answers: `{"account": ...}`,
 `{"asset": ...}`, `{"group": ...}`, `{"adjustment": ...}`, `{"rateLimit": ...}`,
-`{"orderSizeLimit": ...}`, `{"spotFundsPnlBoundsLimit": ...}` or the
-execution-report body. A delete, which REST answers without a body, answers its
-own input. An adjustment the engine rejects, such as one whose resulting
-balance leaves its bounds, is recorded and answered with its `rejected`
-outcome, as REST answers it; one that changes nothing answers `{}`, where REST
-answers 204.
+`{"orderSizeLimit": ...}`, `{"spotFundsPnlBoundsLimit": ...}`,
+`{"spotFundsUnrealizedPnlBoundsLimit": ...}`,
+`{"spotFundsTotalPnlBoundsLimit": ...}` or the execution-report body. A delete,
+which REST answers without a body, answers its own input. An adjustment the
+engine rejects, such as one whose resulting balance leaves its bounds, is
+recorded and answered with its `rejected` outcome, as REST answers it; one that
+changes nothing answers `{}`, where REST answers 204.
 
 `report_fill` leaves a report on a drop-copy order unattested; a report on an
 ordinary order is attested, and signed unless eSign-off is set. REST's `force`
@@ -513,6 +516,13 @@ or the venue refused but cancellation is not recorded yet or could not be
 confirmed; `error` says why. `GET /orders/{id}` is authoritative, and the runtime
 reconciles orders that reached the send step, retrying cancellation after a
 refusal.
+
+## Spot Funds P&L bounds
+
+An unrealized or total P&L bound needs a price for every asset the account
+holds: an order of an account that holds an asset without a price is rejected
+and blocks the account, as the realized bound does when it cannot calculate the
+P&L.
 
 ## Single-account mode
 

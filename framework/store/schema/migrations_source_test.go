@@ -36,8 +36,8 @@ func TestEmbeddedMigrationSourceRendersCanonicalSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrations: %v", err)
 	}
-	if len(migrations) != 1 {
-		t.Fatalf("migration count = %d, want 1", len(migrations))
+	if len(migrations) != 2 {
+		t.Fatalf("migration count = %d, want 2", len(migrations))
 	}
 	text := migrations[0].SQL
 	for _, want := range []string{"TEST_PK", "TEST_XID", "TEST_BOOL", "TEST_DECIMAL"} {

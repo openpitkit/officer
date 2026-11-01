@@ -89,6 +89,11 @@ type LimitOrderSize struct {
 // account-group or global barrier. Bounds are never FX-converted; Officer
 // passes the currency through unchanged.
 type LimitSpotFundsPnlBounds struct {
+	// Axis is the account P&L measure the bounds apply to. Each axis is a
+	// policy of its own (SpotFundsPnlAxis.Policy) with its own cascade. A
+	// backup archive files barriers in one list per axis, so the list carries
+	// the axis and the field is not encoded.
+	Axis SpotFundsPnlAxis `json:"-"`
 	// Scope is the cascade tier this barrier applies to.
 	Scope LimitScope
 	// Account is required only for the account scope.
@@ -101,6 +106,52 @@ type LimitSpotFundsPnlBounds struct {
 	LowerBound string
 	// UpperBound is the upper P&L bound (exact decimal); empty when unset.
 	UpperBound string
+}
+
+// SpotFundsPnlAxis is the account P&L measure a Spot Funds P&L bound limits.
+// Unrealized P&L is what closing every owned quantity at the current price
+// would add to realized P&L; total is realized plus unrealized.
+type SpotFundsPnlAxis string
+
+const (
+	// SpotFundsPnlAxisRealized bounds the account's realized P&L.
+	SpotFundsPnlAxisRealized SpotFundsPnlAxis = "realized"
+	// SpotFundsPnlAxisUnrealized bounds the account's unrealized P&L.
+	SpotFundsPnlAxisUnrealized SpotFundsPnlAxis = "unrealized"
+	// SpotFundsPnlAxisTotal bounds the account's realized plus unrealized P&L.
+	SpotFundsPnlAxisTotal SpotFundsPnlAxis = "total"
+)
+
+// SpotFundsPnlAxes lists every axis in its policy order: realized, unrealized,
+// total.
+var SpotFundsPnlAxes = []SpotFundsPnlAxis{
+	SpotFundsPnlAxisRealized, SpotFundsPnlAxisUnrealized, SpotFundsPnlAxisTotal,
+}
+
+// Policy returns the policy id the axis is configured under, or the empty
+// string for an unknown axis.
+func (a SpotFundsPnlAxis) Policy() string {
+	switch a {
+	case SpotFundsPnlAxisRealized:
+		return PolicySpotFundsPnlBoundsKillSwitch
+	case SpotFundsPnlAxisUnrealized:
+		return PolicySpotFundsUnrealizedPnlBoundsKillSwitch
+	case SpotFundsPnlAxisTotal:
+		return PolicySpotFundsTotalPnlBoundsKillSwitch
+	default:
+		return ""
+	}
+}
+
+// SpotFundsPnlAxisOf returns the axis policy is configured for; the bool is
+// false when policy is not a Spot Funds P&L bounds policy.
+func SpotFundsPnlAxisOf(policy string) (SpotFundsPnlAxis, bool) {
+	for _, axis := range SpotFundsPnlAxes {
+		if axis.Policy() == policy {
+			return axis, true
+		}
+	}
+	return "", false
 }
 
 // allowedScopes maps each policy to its permitted scopes. It is the engine
@@ -116,6 +167,12 @@ var allowedScopes = map[string][]LimitScope{
 		ScopeAccountSettlementAsset,
 	},
 	PolicySpotFundsPnlBoundsKillSwitch: {
+		ScopeGlobal, ScopeAccountGroup, ScopeAccount,
+	},
+	PolicySpotFundsUnrealizedPnlBoundsKillSwitch: {
+		ScopeGlobal, ScopeAccountGroup, ScopeAccount,
+	},
+	PolicySpotFundsTotalPnlBoundsKillSwitch: {
 		ScopeGlobal, ScopeAccountGroup, ScopeAccount,
 	},
 }
@@ -217,10 +274,14 @@ func (l LimitOrderSize) Validate() error {
 }
 
 // Validate checks the SpotFunds self-computed P&L-bounds barrier against the
-// Officer meta-policy contract.
+// Officer meta-policy contract of its axis's policy.
 func (l LimitSpotFundsPnlBounds) Validate() error {
+	policy := l.Axis.Policy()
+	if policy == "" {
+		return fmt.Errorf("unknown spot funds pnl axis %q: %w", l.Axis, ErrInvalid)
+	}
 	if err := ValidateLimitScopeAndAxes(
-		PolicySpotFundsPnlBoundsKillSwitch, l.Scope, l.Account, "", l.AccountGroup,
+		policy, l.Scope, l.Account, "", l.AccountGroup,
 	); err != nil {
 		return err
 	}
@@ -231,8 +292,8 @@ func (l LimitSpotFundsPnlBounds) Validate() error {
 		return invalidField(
 			"", "",
 			fmt.Errorf(
-				"spot_funds_pnl_bounds_kill_switch requires at least lower_bound or upper_bound: %w",
-				ErrInvalid,
+				"%s requires at least lower_bound or upper_bound: %w",
+				policy, ErrInvalid,
 			),
 		)
 	}

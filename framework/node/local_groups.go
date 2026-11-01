@@ -668,21 +668,23 @@ func (n *localNode) groupProtection(
 	if group.Blocked {
 		return fmt.Errorf("group %q is blocked: %w", group.Code, domain.ErrLoosening)
 	}
-	_, bound, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
-		Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
-		Scope:        domain.ScopeAccountGroup,
-		AccountGroup: group.Code,
-	})
-	if err != nil {
-		return fmt.Errorf(
-			"read spot funds pnl-bounds limits for group %q: %w", group.Code, err,
-		)
-	}
-	if bound {
-		return fmt.Errorf(
-			"group %q carries a group-scoped Spot Funds P&L bound: %w",
-			group.Code, domain.ErrLoosening,
-		)
+	for _, axis := range domain.SpotFundsPnlAxes {
+		_, bound, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
+			Policy:       axis.Policy(),
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: group.Code,
+		})
+		if err != nil {
+			return fmt.Errorf(
+				"read spot funds pnl-bounds limits for group %q: %w", group.Code, err,
+			)
+		}
+		if bound {
+			return fmt.Errorf(
+				"group %q carries a group-scoped Spot Funds P&L bound: %w",
+				group.Code, domain.ErrLoosening,
+			)
+		}
 	}
 	return nil
 }

@@ -67,6 +67,10 @@ const (
 	RejectCodeOther                           = "other"
 )
 
+// EngineRejectPolicy is the policy the engine names in a reject it answers
+// itself, as from its blocked set, rather than from a policy run.
+const EngineRejectPolicy = "Engine"
+
 var knownRejectCodes = map[string]struct{}{
 	RejectCodeMissingRequiredField:            {},
 	RejectCodeInvalidFieldFormat:              {},

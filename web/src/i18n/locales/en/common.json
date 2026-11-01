@@ -301,9 +301,9 @@
     "price": "Price",
     "quantity": "Quantity",
     "notional": "Notional",
-    "pnl": "PnL",
-    "unrealizedPnl": "Unrealized PnL",
-    "realizedPnl": "Realized PnL",
+    "pnl": "P&L",
+    "unrealizedPnl": "Unrealized P&L",
+    "realizedPnl": "Realized P&L",
     "markToMarket": "Mark-to-market",
     "timeInForce": "Time in force",
     "actions": "Actions"
@@ -331,12 +331,12 @@
     "quantityShort": "QTY",
     "notional": "Notional",
     "notionalShort": "NTL",
-    "pnl": "PnL",
-    "pnlShort": "PnL",
-    "unrealizedPnl": "Unrealized PnL",
-    "unrealizedPnlShort": "uPnL",
-    "realizedPnl": "Realized PnL",
-    "realizedPnlShort": "rPnL",
+    "pnl": "P&L",
+    "pnlShort": "P&L",
+    "unrealizedPnl": "Unrealized P&L",
+    "unrealizedPnlShort": "Unrealized P&L",
+    "realizedPnl": "Realized P&L",
+    "realizedPnlShort": "Realized P&L",
     "markToMarket": "Mark-to-market",
     "markToMarketShort": "MTM",
     "timeInForce": "Time in force",
@@ -464,7 +464,7 @@
       "copyUnnamed": "For allow-or-deny pre-trade control, assign positions or cash balances to the account, then define policy barriers. If buying-power control is not needed, the account can stay empty."
     },
     "marketData": {
-      "copy": "Market orders, locked prices, cross-currency exposure, and realized PnL need a market-data source. You can connect a live provider later or install a static BYO preset now."
+      "copy": "Market orders, locked prices, cross-currency exposure, and realized P&L need a market-data source. You can connect a live provider later or install a static BYO preset now."
     },
     "optional": {
       "copy": "A pure registry or audit workflow can start without accounts, balances, or feeds. Add the controls only when the order path must be allowed or blocked by Pit."

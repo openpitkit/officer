@@ -775,10 +775,11 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 	return broker, assets, accountAssets, nil
 }
 
-// spotFundsPnlBoundsAxes maps currency-valued SpotFunds P&L bounds onto the
-// runtime Configure axes. Every returned slice is non-nil so Configure replaces
-// all axes wholesale.
+// spotFundsPnlBoundsAxes maps the currency-valued SpotFunds P&L bounds of axis
+// onto the runtime Configure tiers; bounds of other axes are skipped. Every
+// returned slice is non-nil so Configure replaces all tiers wholesale.
 func spotFundsPnlBoundsAxes(
+	axis domain.SpotFundsPnlAxis,
 	limits []domain.LimitSpotFundsPnlBounds,
 	res idResolver,
 ) (
@@ -796,6 +797,9 @@ func spotFundsPnlBoundsAxes(
 	accounts := []policies.SpotFundsPnlBoundsAccountBarrier{}
 
 	for _, limit := range limits {
+		if limit.Axis != axis {
+			continue
+		}
 		barrier, err := spotFundsPnlBoundsBarrier(limit, res)
 		if err != nil {
 			return global, nil, nil, err
@@ -806,7 +810,7 @@ func spotFundsPnlBoundsAxes(
 			// first and lose a configured bound.
 			if globalSet {
 				return global, nil, nil, fmt.Errorf(
-					"engine: spot_funds_pnl_bounds_kill_switch carries more than one global barrier")
+					"engine: %s carries more than one global barrier", axis.Policy())
 			}
 			global = optional.Some(&barrier)
 			globalSet = true
@@ -830,8 +834,7 @@ func spotFundsPnlBoundsAxes(
 			})
 		default:
 			return global, nil, nil, fmt.Errorf(
-				"engine: spot_funds_pnl_bounds_kill_switch unsupported scope %q",
-				limit.Scope,
+				"engine: %s unsupported scope %q", axis.Policy(), limit.Scope,
 			)
 		}
 	}

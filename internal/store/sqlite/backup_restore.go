@@ -476,11 +476,12 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		}
 		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
-	for _, l := range data.SpotFundsPnlBoundsLimits {
+	for _, l := range data.SpotFundsPnlBounds() {
 		if err := restoreValidationError(l.Validate()); err != nil {
 			return fmt.Errorf(
-				"store: restore spot_funds_pnl_bounds_kill_switch scope %q "+
+				"store: restore %s scope %q "+
 					"account %q account group %q currency %q: %w",
+				l.Axis.Policy(),
 				l.Scope,
 				l.Account,
 				l.AccountGroup,
@@ -503,14 +504,15 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		}
 		applied, err := rt.putSpotFundsPnlBoundsLimit(
 			ctx,
+			l.Axis,
 			l.Scope,
 			accountID,
 			groupID,
 			`INSERT INTO limit_spot_funds_pnl_bound
-				 (scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
+				 (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			[]any{
-				l.Scope, accountID, groupID, currencyID,
+				l.Axis, l.Scope, accountID, groupID, currencyID,
 				nullableString(l.LowerBound), nullableString(l.UpperBound),
 			},
 		)
@@ -560,6 +562,7 @@ func (rt *restoreTx) putLimit(
 
 func (rt *restoreTx) putSpotFundsPnlBoundsLimit(
 	ctx context.Context,
+	axis domain.SpotFundsPnlAxis,
 	scope domain.LimitScope,
 	accountID, groupID sql.NullInt64,
 	insertSQL string,
@@ -568,10 +571,11 @@ func (rt *restoreTx) putSpotFundsPnlBoundsLimit(
 	exists, err := rowExists(
 		ctx, rt.tx,
 		`SELECT 1 FROM limit_spot_funds_pnl_bound
-		 WHERE scope = ?
+		 WHERE axis = ?
+		   AND scope = ?
 		   AND account_id IS ?
 		   AND account_group_id IS ?`,
-		scope, accountID, groupID,
+		axis, scope, accountID, groupID,
 	)
 	if err != nil {
 		return 0, err
@@ -582,10 +586,11 @@ func (rt *restoreTx) putSpotFundsPnlBoundsLimit(
 	if _, err := rt.tx.ExecContext(
 		ctx,
 		`DELETE FROM limit_spot_funds_pnl_bound
-		 WHERE scope = ?
+		 WHERE axis = ?
+		   AND scope = ?
 		   AND account_id IS ?
 		   AND account_group_id IS ?`,
-		scope, accountID, groupID,
+		axis, scope, accountID, groupID,
 	); err != nil {
 		return 0, fmt.Errorf("store: restore delete limit_spot_funds_pnl_bound: %w", err)
 	}

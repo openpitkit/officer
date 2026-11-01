@@ -80,6 +80,10 @@ type orderSubmissionBridge struct {
 	abort      chan struct{}
 	done       chan orderSubmissionCompletion
 	completed  bool
+	// accountBlocked is the order account's block state when the chain began,
+	// read before the submission transaction opens; preTradeLatchedBlocks reads
+	// it. A drop-copy submission does not read it.
+	accountBlocked bool
 }
 
 func beginOrderSubmission(
@@ -94,6 +98,23 @@ func beginOrderSubmission(
 		settlement: make(chan domain.OrderSettlement, 1),
 		abort:      make(chan struct{}),
 		done:       make(chan orderSubmissionCompletion, 1),
+	}
+	if !draft.DropCopy {
+		// The store holds one connection, so the read cannot wait until the
+		// transaction below is open.
+		account, ok, err := realm.GetAccount(ctx, draft.Account)
+		if err != nil {
+			return nil, domain.Order{}, fmt.Errorf(
+				"read account block state: %w", err,
+			)
+		}
+		if !ok {
+			return nil, domain.Order{}, fmt.Errorf(
+				"read account block state: account %q: %w",
+				draft.Account, domain.ErrNotFound,
+			)
+		}
+		bridge.accountBlocked = account.Blocked
 	}
 	go func() {
 		order, err := recordOrderSubmissionWithAttestation(
@@ -316,11 +337,15 @@ func (n *localNode) submitOrder(
 			state.err = fmt.Errorf("submit order: engine rejection has no reject reason")
 			return state.err
 		}
+		state.result.Blocks = preTradeLatchedBlocks(
+			state.order, state.bridge.accountBlocked, state.result.Rejects,
+		)
 		if attestFor != nil {
 			state.attest = attestFor(state.order, state.result)
 		}
 		settlement := orderRejectedSettlement(
-			o.Account, state.order, state.result.Rejects, caller,
+			o.Account, state.order, state.result.Rejects, state.result.Blocks,
+			caller,
 		)
 		persisted, persistErr := state.bridge.complete(settlement)
 		if persistErr != nil {
@@ -441,14 +466,12 @@ func (n *localNode) auditSubmittedOrder(
 	result engine.OrderResult,
 	caller domain.Caller,
 ) error {
-	if result.Accepted {
-		if err := n.mirrorEngineBlocksAudit(
-			ctx, order.ExternalID, result.Blocks,
-		); err != nil {
-			return n.fatalPostEnginePersistence(
-				"audit pre-trade engine blocks", account, err,
-			)
-		}
+	if err := n.mirrorEngineBlocksAudit(
+		ctx, order.ExternalID, result.Blocks,
+	); err != nil {
+		return n.fatalPostEnginePersistence(
+			"audit pre-trade engine blocks", account, err,
+		)
 	}
 	return n.auditOrderDecision(
 		ctx, account, order, result.Accepted, result.Rejects, caller,
@@ -557,8 +580,49 @@ func openingLeavesFromOutcomes(
 	return openingLeaves, nil
 }
 
+// preTradeLatchedBlocks returns the account block the engine latched for a
+// rejected pre-trade request, mirrored like a block a fill reports. The engine
+// latches the first account-scope reject a policy run returns for a request
+// whose account it found clear. For a blocked account it answers from its
+// blocked set before any policy runs and latches nothing: with the account's
+// own cause, which Officer already holds - its account row matches the
+// engine's slot inside the account lane, where accountBlocked was read - or
+// with an engine-named cause for an operator, group or engine-wide block. A
+// latched cause carries account_blocked, an engine cause the engine's policy
+// name; no policy run returns either. A drop-copy reject latches nothing.
+//
+// The block keeps the reject's code, while the engine's own latch carries
+// account_blocked until the SDK latch keeps the reject's code as well: until
+// then, later orders of the account are rejected with account_blocked before a
+// restart and with the stored code after one, which re-applies this cause.
+func preTradeLatchedBlocks(
+	order domain.Order, accountBlocked bool, rejects []domain.OrderReject,
+) []domain.AccountBlock {
+	if order.DropCopy || accountBlocked {
+		return nil
+	}
+	for _, r := range rejects {
+		if r.Scope != "account" {
+			continue
+		}
+		if r.Code == domain.RejectCodeAccountBlocked ||
+			r.Policy == domain.EngineRejectPolicy {
+			return nil
+		}
+		return []domain.AccountBlock{{
+			Account: order.Account,
+			Policy:  r.Policy,
+			Code:    r.Code,
+			Reason:  r.Reason,
+			Details: r.Details,
+		}}
+	}
+	return nil
+}
+
 func orderRejectedSettlement(
-	account domain.AccountID, order domain.Order, rejects []domain.OrderReject, caller domain.Caller,
+	account domain.AccountID, order domain.Order, rejects []domain.OrderReject,
+	blocks []domain.AccountBlock, caller domain.Caller,
 ) domain.OrderSettlement {
 	payload := domain.OrderEventPayload{
 		Rejects: append([]domain.OrderReject(nil), rejects...),
@@ -581,6 +645,7 @@ func orderRejectedSettlement(
 		// unknown.
 		Leaves:           "0",
 		ReservedQuantity: "0",
+		Blocks:           blocks,
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeRejected, caller, payload),
 		},
@@ -699,11 +764,15 @@ func (n *localNode) submitImmediate(
 			)
 			return state.err
 		}
+		state.result.Blocks = preTradeLatchedBlocks(
+			state.order, state.bridge.accountBlocked, state.result.Rejects,
+		)
 		if attestFor != nil {
 			state.attest = attestFor(state.order, state.result)
 		}
 		settlement := orderRejectedSettlement(
-			o.Account, state.order, state.result.Rejects, caller,
+			o.Account, state.order, state.result.Rejects, state.result.Blocks,
+			caller,
 		)
 		persisted, persistErr := state.bridge.complete(settlement)
 		if persistErr != nil {
@@ -713,6 +782,14 @@ func (n *localNode) submitImmediate(
 			return state.err
 		}
 		state.order = persisted
+		if err := n.mirrorEngineBlocksAudit(
+			state.ctx, state.order.ExternalID, state.result.Blocks,
+		); err != nil {
+			state.err = n.fatalPostEnginePersistence(
+				"audit immediate engine blocks", o.Account, err,
+			)
+			return state.err
+		}
 		state.err = n.auditOrderDecision(
 			state.ctx, o.Account, state.order, state.result.Accepted,
 			state.result.Rejects, caller,

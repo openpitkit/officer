@@ -259,6 +259,7 @@ func (r *memoryRealm) PutSpotFundsPnlBoundsLimit(
 		return domain.ErrInvalid
 	}
 	r.spotFundsPnlBoundsLimits[spotFundsPnlBoundsLimitKey(
+		limit.Axis,
 		limit.Scope,
 		limit.Account,
 		limit.AccountGroup,
@@ -268,11 +269,12 @@ func (r *memoryRealm) PutSpotFundsPnlBoundsLimit(
 
 func (r *memoryRealm) DeleteSpotFundsPnlBoundsLimit(
 	_ context.Context,
+	axis domain.SpotFundsPnlAxis,
 	scope domain.LimitScope,
 	account domain.AccountID,
 	accountGroup string,
 ) error {
-	key := spotFundsPnlBoundsLimitKey(scope, account, accountGroup)
+	key := spotFundsPnlBoundsLimitKey(axis, scope, account, accountGroup)
 	if _, ok := r.spotFundsPnlBoundsLimits[key]; !ok {
 		return domain.ErrNotFound
 	}
@@ -297,12 +299,14 @@ func TestMemoryRealmSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 	}
 
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
 		{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
 			Currency: "EUR", LowerBound: "-2",
 		},
 		{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "acc-1",
 			Currency: "USD", LowerBound: "-3",
 		},
@@ -334,6 +338,7 @@ func TestMemoryRealmSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 	}
 
 	err = realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "GHOST", LowerBound: "-4",
 	})
 	if !errors.Is(err, domain.ErrInvalid) {

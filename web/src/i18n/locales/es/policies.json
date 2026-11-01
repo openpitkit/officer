@@ -77,8 +77,9 @@
     "values": "Valores",
     "rateLimitFootnote": "Se requieren tanto máx. órdenes como ventana.",
     "atLeastOneFootnote": "Se requiere al menos un valor.",
-    "pnlBoundsFootnote": "Se requieren la moneda y al menos un límite de PnL.",
-    "fxFailSafeNote": "Seguridad ante fallos de FX: una cuenta bajo control de PnL se bloquea cuando falta un dato obligatorio, por ejemplo una cotización FX necesaria para valorar el PnL realizado en la moneda de la cuenta. FX solo se requiere cuando es necesario, no para activos que ya están en la moneda de la cuenta ni para cuentas fuera del control de PnL.",
+    "pnlBoundsFootnote": "Se requieren la moneda y al menos un límite de P&L.",
+    "fxFailSafeNote": "Seguridad ante fallos de FX: una cuenta bajo control de P&L se bloquea cuando falta un dato obligatorio, por ejemplo una cotización FX necesaria para valorar el P&L realizado en la moneda de la cuenta. FX solo se requiere cuando es necesario, no para activos que ya están en la moneda de la cuenta ni para cuentas fuera del control de P&L.",
+    "positionFailSafeNote": "Seguridad ante fallos de precio: una cuenta bajo control de P&L se bloquea cuando falta un dato obligatorio, por ejemplo el precio actual de un activo en cartera o una cotización FX necesaria para valorar la posición abierta en la moneda de la cuenta. FX solo se requiere cuando es necesario, no para activos que ya están en la moneda de la cuenta ni para cuentas fuera del control de P&L.",
     "save": "Guardar"
   },
   "duration": {

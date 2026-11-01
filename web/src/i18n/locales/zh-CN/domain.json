@@ -2,7 +2,9 @@
   "policyLabel": {
     "rate_limit": "频率限制",
     "order_size_limit": "订单规模限制",
-    "spot_funds_pnl_bounds_kill_switch": "PnL 熔断开关"
+    "spot_funds_pnl_bounds_kill_switch": "已实现 P&L 熔断开关",
+    "spot_funds_unrealized_pnl_bounds_kill_switch": "未实现 P&L 熔断开关",
+    "spot_funds_total_pnl_bounds_kill_switch": "总 P&L 熔断开关"
   },
   "scope": {
     "broker": "经纪商",
@@ -35,6 +37,16 @@
       "currency": "资产代码",
       "lower_bound": "小数",
       "upper_bound": "小数"
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "currency": "资产代码",
+      "lower_bound": "小数",
+      "upper_bound": "小数"
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
+      "currency": "资产代码",
+      "lower_bound": "小数",
+      "upper_bound": "小数"
     }
   },
   "policy": {
@@ -47,8 +59,16 @@
       "description": "按数量和名义价值限制单笔订单的规模，防止乌龙指错误。"
     },
     "spot_funds_pnl_bounds_kill_switch": {
-      "label": "PnL 熔断开关",
-      "description": "使用引擎在账户币种中计算的已实现 PnL，并扣除可选传入佣金。若缺少必要输入，例如用于按账户币种估值已实现 PnL 的 FX 报价，引擎会封锁处于 PnL 控制下的账户，因为无法保证限额。仅在实际需要时才要求 FX：资产已使用账户币种时不需要，未处于 PnL 控制下的账户也不需要。"
+      "label": "已实现盈亏熔断开关",
+      "description": "使用引擎在账户币种中计算的已实现盈亏（P&L），并扣除可选传入佣金。若缺少必要输入，例如用于按账户币种估值已实现 P&L 的 FX 报价，引擎会封锁处于 P&L 控制下的账户，因为无法保证限额。仅在实际需要时才要求 FX：资产已使用账户币种时不需要，未处于 P&L 控制下的账户也不需要。"
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "label": "未实现盈亏熔断开关",
+      "description": "使用引擎在账户币种中按当前市场价格计算的账户持仓未实现盈亏（P&L）。P&L 超出上下限后，下一笔订单将被拒绝，账户将被封锁。"
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
+      "label": "总盈亏熔断开关",
+      "description": "使用引擎在账户币种中计算的总盈亏（P&L）：已实现 P&L 加上按当前市场价格计算的账户持仓未实现 P&L。P&L 超出上下限后，下一笔订单将被拒绝，账户将被封锁。"
     }
   },
   "policyField": {
@@ -73,6 +93,34 @@
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "货币",
+        "hint": "资产代码，例如 USD"
+      },
+      "lower_bound": {
+        "label": "下限",
+        "hint": "小数，如 -1000"
+      },
+      "upper_bound": {
+        "label": "上限",
+        "hint": "小数，如 500"
+      }
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "货币",
+        "hint": "资产代码，例如 USD"
+      },
+      "lower_bound": {
+        "label": "下限",
+        "hint": "小数，如 -1000"
+      },
+      "upper_bound": {
+        "label": "上限",
+        "hint": "小数，如 500"
+      }
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
       "currency": {
         "label": "货币",
         "hint": "资产代码，例如 USD"

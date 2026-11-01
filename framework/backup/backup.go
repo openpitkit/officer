@@ -573,9 +573,17 @@ type Data struct {
 	RateLimits []domain.LimitRate `json:"rateLimits,omitempty"`
 	// OrderSizeLimits are order-size barriers, linked by scope+codes.
 	OrderSizeLimits []domain.LimitOrderSize `json:"orderSizeLimits,omitempty"`
-	// SpotFundsPnlBoundsLimits are currency-valued SpotFunds P&L-bounds barriers,
-	// linked by scope+codes.
+	// SpotFundsPnlBoundsLimits are currency-valued SpotFunds realized
+	// P&L-bounds barriers, linked by scope+codes. Each P&L axis has a list of
+	// its own and the list carries the axis, so a barrier in a list holds no
+	// axis of its own (see SpotFundsPnlBounds).
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds `json:"spotFundsPnlBoundsLimits,omitempty"`
+	// SpotFundsUnrealizedPnlBoundsLimits and SpotFundsTotalPnlBoundsLimits are
+	// the unrealized and total P&L-bounds barriers. An archive written before
+	// these axes existed has neither list, and it restores with none of these
+	// bounds: that is the exact state it recorded, not a default.
+	SpotFundsUnrealizedPnlBoundsLimits []domain.LimitSpotFundsPnlBounds `json:"spotFundsUnrealizedPnlBoundsLimits,omitempty"`
+	SpotFundsTotalPnlBoundsLimits      []domain.LimitSpotFundsPnlBounds `json:"spotFundsTotalPnlBoundsLimits,omitempty"`
 	// Adjustments are spot-funds adjustment records (by external id).
 	Adjustments []domain.AccountAdjustmentRecord `json:"adjustments,omitempty"`
 	// Orders are order records with their optional approvals (by external id).
@@ -870,6 +878,16 @@ func FilterData(data Data, scope Scope) Data {
 			scope.Accounts,
 			groupByAccount,
 		)
+		out.SpotFundsUnrealizedPnlBoundsLimits = filterSpotFundsPnlBoundsLimits(
+			data.SpotFundsUnrealizedPnlBoundsLimits,
+			scope.Accounts,
+			groupByAccount,
+		)
+		out.SpotFundsTotalPnlBoundsLimits = filterSpotFundsPnlBoundsLimits(
+			data.SpotFundsTotalPnlBoundsLimits,
+			scope.Accounts,
+			groupByAccount,
+		)
 	}
 	if scope.Included(SectionMarketData) {
 		out.MarketDataInstances = append([]MarketDataInstance(nil),
@@ -1060,6 +1078,64 @@ func filterOrderSizeLimits(
 		}
 	}
 	return out
+}
+
+// SpotFundsPnlBounds returns the P&L-bounds barriers of every axis, in
+// domain.SpotFundsPnlAxes order, each stamped with the axis of its list.
+func (d Data) SpotFundsPnlBounds() []domain.LimitSpotFundsPnlBounds {
+	out := make([]domain.LimitSpotFundsPnlBounds, 0,
+		len(d.SpotFundsPnlBoundsLimits)+
+			len(d.SpotFundsUnrealizedPnlBoundsLimits)+
+			len(d.SpotFundsTotalPnlBoundsLimits))
+	out = appendSpotFundsPnlBounds(
+		out, domain.SpotFundsPnlAxisRealized, d.SpotFundsPnlBoundsLimits,
+	)
+	out = appendSpotFundsPnlBounds(
+		out, domain.SpotFundsPnlAxisUnrealized, d.SpotFundsUnrealizedPnlBoundsLimits,
+	)
+	return appendSpotFundsPnlBounds(
+		out, domain.SpotFundsPnlAxisTotal, d.SpotFundsTotalPnlBoundsLimits,
+	)
+}
+
+func appendSpotFundsPnlBounds(
+	out []domain.LimitSpotFundsPnlBounds,
+	axis domain.SpotFundsPnlAxis,
+	limits []domain.LimitSpotFundsPnlBounds,
+) []domain.LimitSpotFundsPnlBounds {
+	for _, limit := range limits {
+		limit.Axis = axis
+		out = append(out, limit)
+	}
+	return out
+}
+
+// SetSpotFundsPnlBounds files limits into the per-axis lists by their axis,
+// replacing what the lists held. A listed barrier keeps no axis of its own,
+// as after decoding an archive. A barrier of an unknown axis is an error
+// wrapping domain.ErrInvalid.
+func (d *Data) SetSpotFundsPnlBounds(limits []domain.LimitSpotFundsPnlBounds) error {
+	var realized, unrealized, total []domain.LimitSpotFundsPnlBounds
+	for _, limit := range limits {
+		axis := limit.Axis
+		limit.Axis = ""
+		switch axis {
+		case domain.SpotFundsPnlAxisRealized:
+			realized = append(realized, limit)
+		case domain.SpotFundsPnlAxisUnrealized:
+			unrealized = append(unrealized, limit)
+		case domain.SpotFundsPnlAxisTotal:
+			total = append(total, limit)
+		default:
+			return fmt.Errorf(
+				"backup: unknown spot funds pnl axis %q: %w", axis, domain.ErrInvalid,
+			)
+		}
+	}
+	d.SpotFundsPnlBoundsLimits = realized
+	d.SpotFundsUnrealizedPnlBoundsLimits = unrealized
+	d.SpotFundsTotalPnlBoundsLimits = total
+	return nil
 }
 
 func filterSpotFundsPnlBoundsLimits(

@@ -834,9 +834,10 @@ func TestOrderSizeAxes_SecondBrokerBarrierIsError(t *testing.T) {
 func TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError(t *testing.T) {
 	t.Parallel()
 	_, _, _, err := spotFundsPnlBoundsAxes(
+		domain.SpotFundsPnlAxisRealized,
 		[]domain.LimitSpotFundsPnlBounds{
-			{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000"},
-			{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000"},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
 		},
 		testResolver(),
 	)
@@ -859,19 +860,23 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 		t.Fatalf("newIDResolver: %v", err)
 	}
 	global, groups, accounts, err := spotFundsPnlBoundsAxes(
+		domain.SpotFundsPnlAxisRealized,
 		[]domain.LimitSpotFundsPnlBounds{
 			{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   "USD",
 				LowerBound: "-1000",
 			},
 			{
+				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
 				Currency:     "EUR",
 				UpperBound:   "500",
 			},
 			{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    "acc-1",
 				Currency:   "GBP",
@@ -2166,8 +2171,10 @@ func TestPolicyConfigurationBlockOutcomesFromReportsUnknownAccountAsInternal(
 func TestSpotFundsPnlBoundsAxes_UnsupportedScope(t *testing.T) {
 	t.Parallel()
 	_, _, _, err := spotFundsPnlBoundsAxes(
+		domain.SpotFundsPnlAxisRealized,
 		[]domain.LimitSpotFundsPnlBounds{
 			{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAsset,
 				Currency:   "USD",
 				LowerBound: "-100",
@@ -2577,6 +2584,7 @@ func TestOpenPitEngineBuilder_RestoresTypedAccountBlockCause(t *testing.T) {
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
 			Currency:   "USD",

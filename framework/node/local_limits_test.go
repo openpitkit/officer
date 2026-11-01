@@ -513,6 +513,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) 
 	setLiveConfigureProbe(t, n, eng)
 
 	limit := domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
@@ -570,6 +571,7 @@ func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
 		Code: "pnl_bound_breached", Reason: "later SDK cause",
 	}}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
@@ -614,6 +616,7 @@ func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterConfigure(t *testing.T) 
 	seedTestAccount(t, n.realm, "acc-1")
 
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "acc-1",
 		Currency:   "USD",
 		LowerBound: "-100",
@@ -676,6 +679,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore(t *testing.
 
 	eng.failConfigure = true
 	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,
 		Currency:   "USD",
@@ -724,6 +728,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
 	n.fatal = func(err error) { fatalErr = err }
 
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,
 		Currency:   "USD",
@@ -751,6 +756,7 @@ func TestLocalNode_NotImplementedSpotFundsConfigureDoesNotRebuild(t *testing.T) 
 
 	eng.configureErr = fmt.Errorf("configure spot funds: %w", domain.ErrNotImplemented)
 	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
@@ -788,6 +794,7 @@ func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
@@ -848,6 +855,7 @@ func TestLocalNode_PolicyConfigurationBlockReasonIsRestorable(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
@@ -878,6 +886,7 @@ func TestLocalNode_DeleteLastSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *test
 	ctx := context.Background()
 
 	limit := domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
@@ -928,6 +937,7 @@ func TestLocalNode_DeleteSpotFundsPnlBoundsLimitNotImplementedRevertsWithoutRebu
 	ctx := context.Background()
 
 	limit := domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",

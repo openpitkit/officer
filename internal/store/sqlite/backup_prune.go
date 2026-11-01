@@ -272,9 +272,11 @@ func (rt *restoreTx) pruneLimits(
 	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_order_size", sizeKeep); err != nil {
 		return err
 	}
-	spotFundsKeep := make(map[string]bool, len(data.SpotFundsPnlBoundsLimits))
-	for _, l := range data.SpotFundsPnlBoundsLimits {
+	spotFundsPnlBounds := data.SpotFundsPnlBounds()
+	spotFundsKeep := make(map[string]bool, len(spotFundsPnlBounds))
+	for _, l := range spotFundsPnlBounds {
 		spotFundsKeep[spotFundsPnlBoundsLimitKey(
+			string(l.Axis),
 			string(l.Scope),
 			l.Account,
 			l.AccountGroup,
@@ -363,7 +365,7 @@ func (rt *restoreTx) pruneSpotFundsPnlBoundsLimits(
 ) error {
 	rows, err := rt.tx.QueryContext(
 		ctx,
-		`SELECT t.id, t.scope, a.code, g.code
+		`SELECT t.id, t.axis, t.scope, a.code, g.code
 		 FROM limit_spot_funds_pnl_bound t
 		 LEFT JOIN account       a  ON a.id  = t.account_id
 		 LEFT JOIN account_group g  ON g.id  = t.account_group_id`,
@@ -372,22 +374,23 @@ func (rt *restoreTx) pruneSpotFundsPnlBoundsLimits(
 		return fmt.Errorf("store: prune limit_spot_funds_pnl_bound scan: %w", err)
 	}
 	type limitRow struct {
-		id                    int64
-		scope, account, group string
+		id                          int64
+		axis, scope, account, group string
 	}
 	out := make([]limitRow, 0)
 	for rows.Next() {
 		var (
 			id             int64
-			scopeStr       string
+			axis, scopeStr string
 			account, group sql.NullString
 		)
-		if err := rows.Scan(&id, &scopeStr, &account, &group); err != nil {
+		if err := rows.Scan(&id, &axis, &scopeStr, &account, &group); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("store: prune limit_spot_funds_pnl_bound row: %w", err)
 		}
 		out = append(out, limitRow{
 			id:      id,
+			axis:    axis,
 			scope:   scopeStr,
 			account: account.String,
 			group:   group.String,
@@ -400,6 +403,7 @@ func (rt *restoreTx) pruneSpotFundsPnlBoundsLimits(
 	_ = rows.Close()
 	for _, l := range out {
 		if keep[spotFundsPnlBoundsLimitKey(
+			l.axis,
 			l.scope,
 			domain.AccountID(l.account),
 			l.group,
@@ -949,11 +953,11 @@ func limitKey(scope string, account domain.AccountID, asset string) string {
 }
 
 func spotFundsPnlBoundsLimitKey(
-	scope string,
+	axis, scope string,
 	account domain.AccountID,
 	group string,
 ) string {
-	return scope + "\x00" + account.String() + "\x00" + group
+	return axis + "\x00" + scope + "\x00" + account.String() + "\x00" + group
 }
 
 // auditRowInScope reports whether an audit row is in scope. A row with no

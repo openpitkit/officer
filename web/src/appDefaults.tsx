@@ -17,6 +17,7 @@
 
 import { createElement } from "react";
 
+import type { SpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
 import type { Account, Group, Limit } from "@/api/types";
 import { registerPolicy, registerRowAction, registerScope } from "@/framework";
 import {
@@ -71,24 +72,35 @@ export function registerAppVocabulary(): void {
       fields: [{ key: "max_quantity" }, { key: "max_notional" }],
     },
   });
-  registerPolicy({
-    id: "spot_funds_pnl_bounds_kill_switch",
-    allowedScopes: ["global", "account_group", "account"],
-    kinds: [
-      { kind: "currency" },
-      { kind: "lower_bound" },
-      { kind: "upper_bound" },
+  for (const [id, anchor] of [
+    ["spot_funds_pnl_bounds_kill_switch", "self-computed-pnl-kill-switch"],
+    [
+      "spot_funds_unrealized_pnl_bounds_kill_switch",
+      "unrealized-and-total-pnl-bounds",
     ],
-    catalog: {
-      wikiUrl:
-        "https://wiki.openpit.dev/Spot-Funds/?officer#self-computed-pnl-kill-switch",
-      fields: [
-        { key: "currency" },
-        { key: "lower_bound" },
-        { key: "upper_bound" },
+    [
+      "spot_funds_total_pnl_bounds_kill_switch",
+      "unrealized-and-total-pnl-bounds",
+    ],
+  ] satisfies [SpotFundsPnlPolicy, string][]) {
+    registerPolicy({
+      id,
+      allowedScopes: ["global", "account_group", "account"],
+      kinds: [
+        { kind: "currency" },
+        { kind: "lower_bound" },
+        { kind: "upper_bound" },
       ],
-    },
-  });
+      catalog: {
+        wikiUrl: `https://wiki.openpit.dev/Spot-Funds/?officer#${anchor}`,
+        fields: [
+          { key: "currency" },
+          { key: "lower_bound" },
+          { key: "upper_bound" },
+        ],
+      },
+    });
+  }
 }
 
 /** Register the built-in row actions used by the default pages. */

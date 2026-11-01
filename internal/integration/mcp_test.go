@@ -691,6 +691,7 @@ func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
 	src := &fakeSource{limits: node.AccountLimits{
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    "acc-spot",
 				Currency:   "USD",

@@ -281,6 +281,74 @@ func TestFilterDataSpotFundsPnlBoundsIncludeSelectedAccountsGroup(t *testing.T) 
 	}
 }
 
+// TestSpotFundsPnlBoundsListPerAxis files bounds of every axis into the list of
+// their axis, encodes and decodes the archive data, and reads them back with
+// their axes: no list encodes an axis field, and a bound of an unknown axis is
+// refused.
+func TestSpotFundsPnlBoundsListPerAxis(t *testing.T) {
+	bounds := []domain.LimitSpotFundsPnlBounds{
+		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000"},
+		{Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-200"},
+		{Axis: domain.SpotFundsPnlAxisTotal, Scope: domain.ScopeAccountGroup, AccountGroup: "grp-1", Currency: "EUR", UpperBound: "900"},
+	}
+	var data Data
+	if err := data.SetSpotFundsPnlBounds(bounds); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lists map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &lists); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		"spotFundsPnlBoundsLimits", "spotFundsUnrealizedPnlBoundsLimits", "spotFundsTotalPnlBoundsLimits",
+	} {
+		var list []map[string]any
+		if err := json.Unmarshal(lists[key], &list); err != nil || len(list) != 1 {
+			t.Fatalf("%s = %s (error %v), want one bound", key, lists[key], err)
+		}
+		for field := range list[0] {
+			if strings.EqualFold(field, "axis") {
+				t.Errorf("%s encodes an axis field: %s", key, lists[key])
+			}
+		}
+	}
+	var decoded Data
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded.SpotFundsPnlBounds(); !reflect.DeepEqual(got, bounds) {
+		t.Fatalf("decoded bounds = %+v, want %+v", got, bounds)
+	}
+
+	if err := data.SetSpotFundsPnlBounds([]domain.LimitSpotFundsPnlBounds{
+		{Axis: "position", Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("unknown axis error = %v, want ErrInvalid", err)
+	}
+}
+
+// TestSpotFundsPnlBoundsFromArchiveWithoutAxes decodes the data of an archive
+// written before the unrealized and total axes existed: its one list holds
+// realized bounds, and there are no bounds of the other axes.
+func TestSpotFundsPnlBoundsFromArchiveWithoutAxes(t *testing.T) {
+	var data Data
+	if err := json.Unmarshal([]byte(`{"spotFundsPnlBoundsLimits": [
+		{"scope": "global", "currency": "USD", "lowerBound": "-1000"}
+	]}`), &data); err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.LimitSpotFundsPnlBounds{{
+		Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000",
+	}}
+	if got := data.SpotFundsPnlBounds(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("bounds = %+v, want %+v", got, want)
+	}
+}
+
 func TestFilterDataActivityHistoryKeepsOnlySelectedOrderChildren(t *testing.T) {
 	data := fixtureData()
 	filtered := FilterData(data, Scope{
@@ -672,12 +740,14 @@ func fixtureData() Data {
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
+				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "grp-1",
 				Currency:     "USD",
 				LowerBound:   "-100",
 			},
 			{
+				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "grp-2",
 				Currency:     "USD",

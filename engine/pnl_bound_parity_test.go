@@ -59,6 +59,7 @@ func FuzzPnlBoundValidateMatchesEngineParse(f *testing.F) {
 			{"upper", "", writing},
 		} {
 			validateErr := (domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeGlobal, Currency: "USD",
 				LowerBound: bound.lower, UpperBound: bound.upper,
 			}).Validate()

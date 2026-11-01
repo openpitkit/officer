@@ -313,6 +313,7 @@ func TestFakeEngineRejectsUnpublishedAssetOnEveryResolverPath(t *testing.T) {
 				_, err := eng.ConfigurePolicy(ctx,
 					domain.PolicySpotFundsPnlBoundsKillSwitch,
 					engine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+						Axis:     domain.SpotFundsPnlAxisRealized,
 						Currency: unpublished,
 					}}})
 				return err

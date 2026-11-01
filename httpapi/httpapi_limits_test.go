@@ -87,6 +87,7 @@ func TestListLimitsSpotFundsPnlBoundsValues(t *testing.T) {
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
 				SpotFundsPnlBounds: &domain.LimitSpotFundsPnlBounds{
+					Axis:         domain.SpotFundsPnlAxisRealized,
 					Scope:        domain.ScopeAccountGroup,
 					AccountGroup: "desk-a",
 					Currency:     "USD",
@@ -323,6 +324,7 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 		limits: node.AccountLimits{
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 				{
+					Axis:         domain.SpotFundsPnlAxisRealized,
 					Scope:        domain.ScopeAccountGroup,
 					AccountGroup: "desk-a",
 					Currency:     "USD",
@@ -381,6 +383,7 @@ func TestPutSpotFundsPnlBoundsLimit_Account(t *testing.T) {
 		limits: node.AccountLimits{
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 				{
+					Axis:       domain.SpotFundsPnlAxisRealized,
 					Scope:      domain.ScopeAccount,
 					Account:    "acc-1",
 					Currency:   "EUR",
@@ -762,7 +765,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 			{Scope: domain.ScopeBroker, MaxQuantity: "500", MaxNotional: "50000"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Scope: domain.ScopeAccount, Account: "acc-1",
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-1",
 				Currency: "USD", LowerBound: "-1000", UpperBound: "5000"},
 		},
 	}

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"maps"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1515,6 +1516,82 @@ func (e *fakeEngine) CheckedOrder(
 	return e.checkResult, nil
 }
 
+func TestPreTradeLatchedBlocks(t *testing.T) {
+	t.Parallel()
+	order := domain.Order{Account: "acc-1"}
+	sizeReject := domain.OrderReject{
+		Code: "order_size", Scope: "order", Policy: "size",
+	}
+	pnlReject := domain.OrderReject{
+		Code: domain.RejectCodePnlKillSwitchTriggered, Scope: "account",
+		Policy: "SpotFundsPolicy", Reason: "pnl kill switch triggered",
+		Details: "account unrealized pnl -50",
+	}
+	laterReject := domain.OrderReject{
+		Code: "rate_limit", Scope: "account", Policy: "rate",
+	}
+	blockedSetReject := domain.OrderReject{
+		Code: domain.RejectCodeAccountBlocked, Scope: "account",
+		Policy: domain.EngineRejectPolicy, Reason: "group halted",
+	}
+	engineHaltReject := domain.OrderReject{
+		Code: domain.RejectCodeSystemUnavailable, Scope: "account",
+		Policy: domain.EngineRejectPolicy, Reason: "mutation finalizer failed",
+	}
+	want := []domain.AccountBlock{{
+		Account: "acc-1", Policy: pnlReject.Policy, Code: pnlReject.Code,
+		Reason: pnlReject.Reason, Details: pnlReject.Details,
+	}}
+	for _, tc := range []struct {
+		name           string
+		order          domain.Order
+		accountBlocked bool
+		rejects        []domain.OrderReject
+		want           []domain.AccountBlock
+	}{
+		{
+			name:    "first account-scope reject latches",
+			order:   order,
+			rejects: []domain.OrderReject{sizeReject, pnlReject, laterReject},
+			want:    want,
+		},
+		{
+			name:    "order-scope rejects latch nothing",
+			order:   order,
+			rejects: []domain.OrderReject{sizeReject},
+		},
+		{
+			name:           "blocked account answers from the blocked set",
+			order:          order,
+			accountBlocked: true,
+			rejects:        []domain.OrderReject{pnlReject},
+		},
+		{
+			name:    "operator, group or engine-wide cause latches nothing",
+			order:   order,
+			rejects: []domain.OrderReject{blockedSetReject},
+		},
+		{
+			name:    "engine-wide typed halt latches nothing",
+			order:   order,
+			rejects: []domain.OrderReject{engineHaltReject},
+		},
+		{
+			name:    "drop copy latches nothing",
+			order:   domain.Order{Account: "acc-1", DropCopy: true},
+			rejects: []domain.OrderReject{pnlReject},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := preTradeLatchedBlocks(tc.order, tc.accountBlocked, tc.rejects)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("blocks = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOrderRejectedSettlementPreservesOrderedRejects(t *testing.T) {
 	t.Parallel()
 	rejects := []domain.OrderReject{
@@ -1522,7 +1599,7 @@ func TestOrderRejectedSettlementPreservesOrderedRejects(t *testing.T) {
 		{Code: "size", Scope: "order", Policy: "size", Details: "second"},
 	}
 	settlement := orderRejectedSettlement(
-		"acc-1", domain.Order{ExternalID: "order-1"}, rejects, testCaller,
+		"acc-1", domain.Order{ExternalID: "order-1"}, rejects, nil, testCaller,
 	)
 	if len(settlement.Events) != 1 {
 		t.Fatalf("events = %+v, want one reject event", settlement.Events)
@@ -2191,10 +2268,12 @@ func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
 			wantBlocks: 1,
 		},
 		{
+			// The account-scope pre-trade reject latches the account block.
 			name:       "submit order/rejected order",
 			externalID: "regular-rejected-order",
 			rejected:   true,
 			action:     domain.AuditActionSubmitOrder,
+			wantBlocks: 1,
 		},
 		{
 			name:       "submit order/accepted drop copy",
@@ -2223,6 +2302,7 @@ func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
 			externalID:      "immediate-rejected-order",
 			rejected:        true,
 			action:          domain.AuditActionSubmitOrder,
+			wantBlocks:      1,
 		},
 		{
 			name:            "submit immediate/accepted drop copy",

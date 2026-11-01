@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 
@@ -65,17 +66,22 @@ type SpotFundsPnlBoundsLimitDTO struct {
 // PutLimitResultDTO is the answer of a limit put: the barrier as stored, under
 // the key of its kind. Exactly one field is set.
 type PutLimitResultDTO struct {
-	RateLimit               *RateLimitDTO               `json:"rateLimit,omitempty"`
-	OrderSizeLimit          *OrderSizeLimitDTO          `json:"orderSizeLimit,omitempty"`
-	SpotFundsPnlBoundsLimit *SpotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimit,omitempty"`
+	RateLimit                         *RateLimitDTO               `json:"rateLimit,omitempty"`
+	OrderSizeLimit                    *OrderSizeLimitDTO          `json:"orderSizeLimit,omitempty"`
+	SpotFundsPnlBoundsLimit           *SpotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimit,omitempty"`
+	SpotFundsUnrealizedPnlBoundsLimit *SpotFundsPnlBoundsLimitDTO `json:"spotFundsUnrealizedPnlBoundsLimit,omitempty"`
+	SpotFundsTotalPnlBoundsLimit      *SpotFundsPnlBoundsLimitDTO `json:"spotFundsTotalPnlBoundsLimit,omitempty"`
 }
 
 // AccountLimitsDTO is the per-policy view of typed barriers, an account's or
-// every account's. Each slice is always a non-nil JSON array.
+// every account's. Each slice is always a non-nil JSON array. The Spot Funds
+// P&L bounds are listed per axis, each under the key of its own policy.
 type AccountLimitsDTO struct {
-	RateLimits               []RateLimitDTO               `json:"rateLimits"`
-	OrderSizeLimits          []OrderSizeLimitDTO          `json:"orderSizeLimits"`
-	SpotFundsPnlBoundsLimits []SpotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimits"`
+	RateLimits                         []RateLimitDTO               `json:"rateLimits"`
+	OrderSizeLimits                    []OrderSizeLimitDTO          `json:"orderSizeLimits"`
+	SpotFundsPnlBoundsLimits           []SpotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimits"`
+	SpotFundsUnrealizedPnlBoundsLimits []SpotFundsPnlBoundsLimitDTO `json:"spotFundsUnrealizedPnlBoundsLimits"`
+	SpotFundsTotalPnlBoundsLimits      []SpotFundsPnlBoundsLimitDTO `json:"spotFundsTotalPnlBoundsLimits"`
 }
 
 // FromRateLimitDTO maps a wire rate-limit body onto the domain barrier. A
@@ -111,12 +117,15 @@ func FromOrderSizeLimitDTO(dto OrderSizeLimitDTO) domain.LimitOrderSize {
 }
 
 // FromSpotFundsPnlBoundsLimitDTO maps a wire SpotFunds P&L-bounds body onto
-// the domain barrier. Decimal values are carried through verbatim; never
-// parsed to float.
+// the domain barrier of axis, which the route or policy names and the body
+// does not carry. Decimal values are carried through verbatim; never parsed to
+// float.
 func FromSpotFundsPnlBoundsLimitDTO(
+	axis domain.SpotFundsPnlAxis,
 	dto SpotFundsPnlBoundsLimitDTO,
 ) domain.LimitSpotFundsPnlBounds {
 	return domain.LimitSpotFundsPnlBounds{
+		Axis:         axis,
 		Scope:        domain.LimitScope(dto.Scope),
 		Account:      domain.AccountID(dto.Account),
 		AccountGroup: dto.AccountGroup,
@@ -174,18 +183,37 @@ func ToAccountLimitsDTO(limits node.AccountLimits) AccountLimitsDTO {
 	for _, l := range limits.OrderSizeLimits {
 		sizes = append(sizes, ToOrderSizeLimitDTO(l))
 	}
-	spotFundsPnls := make(
-		[]SpotFundsPnlBoundsLimitDTO,
-		0,
-		len(limits.SpotFundsPnlBoundsLimits),
-	)
+	spotFundsPnls := map[domain.SpotFundsPnlAxis][]SpotFundsPnlBoundsLimitDTO{}
+	for _, axis := range domain.SpotFundsPnlAxes {
+		spotFundsPnls[axis] = []SpotFundsPnlBoundsLimitDTO{}
+	}
 	for _, l := range limits.SpotFundsPnlBoundsLimits {
-		spotFundsPnls = append(spotFundsPnls, ToSpotFundsPnlBoundsLimitDTO(l))
+		spotFundsPnls[l.Axis] = append(spotFundsPnls[l.Axis], ToSpotFundsPnlBoundsLimitDTO(l))
 	}
 	return AccountLimitsDTO{
-		RateLimits:               rates,
-		OrderSizeLimits:          sizes,
-		SpotFundsPnlBoundsLimits: spotFundsPnls,
+		RateLimits:                         rates,
+		OrderSizeLimits:                    sizes,
+		SpotFundsPnlBoundsLimits:           spotFundsPnls[domain.SpotFundsPnlAxisRealized],
+		SpotFundsUnrealizedPnlBoundsLimits: spotFundsPnls[domain.SpotFundsPnlAxisUnrealized],
+		SpotFundsTotalPnlBoundsLimits:      spotFundsPnls[domain.SpotFundsPnlAxisTotal],
+	}
+}
+
+// ToPutSpotFundsPnlBoundsLimitResultDTO answers a Spot Funds P&L-bounds put
+// with the barrier as stored, under the key of its axis's policy.
+func ToPutSpotFundsPnlBoundsLimitResultDTO(
+	l domain.LimitSpotFundsPnlBounds,
+) (PutLimitResultDTO, error) {
+	dto := ToSpotFundsPnlBoundsLimitDTO(l)
+	switch l.Axis {
+	case domain.SpotFundsPnlAxisRealized:
+		return PutLimitResultDTO{SpotFundsPnlBoundsLimit: &dto}, nil
+	case domain.SpotFundsPnlAxisUnrealized:
+		return PutLimitResultDTO{SpotFundsUnrealizedPnlBoundsLimit: &dto}, nil
+	case domain.SpotFundsPnlAxisTotal:
+		return PutLimitResultDTO{SpotFundsTotalPnlBoundsLimit: &dto}, nil
+	default:
+		return PutLimitResultDTO{}, fmt.Errorf("httpapi: unknown Spot Funds P&L axis %q", l.Axis)
 	}
 }
 
@@ -278,7 +306,8 @@ func sameSpotFundsPnlBoundsAddress(
 	left domain.LimitSpotFundsPnlBounds,
 	right domain.LimitSpotFundsPnlBounds,
 ) bool {
-	return left.Scope == right.Scope &&
+	return left.Axis == right.Axis &&
+		left.Scope == right.Scope &&
 		left.Account == right.Account &&
 		left.AccountGroup == right.AccountGroup
 }

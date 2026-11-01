@@ -1498,17 +1498,20 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 		limit domain.LimitSpotFundsPnlBounds
 	}{
 		{"global", domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeGlobal,
 			Currency:   "USD",
 			LowerBound: "-1000",
 		}},
 		{"account_group", domain.LimitSpotFundsPnlBounds{
+			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			Currency:     "USD",
 			UpperBound:   "500",
 		}},
 		{"account", domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
 			Currency:   "USD",
@@ -1530,11 +1533,13 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 		limit domain.LimitSpotFundsPnlBounds
 	}{
 		{"missing group", domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccountGroup,
 			Currency:   "USD",
 			LowerBound: "-1",
 		}},
 		{"account group on account rejected", domain.LimitSpotFundsPnlBounds{
+			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccount,
 			Account:      "acc-1",
 			AccountGroup: "desk-a",
@@ -1542,25 +1547,30 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 			LowerBound:   "-1",
 		}},
 		{"neither bound", domain.LimitSpotFundsPnlBounds{
+			Axis:     domain.SpotFundsPnlAxisRealized,
 			Scope:    domain.ScopeGlobal,
 			Currency: "USD",
 		}},
 		{"lower greater than upper", domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeGlobal,
 			Currency:   "USD",
 			LowerBound: "10",
 			UpperBound: "1",
 		}},
 		{"global missing currency", domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeGlobal,
 			LowerBound: "-1",
 		}},
 		{"account group missing currency", domain.LimitSpotFundsPnlBounds{
+			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			LowerBound:   "-1",
 		}},
 		{"account missing currency", domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
 			LowerBound: "-1",
@@ -1580,6 +1590,7 @@ func TestLimitSpotFundsPnlBounds_EitherOrValidationUsesRequestRoot(t *testing.T)
 	t.Parallel()
 
 	err := (domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD",
 	}).Validate()
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -1593,6 +1604,7 @@ func TestLimitSpotFundsPnlBounds_EitherOrValidationUsesRequestRoot(t *testing.T)
 	}
 
 	err = (domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "10",
@@ -1628,6 +1640,7 @@ func TestLimitSpotFundsPnlBounds_ValidateRefusesHugeExponent(t *testing.T) {
 			var err error
 			requireWithinASecond(t, "Validate", func() {
 				err = (domain.LimitSpotFundsPnlBounds{
+					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeGlobal, Currency: "USD",
 					LowerBound: tc.lower, UpperBound: tc.upper,
 				}).Validate()
@@ -1688,6 +1701,7 @@ func TestLimitSpotFundsPnlBounds_ValidateTakesEngineWritingsOnly(t *testing.T) {
 			t.Run(bound.name+"="+tc.value, func(t *testing.T) {
 				t.Parallel()
 				err := (domain.LimitSpotFundsPnlBounds{
+					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeGlobal, Currency: "USD",
 					LowerBound: bound.lower, UpperBound: bound.upper,
 				}).Validate()

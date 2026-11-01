@@ -149,6 +149,8 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"PUT /limits/rate",
 		"PUT /limits/order-size",
 		"PUT /limits/spot-funds-pnl-bounds",
+		"PUT /limits/spot-funds-unrealized-pnl-bounds",
+		"PUT /limits/spot-funds-total-pnl-bounds",
 		"DELETE /limits",
 		"GET /audit",
 		"GET /audit/actions",

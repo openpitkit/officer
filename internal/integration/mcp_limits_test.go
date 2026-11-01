@@ -113,18 +113,33 @@ func orderSizeLimitDriver(
 	}
 }
 
+// spotFundsPnlBoundsDriver drives the P&L-bound kill switch of axis: it sees
+// only the stored bounds of that axis, and REST's body answers them under that
+// axis's key.
 func spotFundsPnlBoundsDriver(
-	t *testing.T, service *backend.Service, src frameworkmcp.Source,
+	t *testing.T, service *backend.Service, src frameworkmcp.Source, axis domain.SpotFundsPnlAxis,
 ) setLimitDriver[domain.LimitSpotFundsPnlBounds] {
+	key := map[domain.SpotFundsPnlAxis]string{
+		domain.SpotFundsPnlAxisRealized:   "spotFundsPnlBoundsLimit",
+		domain.SpotFundsPnlAxisUnrealized: "spotFundsUnrealizedPnlBoundsLimit",
+		domain.SpotFundsPnlAxisTotal:      "spotFundsTotalPnlBoundsLimit",
+	}[axis]
+	if key == "" {
+		t.Fatalf("no put result key for P&L axis %q", axis)
+	}
 	return setLimitDriver[domain.LimitSpotFundsPnlBounds]{
 		t: t, src: src,
 		stored: func() []domain.LimitSpotFundsPnlBounds {
-			return storedLimits(t, service).SpotFundsPnlBoundsLimits
+			var stored []domain.LimitSpotFundsPnlBounds
+			for _, limit := range storedLimits(t, service).SpotFundsPnlBoundsLimits {
+				if limit.Axis == axis {
+					stored = append(stored, limit)
+				}
+			}
+			return stored
 		},
 		body: func(limit domain.LimitSpotFundsPnlBounds) map[string]any {
-			return map[string]any{
-				"spotFundsPnlBoundsLimit": httpx.ToSpotFundsPnlBoundsLimitDTO(limit),
-			}
+			return map[string]any{key: httpx.ToSpotFundsPnlBoundsLimitDTO(limit)}
 		},
 	}
 }
@@ -179,9 +194,11 @@ func TestSetLimitRateOnControlPlane(t *testing.T) {
 
 	wire := callToolOK(t, src, "get_limits", map[string]any{})
 	assertResultBody(t, wire, map[string]any{"limits": map[string]any{
-		"rateLimits":               []httpx.RateLimitDTO{httpx.ToRateLimitDTO(stricter)},
-		"orderSizeLimits":          []any{},
-		"spotFundsPnlBoundsLimits": []any{},
+		"rateLimits":                         []httpx.RateLimitDTO{httpx.ToRateLimitDTO(stricter)},
+		"orderSizeLimits":                    []any{},
+		"spotFundsPnlBoundsLimits":           []any{},
+		"spotFundsUnrealizedPnlBoundsLimits": []any{},
+		"spotFundsTotalPnlBoundsLimits":      []any{},
 	}})
 }
 
@@ -246,7 +263,7 @@ func TestSetLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 			t.Fatalf("create asset %s: %v", code, err)
 		}
 	}
-	bounds := spotFundsPnlBoundsDriver(t, service, src)
+	bounds := spotFundsPnlBoundsDriver(t, service, src, domain.SpotFundsPnlAxisRealized)
 	global := func(currency, lower, upper string) map[string]any {
 		in := map[string]any{
 			"policy": "spot_funds_pnl_bounds_kill_switch", "scope": "global",
@@ -260,9 +277,11 @@ func TestSetLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 	const text = "spot_funds_pnl_bounds_kill_switch global set"
 
 	bounds.accepts(global("USD", "-100", "100"), text, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100", UpperBound: "100",
 	})
 	stricter := domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-50", UpperBound: "100",
 	}
 	bounds.accepts(global("USD", "-50", "100"), text, stricter)
@@ -283,6 +302,89 @@ func TestSetLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 		foreign := global("USD", "-40", "100")
 		foreign["asset"] = asset
 		bounds.refuses(foreign, "validation", stricter)
+	}
+}
+
+// TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane drives set_limit with
+// the unrealized and total P&L-bound kill switches through the control-plane
+// Source, as an agent. Each axis is a policy of its own: a realized bound at
+// the same address neither replaces nor constrains it. A new bound and a
+// stricter one are stored as sent and answered under the axis's key; a lower
+// bound lowered by 1e-19, a dropped bound and bounds in another currency are
+// refused with loosening_refused, and an account bound looser than the global
+// bound of its axis is refused too. Each refusal leaves the bounds of the axis,
+// and the realized bound, as they were.
+func TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
+	t.Parallel()
+	for _, axis := range []domain.SpotFundsPnlAxis{
+		domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal,
+	} {
+		t.Run(string(axis), func(t *testing.T) {
+			t.Parallel()
+			service, src := controlPlaneTools(t)
+			for _, code := range []string{"USD", "EUR"} {
+				if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: code}); err != nil {
+					t.Fatalf("create asset %s: %v", code, err)
+				}
+			}
+			if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "acc-1"}); err != nil {
+				t.Fatalf("create account: %v", err)
+			}
+			realized := domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
+				Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10", UpperBound: "10",
+			}
+			spotFundsPnlBoundsDriver(t, service, src, domain.SpotFundsPnlAxisRealized).accepts(
+				map[string]any{
+					"policy": "spot_funds_pnl_bounds_kill_switch", "scope": "global",
+					"currency": "USD", "lowerBound": "-10", "upperBound": "10",
+				}, "spot_funds_pnl_bounds_kill_switch global set", realized)
+
+			policy := string(axis.Policy())
+			bounds := spotFundsPnlBoundsDriver(t, service, src, axis)
+			in := func(scope, currency, lower, upper string) map[string]any {
+				in := map[string]any{
+					"policy": policy, "scope": scope, "currency": currency, "lowerBound": lower,
+				}
+				if scope == "account" {
+					in["account"], in["missingAccount"] = "acc-1", "reject"
+				}
+				if upper != "" {
+					in["upperBound"] = upper
+				}
+				return in
+			}
+			// Looser than the realized bound at the same address.
+			bounds.accepts(in("global", "USD", "-100", "100"), policy+" global set",
+				domain.LimitSpotFundsPnlBounds{
+					Axis: axis, Scope: domain.ScopeGlobal,
+					Currency: "USD", LowerBound: "-100", UpperBound: "100",
+				})
+			stricter := domain.LimitSpotFundsPnlBounds{
+				Axis: axis, Scope: domain.ScopeGlobal,
+				Currency: "USD", LowerBound: "-50", UpperBound: "100",
+			}
+			bounds.accepts(in("global", "USD", "-50", "100"), policy+" global set", stricter)
+
+			for _, loose := range []map[string]any{
+				// The lower bound lowered by 1e-19.
+				in("global", "USD", "-50.0000000000000000001", "100"),
+				// The upper bound dropped.
+				in("global", "USD", "-50", ""),
+				// The bounds moved to another currency.
+				in("global", "EUR", "-50", "100"),
+				// An account bound looser than the global bound of its axis.
+				in("account", "USD", "-60", "100"),
+			} {
+				bounds.refuses(loose, "loosening_refused", stricter)
+			}
+			realizedStored := spotFundsPnlBoundsDriver(
+				t, service, src, domain.SpotFundsPnlAxisRealized,
+			).stored()
+			if !slices.Equal(realizedStored, []domain.LimitSpotFundsPnlBounds{realized}) {
+				t.Fatalf("realized bounds = %+v, want %+v", realizedStored, realized)
+			}
+		})
 	}
 }
 
@@ -337,7 +439,7 @@ func TestSetLimitRefusesBoundsTheEngineCannotParse(t *testing.T) {
 		t.Fatalf("create asset USD: %v", err)
 	}
 	built := builds.Load()
-	bounds := spotFundsPnlBoundsDriver(t, service, src)
+	bounds := spotFundsPnlBoundsDriver(t, service, src, domain.SpotFundsPnlAxisRealized)
 	global := func(lower string) map[string]any {
 		return map[string]any{
 			"policy": "spot_funds_pnl_bounds_kill_switch", "scope": "global",
@@ -454,6 +556,7 @@ func TestSetLimitWithOneAccount(t *testing.T) {
 		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
 	})
 	rest := httpx.DescribeErr(service.PutSpotFundsPnlBoundsLimit(restCtx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, Currency: "USD", LowerBound: "-1",
 	}, ""))
 	if rest.Code != "validation" {

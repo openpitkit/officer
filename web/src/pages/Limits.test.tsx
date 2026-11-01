@@ -286,7 +286,7 @@ describe("Limits identity filters", () => {
 
     renderLimits();
 
-    expect(screen.getByText("PnL Kill Switch")).toBeInTheDocument();
+    expect(screen.getByText("Realized P&L Kill Switch")).toBeInTheDocument();
     expect(screen.getByText("desk-a")).toBeInTheDocument();
     expect(screen.getByText("USD")).toBeInTheDocument();
   });
@@ -580,7 +580,9 @@ describe("LimitDialog framework controls", () => {
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
-      within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
+      within(dialog).getByRole("option", {
+        name: "Realized Profit and Loss Kill Switch",
+      }),
     );
     await user.click(within(dialog).getAllByRole("combobox")[1]);
     await user.click(
@@ -615,7 +617,9 @@ describe("LimitDialog framework controls", () => {
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
-      within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
+      within(dialog).getByRole("option", {
+        name: "Realized Profit and Loss Kill Switch",
+      }),
     );
     const currencyValidationMessage = within(dialog).getByText(
       "spot_funds_pnl_bounds_kill_switch requires currency",
@@ -632,7 +636,7 @@ describe("LimitDialog framework controls", () => {
     );
     expect(
       within(dialog).getByText(
-        "Currency and at least one PnL bound are required.",
+        "Currency and at least one P&L bound are required.",
       ),
     ).toBeInTheDocument();
     await user.click(within(dialog).getAllByRole("combobox")[1]);
@@ -674,6 +678,33 @@ describe("LimitDialog framework controls", () => {
     );
   });
 
+  it("gives the policy a full row and states its fail-safe input", async () => {
+    const user = userEvent.setup();
+    renderLimits();
+
+    await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
+    const dialog = screen.getByRole("dialog");
+    const choose = async (label: string) => {
+      await user.click(within(dialog).getAllByRole("combobox")[0]);
+      await user.click(within(dialog).getByRole("option", { name: label }));
+    };
+
+    expect(within(dialog).getByText("Policy").parentElement).toHaveClass(
+      "col-span-2",
+    );
+    await choose("Realized Profit and Loss Kill Switch");
+    expect(within(dialog).getByText(/^FX fail-safe:/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/^Price fail-safe:/)).toBeNull();
+    for (const label of [
+      "Unrealized Profit and Loss Kill Switch",
+      "Total Profit and Loss Kill Switch",
+    ]) {
+      await choose(label);
+      expect(within(dialog).getByText(/^Price fail-safe:/)).toBeInTheDocument();
+      expect(within(dialog).queryByText(/^FX fail-safe:/)).toBeNull();
+    }
+  });
+
   it("blocks a malformed PnL currency before submitting the form", async () => {
     const user = userEvent.setup();
     renderLimits();
@@ -682,7 +713,9 @@ describe("LimitDialog framework controls", () => {
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
-      within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
+      within(dialog).getByRole("option", {
+        name: "Realized Profit and Loss Kill Switch",
+      }),
     );
     await user.type(within(dialog).getByLabelText("currency"), "US D");
     await user.type(within(dialog).getByLabelText("lower bound"), "-100");
@@ -722,7 +755,9 @@ describe("LimitDialog framework controls", () => {
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
-      within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
+      within(dialog).getByRole("option", {
+        name: "Realized Profit and Loss Kill Switch",
+      }),
     );
     await user.click(within(dialog).getAllByRole("combobox")[1]);
     await user.click(within(dialog).getByRole("option", { name: "Account" }));
@@ -809,7 +844,9 @@ describe("LimitDialog framework controls", () => {
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
-      within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
+      within(dialog).getByRole("option", {
+        name: "Realized Profit and Loss Kill Switch",
+      }),
     );
     await user.type(within(dialog).getByLabelText("currency"), "XYZ");
     await user.type(within(dialog).getByLabelText("lower bound"), "-100");
@@ -947,17 +984,19 @@ describe("Limits with accounts shown", () => {
         accountRow.getByRole("button", { name: "Copy link (Rate limit)" }),
       ).get("account"),
     ).toBe("acc-1");
-    const groupRow = within(policyRow("PnL Kill Switch"));
+    const groupRow = within(policyRow("Realized P&L Kill Switch"));
     expect(
       shareLinkParams(
-        groupRow.getByRole("button", { name: "Copy link (PnL Kill Switch)" }),
+        groupRow.getByRole("button", {
+          name: "Copy link (Realized P&L Kill Switch)",
+        }),
       ).get("accountGroup"),
     ).toBe("desk-a");
     expect(
-      groupRow.getByRole("button", { name: "Edit PnL Kill Switch" }),
+      groupRow.getByRole("button", { name: "Edit Realized P&L Kill Switch" }),
     ).toBeInTheDocument();
     expect(
-      groupRow.getByRole("button", { name: "Delete PnL Kill Switch" }),
+      groupRow.getByRole("button", { name: "Delete Realized P&L Kill Switch" }),
     ).toBeInTheDocument();
   });
 
@@ -1062,7 +1101,7 @@ describe("Limits with accounts hidden", () => {
       accountRow.getByRole("button", { name: "Edit Rate limit" }),
     ).toBeInTheDocument();
 
-    const groupRow = within(policyRow("PnL Kill Switch"));
+    const groupRow = within(policyRow("Realized P&L Kill Switch"));
     expect(groupRow.getByText("Account group")).toBeInTheDocument();
     expect(groupRow.queryAllByRole("button")).toEqual([]);
   });
@@ -1108,7 +1147,12 @@ describe("Limits with accounts hidden", () => {
     renderLimits("/policies", { includeGroupsApi: true });
 
     const dialog = await openAddDialog(user);
-    await chooseInDialog(user, dialog, 0, "PnL Kill Switch");
+    await chooseInDialog(
+      user,
+      dialog,
+      0,
+      "Realized Profit and Loss Kill Switch",
+    );
     await user.click(within(dialog).getAllByRole("combobox")[1]);
     expect(
       within(dialog)

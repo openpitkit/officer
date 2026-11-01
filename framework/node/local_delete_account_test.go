@@ -59,9 +59,9 @@ func TestSnapshotWithoutAccountKeepsUnrelatedAndGroupRuntimeState(t *testing.T) 
 			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "retained", Asset: "USD", MaxQuantity: "2"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Scope: domain.ScopeAccount, Account: "deleted", Currency: "USD", LowerBound: "-1"},
-			{Scope: domain.ScopeAccount, Account: "retained", Currency: "USD", LowerBound: "-2"},
-			{Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-3"},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "deleted", Currency: "USD", LowerBound: "-1"},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "retained", Currency: "USD", LowerBound: "-2"},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-3"},
 		},
 	}, "deleted")
 

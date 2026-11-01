@@ -90,7 +90,7 @@
     "block_group_reason": "Bloqueio do grupo {{group}}: {{reason}}",
     "unblock_group": "Desbloqueio do grupo {{group}}",
     "unblock_group_reason": "Desbloqueio do grupo {{group}}: {{reason}}",
-    "delete_group": "Exclusão do grupo {{group}}; contas desvinculadas: {{detachedAccounts}}, interruptores de emergência por PnL excluídos: {{destroyedSpotFundsPnlBounds}}",
+    "delete_group": "Exclusão do grupo {{group}}; contas desvinculadas: {{detachedAccounts}}, interruptores de emergência por P&L excluídos: {{destroyedSpotFundsPnlBounds}}",
     "delete_group_detach_account": "Exclusão do grupo {{group}}; conta {{account}} desvinculada",
     "delete_group_currency_refused": "Exclusão do grupo {{group}} com moeda {{currency}} recusada: {{refusal}}",
     "create_asset": "Criação do ativo {{asset}}",

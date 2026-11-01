@@ -953,6 +953,7 @@ func TestOpenPitEngineBuilder_PersistedPnlKeepsBoundsClear(t *testing.T) {
 	acct.Currency = testQuote
 	acct.Pnl = "5"
 	limits := []domain.LimitSpotFundsPnlBounds{{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    testAccount,
 		Currency:   testQuote,
@@ -1099,17 +1100,20 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   testQuote,
 				LowerBound: "-1000000",
 			},
 			{
+				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
 				Currency:     testQuote,
 				LowerBound:   "-1000000",
 			},
 			{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    domain.AccountID(testAccount),
 				Currency:   testQuote,
@@ -1257,11 +1261,13 @@ func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   testQuote,
 				LowerBound: "-1000000",
 			},
 			{
+				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
 				Currency:     testQuote,
@@ -1329,17 +1335,20 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierReportsLivePnlBlock(
 	// accrued and return the newly inserted block with its account identity.
 	limits := fwengine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 		{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeGlobal,
 			Currency:   testQuote,
 			LowerBound: "-1000000",
 		},
 		{
+			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			Currency:     testQuote,
 			LowerBound:   "-1000000",
 		},
 		{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    domain.AccountID(testAccount),
 			Currency:   testQuote,

@@ -281,7 +281,7 @@
       "concentration_limit_exceeded": "超出集中度限额",
       "leverage_limit_exceeded": "超出杠杆限额",
       "rate_limit_exceeded": "超出频率限制",
-      "pnl_kill_switch_triggered": "PnL 熔断开关已触发",
+      "pnl_kill_switch_triggered": "P&L 熔断开关已触发",
       "account_not_authorized": "账户未获授权",
       "compliance_restriction": "合规限制",
       "instrument_restricted": "工具受限",
@@ -318,7 +318,7 @@
       "commissionAmountPlaceholder": "如 0.25",
       "commissionCurrency": "佣金币种",
       "commissionCurrencyPlaceholder": "如 USD",
-      "economicsHelp": "佣金进入 PnL 熔断开关和显示；金额与币种必须同时填写。",
+      "economicsHelp": "佣金进入 P&L 熔断开关和显示；金额与币种必须同时填写。",
       "economics": {
         "commission": {
           "title": "佣金",
@@ -330,7 +330,7 @@
           },
           "infoAriaLabel": "佣金说明",
           "infoTitle": "佣金",
-          "infoBody": "佣金以自身币种输入，并从引擎按账户币种计算的已实现 PnL 中扣除。选择费用表示成本，选择返佣表示入账；Officer 会自动设置符号。"
+          "infoBody": "佣金以自身币种输入，并从引擎按账户币种计算的已实现 P&L 中扣除。选择费用表示成本，选择返佣表示入账；Officer 会自动设置符号。"
         }
       },
       "status": "目标状态",

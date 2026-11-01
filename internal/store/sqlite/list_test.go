@@ -459,10 +459,10 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 		t.Fatalf("PutOrderSizeLimit(a): %v", err)
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{Scope: domain.ScopeAccount, Account: "a", Currency: "USD", LowerBound: "-1"},
-		{Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-2"},
-		{Scope: domain.ScopeAccountGroup, AccountGroup: "ops", Currency: "USD", LowerBound: "-4"},
-		{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-3"},
+		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "a", Currency: "USD", LowerBound: "-1"},
+		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-2"},
+		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "ops", Currency: "USD", LowerBound: "-4"},
+		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-3"},
 	} {
 		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", limit.Scope, err)

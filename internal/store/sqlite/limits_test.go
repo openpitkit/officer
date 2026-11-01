@@ -347,6 +347,7 @@ func TestDeleteAccountWithoutForceRejectsSpotFundsPnlBoundsDependent(t *testing.
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-100",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
@@ -376,6 +377,7 @@ func TestDeleteAccountForceCascadesSpotFundsPnlBoundsDependent(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-100",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
@@ -556,12 +558,14 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
 		{
+			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			Currency:     "USD",
 			LowerBound:   "-1000",
 		},
 		{
+			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-b",
 			Currency:     "USD",
@@ -620,10 +624,12 @@ func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
 		{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "acc-1",
 			Currency: "USD", LowerBound: "-100",
 		},
 		{
+			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			Currency:     "EUR",
@@ -687,12 +693,14 @@ func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 	}
 
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
 		{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
 			Currency: "EUR", LowerBound: "-2",
 		},
 		{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "acc-1",
 			Currency: "USD", LowerBound: "-3",
 		},
@@ -724,6 +732,7 @@ func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 	}
 
 	err = rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "GHOST", LowerBound: "-4",
 	})
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -738,6 +747,7 @@ func TestSpotFundsPnlBoundsUpsertOverwritesCurrency(t *testing.T) {
 	}
 	for _, currency := range []string{"USD", "EUR"} {
 		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
 			Currency:   currency,
@@ -762,6 +772,7 @@ func TestSpotFundsPnlBoundsUpsertOverwritesCurrency(t *testing.T) {
 func TestDeleteAssetRequiresForceForSpotFundsPnlBoundsCurrencyDependent(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)

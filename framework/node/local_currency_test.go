@@ -231,6 +231,7 @@ func TestLocalNode_UpdateAssetRenameKeepsEngineStateWithOrdersAndMarketData(t *t
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 	if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: accountID,
 		Currency: quoteAsset, LowerBound: "-1",
 	}); err != nil {
@@ -840,6 +841,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		if err := st.PutSpotFundsPnlBoundsLimit(
 			ctx,
 			domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccount, Account: "acc-1", Currency: "EUR", LowerBound: "-10",
 			},
 		); err != nil {
@@ -882,6 +884,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		if err := st.PutSpotFundsPnlBoundsLimit(
 			ctx,
 			domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency:   "EUR",
 				UpperBound: "10",
@@ -915,6 +918,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		{
 			name: "group scope on default change",
 			limit: domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency:   "USD",
 				LowerBound: "-10",
@@ -923,6 +927,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		{
 			name: "global scope on default change",
 			limit: domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeGlobal, Currency: "USD", UpperBound: "10",
 			},
 		},
@@ -983,6 +988,7 @@ func TestLocalNode_CurrencyChangeBalanceDominatesCurrencyValuedLimit(t *testing.
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 	if err := st.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "EUR", LowerBound: "-10",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)

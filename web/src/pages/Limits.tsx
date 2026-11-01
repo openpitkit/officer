@@ -35,6 +35,7 @@ import type {
   SortOrder,
 } from "@/api/types";
 import { useLimitsPage } from "@/api/useLimits";
+import { isSpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
 import {
   getPolicyCatalogEntry,
   policyCatalogDescription,
@@ -115,24 +116,22 @@ const POLICY_FILTER_KIND: Record<Exclude<PolicyFilter, "all">, string> = {
   rate: "rate_limit",
   order_size: "order_size_limit",
   spot_funds_pnl_bounds: "spot_funds_pnl_bounds_kill_switch",
+  spot_funds_unrealized_pnl_bounds:
+    "spot_funds_unrealized_pnl_bounds_kill_switch",
+  spot_funds_total_pnl_bounds: "spot_funds_total_pnl_bounds_kill_switch",
 };
 
 const POLICY_FILTERS: Exclude<PolicyFilter, "all">[] = [
   "rate",
   "order_size",
   "spot_funds_pnl_bounds",
+  "spot_funds_unrealized_pnl_bounds",
+  "spot_funds_total_pnl_bounds",
 ];
 
 function policyFilterFromParams(params: URLSearchParams): PolicyFilter {
   const policy = params.get("policy");
-  if (
-    policy === "rate" ||
-    policy === "order_size" ||
-    policy === "spot_funds_pnl_bounds"
-  ) {
-    return policy;
-  }
-  return ALL;
+  return POLICY_FILTERS.find((filter) => filter === policy) ?? ALL;
 }
 
 function sortFromParams(params: URLSearchParams): {
@@ -630,6 +629,12 @@ export function Limits() {
   const rateCount = usePolicyCount("rate");
   const orderSizeCount = usePolicyCount("order_size");
   const spotFundsPnlBoundsCount = usePolicyCount("spot_funds_pnl_bounds");
+  const spotFundsUnrealizedPnlBoundsCount = usePolicyCount(
+    "spot_funds_unrealized_pnl_bounds",
+  );
+  const spotFundsTotalPnlBoundsCount = usePolicyCount(
+    "spot_funds_total_pnl_bounds",
+  );
   const policyCounts = useMemo(() => {
     const next: Record<string, number> = {};
     if (rateCount.load.state === "ready") {
@@ -642,13 +647,35 @@ export function Limits() {
       next[POLICY_FILTER_KIND.spot_funds_pnl_bounds] =
         spotFundsPnlBoundsCount.load.data.total;
     }
+    if (spotFundsUnrealizedPnlBoundsCount.load.state === "ready") {
+      next[POLICY_FILTER_KIND.spot_funds_unrealized_pnl_bounds] =
+        spotFundsUnrealizedPnlBoundsCount.load.data.total;
+    }
+    if (spotFundsTotalPnlBoundsCount.load.state === "ready") {
+      next[POLICY_FILTER_KIND.spot_funds_total_pnl_bounds] =
+        spotFundsTotalPnlBoundsCount.load.data.total;
+    }
     return next;
-  }, [orderSizeCount.load, rateCount.load, spotFundsPnlBoundsCount.load]);
+  }, [
+    orderSizeCount.load,
+    rateCount.load,
+    spotFundsPnlBoundsCount.load,
+    spotFundsUnrealizedPnlBoundsCount.load,
+    spotFundsTotalPnlBoundsCount.load,
+  ]);
   const reloadPolicyCounts = useCallback(() => {
     rateCount.reload();
     orderSizeCount.reload();
     spotFundsPnlBoundsCount.reload();
-  }, [orderSizeCount, rateCount, spotFundsPnlBoundsCount]);
+    spotFundsUnrealizedPnlBoundsCount.reload();
+    spotFundsTotalPnlBoundsCount.reload();
+  }, [
+    orderSizeCount,
+    rateCount,
+    spotFundsPnlBoundsCount,
+    spotFundsUnrealizedPnlBoundsCount,
+    spotFundsTotalPnlBoundsCount,
+  ]);
   const reloadLimits = useCallback(() => {
     reload();
     reloadPolicyCounts();
@@ -1010,7 +1037,7 @@ export function Limits() {
         open={deleteTarget !== null}
         requiresEngineRebuild={
           deleteTarget !== null &&
-          deleteTarget.policy !== "spot_funds_pnl_bounds_kill_switch" &&
+          !isSpotFundsPnlPolicy(deleteTarget.policy) &&
           policyCounts[deleteTarget.policy] !== undefined &&
           policyCounts[deleteTarget.policy] <= 1
         }

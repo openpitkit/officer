@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -384,7 +385,9 @@ func barrierCount(policy string, limits fwengine.LimitSet) int {
 		return len(limits.RateLimits)
 	case domain.PolicyOrderSizeLimit:
 		return len(limits.OrderSizeLimits)
-	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+	case domain.PolicySpotFundsPnlBoundsKillSwitch,
+		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
 		return len(limits.SpotFundsPnlBoundsLimits)
 	default:
 		return 0
@@ -546,8 +549,8 @@ func (e *openPitEngine) ConfigurePolicy(
 				"registration is not supported by the SDK yet: %w",
 			policy, domain.ErrNotImplemented)
 	}
-	if policy != domain.PolicySpotFundsPnlBoundsKillSwitch &&
-		barrierCount(policy, limits) == 0 {
+	pnlAxis, pnlBounds := domain.SpotFundsPnlAxisOf(policy)
+	if !pnlBounds && barrierCount(policy, limits) == 0 {
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf(
 			"engine: cannot remove the last barrier of policy %q: empty policy "+
 				"settings are rejected by the SDK: %w",
@@ -564,8 +567,12 @@ func (e *openPitEngine) ConfigurePolicy(
 			return fwengine.PolicyConfigurationResult{}, err
 		}
 		return fwengine.PolicyConfigurationResult{}, nil
-	case domain.PolicySpotFundsPnlBoundsKillSwitch:
-		return e.configureSpotFundsPnlBoundsLocked(ctx, limits.SpotFundsPnlBoundsLimits)
+	case domain.PolicySpotFundsPnlBoundsKillSwitch,
+		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
+		return e.configureSpotFundsPnlBoundsLocked(
+			ctx, pnlAxis, limits.SpotFundsPnlBoundsLimits,
+		)
 	default:
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf("engine: configure unknown policy %q", policy)
 	}
@@ -609,14 +616,16 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize)
 }
 
 // configureSpotFundsPnlBoundsLocked replaces the SpotFunds self-computed
-// account-currency P&L bounds axes on the live handle from the complete barrier
-// set. Empty axes are passed as empty non-nil slices so they are cleared rather
+// account-currency P&L bounds of axis on the live handle from the complete
+// barrier set; bounds of other axes in limits are left to their own policy.
+// Empty axes are passed as empty non-nil slices so they are cleared rather
 // than left unchanged. Runtime bounds updates never touch the live account P&L
 // accumulator; account P&L is set through the dedicated account operation.
 // The retune is an exclusive operation, so it runs in one exclusive section
 // through the dispatcher's driver. Callers must hold e.mu.
 func (e *openPitEngine) configureSpotFundsPnlBoundsLocked(
 	ctx context.Context,
+	axis domain.SpotFundsPnlAxis,
 	limits []domain.LimitSpotFundsPnlBounds,
 ) (fwengine.PolicyConfigurationResult, error) {
 	var result fwengine.PolicyConfigurationResult
@@ -628,7 +637,7 @@ func (e *openPitEngine) configureSpotFundsPnlBoundsLocked(
 		func(driver asyncengine.Driver) error {
 			var err error
 			result, err = configureSpotFundsPnlBounds(
-				driver.Configure(), e.res, limits,
+				driver.Configure(), e.res, axis, limits,
 			)
 			return err
 		},
@@ -639,25 +648,50 @@ func (e *openPitEngine) configureSpotFundsPnlBoundsLocked(
 	return result, nil
 }
 
+// configureSpotFundsPnlBounds replaces the bounds of axis on the SDK SpotFunds
+// policy: realized through the P&L-bounds kill switch, unrealized and total
+// through the account axis of the same name. Every axis blocks with the one
+// PnlKillSwitchTriggered code; the SDK block details name the bound.
 func configureSpotFundsPnlBounds(
 	configurator configure.Configurator,
 	res idResolver,
+	axis domain.SpotFundsPnlAxis,
 	limits []domain.LimitSpotFundsPnlBounds,
 ) (fwengine.PolicyConfigurationResult, error) {
-	global, groups, accounts, err := spotFundsPnlBoundsAxes(limits, res)
+	global, groups, accounts, err := spotFundsPnlBoundsAxes(axis, limits, res)
 	if err != nil {
 		return fwengine.PolicyConfigurationResult{}, err
 	}
-	outcomes, err := configurator.SpotFundsPnlBoundsKillSwitch(
-		policies.SpotFundsPolicyName, global, groups, accounts,
-	)
+	var outcomes configure.AccountBlockOutcomes
+	switch axis {
+	case domain.SpotFundsPnlAxisRealized:
+		outcomes, err = configurator.SpotFundsPnlBoundsKillSwitch(
+			policies.SpotFundsPolicyName, global, groups, accounts,
+		)
+	case domain.SpotFundsPnlAxisUnrealized:
+		outcomes, err = configurator.SpotFundsPnlBoundsAxis(
+			policies.SpotFundsPolicyName,
+			policies.SpotFundsPnlBoundsAxisAccountUnrealized,
+			global, groups, accounts,
+		)
+	case domain.SpotFundsPnlAxisTotal:
+		outcomes, err = configurator.SpotFundsPnlBoundsAxis(
+			policies.SpotFundsPolicyName,
+			policies.SpotFundsPnlBoundsAxisAccountTotal,
+			global, groups, accounts,
+		)
+	default:
+		return fwengine.PolicyConfigurationResult{}, fmt.Errorf(
+			"engine: unknown spot funds pnl axis %q: %w", axis, domain.ErrInvalid,
+		)
+	}
 	if err != nil {
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf(
-			"engine: configure spot_funds_pnl_bounds_kill_switch: %w", err,
+			"engine: configure %s: %w", axis.Policy(), err,
 		)
 	}
 	blocks, err := policyConfigurationBlockOutcomesFrom(
-		outcomes.AccountBlocks, res, domain.PolicySpotFundsPnlBoundsKillSwitch,
+		outcomes.AccountBlocks, res, axis.Policy(),
 	)
 	if err != nil {
 		return fwengine.PolicyConfigurationResult{}, err
@@ -921,7 +955,9 @@ func policyName(policy string) string {
 		return nameRateLimit
 	case domain.PolicyOrderSizeLimit:
 		return nameOrderSizeLimit
-	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+	case domain.PolicySpotFundsPnlBoundsKillSwitch,
+		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
 		return nameSpotFunds
 	default:
 		return policy
@@ -1040,17 +1076,43 @@ func buildEngine(
 	if err := applyBlocks(eng, snap.Accounts); err != nil {
 		return releaseOnErr(err)
 	}
-	var buildBlocks []domain.AccountBlock
-	if len(snap.SpotFundsPnlBoundsLimits) > 0 {
-		configuration, err := configureSpotFundsPnlBounds(
-			eng.Configure(), res, snap.SpotFundsPnlBoundsLimits,
-		)
-		if err != nil {
-			return releaseOnErr(err)
-		}
-		buildBlocks = configuration.AccountBlocks
+	// Every axis is configured while no account holds anything yet. A rebuilt
+	// engine has no marks, so an unrealized or total axis judged over a seeded
+	// position would halt and block every account that holds one; seeding the
+	// account P&L afterwards judges the total axis on the realized P&L alone.
+	// That is a known limit until the SDK can seed the account P&L and the
+	// positions without judging them and then judge each account once.
+	buildBlocks, err := configureStoredSpotFundsPnlAxes(
+		eng.Configure(), res, snap.SpotFundsPnlBoundsLimits,
+	)
+	if err != nil {
+		return releaseOnErr(err)
 	}
 	return eng, service, registered, buildBlocks, created, nil
+}
+
+// configureStoredSpotFundsPnlAxes configures each axis that has a stored bound
+// and returns the account blocks the configuration reports.
+func configureStoredSpotFundsPnlAxes(
+	configurator configure.Configurator,
+	res idResolver,
+	limits []domain.LimitSpotFundsPnlBounds,
+) ([]domain.AccountBlock, error) {
+	var blocks []domain.AccountBlock
+	for _, axis := range domain.SpotFundsPnlAxes {
+		if !slices.ContainsFunc(
+			limits,
+			func(limit domain.LimitSpotFundsPnlBounds) bool { return limit.Axis == axis },
+		) {
+			continue
+		}
+		configuration, err := configureSpotFundsPnlBounds(configurator, res, axis, limits)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, configuration.AccountBlocks...)
+	}
+	return blocks, nil
 }
 
 // applyBlocks blocks every blocked account in accounts on the engine with its

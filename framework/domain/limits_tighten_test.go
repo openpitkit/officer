@@ -73,6 +73,7 @@ func orderSize(quantity, notional string) domain.LimitOrderSize {
 // unset.
 func pnlBounds(currency, lower, upper string) domain.LimitSpotFundsPnlBounds {
 	return domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: currency,
 		LowerBound: lower, UpperBound: upper,
 	}

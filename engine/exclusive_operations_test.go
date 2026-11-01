@@ -97,6 +97,7 @@ func TestExclusiveOperationsBesideOrderFlow(t *testing.T) {
 			t.Fatalf("round %d: SetAccountGroup(%q): %v", round, group, err)
 		}
 		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    mover,
 			Currency:   "USDT",
@@ -148,6 +149,7 @@ func TestSpotFundsRetuneWaitsForLaneWork(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
 	limits := []domain.LimitSpotFundsPnlBounds{{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    testAccount,
 		Currency:   testQuote,
@@ -184,6 +186,7 @@ func TestSpotFundsRetuneWaitsForLaneWork(t *testing.T) {
 			context.Background(),
 			domain.PolicySpotFundsPnlBoundsKillSwitch,
 			fwengine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    testAccount,
 				Currency:   testQuote,

@@ -281,7 +281,7 @@
       "concentration_limit_exceeded": "Límite de concentración superado",
       "leverage_limit_exceeded": "Límite de apalancamiento superado",
       "rate_limit_exceeded": "Límite de frecuencia superado",
-      "pnl_kill_switch_triggered": "Interruptor de emergencia por PnL activado",
+      "pnl_kill_switch_triggered": "Interruptor de emergencia por P&L activado",
       "account_not_authorized": "Cuenta no autorizada",
       "compliance_restriction": "Restricción de cumplimiento normativo",
       "instrument_restricted": "Instrumento restringido",
@@ -330,7 +330,7 @@
           },
           "infoAriaLabel": "Detalles de la comisión",
           "infoTitle": "Comisión",
-          "infoBody": "La comisión se introduce en su propia moneda y se resta del PnL realizado que calcula el motor en la moneda de la cuenta. Seleccione Cargo para un coste o Reembolso para un abono; Officer aplica el signo."
+          "infoBody": "La comisión se introduce en su propia moneda y se resta del P&L realizado que calcula el motor en la moneda de la cuenta. Seleccione Cargo para un coste o Reembolso para un abono; Officer aplica el signo."
         }
       },
       "status": "Estado objetivo",

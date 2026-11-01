@@ -660,6 +660,7 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 	// --- limit_spot_funds_pnl_bound ---
 
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
@@ -667,6 +668,7 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit(global): %v", err)
 	}
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "EUR",
 		LowerBound: "-200",
@@ -696,8 +698,8 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 	}
 	if _, err := r.rawDB().ExecContext(ctx, `
 INSERT INTO limit_spot_funds_pnl_bound
-       (scope, account_id, account_group_id, currency_asset_id, lower_bound)
-VALUES (?, NULL, NULL, (SELECT id FROM asset WHERE code = 'USD'), ?)`,
+       (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound)
+VALUES ('realized', ?, NULL, NULL, (SELECT id FROM asset WHERE code = 'USD'), ?)`,
 		domain.ScopeGlobal, "-300"); err == nil {
 		t.Fatal("raw duplicate limit_spot_funds_pnl_bounds global insert succeeded, want unique conflict")
 	} else if !isSQLiteUnique(err) {
@@ -731,6 +733,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 	}
 
 	groupLimit := domain.LimitSpotFundsPnlBounds{
+		Axis:         domain.SpotFundsPnlAxisRealized,
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-a",
 		Currency:     "USD",
@@ -740,6 +743,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit(group): %v", err)
 	}
 	accountLimit := domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    "acc-1",
 		Currency:   "USD",
@@ -789,6 +793,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 
 	if err := rs.DeleteSpotFundsPnlBoundsLimit(
 		ctx,
+		domain.SpotFundsPnlAxisRealized,
 		domain.ScopeAccount,
 		"acc-1",
 		"",

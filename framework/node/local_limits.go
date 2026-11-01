@@ -263,8 +263,14 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	}
 	defer n.endLivePolicyConfiguration()
 
+	policy := limit.Axis.Policy()
+	if policy == "" {
+		return nil, fmt.Errorf(
+			"unknown spot funds pnl axis %q: %w", limit.Axis, domain.ErrInvalid,
+		)
+	}
 	target := LimitTarget{
-		Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Policy:       policy,
 		Scope:        limit.Scope,
 		Account:      limit.Account,
 		AccountGroup: limit.AccountGroup,
@@ -290,7 +296,7 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	}
 
 	sink, applyErr := n.applyPolicyChangeLocked(
-		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, func() error {
+		ctx, policy, func() error {
 			return n.revertSpotFundsPnlBoundsBarrier(
 				context.WithoutCancel(ctx), target, prev, hadPrev,
 			)
@@ -308,7 +314,7 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	}); err != nil {
 		return sink, n.fatalPostEngineAuditByCode(
 			"audit spot funds pnl-bounds limit", "policy",
-			domain.PolicySpotFundsPnlBoundsKillSwitch,
+			policy,
 			fmt.Errorf("audit set limit: %w", err),
 		)
 	}
@@ -400,15 +406,15 @@ func (n *localNode) guardTightenOnlySpotFundsPnlBounds(
 		return nil
 	case domain.ScopeAccountGroup:
 		ref, ok, err = n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
-			Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
+			Policy: limit.Axis.Policy(),
 			Scope:  domain.ScopeGlobal,
 		})
 	case domain.ScopeAccount:
-		ref, ok, err = n.resolvedSpotFundsPnlBounds(ctx, limit.Account)
+		ref, ok, err = n.resolvedSpotFundsPnlBounds(ctx, limit.Axis, limit.Account)
 	default:
 		return fmt.Errorf(
 			"scope %q not allowed for policy %q: %w",
-			limit.Scope, domain.PolicySpotFundsPnlBoundsKillSwitch, domain.ErrInvalid,
+			limit.Scope, limit.Axis.Policy(), domain.ErrInvalid,
 		)
 	}
 	if err != nil {
@@ -420,15 +426,15 @@ func (n *localNode) guardTightenOnlySpotFundsPnlBounds(
 	return limit.NoLooserThan(ref)
 }
 
-// resolvedSpotFundsPnlBounds returns the Spot Funds P&L bound the engine's
-// cascade applies to account while it has no bound of its own: its group's
-// bound when that bound is in the account's effective currency or the account
-// has none, else the global bound on the same currency test. An account
+// resolvedSpotFundsPnlBounds returns the Spot Funds P&L bound of axis the
+// engine's cascade applies to account while it has no bound of its own: its
+// group's bound when that bound is in the account's effective currency or
+// the account has none, else the global bound on the same currency test. An account
 // Officer does not know yet resolves as the account a barrier would create: in
 // no group and with no currency of its own, so its effective currency is the
 // default group's. The bool is false when no bound applies.
 func (n *localNode) resolvedSpotFundsPnlBounds(
-	ctx context.Context, account domain.AccountID,
+	ctx context.Context, axis domain.SpotFundsPnlAxis, account domain.AccountID,
 ) (domain.LimitSpotFundsPnlBounds, bool, error) {
 	stored, ok, err := n.realm.GetAccount(ctx, account)
 	if err != nil {
@@ -452,7 +458,7 @@ func (n *localNode) resolvedSpotFundsPnlBounds(
 	}
 	if groupCode != "" {
 		bound, ok, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
-			Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
+			Policy:       axis.Policy(),
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: groupCode,
 		})
@@ -464,7 +470,7 @@ func (n *localNode) resolvedSpotFundsPnlBounds(
 		}
 	}
 	bound, ok, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
-		Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Policy: axis.Policy(),
 		Scope:  domain.ScopeGlobal,
 	})
 	if err != nil {
@@ -554,13 +560,20 @@ func (n *localNode) deleteBarrier(
 				context.WithoutCancel(ctx), target, prev, hadPrev,
 			)
 		}, nil
-	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+	case domain.PolicySpotFundsPnlBoundsKillSwitch,
+		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
+		axis, err := spotFundsPnlAxisOfPolicy(target.Policy)
+		if err != nil {
+			return nil, err
+		}
 		prev, hadPrev, err := n.readSpotFundsPnlBoundsBarrier(ctx, target)
 		if err != nil {
 			return nil, err
 		}
 		if err := n.realm.DeleteSpotFundsPnlBoundsLimit(
 			ctx,
+			axis,
 			target.Scope,
 			target.Account,
 			target.AccountGroup,
@@ -705,7 +718,7 @@ func (n *localNode) applyPolicyChangeLocked(
 		}
 		return nil, nil
 	}
-	spotFunds := policy == domain.PolicySpotFundsPnlBoundsKillSwitch
+	_, spotFunds := domain.SpotFundsPnlAxisOf(policy)
 	durableCtx := context.WithoutCancel(ctx)
 	revertPolicy := func() error {
 		if revertErr := revert(); revertErr != nil {
@@ -788,7 +801,10 @@ func (n *localNode) policyLimitSet(ctx context.Context, policy string) (engine.L
 			return engine.LimitSet{}, fmt.Errorf("read order-size limits: %w", err)
 		}
 		return engine.LimitSet{OrderSizeLimits: limits}, nil
-	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+	case domain.PolicySpotFundsPnlBoundsKillSwitch,
+		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
+		// Every axis is listed: the engine configures the axis of policy alone.
 		limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 		if err != nil {
 			return engine.LimitSet{}, fmt.Errorf(
@@ -923,17 +939,22 @@ func (n *localNode) revertOrderSizeBarrier(
 }
 
 // readSpotFundsPnlBoundsBarrier mirrors readRateBarrier for the SpotFunds
-// P&L-bounds table.
+// P&L-bounds table, on the axis of target.Policy.
 func (n *localNode) readSpotFundsPnlBoundsBarrier(
 	ctx context.Context, target LimitTarget,
 ) (domain.LimitSpotFundsPnlBounds, bool, error) {
+	axis, err := spotFundsPnlAxisOfPolicy(target.Policy)
+	if err != nil {
+		return domain.LimitSpotFundsPnlBounds{}, false, err
+	}
 	limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
 		return domain.LimitSpotFundsPnlBounds{}, false,
 			fmt.Errorf("read spot funds pnl-bounds barrier: %w", err)
 	}
 	for _, limit := range limits {
-		if limit.Scope == target.Scope &&
+		if limit.Axis == axis &&
+			limit.Scope == target.Scope &&
 			limit.Account == target.Account &&
 			limit.AccountGroup == target.AccountGroup {
 			return limit, true, nil
@@ -956,8 +977,13 @@ func (n *localNode) revertSpotFundsPnlBoundsBarrier(
 		}
 		return nil
 	}
+	axis, err := spotFundsPnlAxisOfPolicy(target.Policy)
+	if err != nil {
+		return err
+	}
 	if err := n.realm.DeleteSpotFundsPnlBoundsLimit(
 		ctx,
+		axis,
 		target.Scope,
 		target.Account,
 		target.AccountGroup,
@@ -965,6 +991,19 @@ func (n *localNode) revertSpotFundsPnlBoundsBarrier(
 		return fmt.Errorf("remove spot funds pnl-bounds barrier: %w", err)
 	}
 	return nil
+}
+
+// spotFundsPnlAxisOfPolicy returns the P&L axis a Spot Funds P&L-bounds policy
+// bounds, or an error wrapping domain.ErrInvalid for any other policy.
+func spotFundsPnlAxisOfPolicy(policy string) (domain.SpotFundsPnlAxis, error) {
+	axis, ok := domain.SpotFundsPnlAxisOf(policy)
+	if !ok {
+		return "", fmt.Errorf(
+			"policy %q is not a spot funds pnl-bounds policy: %w",
+			policy, domain.ErrInvalid,
+		)
+	}
+	return axis, nil
 }
 
 // ListAudit returns the most recent n audit rows, newest first.

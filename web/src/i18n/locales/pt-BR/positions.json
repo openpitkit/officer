@@ -52,7 +52,7 @@
       "held": "Retido",
       "incoming": "A receber",
       "avgEntryPrice": "Preço médio de entrada",
-      "realizedPnl": "PnL realizado",
+      "realizedPnl": "P&L realizado",
       "updated": "Atualização",
       "adjust": "Ajuste"
     },
@@ -69,12 +69,12 @@
     },
     "noAccountCurrencyHint": "A conta não define uma moeda, portanto este valor não tem unidade.",
     "pnlHalt": {
-      "missingFx": "Cálculo de PnL interrompido: uma cotação FX obrigatória não está disponível.",
-      "missingAccountCurrency": "Cálculo de PnL interrompido: a moeda da conta não está disponível.",
-      "missingInitialPnl": "Cálculo de PnL interrompido: um valor inicial de PnL de referência não está disponível.",
-      "missingCostBasis": "Cálculo de PnL interrompido: o custo de aquisição da posição não está disponível.",
-      "arithmeticOverflow": "Cálculo de PnL interrompido: a aritmética exata excedeu o intervalo numérico suportado.",
-      "unknown": "O motor interrompeu o cálculo de PnL."
+      "missingFx": "Cálculo de P&L interrompido: uma cotação FX obrigatória não está disponível.",
+      "missingAccountCurrency": "Cálculo de P&L interrompido: a moeda da conta não está disponível.",
+      "missingInitialPnl": "Cálculo de P&L interrompido: um valor inicial de P&L de referência não está disponível.",
+      "missingCostBasis": "Cálculo de P&L interrompido: o custo de aquisição da posição não está disponível.",
+      "arithmeticOverflow": "Cálculo de P&L interrompido: a aritmética exata excedeu o intervalo numérico suportado.",
+      "unknown": "O motor interrompeu o cálculo de P&L."
     },
     "empty": {
       "title": "Nenhum saldo",
@@ -148,7 +148,7 @@
       "asset": "Esta coluna mostra o ativo visado pelo ajuste.",
       "source": "Esta coluna mostra se o ajuste veio do painel, de REST, de MCP ou de outra origem.",
       "type": "Esta coluna mostra o que o ajuste lança: uma taxa da plataforma, um depósito, uma retirada ou uma correção manual.",
-      "request": "Esta coluna mostra a alteração solicitada de saldo, retido, a receber, preço médio ou PnL realizado.",
+      "request": "Esta coluna mostra a alteração solicitada de saldo, retido, a receber, preço médio ou P&L realizado.",
       "status": "Esta coluna mostra se o ajuste foi aceito ou rejeitado.",
       "outcome": "Esta coluna mostra o resultado salvo ou o resumo da rejeição.",
       "externalId": "Esta coluna mostra o ID imutável do ajuste."
@@ -165,7 +165,7 @@
       "incomingDelta": "a receber Δ{{value}}",
       "incomingAbsolute": "a receber ={{value}}",
       "avgPrice": "médio {{value}}",
-      "realizedPnl": "PnL realizado ={{value}}"
+      "realizedPnl": "P&L realizado ={{value}}"
     },
     "status": {
       "rejected": "rejeitado",
@@ -184,7 +184,7 @@
       "type": "Tipo",
       "avgEntryPrice": "Preço médio de entrada (opcional)",
       "avgEntryPriceHint": "Número decimal positivo. Deixe em branco para manter o valor atual.",
-      "realizedPnl": "PnL realizado",
+      "realizedPnl": "P&L realizado",
       "realizedPnlPlaceholder": "ex.: -12.50"
     },
     "amounts": {
@@ -211,7 +211,7 @@
       "fieldBalance": "saldo",
       "fieldHeld": "retido",
       "fieldIncoming": "a receber",
-      "fieldRealizedPnl": "PnL realizado"
+      "fieldRealizedPnl": "P&L realizado"
     },
     "footer": {
       "close": "Fechar",

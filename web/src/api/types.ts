@@ -261,11 +261,14 @@ export interface SpotFundsPnlBoundsLimit {
   upperBound: string;
 }
 
-/** Per-policy typed limits returned by the account-state and limit-list APIs. */
+/** Per-policy typed limits returned by the account-state and limit-list APIs.
+ *  The Spot Funds P&L bounds are listed per axis: realized, unrealized, total. */
 export interface AccountLimits {
   rateLimits: RateLimit[];
   orderSizeLimits: OrderSizeLimit[];
   spotFundsPnlBoundsLimits: SpotFundsPnlBoundsLimit[];
+  spotFundsUnrealizedPnlBoundsLimits: SpotFundsPnlBoundsLimit[];
+  spotFundsTotalPnlBoundsLimits: SpotFundsPnlBoundsLimit[];
 }
 
 /** One risk-limit barrier in the UI's flat policy/value model. Values is an
@@ -284,7 +287,9 @@ export interface Limit {
 export type PolicyKind =
   | "rate_limit"
   | "order_size_limit"
-  | "spot_funds_pnl_bounds_kill_switch";
+  | "spot_funds_pnl_bounds_kill_switch"
+  | "spot_funds_unrealized_pnl_bounds_kill_switch"
+  | "spot_funds_total_pnl_bounds_kill_switch";
 
 /** Rate-limit barrier values (window in ms, integer order cap). */
 export interface PolicyRateValues {
@@ -328,7 +333,9 @@ export type PolicyFilter =
   | "all"
   | "rate"
   | "order_size"
-  | "spot_funds_pnl_bounds";
+  | "spot_funds_pnl_bounds"
+  | "spot_funds_unrealized_pnl_bounds"
+  | "spot_funds_total_pnl_bounds";
 
 /** Filter options accepted by the unified, paged GET /limits list. */
 export interface PolicyListFilters extends PageRequest, SortSpec {
@@ -1131,6 +1138,8 @@ export interface BackupData {
   rateLimits?: Record<string, unknown>[];
   orderSizeLimits?: Record<string, unknown>[];
   spotFundsPnlBoundsLimits?: Record<string, unknown>[];
+  spotFundsUnrealizedPnlBoundsLimits?: Record<string, unknown>[];
+  spotFundsTotalPnlBoundsLimits?: Record<string, unknown>[];
   adjustments?: Record<string, unknown>[];
   orders?: Record<string, unknown>[];
   orderEvents?: Record<string, unknown>[];

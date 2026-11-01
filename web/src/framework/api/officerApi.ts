@@ -125,6 +125,11 @@ import type {
   TextMatchMode,
   Trade,
 } from "../../api/types";
+import {
+  SPOT_FUNDS_PNL_POLICIES,
+  SPOT_FUNDS_PNL_POLICY_IDS,
+  isSpotFundsPnlPolicy,
+} from "../../api/spotFundsPnlPolicies";
 import { ADJUSTMENT_TYPES } from "../registries/vocabulary";
 import { isRfc3339Time } from "./rfc3339";
 
@@ -908,6 +913,14 @@ function normalizeAccountLimits(v: unknown): AccountLimits {
       ),
       normalizeSpotFundsPnlBoundsLimit,
     ),
+    spotFundsUnrealizedPnlBoundsLimits: normalizeArray(
+      pick(o, "spotFundsUnrealizedPnlBoundsLimits"),
+      normalizeSpotFundsPnlBoundsLimit,
+    ),
+    spotFundsTotalPnlBoundsLimits: normalizeArray(
+      pick(o, "spotFundsTotalPnlBoundsLimits"),
+      normalizeSpotFundsPnlBoundsLimit,
+    ),
   };
 }
 
@@ -933,18 +946,20 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
         max_notional: limit.maxNotional,
       },
     })),
-    ...v.spotFundsPnlBoundsLimits.map((limit) => ({
-      policy: "spot_funds_pnl_bounds_kill_switch",
-      scope: limit.scope,
-      account: limit.account,
-      accountGroup: limit.accountGroup,
-      asset: "",
-      values: {
-        currency: limit.currency,
-        lower_bound: limit.lowerBound,
-        upper_bound: limit.upperBound,
-      },
-    })),
+    ...SPOT_FUNDS_PNL_POLICY_IDS.flatMap((policy) =>
+      v[SPOT_FUNDS_PNL_POLICIES[policy].listKey].map((limit) => ({
+        policy,
+        scope: limit.scope,
+        account: limit.account,
+        accountGroup: limit.accountGroup,
+        asset: "",
+        values: {
+          currency: limit.currency,
+          lower_bound: limit.lowerBound,
+          upper_bound: limit.upperBound,
+        },
+      })),
+    ),
   ];
 }
 
@@ -960,6 +975,8 @@ function normalizePolicyKind(v: unknown): Policy["kind"] {
     case "rate_limit":
     case "order_size_limit":
     case "spot_funds_pnl_bounds_kill_switch":
+    case "spot_funds_unrealized_pnl_bounds_kill_switch":
+    case "spot_funds_total_pnl_bounds_kill_switch":
       return v;
     default:
       return "rate_limit";
@@ -1055,7 +1072,9 @@ function policyToLimit(policy: Policy): Limit {
         },
       };
     }
-    case "spot_funds_pnl_bounds_kill_switch": {
+    case "spot_funds_pnl_bounds_kill_switch":
+    case "spot_funds_unrealized_pnl_bounds_kill_switch":
+    case "spot_funds_total_pnl_bounds_kill_switch": {
       const pnlBounds = policy.values.spotFundsPnlBounds;
       if (pnlBounds === undefined) {
         throw new ApiError(
@@ -1114,6 +1133,19 @@ function limitEndpointBody(
     limit.account.trim() !== ""
       ? `?${missingAccountQuery(missingAccount)}`
       : "";
+  if (isSpotFundsPnlPolicy(limit.policy)) {
+    return {
+      path: `${client.baseUrl}/limits/${SPOT_FUNDS_PNL_POLICIES[limit.policy].path}${query}`,
+      body: {
+        scope: limit.scope,
+        account: limit.account,
+        accountGroup: limit.accountGroup ?? "",
+        currency: limit.values.currency,
+        lowerBound: limit.values.lower_bound ?? "",
+        upperBound: limit.values.upper_bound ?? "",
+      },
+    };
+  }
   switch (limit.policy) {
     case "rate_limit":
       return {
@@ -1137,18 +1169,6 @@ function limitEndpointBody(
           maxNotional: limit.values.max_notional ?? "",
         },
       };
-    case "spot_funds_pnl_bounds_kill_switch":
-      return {
-        path: `${client.baseUrl}/limits/spot-funds-pnl-bounds${query}`,
-        body: {
-          scope: limit.scope,
-          account: limit.account,
-          accountGroup: limit.accountGroup ?? "",
-          currency: limit.values.currency,
-          lowerBound: limit.values.lower_bound ?? "",
-          upperBound: limit.values.upper_bound ?? "",
-        },
-      };
     default:
       throw new ApiError(`unknown policy ${limit.policy}`, "validation", 400);
   }
@@ -1163,31 +1183,40 @@ function singleFlattenedLimit(policy: string, limits: AccountLimits): Limit {
   return first;
 }
 
+function emptyAccountLimits(): AccountLimits {
+  return {
+    rateLimits: [],
+    orderSizeLimits: [],
+    spotFundsPnlBoundsLimits: [],
+    spotFundsUnrealizedPnlBoundsLimits: [],
+    spotFundsTotalPnlBoundsLimits: [],
+  };
+}
+
 function normalizePutLimitResponse(policy: string, v: unknown): Limit {
   const o = isObject(v) ? v : {};
+  if (isSpotFundsPnlPolicy(policy)) {
+    const wire = SPOT_FUNDS_PNL_POLICIES[policy];
+    const putKey =
+      policy === "spot_funds_pnl_bounds_kill_switch"
+        ? pick(o, wire.putKey, "SpotFundsPnlBoundsLimit")
+        : pick(o, wire.putKey);
+    return singleFlattenedLimit(policy, {
+      ...emptyAccountLimits(),
+      [wire.listKey]: [normalizeSpotFundsPnlBoundsLimit(putKey)],
+    });
+  }
   switch (policy) {
     case "rate_limit":
       return singleFlattenedLimit(policy, {
+        ...emptyAccountLimits(),
         rateLimits: [normalizeRateLimit(pick(o, "rateLimit", "RateLimit"))],
-        orderSizeLimits: [],
-        spotFundsPnlBoundsLimits: [],
       });
     case "order_size_limit":
       return singleFlattenedLimit(policy, {
-        rateLimits: [],
+        ...emptyAccountLimits(),
         orderSizeLimits: [
           normalizeOrderSizeLimit(pick(o, "orderSizeLimit", "OrderSizeLimit")),
-        ],
-        spotFundsPnlBoundsLimits: [],
-      });
-    case "spot_funds_pnl_bounds_kill_switch":
-      return singleFlattenedLimit(policy, {
-        rateLimits: [],
-        orderSizeLimits: [],
-        spotFundsPnlBoundsLimits: [
-          normalizeSpotFundsPnlBoundsLimit(
-            pick(o, "spotFundsPnlBoundsLimit", "SpotFundsPnlBoundsLimit"),
-          ),
         ],
       });
     default:

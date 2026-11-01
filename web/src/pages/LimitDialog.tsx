@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { isSpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
 import type { Account, Limit } from "@/api/types";
 import { validateLimit } from "@/api/validate";
 import {
@@ -28,9 +29,9 @@ import {
   getPolicyKinds,
   kindHint,
   policyCatalogDescription,
+  policyCatalogLabel,
   policyFieldHint,
   policyFieldLabel,
-  policyLabel,
   scopeHasAccount,
   scopeHasAsset,
   scopeLabel,
@@ -340,7 +341,7 @@ export function LimitDialog({
     useState<string[]>([]);
 
   const isEdit = editing !== null;
-  const isSpotFundsPnl = form.policy === "spot_funds_pnl_bounds_kill_switch";
+  const isSpotFundsPnl = isSpotFundsPnlPolicy(form.policy);
   const currencySuggestionResult = useAssetCodeSuggestions(
     form.values.currency ?? "",
     open && isSpotFundsPnl,
@@ -581,25 +582,30 @@ export function LimitDialog({
           <div className="flex flex-col gap-y-4">
             {isSpotFundsPnl && (
               <p className="text-xs text-muted-lt">
-                {t("dialog.fxFailSafeNote")}
+                {form.policy === "spot_funds_pnl_bounds_kill_switch"
+                  ? t("dialog.fxFailSafeNote")
+                  : t("dialog.positionFailSafeNote")}
               </p>
             )}
 
             <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-y-1.5">
+              {/* A full row for the spelled-out policy names. A name longer
+                  than the row wraps inside the trigger instead of being cut,
+                  since the word that tells the policies apart comes last. */}
+              <div className="col-span-2 flex flex-col gap-y-1.5">
                 <Label>{t("dialog.policy")}</Label>
                 <Select
                   value={form.policy}
                   onValueChange={setPolicy}
                   disabled={isEdit}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="h-auto min-h-[var(--dens-field-h)] text-left">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {getPolicies().map((p) => (
                       <SelectItem key={p} value={p}>
-                        {policyLabel(tc, p)}
+                        {policyCatalogLabel(t, p)}
                       </SelectItem>
                     ))}
                   </SelectContent>

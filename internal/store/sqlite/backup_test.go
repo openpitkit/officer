@@ -115,6 +115,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    "acc-1",
 		Currency:   "USD",
@@ -122,6 +123,20 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 		UpperBound: "500",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	for _, limit := range []domain.LimitSpotFundsPnlBounds{
+		{
+			Axis:  domain.SpotFundsPnlAxisUnrealized,
+			Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-100",
+		},
+		{
+			Axis:  domain.SpotFundsPnlAxisTotal,
+			Scope: domain.ScopeGlobal, Currency: "USD", UpperBound: "900",
+		},
+	} {
+		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", limit.Axis, err)
+		}
 	}
 	order, err := rs.CreateOrder(ctx, domain.Order{
 		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
@@ -2552,8 +2567,9 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 		{
 			name: "spot-funds-pnl-bounds",
 			data: backup.Data{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-				{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+				{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
 				{
+					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
 					LowerBound: "-1",
 				},
@@ -3347,6 +3363,7 @@ func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 		t.Fatalf("dst CreateAccount(acc-1): %v", err)
 	}
 	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:         domain.SpotFundsPnlAxisRealized,
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-a",
 		Currency:     "USD",
@@ -3355,6 +3372,7 @@ func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 		t.Fatalf("dst PutSpotFundsPnlBoundsLimit(desk-a): %v", err)
 	}
 	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:         domain.SpotFundsPnlAxisRealized,
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-b",
 		Currency:     "USD",
@@ -5205,6 +5223,17 @@ func assertNoIDLeak(t *testing.T, archive backup.Archive) {
 // assertRealmsEqualOnPublicIdentity compares the public identity of every section
 // between src and dst: dictionaries by code, machine records by external id, and
 // the money/quantity decimals through the domain value types.
+// spotFundsPnlBoundsByAxis keys bounds that hold one bound per axis by axis.
+func spotFundsPnlBoundsByAxis(
+	limits []domain.LimitSpotFundsPnlBounds,
+) map[domain.SpotFundsPnlAxis]domain.LimitSpotFundsPnlBounds {
+	out := make(map[domain.SpotFundsPnlAxis]domain.LimitSpotFundsPnlBounds, len(limits))
+	for _, limit := range limits {
+		out[limit.Axis] = limit
+	}
+	return out
+}
+
 func assertRealmsEqualOnPublicIdentity(
 	t *testing.T, ctx context.Context, src, dst fwstore.RealmStore, orderXID domain.ExternalID,
 ) {
@@ -5245,12 +5274,15 @@ func assertRealmsEqualOnPublicIdentity(
 	}
 	srcSpotFunds, _ := src.ListSpotFundsPnlBoundsLimits(ctx, "")
 	dstSpotFunds, _ := dst.ListSpotFundsPnlBoundsLimits(ctx, "")
-	if len(srcSpotFunds) != len(dstSpotFunds) || len(dstSpotFunds) != 1 ||
-		dstSpotFunds[0].Account != "acc-1" ||
-		dstSpotFunds[0].Currency != "USD" ||
-		dstSpotFunds[0].LowerBound != "-250" ||
-		dstSpotFunds[0].UpperBound != "500" {
+	// One bound of each P&L axis comes back on its own axis.
+	if len(srcSpotFunds) != 3 || !reflect.DeepEqual(
+		spotFundsPnlBoundsByAxis(srcSpotFunds), spotFundsPnlBoundsByAxis(dstSpotFunds),
+	) {
 		t.Fatalf("spot funds pnl bounds differ: %v vs %v", srcSpotFunds, dstSpotFunds)
+	}
+	if realized := spotFundsPnlBoundsByAxis(dstSpotFunds)[domain.SpotFundsPnlAxisRealized]; realized.Account != "acc-1" ||
+		realized.LowerBound != "-250" || realized.UpperBound != "500" {
+		t.Fatalf("realized pnl bound = %+v, want the acc-1 bound", realized)
 	}
 
 	srcOrder, _ := src.GetOrder(ctx, orderXID)

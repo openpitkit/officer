@@ -210,8 +210,8 @@ func classifyRestoreRuntimeDelta(
 		orderSizeLimitMap(after.data.OrderSizeLimits),
 	)
 	plan.spotFundsChanged = !reflect.DeepEqual(
-		spotFundsLimitMap(before.data.SpotFundsPnlBoundsLimits),
-		spotFundsLimitMap(after.data.SpotFundsPnlBoundsLimits),
+		spotFundsLimitMap(before.data.SpotFundsPnlBounds()),
+		spotFundsLimitMap(after.data.SpotFundsPnlBounds()),
 	)
 	if plan.rateChanged &&
 		(len(before.data.RateLimits) == 0) != (len(after.data.RateLimits) == 0) {
@@ -335,7 +335,8 @@ func spotFundsLimitMap(
 ) map[string]domain.LimitSpotFundsPnlBounds {
 	out := make(map[string]domain.LimitSpotFundsPnlBounds, len(limits))
 	for _, limit := range limits {
-		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.AccountGroup] = limit
+		out[string(limit.Axis)+"\x00"+string(limit.Scope)+"\x00"+
+			limit.Account.String()+"\x00"+limit.AccountGroup] = limit
 	}
 	return out
 }
@@ -489,6 +490,8 @@ func (n *localNode) applyRestoreRuntimeDelta(
 		{name: domain.PolicyRateLimit, changed: plan.rateChanged},
 		{name: domain.PolicyOrderSizeLimit, changed: plan.orderSizeChanged},
 		{name: domain.PolicySpotFundsPnlBoundsKillSwitch, changed: plan.spotFundsChanged},
+		{name: domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch, changed: plan.spotFundsChanged},
+		{name: domain.PolicySpotFundsTotalPnlBoundsKillSwitch, changed: plan.spotFundsChanged},
 	} {
 		if !policy.changed {
 			continue

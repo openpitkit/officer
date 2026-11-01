@@ -19,6 +19,7 @@
 // authoritative; these only catch obvious mistakes before a request goes out
 // and drive the form hints. They must not diverge from the contract.
 
+import { isSpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
 import type { Limit } from "@/api/types";
 import {
   getAllowedScopes,
@@ -34,7 +35,6 @@ const MAX_ACCOUNT_LEN = 64;
 const MAX_ASSET_LEN = 32;
 const MAX_ORDERS_CAP = 1e9;
 const MAX_WINDOW_HOURS = 24;
-const SPOT_FUNDS_PNL_POLICY = "spot_funds_pnl_bounds_kill_switch";
 
 /**
  * A localizable validation failure. `key` names a key in the `validation`
@@ -270,7 +270,7 @@ export function validateLimit(limit: Limit): FieldError | null {
     return { key: "limit.unknownPolicy", values: { policy: limit.policy } };
   }
   const policy: Policy = limit.policy;
-  const isSpotFundsPnl = policy === SPOT_FUNDS_PNL_POLICY;
+  const isSpotFundsPnl = isSpotFundsPnlPolicy(policy);
 
   if (!isScope(limit.scope)) {
     return { key: "limit.unknownScope", values: { scope: limit.scope } };
@@ -343,14 +343,14 @@ export function validateLimit(limit: Limit): FieldError | null {
     if (isSettlementScope && kinds.includes("max_quantity")) {
       return { key: "limit.orderSizeSettlementNoQuantity" };
     }
-  } else if (policy === SPOT_FUNDS_PNL_POLICY) {
+  } else if (isSpotFundsPnl) {
     if ((limit.values.currency ?? "").trim() === "") {
-      return { key: "limit.pnlCurrencyRequired" };
+      return { key: "limit.pnlCurrencyRequired", values: { policy } };
     }
     const hasBound =
       kinds.includes("lower_bound") || kinds.includes("upper_bound");
     if (!hasBound) {
-      return { key: "limit.pnlRequires" };
+      return { key: "limit.pnlRequires", values: { policy } };
     }
   }
 
@@ -364,7 +364,7 @@ export function validateLimit(limit: Limit): FieldError | null {
   // pnl: when both bounds are present, lower <= upper. Compared as exact
   // decimal strings so high-precision bounds keep full precision.
   if (
-    policy === SPOT_FUNDS_PNL_POLICY &&
+    isSpotFundsPnl &&
     kinds.includes("lower_bound") &&
     kinds.includes("upper_bound")
   ) {

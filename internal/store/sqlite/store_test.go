@@ -91,8 +91,8 @@ func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if version != 1 {
-		t.Fatalf("schema version = %d, want 1", version)
+	if version != 2 {
+		t.Fatalf("schema version = %d, want 2", version)
 	}
 
 	// Foreign-key enforcement must be ON: inserting an account whose group link
@@ -567,15 +567,18 @@ func TestMigrateCurrentDatabaseRestarts(t *testing.T) {
 
 func assertMigrationBookkeeping(t *testing.T, store *sqliteStore) {
 	t.Helper()
-	for _, table := range []string{"schema_migration", appMigrationTable} {
+	for table, want := range map[string]int{
+		"schema_migration": 2, // 0001 schema, 0002 P&L-bound axis
+		appMigrationTable:  1,
+	} {
 		var rows int
 		if err := store.currentDB().QueryRowContext(context.Background(),
 			`SELECT COUNT(*) FROM `+table,
 		).Scan(&rows); err != nil {
 			t.Fatalf("read %s: %v", table, err)
 		}
-		if rows != 1 {
-			t.Fatalf("%s rows = %d, want 1", table, rows)
+		if rows != want {
+			t.Fatalf("%s rows = %d, want %d", table, rows, want)
 		}
 	}
 }

@@ -304,9 +304,9 @@
     "price": "Precio",
     "quantity": "Cantidad",
     "notional": "Nocional",
-    "pnl": "PnL",
-    "unrealizedPnl": "PnL no realizado",
-    "realizedPnl": "PnL realizado",
+    "pnl": "P&L",
+    "unrealizedPnl": "P&L no realizado",
+    "realizedPnl": "P&L realizado",
     "markToMarket": "Valoración a mercado",
     "timeInForce": "Validez",
     "actions": "Acciones"
@@ -334,12 +334,12 @@
     "quantityShort": "QTY",
     "notional": "Nocional",
     "notionalShort": "NTL",
-    "pnl": "PnL",
-    "pnlShort": "PnL",
-    "unrealizedPnl": "PnL no realizado",
-    "unrealizedPnlShort": "uPnL",
-    "realizedPnl": "PnL realizado",
-    "realizedPnlShort": "rPnL",
+    "pnl": "P&L",
+    "pnlShort": "P&L",
+    "unrealizedPnl": "P&L no realizado",
+    "unrealizedPnlShort": "P&L no realizado",
+    "realizedPnl": "P&L realizado",
+    "realizedPnlShort": "P&L realizado",
     "markToMarket": "Valoración a mercado",
     "markToMarketShort": "MTM",
     "timeInForce": "Validez",
@@ -467,7 +467,7 @@
       "copyUnnamed": "Para un control pre-negociación de permitir o denegar, asigne posiciones o saldos de efectivo a la cuenta y, a continuación, defina las barreras de las políticas. Si no se necesita control del poder de compra, la cuenta puede quedar vacía."
     },
     "marketData": {
-      "copy": "Las órdenes de mercado, los precios fijados, la exposición entre monedas y el PnL realizado requieren una fuente de datos de mercado. Puede conectar un proveedor en tiempo real más adelante o instalar ahora un conjunto predefinido estático BYO."
+      "copy": "Las órdenes de mercado, los precios fijados, la exposición entre monedas y el P&L realizado requieren una fuente de datos de mercado. Puede conectar un proveedor en tiempo real más adelante o instalar ahora un conjunto predefinido estático BYO."
     },
     "optional": {
       "copy": "Un escenario de solo registro o auditoría puede empezar sin cuentas, saldos ni flujos. Añada los controles solo cuando Pit deba permitir o bloquear el paso de las órdenes."

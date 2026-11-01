@@ -304,9 +304,9 @@
     "price": "Preço",
     "quantity": "Quantidade",
     "notional": "Nocional",
-    "pnl": "PnL",
-    "unrealizedPnl": "PnL não realizado",
-    "realizedPnl": "PnL realizado",
+    "pnl": "P&L",
+    "unrealizedPnl": "P&L não realizado",
+    "realizedPnl": "P&L realizado",
     "markToMarket": "Marcação a mercado",
     "timeInForce": "Validade",
     "actions": "Ações"
@@ -334,12 +334,12 @@
     "quantityShort": "QTY",
     "notional": "Nocional",
     "notionalShort": "NTL",
-    "pnl": "PnL",
-    "pnlShort": "PnL",
-    "unrealizedPnl": "PnL não realizado",
-    "unrealizedPnlShort": "uPnL",
-    "realizedPnl": "PnL realizado",
-    "realizedPnlShort": "rPnL",
+    "pnl": "P&L",
+    "pnlShort": "P&L",
+    "unrealizedPnl": "P&L não realizado",
+    "unrealizedPnlShort": "P&L não realizado",
+    "realizedPnl": "P&L realizado",
+    "realizedPnlShort": "P&L realizado",
     "markToMarket": "Marcação a mercado",
     "markToMarketShort": "MTM",
     "timeInForce": "Validade",
@@ -467,7 +467,7 @@
       "copyUnnamed": "Para um controle pré-negociação de permitir ou negar, atribua posições ou saldos em dinheiro à conta e, em seguida, defina as barreiras das políticas. Se o controle do poder de compra não for necessário, a conta pode ficar vazia."
     },
     "marketData": {
-      "copy": "Ordens a mercado, preços travados, exposição entre moedas e PnL realizado exigem uma fonte de dados de mercado. Você pode conectar um provedor em tempo real mais tarde ou instalar agora uma predefinição estática BYO."
+      "copy": "Ordens a mercado, preços travados, exposição entre moedas e P&L realizado exigem uma fonte de dados de mercado. Você pode conectar um provedor em tempo real mais tarde ou instalar agora uma predefinição estática BYO."
     },
     "optional": {
       "copy": "Um uso apenas de registro ou auditoria pode começar sem contas, saldos ou fluxos de dados. Adicione os controles somente quando o Pit precisar permitir ou bloquear o caminho das ordens."

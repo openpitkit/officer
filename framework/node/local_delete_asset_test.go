@@ -303,6 +303,7 @@ func seedAssetPnlBound(t *testing.T, n *localNode, asset string) {
 	if err := n.realm.PutSpotFundsPnlBoundsLimit(
 		context.Background(),
 		domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeGlobal, Currency: asset, LowerBound: "-1",
 		},
 	); err != nil {
@@ -332,8 +333,8 @@ func TestSnapshotWithoutAssetDropsCascadedRuntimeRows(t *testing.T) {
 			{Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "1"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-1"},
-			{Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-1"},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
 		},
 	}, "AAPL")
 

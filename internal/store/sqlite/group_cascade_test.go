@@ -140,8 +140,8 @@ func TestDeleteGroupRequiresForceForGroupScopedPnlBound(t *testing.T) {
 	)
 	currencyAssetID := queryRowID(t, ctx, db, `SELECT id FROM asset WHERE code = 'USD'`)
 	if _, err := db.ExecContext(ctx, `INSERT INTO limit_spot_funds_pnl_bound
-		(scope, account_group_id, currency_asset_id, lower_bound)
-		VALUES ('account_group', ?, ?, '-2')`, groupID, currencyAssetID); err != nil {
+		(axis, scope, account_group_id, currency_asset_id, lower_bound)
+		VALUES ('realized', 'account_group', ?, ?, '-2')`, groupID, currencyAssetID); err != nil {
 		t.Fatalf("seed group P&L bound: %v", err)
 	}
 
@@ -218,11 +218,11 @@ func seedAccountOperationalRows(
 	exec(`INSERT INTO limit_order_size
 		(scope, account_id, max_quantity) VALUES ('account', ?, '1')`, accountID)
 	exec(`INSERT INTO limit_spot_funds_pnl_bound
-		(scope, account_id, currency_asset_id, lower_bound)
-		VALUES ('account', ?, ?, '-1')`, accountID, quoteID)
+		(axis, scope, account_id, currency_asset_id, lower_bound)
+		VALUES ('realized', 'account', ?, ?, '-1')`, accountID, quoteID)
 	exec(`INSERT INTO limit_spot_funds_pnl_bound
-		(scope, account_group_id, currency_asset_id, lower_bound)
-		VALUES ('account_group', ?, ?, '-2')`, groupID, quoteID)
+		(axis, scope, account_group_id, currency_asset_id, lower_bound)
+		VALUES ('realized', 'account_group', ?, ?, '-2')`, groupID, quoteID)
 	exec(`INSERT INTO adjustment
 		(external_id, account_id, asset_id, at, source_id, status_id, type_id, request, outcome)
 		VALUES (?, ?, ?, '2026-08-01T00:00:00Z',

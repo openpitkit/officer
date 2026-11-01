@@ -2,7 +2,9 @@
   "policyLabel": {
     "rate_limit": "Limite de frequência",
     "order_size_limit": "Limite de tamanho de ordem",
-    "spot_funds_pnl_bounds_kill_switch": "Interruptor de emergência por PnL"
+    "spot_funds_pnl_bounds_kill_switch": "Interruptor de emergência por P&L realizado",
+    "spot_funds_unrealized_pnl_bounds_kill_switch": "Interruptor de emergência por P&L não realizado",
+    "spot_funds_total_pnl_bounds_kill_switch": "Interruptor de emergência por P&L total"
   },
   "scope": {
     "broker": "Corretora",
@@ -35,6 +37,16 @@
       "currency": "código do ativo",
       "lower_bound": "número decimal",
       "upper_bound": "número decimal"
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "currency": "código do ativo",
+      "lower_bound": "número decimal",
+      "upper_bound": "número decimal"
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
+      "currency": "código do ativo",
+      "lower_bound": "número decimal",
+      "upper_bound": "número decimal"
     }
   },
   "policy": {
@@ -47,8 +59,16 @@
       "description": "Limita o tamanho de uma única ordem por quantidade e por valor nocional para evitar erros de digitação."
     },
     "spot_funds_pnl_bounds_kill_switch": {
-      "label": "Interruptor de emergência por PnL",
-      "description": "Usa o PnL realizado calculado pelo motor na moeda da conta, líquido da comissão opcional informada. Se faltar um dado obrigatório, por exemplo uma cotação FX necessária para avaliar o PnL realizado na moeda da conta, o motor bloqueia as contas sob controle de PnL porque não pode garantir o limite. FX só é exigido quando necessário: não para ativos que já estão na moeda da conta nem para contas fora do controle de PnL."
+      "label": "Interruptor de emergência por lucros e prejuízos realizados",
+      "description": "Usa os lucros e prejuízos (P&L) realizados calculados pelo motor na moeda da conta, líquidos da comissão opcional informada. Se faltar um dado obrigatório, por exemplo uma cotação FX necessária para avaliar o P&L realizado na moeda da conta, o motor bloqueia as contas sob controle de P&L porque não pode garantir o limite. FX só é exigido quando necessário: não para ativos que já estão na moeda da conta nem para contas fora do controle de P&L."
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "label": "Interruptor de emergência por lucros e prejuízos não realizados",
+      "description": "Usa os lucros e prejuízos (P&L) não realizados das posições da conta calculados pelo motor na moeda da conta, ao preço de mercado atual. Quando o P&L sai dos limites, a próxima ordem é rejeitada e a conta é bloqueada."
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
+      "label": "Interruptor de emergência por lucros e prejuízos totais",
+      "description": "Usa os lucros e prejuízos (P&L) totais calculados pelo motor na moeda da conta: o P&L realizado mais o P&L não realizado das posições da conta ao preço de mercado atual. Quando o P&L sai dos limites, a próxima ordem é rejeitada e a conta é bloqueada."
     }
   },
   "policyField": {
@@ -73,6 +93,34 @@
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "moeda",
+        "hint": "código do ativo, por exemplo USD"
+      },
+      "lower_bound": {
+        "label": "piso",
+        "hint": "número decimal, por exemplo -1000"
+      },
+      "upper_bound": {
+        "label": "teto",
+        "hint": "número decimal, por exemplo 500"
+      }
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "moeda",
+        "hint": "código do ativo, por exemplo USD"
+      },
+      "lower_bound": {
+        "label": "piso",
+        "hint": "número decimal, por exemplo -1000"
+      },
+      "upper_bound": {
+        "label": "teto",
+        "hint": "número decimal, por exemplo 500"
+      }
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
       "currency": {
         "label": "moeda",
         "hint": "código do ativo, por exemplo USD"

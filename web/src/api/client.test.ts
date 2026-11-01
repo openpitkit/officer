@@ -2045,8 +2045,34 @@ describe("limits client", () => {
               },
             },
           },
+          {
+            kind: "spot_funds_unrealized_pnl_bounds_kill_switch",
+            scope: "account",
+            account: "desk-alpha",
+            asset: "",
+            values: {
+              spotFundsPnlBounds: {
+                currency: "USD",
+                lowerBound: "-200",
+                upperBound: "",
+              },
+            },
+          },
+          {
+            kind: "spot_funds_total_pnl_bounds_kill_switch",
+            scope: "global",
+            account: "",
+            asset: "",
+            values: {
+              spotFundsPnlBounds: {
+                currency: "USD",
+                lowerBound: "",
+                upperBound: "900",
+              },
+            },
+          },
         ],
-        total: 3,
+        total: 5,
       }),
     );
 
@@ -2081,6 +2107,22 @@ describe("limits client", () => {
         accountGroup: "desk-alpha",
         asset: "",
         values: { currency: "USD", lower_bound: "-1000", upper_bound: "" },
+      },
+      {
+        policy: "spot_funds_unrealized_pnl_bounds_kill_switch",
+        scope: "account",
+        account: "desk-alpha",
+        accountGroup: "",
+        asset: "",
+        values: { currency: "USD", lower_bound: "-200", upper_bound: "" },
+      },
+      {
+        policy: "spot_funds_total_pnl_bounds_kill_switch",
+        scope: "global",
+        account: "",
+        accountGroup: "",
+        asset: "",
+        values: { currency: "USD", lower_bound: "", upper_bound: "900" },
       },
     ]);
   });
@@ -2304,6 +2346,59 @@ describe("limits client", () => {
       }),
     );
   });
+
+  it.each([
+    [
+      "spot_funds_unrealized_pnl_bounds_kill_switch",
+      "spot-funds-unrealized-pnl-bounds",
+      "spotFundsUnrealizedPnlBoundsLimit",
+    ],
+    [
+      "spot_funds_total_pnl_bounds_kill_switch",
+      "spot-funds-total-pnl-bounds",
+      "spotFundsTotalPnlBoundsLimit",
+    ],
+  ])(
+    "upserts the %s bound through its own endpoint",
+    async (policy, path, putKey) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          [putKey]: {
+            scope: "account",
+            account: "desk-alpha",
+            accountGroup: "",
+            currency: "USD",
+            lowerBound: "-1000",
+            upperBound: "",
+          },
+        }),
+      );
+
+      const { putLimit } = api();
+      const limit = await putLimit(
+        {
+          policy,
+          scope: "account",
+          account: "desk-alpha",
+          asset: "",
+          values: { currency: "USD", lower_bound: "-1000", upper_bound: "" },
+        },
+        "reject",
+      );
+
+      expect(fetch).toHaveBeenCalledWith(
+        `/app/api/v1/limits/${path}?missingAccount=reject`,
+        expect.objectContaining({ method: "PUT" }),
+      );
+      expect(limit).toEqual(
+        expect.objectContaining({
+          policy,
+          account: "desk-alpha",
+          values: { currency: "USD", lower_bound: "-1000", upper_bound: "" },
+        }),
+      );
+    },
+  );
 
   it("deletes self-computed PnL limits with the account-group axis", async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));

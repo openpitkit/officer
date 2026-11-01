@@ -134,7 +134,10 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "set_limit",
 			description: "Create a risk barrier, or make the one stored at the same " +
 				"address stricter, and return it as stored. policy names the kind - " +
-				"rate_limit, order_size_limit or spot_funds_pnl_bounds_kill_switch - " +
+				"rate_limit, order_size_limit, or one of the P&L-bound kill " +
+				"switches spot_funds_pnl_bounds_kill_switch (realized P&L), " +
+				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
+				"spot_funds_total_pnl_bounds_kill_switch (total P&L) - " +
 				"and the other arguments are that kind's fields; a field of another " +
 				"kind is refused with validation. Anything that loosens risk is " +
 				"refused with loosening_refused and changes nothing. A barrier that " +
@@ -142,7 +145,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				"no more orders and, on the broker and asset scopes, the same " +
 				"window, on the account and account_asset scopes a window no " +
 				"shorter; for order_size_limit every current cap kept and none " +
-				"raised; for spot_funds_pnl_bounds_kill_switch the same currency, " +
+				"raised; for a P&L-bound kill switch the same currency, " +
 				"every current bound kept, the lower bound no lower and the upper " +
 				"bound no higher. A new account_underlying_asset or " +
 				"account_settlement_asset cap must be no higher than the " +

@@ -432,12 +432,14 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 		{
 			name: "account PnL bounds",
 			limit: domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-10",
 			},
 		},
 		{
 			name: "group PnL bounds",
 			limit: domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency:   "USD",
 				UpperBound: "10",
@@ -454,6 +456,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 		{
 			name: "global PnL bounds",
 			limit: domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 			},
 		},
@@ -485,6 +488,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 			t.Fatalf("UpsertBalance: %v", err)
 		}
 		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 		}); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
@@ -512,8 +516,8 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 		if _, err := db.ExecContext(
 			ctx,
 			`INSERT INTO limit_spot_funds_pnl_bound
-			 (scope, account_id, account_group_id, currency_asset_id, lower_bound)
-			 VALUES (?, NULL, NULL, ?, ?)`,
+			 (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound)
+			 VALUES ('realized', ?, NULL, NULL, ?, ?)`,
 			domain.ScopeAccountGroup, currencyID, "-100",
 		); err != nil {
 			t.Fatalf("insert default group P&L bounds: %v", err)

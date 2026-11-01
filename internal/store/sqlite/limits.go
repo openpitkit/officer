@@ -68,7 +68,12 @@ FROM limit_order_size los
 LEFT JOIN account a   ON a.id   = los.account_id
 LEFT JOIN asset   ast ON ast.id = los.asset_id
 UNION ALL
-SELECT 'spot_funds_pnl_bounds_kill_switch' AS kind, lsfpb.scope AS scope,
+SELECT CASE lsfpb.axis
+         WHEN 'realized'   THEN 'spot_funds_pnl_bounds_kill_switch'
+         WHEN 'unrealized' THEN 'spot_funds_unrealized_pnl_bounds_kill_switch'
+         WHEN 'total'      THEN 'spot_funds_total_pnl_bounds_kill_switch'
+       END AS kind,
+       lsfpb.scope AS scope,
        a.code AS account_code, g.code AS account_group_code,
        NULL AS asset_code, c.code AS currency_code,
        NULL AS max_orders, NULL AS window,
@@ -262,8 +267,18 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 			MaxQuantity: maxQuantity.String,
 			MaxNotional: maxNotional.String,
 		}
-	case fwstore.PolicyKindSpotFundsPnlBounds:
+	case fwstore.PolicyKindSpotFundsPnlBounds,
+		fwstore.PolicyKindSpotFundsUnrealizedPnlBounds,
+		fwstore.PolicyKindSpotFundsTotalPnlBounds:
+		axis, ok := domain.SpotFundsPnlAxisOf(kind)
+		if !ok {
+			return fwstore.PolicyListRow{}, fmt.Errorf(
+				"store: policy kind %q has no spot funds pnl axis: %w",
+				kind, domain.ErrInvalid,
+			)
+		}
 		row.SpotFundsPnlBounds = &domain.LimitSpotFundsPnlBounds{
+			Axis:         axis,
 			Scope:        scope,
 			Account:      account,
 			AccountGroup: accountGroupCode.String,
@@ -534,13 +549,13 @@ func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 // --- SpotFunds P&L-bounds barriers (limit_spot_funds_pnl_bound) -------------
 
 // ListSpotFundsPnlBoundsLimits returns every SpotFunds self-computed
-// P&L-bounds barrier. When account is non-empty only account-scoped barriers
-// whose account_id matches are returned.
+// P&L-bounds barrier of every axis. When account is non-empty only
+// account-scoped barriers whose account_id matches are returned.
 func (r *realmStore) ListSpotFundsPnlBoundsLimits(
 	ctx context.Context, account domain.AccountID,
 ) ([]domain.LimitSpotFundsPnlBounds, error) {
 	q := `
-	SELECT lsfpb.scope, a.code, g.code, c.code,
+	SELECT lsfpb.axis, lsfpb.scope, a.code, g.code, c.code,
 	       lsfpb.lower_bound, lsfpb.upper_bound
 FROM limit_spot_funds_pnl_bound lsfpb
 LEFT JOIN account       a  ON a.id  = lsfpb.account_id
@@ -551,7 +566,7 @@ JOIN asset               c  ON c.id  = lsfpb.currency_asset_id`
 		q += ` WHERE a.code = ?`
 		args = append(args, account.String())
 	}
-	q += ` ORDER BY lsfpb.scope, a.code, g.code`
+	q += ` ORDER BY lsfpb.axis, lsfpb.scope, a.code, g.code`
 
 	db, err := r.db()
 	if err != nil {
@@ -602,14 +617,14 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 		return err
 	}
 	return putSpotFundsPnlBoundsRow(
-		ctx, db, limit.Scope, accountID, groupID,
+		ctx, db, limit.Axis, limit.Scope, accountID, groupID,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
 				ctx,
 				`INSERT INTO limit_spot_funds_pnl_bound
-					 (scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
-					 VALUES (?, ?, ?, ?, ?, ?)`,
-				limit.Scope, accountID, groupID, currencyID,
+					 (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
+					 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				limit.Axis, limit.Scope, accountID, groupID, currencyID,
 				nullableString(limit.LowerBound),
 				nullableString(limit.UpperBound),
 			)
@@ -619,9 +634,11 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 }
 
 // DeleteSpotFundsPnlBoundsLimit removes the SpotFunds self-computed P&L-bounds
-// barrier with the given composite. Returns domain.ErrNotFound when absent.
+// barrier with the given composite, the axis included. Returns
+// domain.ErrNotFound when absent.
 func (r *realmStore) DeleteSpotFundsPnlBoundsLimit(
 	ctx context.Context,
+	axis domain.SpotFundsPnlAxis,
 	scope domain.LimitScope,
 	account domain.AccountID,
 	accountGroup string,
@@ -637,10 +654,11 @@ func (r *realmStore) DeleteSpotFundsPnlBoundsLimit(
 	res, err := db.ExecContext(
 		ctx,
 		`DELETE FROM limit_spot_funds_pnl_bound
-		 WHERE scope = ?
+		 WHERE axis = ?
+		   AND scope = ?
 		   AND account_id IS ?
 		   AND account_group_id IS ?`,
-		scope, accountID, groupID,
+		axis, scope, accountID, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("store: delete spot funds pnl bounds limit: %w", err)
@@ -652,13 +670,14 @@ func scanSpotFundsPnlBoundsLimit(
 	rows *sql.Rows,
 ) (domain.LimitSpotFundsPnlBounds, error) {
 	var (
+		axis                          domain.SpotFundsPnlAxis
 		scope                         domain.LimitScope
 		accountCode, accountGroupCode sql.NullString
 		currencyCode                  string
 		lowerBound, upperBound        sql.NullString
 	)
 	if err := rows.Scan(
-		&scope, &accountCode, &accountGroupCode,
+		&axis, &scope, &accountCode, &accountGroupCode,
 		&currencyCode,
 		&lowerBound, &upperBound,
 	); err != nil {
@@ -667,6 +686,7 @@ func scanSpotFundsPnlBoundsLimit(
 		)
 	}
 	return domain.LimitSpotFundsPnlBounds{
+		Axis:         axis,
 		Scope:        scope,
 		Account:      domain.AccountID(accountCode.String),
 		AccountGroup: accountGroupCode.String,
@@ -745,6 +765,7 @@ func resolveLimitAxes(
 func putSpotFundsPnlBoundsRow(
 	ctx context.Context,
 	db *sql.DB,
+	axis domain.SpotFundsPnlAxis,
 	scope domain.LimitScope,
 	accountID, groupID sql.NullInt64,
 	insertFn func(context.Context, sqlExecer) error,
@@ -758,10 +779,11 @@ func putSpotFundsPnlBoundsRow(
 	if _, err := tx.ExecContext(
 		ctx,
 		`DELETE FROM limit_spot_funds_pnl_bound
-		 WHERE scope = ?
+		 WHERE axis = ?
+		   AND scope = ?
 		   AND account_id IS ?
 		   AND account_group_id IS ?`,
-		scope, accountID, groupID,
+		axis, scope, accountID, groupID,
 	); err != nil {
 		return fmt.Errorf("store: delete old spot funds pnl bounds limit: %w", err)
 	}

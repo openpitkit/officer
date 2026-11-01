@@ -52,7 +52,7 @@
       "held": "Held",
       "incoming": "Incoming",
       "avgEntryPrice": "Avg entry price",
-      "realizedPnl": "Realized PnL",
+      "realizedPnl": "Realized P&L",
       "updated": "Updated",
       "adjust": "Adjustment"
     },
@@ -69,12 +69,12 @@
     },
     "noAccountCurrencyHint": "The account sets no currency, so this value has no unit.",
     "pnlHalt": {
-      "missingFx": "PnL calculation stopped: a required FX quote is unavailable.",
-      "missingAccountCurrency": "PnL calculation stopped: the account currency is unavailable.",
-      "missingInitialPnl": "PnL calculation stopped: an authoritative initial PnL value is unavailable.",
-      "missingCostBasis": "PnL calculation stopped: the position cost basis is unavailable.",
-      "arithmeticOverflow": "PnL calculation stopped: exact arithmetic exceeded the supported numeric range.",
-      "unknown": "PnL calculation stopped by the engine."
+      "missingFx": "P&L calculation stopped: a required FX quote is unavailable.",
+      "missingAccountCurrency": "P&L calculation stopped: the account currency is unavailable.",
+      "missingInitialPnl": "P&L calculation stopped: an authoritative initial P&L value is unavailable.",
+      "missingCostBasis": "P&L calculation stopped: the position cost basis is unavailable.",
+      "arithmeticOverflow": "P&L calculation stopped: exact arithmetic exceeded the supported numeric range.",
+      "unknown": "P&L calculation stopped by the engine."
     },
     "empty": {
       "title": "No balances",
@@ -148,7 +148,7 @@
       "asset": "This column shows the asset targeted by the adjustment.",
       "source": "This column shows whether the adjustment came from the panel, REST, MCP, or another source.",
       "type": "This column shows what the adjustment books: a venue fee, a deposit, a withdrawal, or a manual correction.",
-      "request": "This column shows the requested balance, held, incoming, average-price, or realized-PnL change.",
+      "request": "This column shows the requested balance, held, incoming, average-price, or realized-P&L change.",
       "status": "This column shows whether the adjustment was accepted or rejected.",
       "outcome": "This column shows the stored result or rejection summary.",
       "externalId": "This column shows the immutable adjustment ID."
@@ -165,7 +165,7 @@
       "incomingDelta": "incoming Δ{{value}}",
       "incomingAbsolute": "incoming ={{value}}",
       "avgPrice": "avg {{value}}",
-      "realizedPnl": "realized PnL ={{value}}"
+      "realizedPnl": "realized P&L ={{value}}"
     },
     "status": {
       "rejected": "rejected",
@@ -184,7 +184,7 @@
       "type": "Type",
       "avgEntryPrice": "Average entry price (optional)",
       "avgEntryPriceHint": "Positive decimal. Leave blank to keep the current value.",
-      "realizedPnl": "Realized PnL",
+      "realizedPnl": "Realized P&L",
       "realizedPnlPlaceholder": "e.g. -12.50"
     },
     "amounts": {
@@ -211,7 +211,7 @@
       "fieldBalance": "balance",
       "fieldHeld": "held",
       "fieldIncoming": "incoming",
-      "fieldRealizedPnl": "realized PnL"
+      "fieldRealizedPnl": "realized P&L"
     },
     "footer": {
       "close": "Close",

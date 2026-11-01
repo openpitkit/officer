@@ -907,6 +907,12 @@ const (
 	// PolicyKindSpotFundsPnlBounds is the SpotFunds self-computed P&L-bounds
 	// kill-switch barrier.
 	PolicyKindSpotFundsPnlBounds PolicyKind = "spot_funds_pnl_bounds_kill_switch"
+	// PolicyKindSpotFundsUnrealizedPnlBounds is the SpotFunds unrealized P&L
+	// bounds kill-switch barrier.
+	PolicyKindSpotFundsUnrealizedPnlBounds PolicyKind = "spot_funds_unrealized_pnl_bounds_kill_switch"
+	// PolicyKindSpotFundsTotalPnlBounds is the SpotFunds total P&L bounds
+	// kill-switch barrier.
+	PolicyKindSpotFundsTotalPnlBounds PolicyKind = "spot_funds_total_pnl_bounds_kill_switch"
 )
 
 // PolicyListFilter narrows the unified policy-list read. Account mirrors the
@@ -1462,19 +1468,20 @@ type RealmStore interface {
 	) error
 
 	// ListSpotFundsPnlBoundsLimits returns every SpotFunds self-computed P&L
-	// barrier, optionally narrowed to the given account.
+	// barrier of every axis, optionally narrowed to the given account.
 	ListSpotFundsPnlBoundsLimits(
 		ctx context.Context, account domain.AccountID,
 	) ([]domain.LimitSpotFundsPnlBounds, error)
 
 	// PutSpotFundsPnlBoundsLimit upserts one SpotFunds self-computed P&L
-	// barrier keyed by its composite.
+	// barrier keyed by its composite, the axis included.
 	PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds) error
 
 	// DeleteSpotFundsPnlBoundsLimit removes the SpotFunds self-computed P&L
 	// barrier with the given composite. Returns domain.ErrNotFound when absent.
 	DeleteSpotFundsPnlBoundsLimit(
 		ctx context.Context,
+		axis domain.SpotFundsPnlAxis,
 		scope domain.LimitScope,
 		account domain.AccountID,
 		accountGroup string,

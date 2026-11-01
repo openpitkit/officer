@@ -69,12 +69,12 @@
     },
     "noAccountCurrencyHint": "该账户未设置货币，因此此数值没有计价单位。",
     "pnlHalt": {
-      "missingFx": "PnL 计算已停止：缺少所需的 FX 报价。",
-      "missingAccountCurrency": "PnL 计算已停止：账户货币不可用。",
-      "missingInitialPnl": "PnL 计算已停止：缺少权威初始 PnL 值。",
-      "missingCostBasis": "PnL 计算已停止：缺少持仓成本基础。",
-      "arithmeticOverflow": "PnL 计算已停止：精确运算超出支持的数值范围。",
-      "unknown": "引擎已停止 PnL 计算。"
+      "missingFx": "P&L 计算已停止：缺少所需的 FX 报价。",
+      "missingAccountCurrency": "P&L 计算已停止：账户货币不可用。",
+      "missingInitialPnl": "P&L 计算已停止：缺少权威初始 P&L 值。",
+      "missingCostBasis": "P&L 计算已停止：缺少持仓成本基础。",
+      "arithmeticOverflow": "P&L 计算已停止：精确运算超出支持的数值范围。",
+      "unknown": "引擎已停止 P&L 计算。"
     },
     "empty": {
       "title": "暂无余额",

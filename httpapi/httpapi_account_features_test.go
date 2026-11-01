@@ -165,6 +165,7 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 			Asset: "AAPL", MaxQuantity: "10",
 		}},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
 			Currency: "USD", LowerBound: "-100",
 		}},

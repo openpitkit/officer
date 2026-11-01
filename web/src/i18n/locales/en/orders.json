@@ -281,7 +281,7 @@
       "concentration_limit_exceeded": "Concentration limit exceeded",
       "leverage_limit_exceeded": "Leverage limit exceeded",
       "rate_limit_exceeded": "Rate limit exceeded",
-      "pnl_kill_switch_triggered": "PnL kill switch triggered",
+      "pnl_kill_switch_triggered": "P&L kill switch triggered",
       "account_not_authorized": "Account not authorized",
       "compliance_restriction": "Compliance restriction",
       "instrument_restricted": "Instrument restricted",
@@ -330,7 +330,7 @@
           },
           "infoAriaLabel": "Commission details",
           "infoTitle": "Commission",
-          "infoBody": "Commission is entered in its own currency and subtracted from engine-computed realized PnL in the account currency. Select Fee for a cost or Rebate for a credit; Officer applies the sign."
+          "infoBody": "Commission is entered in its own currency and subtracted from engine-computed realized P&L in the account currency. Select Fee for a cost or Rebate for a credit; Officer applies the sign."
         }
       },
       "status": "Target status",

@@ -90,7 +90,7 @@
     "block_group_reason": "封锁分组 {{group}}：{{reason}}",
     "unblock_group": "解封分组 {{group}}",
     "unblock_group_reason": "解封分组 {{group}}：{{reason}}",
-    "delete_group": "删除分组 {{group}}；解除关联的账户：{{detachedAccounts}}，删除的 PnL 熔断开关：{{destroyedSpotFundsPnlBounds}}",
+    "delete_group": "删除分组 {{group}}；解除关联的账户：{{detachedAccounts}}，删除的 P&L 熔断开关：{{destroyedSpotFundsPnlBounds}}",
     "delete_group_detach_account": "删除分组 {{group}}；解除账户 {{account}} 的关联",
     "delete_group_currency_refused": "删除货币为 {{currency}} 的分组 {{group}} 被拒绝：{{refusal}}",
     "create_asset": "创建资产 {{asset}}",

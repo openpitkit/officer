@@ -430,7 +430,7 @@ describe("Positions adjustment panel", () => {
     enter(scope.getByLabelText("Held adjustment amount"), "10");
     enter(scope.getByLabelText("Incoming adjustment amount"), "-50");
     enter(scope.getByLabelText("Average entry price (optional)"), "142.50");
-    enter(scope.getByLabelText("Realized PnL"), "-12.50");
+    enter(scope.getByLabelText("Realized P&L"), "-12.50");
     await user.click(
       scope.getByRole("button", { name: /bounds \(optional\)/i }),
     );
@@ -531,7 +531,7 @@ describe("Positions adjustment panel", () => {
 
     const panel = screen.getByRole("region", { name: "Adjustment" });
     const scope = within(panel);
-    await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
+    await user.type(scope.getByLabelText("Realized P&L"), "-12.50");
     await user.click(scope.getByRole("button", { name: "Manual correction" }));
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
@@ -546,7 +546,7 @@ describe("Positions adjustment panel", () => {
       "reject",
     );
     expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
-    expect(scope.getByText("realized PnL")).toBeInTheDocument();
+    expect(scope.getByText("realized P&L")).toBeInTheDocument();
     expect(scope.getAllByText("-12.50").length).toBeGreaterThan(0);
   });
 
@@ -575,7 +575,7 @@ describe("Positions adjustment panel", () => {
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
     const warning = await scope.findByRole("note", {
-      name: /authoritative initial PnL value is unavailable/i,
+      name: /authoritative initial P&L value is unavailable/i,
     });
     expect(warning.parentElement).toHaveClass(
       "border-[var(--warn)]",
@@ -584,7 +584,7 @@ describe("Positions adjustment panel", () => {
     expect(warning.parentElement).not.toHaveClass("border-[var(--ok)]");
     expect(
       within(warning.parentElement as HTMLElement).queryByText(
-        /^realized PnL$/i,
+        /^realized P&L$/i,
       ),
     ).not.toBeInTheDocument();
   });
@@ -615,7 +615,7 @@ describe("Positions adjustment panel", () => {
     await user.click(scope.getByLabelText("Available adjustment mode"));
     await user.click(screen.getByRole("option", { name: "delta" }));
     await user.type(scope.getByLabelText("Available adjustment amount"), "25");
-    await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
+    await user.type(scope.getByLabelText("Realized P&L"), "-12.50");
     await user.click(scope.getByRole("button", { name: "Deposit" }));
 
     const submit = scope.getByRole("button", { name: /submit adjustment/i });
@@ -1136,9 +1136,9 @@ describe("Positions business CSV", () => {
       },
     ],
     [
-      "realized pnl",
+      "realized P&L",
       4,
-      /currency for the realized pnl threshold/i,
+      /currency for the realized P&L threshold/i,
       {
         realizedPnlMode: "eq",
         realizedPnlMin: "10",
@@ -1201,7 +1201,7 @@ describe("Positions business CSV", () => {
       expect.objectContaining({ realizedPnlMin: expect.any(String) }),
     );
     expect(
-      screen.queryByText(/realized pnl: Greater than 50/i),
+      screen.queryByText(/realized P&L: Greater than 50/i),
     ).not.toBeInTheDocument();
   });
 
@@ -1220,7 +1220,7 @@ describe("Positions business CSV", () => {
       ),
     );
     expect(
-      screen.getByText(/realized pnl: Greater than 50 EUR/i),
+      screen.getByText(/realized P&L: Greater than 50 EUR/i),
     ).toBeInTheDocument();
   });
 
@@ -1490,7 +1490,7 @@ describe("Positions value denomination", () => {
       screen.queryByRole("button", { name: "Sort by Avg entry price" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Sort by Realized PnL" }),
+      screen.queryByRole("button", { name: "Sort by Realized P&L" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1743,7 +1743,7 @@ describe("Positions history row actions", () => {
     ).toHaveLength(0);
     await user.type(dialog.getByLabelText("Account"), "Bucks McMoneyface");
     await user.type(dialog.getByLabelText("Asset"), "AAPL");
-    await user.type(dialog.getByLabelText("Realized PnL"), "-12.50");
+    await user.type(dialog.getByLabelText("Realized P&L"), "-12.50");
     await user.click(dialog.getByRole("button", { name: "Submit" }));
 
     expect(dialog.getByRole("alert")).toHaveTextContent(
@@ -1847,7 +1847,7 @@ describe("Positions history row actions", () => {
     expect(row).toBeDefined();
     const scope = within(row as HTMLElement);
     expect(
-      scope.getByText(/authoritative initial PnL value is unavailable/i),
+      scope.getByText(/authoritative initial P&L value is unavailable/i),
     ).toHaveClass("text-[var(--warn)]");
     expect(scope.getByText(/accepted/i)).toHaveClass("border-[var(--warn)]");
   });
@@ -2656,7 +2656,7 @@ describe("Positions page with accounts hidden", () => {
 
     await user.click(scope.getByRole("button", { name: "Clear all" }));
     await user.type(scope.getByLabelText("Asset"), "MSFT");
-    await user.type(scope.getByLabelText("Realized PnL"), "5");
+    await user.type(scope.getByLabelText("Realized P&L"), "5");
     await user.click(scope.getByRole("button", { name: "Manual correction" }));
     await user.click(scope.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));

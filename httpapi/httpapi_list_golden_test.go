@@ -257,7 +257,7 @@ func TestListAndDetailResponseBytes(t *testing.T) {
 			path:   "/api/v1/accounts/acc-1",
 			fake:   goldenFakeService,
 			status: http.StatusOK,
-			want:   `{"account":{"code":"acc-1","title":"Account One","pnl":"125.50","pnlHaltReason":"missing_fx","group":"desk-a","currency":"USD","effectiveCurrency":"USD","currencyOrigin":"account","currencyCascade":{"account":"USD","group":"EUR","default":"GBP"},"notes":"account one notes","positionCount":0,"blockReason":"desk a halt","blockSource":"group","accountBlockReason":"","groupBlockReason":"desk a halt","blocked":true,"accountBlocked":false,"groupBlocked":true},"limits":{"rateLimits":[],"orderSizeLimits":[],"spotFundsPnlBoundsLimits":[]}}` + "\n",
+			want:   `{"account":{"code":"acc-1","title":"Account One","pnl":"125.50","pnlHaltReason":"missing_fx","group":"desk-a","currency":"USD","effectiveCurrency":"USD","currencyOrigin":"account","currencyCascade":{"account":"USD","group":"EUR","default":"GBP"},"notes":"account one notes","positionCount":0,"blockReason":"desk a halt","blockSource":"group","accountBlockReason":"","groupBlockReason":"desk a halt","blocked":true,"accountBlocked":false,"groupBlocked":true},"limits":{"rateLimits":[],"orderSizeLimits":[],"spotFundsPnlBoundsLimits":[],"spotFundsUnrealizedPnlBoundsLimits":[],"spotFundsTotalPnlBoundsLimits":[]}}` + "\n",
 		},
 		{
 			name:   "group detail",

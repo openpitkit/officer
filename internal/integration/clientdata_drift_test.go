@@ -24,6 +24,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -982,6 +983,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"limit_spot_funds_pnl_bound": {
 		backup: map[string]string{
+			"axis":              "Axis",
 			"scope":             "Scope",
 			"account_id":        "Account",
 			"account_group_id":  "AccountGroup",
@@ -1599,6 +1601,7 @@ func seedClientDataDriftRealm(
 	must(t, "PutSpotFundsPnlBoundsLimit", rs.PutSpotFundsPnlBoundsLimit(
 		ctx,
 		domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
 			Currency:   "USD",
@@ -1606,14 +1609,26 @@ func seedClientDataDriftRealm(
 			UpperBound: "100.75",
 		},
 	))
-	must(t, "PutSpotFundsPnlBoundsLimit group", rs.PutSpotFundsPnlBoundsLimit(
+	must(t, "PutSpotFundsPnlBoundsLimit unrealized group", rs.PutSpotFundsPnlBoundsLimit(
 		ctx,
 		domain.LimitSpotFundsPnlBounds{
+			Axis:         domain.SpotFundsPnlAxisUnrealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "grp-1",
 			Currency:     "USD",
 			LowerBound:   "-25.00",
 			UpperBound:   "75.00",
+		},
+	))
+	must(t, "PutSpotFundsPnlBoundsLimit total", rs.PutSpotFundsPnlBoundsLimit(
+		ctx,
+		domain.LimitSpotFundsPnlBounds{
+			Axis:       domain.SpotFundsPnlAxisTotal,
+			Scope:      domain.ScopeAccount,
+			Account:    "acc-1",
+			Currency:   "USD",
+			LowerBound: "-80.50",
+			UpperBound: "120.25",
 		},
 	))
 	order, err := rs.CreateOrder(ctx, domain.Order{
@@ -2061,7 +2076,9 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"positions", data.Balances},
 		{"rate-limits", data.RateLimits},
 		{"order-size-limits", data.OrderSizeLimits},
-		{"spot-funds-pnl-bounds-limits", data.SpotFundsPnlBoundsLimits},
+		// The archive files P&L bounds in one list per axis; the accessor
+		// stamps each with the axis of its list.
+		{"spot-funds-pnl-bounds-limits", data.SpotFundsPnlBounds()},
 		{"adjustments", data.Adjustments},
 		{"orders", data.Orders},
 		{"order-events", data.OrderEvents},
@@ -2413,18 +2430,28 @@ func parseClientDataSchema() (map[string][]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("resolve test file path")
 	}
-	path := filepath.Join(
-		filepath.Dir(file), "..", "..", "framework", "store", "schema", "migrations", "0001_init.sql",
-	)
-	raw, err := os.ReadFile(path)
+	// Migrations are read in version order; a later CREATE TABLE of a rebuilt
+	// table replaces its earlier column list.
+	paths, err := filepath.Glob(filepath.Join(
+		filepath.Dir(file), "..", "..", "framework", "store", "schema", "migrations", "*.sql",
+	))
 	if err != nil {
 		return nil, err
 	}
-	sql := strings.ReplaceAll(string(raw), "{{PRINCIPAL}}",
-		schema.PrincipalTableSQL("{{PRIMARY_KEY}}", "principal"))
-	tables, err := parseClientDataSchemaSQL(sql)
-	if err != nil {
-		return nil, err
+	slices.Sort(paths)
+	tables := map[string][]string{}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		sql := strings.ReplaceAll(string(raw), "{{PRINCIPAL}}",
+			schema.PrincipalTableSQL("{{PRIMARY_KEY}}", "principal"))
+		parsed, err := parseClientDataSchemaSQL(sql)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+		}
+		maps.Copy(tables, parsed)
 	}
 	if err := checkExpectedSchemaTables(tables); err != nil {
 		return nil, err

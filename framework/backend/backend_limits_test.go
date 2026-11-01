@@ -267,6 +267,7 @@ func TestServicePutSpotFundsPnlBoundsLimitValidatesCurrencyBeforeNode(t *testing
 		t.Run(tc.name, func(t *testing.T) {
 			callsBefore := n.putCalls
 			err := svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   tc.currency,
 				LowerBound: "-1",

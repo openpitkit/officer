@@ -2,7 +2,9 @@
   "policyLabel": {
     "rate_limit": "Rate limit",
     "order_size_limit": "Order size limit",
-    "spot_funds_pnl_bounds_kill_switch": "PnL Kill Switch"
+    "spot_funds_pnl_bounds_kill_switch": "Realized P&L Kill Switch",
+    "spot_funds_unrealized_pnl_bounds_kill_switch": "Unrealized P&L Kill Switch",
+    "spot_funds_total_pnl_bounds_kill_switch": "Total P&L Kill Switch"
   },
   "scope": {
     "broker": "Broker",
@@ -35,6 +37,16 @@
       "currency": "asset code",
       "lower_bound": "decimal",
       "upper_bound": "decimal"
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "currency": "asset code",
+      "lower_bound": "decimal",
+      "upper_bound": "decimal"
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
+      "currency": "asset code",
+      "lower_bound": "decimal",
+      "upper_bound": "decimal"
     }
   },
   "policy": {
@@ -47,8 +59,16 @@
       "description": "Caps the size of a single order by quantity and notional value to prevent fat-finger errors."
     },
     "spot_funds_pnl_bounds_kill_switch": {
-      "label": "PnL Kill Switch",
-      "description": "Uses engine-computed realized PnL in the account currency, net of optional passed commission. If a required input is missing, for example an FX quote needed to value realized PnL in the account currency, the engine blocks accounts under PnL control because it cannot guarantee the limit. FX is required only when needed: not for assets already in the account currency and not for accounts outside PnL control."
+      "label": "Realized Profit and Loss Kill Switch",
+      "description": "Uses engine-computed realized profit and loss (P&L) in the account currency, net of optional passed commission. If a required input is missing, for example an FX quote needed to value realized P&L in the account currency, the engine blocks accounts under P&L control because it cannot guarantee the limit. FX is required only when needed: not for assets already in the account currency and not for accounts outside P&L control."
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "label": "Unrealized Profit and Loss Kill Switch",
+      "description": "Uses engine-computed unrealized profit and loss (P&L) of the account's positions in the account currency, valued at the current market price. Once the P&L leaves its bounds, the next order is rejected and the account is blocked."
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
+      "label": "Total Profit and Loss Kill Switch",
+      "description": "Uses engine-computed total profit and loss (P&L) in the account currency: realized P&L plus the unrealized P&L of the account's positions at the current market price. Once the P&L leaves its bounds, the next order is rejected and the account is blocked."
     }
   },
   "policyField": {
@@ -73,6 +93,34 @@
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "currency",
+        "hint": "asset code, e.g. USD"
+      },
+      "lower_bound": {
+        "label": "lower bound",
+        "hint": "decimal, e.g. -1000"
+      },
+      "upper_bound": {
+        "label": "upper bound",
+        "hint": "decimal, e.g. 500"
+      }
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "currency",
+        "hint": "asset code, e.g. USD"
+      },
+      "lower_bound": {
+        "label": "lower bound",
+        "hint": "decimal, e.g. -1000"
+      },
+      "upper_bound": {
+        "label": "upper bound",
+        "hint": "decimal, e.g. 500"
+      }
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
       "currency": {
         "label": "currency",
         "hint": "asset code, e.g. USD"

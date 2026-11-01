@@ -73,7 +73,7 @@ type Snapshot struct {
 	// OrderSizeLimits are the persisted order-size barriers.
 	OrderSizeLimits []domain.LimitOrderSize
 	// SpotFundsPnlBoundsLimits are the persisted SpotFunds self-computed
-	// P&L-bounds barriers.
+	// P&L-bounds barriers of every axis.
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
 	// Groups are the persisted account groups, carrying their stored engine group
 	// id, blocked state and reason. Membership lives on Accounts; this seeds group
@@ -95,7 +95,8 @@ type LimitSet struct {
 	// OrderSizeLimits is the complete order-size barrier set (order_size_limit).
 	OrderSizeLimits []domain.LimitOrderSize
 	// SpotFundsPnlBoundsLimits is the complete SpotFunds self-computed
-	// P&L-bounds barrier set (spot_funds_pnl_bounds_kill_switch).
+	// P&L-bounds barrier set of every axis; each P&L-bounds policy applies the
+	// barriers of its own axis.
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
 }
 

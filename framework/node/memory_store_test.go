@@ -164,11 +164,12 @@ func limitKey(scope domain.LimitScope, account domain.AccountID, asset string) s
 }
 
 func spotFundsPnlBoundsLimitKey(
+	axis domain.SpotFundsPnlAxis,
 	scope domain.LimitScope,
 	account domain.AccountID,
 	accountGroup string,
 ) string {
-	return string(scope) + "\x00" + string(account) + "\x00" + accountGroup
+	return string(axis) + "\x00" + string(scope) + "\x00" + string(account) + "\x00" + accountGroup
 }
 
 func instrumentKey(instance domain.ExternalID, externalSymbol string) string {

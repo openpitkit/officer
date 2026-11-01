@@ -89,7 +89,7 @@ rules:
         | PowerShell | localhost | Cmd | Ctrl
         # Abbreviations, trading codes and the trade abbreviations.
         | API | SDK | CLI | URL | CPU | LTO | AI | ID | GET | FX
-        | P&L | PnL | uPnL | rPnL | PX | QTY | NTL | MTM | TIF | CCY
+        | P&L | PX | QTY | NTL | MTM | TIF | CCY
         | STK | CASH | OPT | FUT | IND | CRYPTO
         | DAY | GTC | OPG | CLS | IOC | FOK
         | BTC | USDT | USD | EUR | AAPL | BTCUSDT | EUR_USD | YYYYMMDD

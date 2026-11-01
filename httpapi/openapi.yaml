@@ -3125,7 +3125,7 @@ paths:
           description: Filter by policy kind.
           schema:
             type: string
-            enum: [all, rate, order_size, spot_funds_pnl_bounds]
+            enum: [all, rate, order_size, spot_funds_pnl_bounds, spot_funds_unrealized_pnl_bounds, spot_funds_total_pnl_bounds]
             default: all
         - name: sort
           in: query
@@ -3182,7 +3182,7 @@ paths:
           description: Risk policy whose barrier should be deleted.
           schema:
             type: string
-            enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch]
+            enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch]
         - name: scope
           in: query
           required: true
@@ -3329,11 +3329,111 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /limits/spot-funds-unrealized-pnl-bounds:
+    put:
+      operationId: putSpotFundsUnrealizedPnlBoundsLimit
+      summary: Upsert a SpotFunds unrealized P&L-bounds barrier
+      description: >
+        The barrier of policy `spot_funds_unrealized_pnl_bounds_kill_switch`:
+        it bounds the account's unrealized P&L, valued at the current price.
+        Body, scopes, `missingAccount` and single-account mode are those of
+        `PUT /limits/spot-funds-pnl-bounds`. A breach blocks the account with
+        the same reject code as a realized P&L bound.
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+      responses:
+        "200":
+          description: Normalized form of the stored barrier.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [spotFundsUnrealizedPnlBoundsLimit]
+                properties:
+                  spotFundsUnrealizedPnlBoundsLimit:
+                    $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /limits/spot-funds-total-pnl-bounds:
+    put:
+      operationId: putSpotFundsTotalPnlBoundsLimit
+      summary: Upsert a SpotFunds total P&L-bounds barrier
+      description: >
+        The barrier of policy `spot_funds_total_pnl_bounds_kill_switch`: it
+        bounds the account's total P&L, realized plus unrealized. Body,
+        scopes, `missingAccount` and single-account mode are those of
+        `PUT /limits/spot-funds-pnl-bounds`. A breach blocks the account with
+        the same reject code as a realized P&L bound.
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+      responses:
+        "200":
+          description: Normalized form of the stored barrier.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [spotFundsTotalPnlBoundsLimit]
+                properties:
+                  spotFundsTotalPnlBoundsLimit:
+                    $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /limits/spot-funds-pnl-bounds:
     put:
       operationId: putSpotFundsPnlBoundsLimit
       summary: Upsert a SpotFunds P&L-bounds barrier
       description: >
+        The barrier of policy `spot_funds_pnl_bounds_kill_switch`: it bounds
+        the account's realized P&L.
         `missingAccount` follows the rate-limit barrier; only the `account`
         scope carries an account axis here. When the server runs in
         single-account mode the account may be left empty and defaults to that
@@ -6687,7 +6787,21 @@ components:
             type: object
         spotFundsPnlBoundsLimits:
           type: array
-          description: Serialized SpotFunds P&L-bounds limit rows.
+          description: Serialized SpotFunds realized P&L-bounds limit rows.
+          items:
+            type: object
+        spotFundsUnrealizedPnlBoundsLimits:
+          type: array
+          description: >
+            Serialized SpotFunds unrealized P&L-bounds limit rows. Absent from
+            an archive that has none, including every 0.1 archive.
+          items:
+            type: object
+        spotFundsTotalPnlBoundsLimits:
+          type: array
+          description: >
+            Serialized SpotFunds total P&L-bounds limit rows. Absent from an
+            archive that has none, including every 0.1 archive.
           items:
             type: object
         balances:
@@ -7881,7 +7995,7 @@ components:
             lowerBound must be.
     AccountLimits:
       type: object
-      required: [rateLimits, orderSizeLimits, spotFundsPnlBoundsLimits]
+      required: [rateLimits, orderSizeLimits, spotFundsPnlBoundsLimits, spotFundsUnrealizedPnlBoundsLimits, spotFundsTotalPnlBoundsLimits]
       properties:
         rateLimits:
           type: array
@@ -7895,7 +8009,17 @@ components:
             $ref: "#/components/schemas/OrderSizeLimit"
         spotFundsPnlBoundsLimits:
           type: array
-          description: SpotFunds P&L-bounds barriers (always a non-null array).
+          description: SpotFunds realized P&L-bounds barriers (always a non-null array).
+          items:
+            $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+        spotFundsUnrealizedPnlBoundsLimits:
+          type: array
+          description: SpotFunds unrealized P&L-bounds barriers (always a non-null array).
+          items:
+            $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+        spotFundsTotalPnlBoundsLimits:
+          type: array
+          description: SpotFunds total P&L-bounds barriers (always a non-null array).
           items:
             $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
 
@@ -7911,7 +8035,7 @@ components:
         kind:
           type: string
           description: Policy kind discriminator.
-          enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch]
+          enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch]
         scope:
           $ref: "#/components/schemas/LimitScope"
         account:
@@ -7958,7 +8082,9 @@ components:
             spotFundsPnlBounds:
               type: object
               description: >
-                Value payload for kind spot_funds_pnl_bounds_kill_switch.
+                Value payload for kinds spot_funds_pnl_bounds_kill_switch,
+                spot_funds_unrealized_pnl_bounds_kill_switch and
+                spot_funds_total_pnl_bounds_kill_switch.
               required: [currency, lowerBound, upperBound]
               properties:
                 currency:

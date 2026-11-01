@@ -398,6 +398,7 @@ func renameSpotFundsPnlBoundsLimits(
 		if limit.Account == oldCode {
 			limit.Account = newCode
 			key = spotFundsPnlBoundsLimitKey(
+				limit.Axis,
 				limit.Scope,
 				limit.Account,
 				limit.AccountGroup,

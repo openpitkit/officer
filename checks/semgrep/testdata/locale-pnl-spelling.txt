@@ -1,0 +1,37 @@
+# Regression cases of the locale-pnl-spelling rule, in the shape of a
+# prettier-formatted catalog. A `ruleid` line marks the next line as a finding,
+# an `ok` line marks it clean. The annotations make this file text, not JSON.
+{
+  "nested": {
+    # ruleid: locale-pnl-spelling
+    "camel": "Realized PnL",
+    # ruleid: locale-pnl-spelling
+    "upper": "PNL bound",
+    # ruleid: locale-pnl-spelling
+    "unrealizedPrefix": "uPnL Kill Switch",
+    # ruleid: locale-pnl-spelling
+    "realizedPrefix": "Колонка rPnL",
+    # ruleid: locale-pnl-spelling
+    "afterPlaceholder": "{{value}} PnL",
+    # ruleid: locale-pnl-spelling
+    "afterHyphen": "realized-PnL change",
+    # ruleid: locale-pnl-spelling
+    "titleCase": "Pnl bound",
+    # ruleid: locale-pnl-spelling
+    "plural": "Daily PnLs",
+    # ruleid: locale-pnl-spelling
+    "otherPrefix": "tPnL limit",
+    # ruleid: locale-pnl-spelling
+    "afterEscapedQuote": "Колонка \"PnL\"",
+    # ruleid: locale-pnl-spelling
+    "gluedToHan": "未实现PnL",
+    # ok: locale-pnl-spelling
+    "ampersand": "Realized P&L, total P&L and 未实现 P&L.",
+    # ok: locale-pnl-spelling
+    "placeholder": "P&L {{PnL}}",
+    # ok: locale-pnl-spelling
+    "csv": "code,currency,pnl,pnl_halt_reason,realized_pnl",
+    # ok: locale-pnl-spelling
+    "PnL": "Profit and loss"
+  }
+}

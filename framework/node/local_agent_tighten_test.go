@@ -215,6 +215,7 @@ func TestLocalNode_AgentGroupDeleteRefusalPrecedesCurrencyGuard(t *testing.T) {
 		"group-scoped spot funds pnl bound": func(t *testing.T, n *localNode, _ *rebuildProbe) {
 			t.Helper()
 			if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency: "EUR", UpperBound: "10",
 			}, domain.MissingAccountCreate, testCaller); err != nil {
@@ -284,6 +285,7 @@ func TestLocalNode_AgentDeleteGroupRefusesGroupPnlBound(t *testing.T) {
 		t.Helper()
 		n, probe := newDeskNode(t)
 		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 			Currency: "USD", UpperBound: "10",
 		}, domain.MissingAccountCreate, testCaller); err != nil {
@@ -411,6 +413,7 @@ func TestLocalNode_AgentDeleteGroupRefusedWhileRateBarrierExists(t *testing.T) {
 			t.Fatalf("CreateGroup(other): %v", err)
 		}
 		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "other",
 			Currency: "USD", UpperBound: "10",
 		}, domain.MissingAccountCreate, testCaller); err != nil {
@@ -529,6 +532,7 @@ var accountProtections = map[string]func(context.Context, store.RealmStore) erro
 	},
 	"group-scoped spot funds pnl bound": func(ctx context.Context, realm store.RealmStore) error {
 		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 			Currency: "USD", UpperBound: "10",
 		})
@@ -546,6 +550,7 @@ var accountProtections = map[string]func(context.Context, store.RealmStore) erro
 	},
 	"own spot funds pnl bound": func(ctx context.Context, realm store.RealmStore) error {
 		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "acc",
 			Currency: "USD", UpperBound: "10",
 		})
@@ -579,6 +584,7 @@ var assetProtections = map[string]func(context.Context, store.RealmStore) error{
 	},
 	"spot funds pnl bound in the asset": func(ctx context.Context, realm store.RealmStore) error {
 		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-1",
 		})
 	},
@@ -909,11 +915,13 @@ func TestLocalNode_AgentReleasesUnprotectedSubjects(t *testing.T) {
 	must("block halted", n.realm.SetGroupBlocked(ctx, "halted", true, "risk"))
 	must("bound halted", n.realm.PutSpotFundsPnlBoundsLimit(ctx,
 		domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "halted",
 			Currency: "USD", UpperBound: "10",
 		}))
 	must("bound other", n.realm.PutSpotFundsPnlBoundsLimit(ctx,
 		domain.LimitSpotFundsPnlBounds{
+			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "other",
 			Currency: "USD", UpperBound: "10",
 		}))
@@ -1131,6 +1139,7 @@ func pnlBound(
 	scope domain.LimitScope, subject, currency, lower, upper string,
 ) domain.LimitSpotFundsPnlBounds {
 	bound := domain.LimitSpotFundsPnlBounds{
+		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: scope, Currency: currency, LowerBound: lower, UpperBound: upper,
 	}
 	switch scope {

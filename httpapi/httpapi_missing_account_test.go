@@ -153,6 +153,7 @@ func newMissingAccountService() *fakeService {
 				MaxQuantity: "10",
 			}},
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    "acc-1",
 				Currency:   "USD",

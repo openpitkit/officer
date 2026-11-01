@@ -2,7 +2,9 @@
   "policyLabel": {
     "rate_limit": "Límite de frecuencia",
     "order_size_limit": "Límite de tamaño de orden",
-    "spot_funds_pnl_bounds_kill_switch": "Interruptor de emergencia por PnL"
+    "spot_funds_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L realizado",
+    "spot_funds_unrealized_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L no realizado",
+    "spot_funds_total_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L total"
   },
   "scope": {
     "broker": "Bróker",
@@ -35,6 +37,16 @@
       "currency": "código de activo",
       "lower_bound": "decimal",
       "upper_bound": "decimal"
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "currency": "código de activo",
+      "lower_bound": "decimal",
+      "upper_bound": "decimal"
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
+      "currency": "código de activo",
+      "lower_bound": "decimal",
+      "upper_bound": "decimal"
     }
   },
   "policy": {
@@ -47,8 +59,16 @@
       "description": "Limita el tamaño de una sola orden por cantidad y por valor nocional para evitar errores de introducción."
     },
     "spot_funds_pnl_bounds_kill_switch": {
-      "label": "Interruptor de emergencia por PnL",
-      "description": "Utiliza el PnL realizado que calcula el motor en la moneda de la cuenta, neto de la comisión opcional transmitida. Si falta un dato obligatorio, por ejemplo una cotización FX necesaria para valorar el PnL realizado en la moneda de la cuenta, el motor bloquea las cuentas bajo control de PnL porque no puede garantizar el límite. FX solo se requiere cuando es necesario: no para activos que ya están en la moneda de la cuenta ni para cuentas fuera del control de PnL."
+      "label": "Interruptor de emergencia por pérdidas y ganancias realizadas",
+      "description": "Utiliza las pérdidas y ganancias (P&L) realizadas que calcula el motor en la moneda de la cuenta, netas de la comisión opcional transmitida. Si falta un dato obligatorio, por ejemplo una cotización FX necesaria para valorar el P&L realizado en la moneda de la cuenta, el motor bloquea las cuentas bajo control de P&L porque no puede garantizar el límite. FX solo se requiere cuando es necesario: no para activos que ya están en la moneda de la cuenta ni para cuentas fuera del control de P&L."
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "label": "Interruptor de emergencia por pérdidas y ganancias no realizadas",
+      "description": "Utiliza las pérdidas y ganancias (P&L) no realizadas de las posiciones de la cuenta que calcula el motor en la moneda de la cuenta, al precio de mercado actual. Cuando el P&L sale de sus límites, se rechaza la siguiente orden y se bloquea la cuenta."
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
+      "label": "Interruptor de emergencia por pérdidas y ganancias totales",
+      "description": "Utiliza las pérdidas y ganancias (P&L) totales que calcula el motor en la moneda de la cuenta: el P&L realizado más el P&L no realizado de las posiciones de la cuenta al precio de mercado actual. Cuando el P&L sale de sus límites, se rechaza la siguiente orden y se bloquea la cuenta."
     }
   },
   "policyField": {
@@ -73,6 +93,34 @@
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "moneda",
+        "hint": "código de activo, p. ej., USD"
+      },
+      "lower_bound": {
+        "label": "límite inferior",
+        "hint": "decimal, p. ej., -1000"
+      },
+      "upper_bound": {
+        "label": "límite superior",
+        "hint": "decimal, p. ej., 500"
+      }
+    },
+    "spot_funds_unrealized_pnl_bounds_kill_switch": {
+      "currency": {
+        "label": "moneda",
+        "hint": "código de activo, p. ej., USD"
+      },
+      "lower_bound": {
+        "label": "límite inferior",
+        "hint": "decimal, p. ej., -1000"
+      },
+      "upper_bound": {
+        "label": "límite superior",
+        "hint": "decimal, p. ej., 500"
+      }
+    },
+    "spot_funds_total_pnl_bounds_kill_switch": {
       "currency": {
         "label": "moneda",
         "hint": "código de activo, p. ej., USD"

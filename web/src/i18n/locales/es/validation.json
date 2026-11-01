@@ -43,8 +43,8 @@
     "orderSizeUnderlyingNoNotional": "un ámbito de activo subyacente no debe incluir max_notional",
     "orderSizeSettlementRequires": "un ámbito de activo de liquidación requiere max_notional",
     "orderSizeSettlementNoQuantity": "un ámbito de activo de liquidación no debe incluir max_quantity",
-    "pnlCurrencyRequired": "spot_funds_pnl_bounds_kill_switch requiere una moneda",
-    "pnlRequires": "spot_funds_pnl_bounds_kill_switch requiere lower_bound o upper_bound",
+    "pnlCurrencyRequired": "{{policy}} requiere una moneda",
+    "pnlRequires": "{{policy}} requiere lower_bound o upper_bound",
     "pnlBoundOrder": "lower_bound debe ser <= upper_bound"
   },
   "password": {

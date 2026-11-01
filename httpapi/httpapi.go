@@ -31,6 +31,7 @@ import (
 
 	frameworkapp "go.openpit.dev/officer/framework/app"
 	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/domain"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
@@ -148,7 +149,9 @@ func RegisterRoutes(
 	register(registry, "limits.list.get", http.MethodGet, "/limits", handleListLimits(svc))
 	register(registry, "limits.rate.put", http.MethodPut, "/limits/rate", handlePutRateLimit(svc))
 	register(registry, "limits.order-size.put", http.MethodPut, "/limits/order-size", handlePutOrderSizeLimit(svc))
-	register(registry, "limits.spot-funds-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc))
+	register(registry, "limits.spot-funds-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisRealized))
+	register(registry, "limits.spot-funds-unrealized-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-unrealized-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisUnrealized))
+	register(registry, "limits.spot-funds-total-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-total-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisTotal))
 	register(registry, "limits.delete", http.MethodDelete, "/limits", handleDeleteLimit(svc))
 
 	register(registry, "audit.list.get", http.MethodGet, "/audit", handleListAudit(svc))

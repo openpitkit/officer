@@ -61,7 +61,7 @@ func setOrderSizeLimitDetail(limit domain.LimitOrderSize) domain.AuditDetail {
 // setSpotFundsPnlBoundsLimitDetail renders a SpotFunds P&L-bounds upsert.
 func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) domain.AuditDetail {
 	target := LimitTarget{
-		Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Policy:       limit.Axis.Policy(),
 		Scope:        limit.Scope,
 		Account:      limit.Account,
 		AccountGroup: limit.AccountGroup,

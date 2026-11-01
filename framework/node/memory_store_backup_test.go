@@ -327,6 +327,7 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 	r.spotFundsPnlBoundsLimits = map[string]domain.LimitSpotFundsPnlBounds{}
 	for _, limit := range data.SpotFundsPnlBoundsLimits {
 		r.spotFundsPnlBoundsLimits[spotFundsPnlBoundsLimitKey(
+			limit.Axis,
 			limit.Scope,
 			limit.Account,
 			limit.AccountGroup,

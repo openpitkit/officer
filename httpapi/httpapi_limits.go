@@ -114,17 +114,21 @@ func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
 }
 
 // handlePutSpotFundsPnlBoundsLimit handles
-// PUT /api/v1/limits/spot-funds-pnl-bounds[?missingAccount=create|reject]. The
-// body is the typed SpotFunds self-computed P&L-bounds barrier; the backend
-// validates scope/axes and upserts it. The query parameter is required when the
-// scope names an account.
-func handlePutSpotFundsPnlBoundsLimit(svc backend.ControlPlane) http.HandlerFunc {
+// PUT /api/v1/limits/spot-funds-pnl-bounds,
+// /limits/spot-funds-unrealized-pnl-bounds and
+// /limits/spot-funds-total-pnl-bounds[?missingAccount=create|reject], one route
+// per P&L axis. The body is the typed SpotFunds self-computed P&L-bounds
+// barrier of the route's axis; the backend validates scope/axes and upserts it.
+// The query parameter is required when the scope names an account.
+func handlePutSpotFundsPnlBoundsLimit(
+	svc backend.ControlPlane, axis domain.SpotFundsPnlAxis,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req httpx.SpotFundsPnlBoundsLimitDTO
 		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		limit := httpx.FromSpotFundsPnlBoundsLimitDTO(req)
+		limit := httpx.FromSpotFundsPnlBoundsLimitDTO(axis, req)
 		missing, err := missingAccountQuery(r, limit.Account)
 		if err != nil {
 			httpx.WriteErr(w, err)
@@ -143,10 +147,12 @@ func handlePutSpotFundsPnlBoundsLimit(svc backend.ControlPlane) http.HandlerFunc
 			httpx.WriteErr(w, err)
 			return
 		}
-		stored := httpx.ToSpotFundsPnlBoundsLimitDTO(persisted)
-		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{
-			SpotFundsPnlBoundsLimit: &stored,
-		})
+		result, err := httpx.ToPutSpotFundsPnlBoundsLimitResultDTO(persisted)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, result)
 	}
 }
 

@@ -20,10 +20,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
@@ -33,8 +35,20 @@ import (
 // end rather than against a fake.
 func newMissingAccountNode(t *testing.T) (node.Node, domain.Caller) {
 	t.Helper()
+	n, _ := openMissingAccountNode(t, t.TempDir()+"/officer.db")
+	return n, domain.Caller{
+		Source:    domain.SourcePanel,
+		Principal: domain.PrincipalOperator,
+	}
+}
+
+// openMissingAccountNode opens a node on the sqlite store at path. The returned
+// close stops the node and its store, so a test can reopen the same file as a
+// restart.
+func openMissingAccountNode(t *testing.T, path string) (node.Node, func()) {
+	t.Helper()
 	ctx := context.Background()
-	st, err := sqlite.New(t.TempDir()+"/officer.db", domain.DefaultRealm)
+	st, err := sqlite.New(path, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("sqlite.New: %v", err)
 	}
@@ -53,9 +67,13 @@ func newMissingAccountNode(t *testing.T) (node.Node, domain.Caller) {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
 	t.Cleanup(func() { _ = n.Close() })
-	return n, domain.Caller{
-		Source:    domain.SourcePanel,
-		Principal: domain.PrincipalOperator,
+	return n, func() {
+		if err := n.Close(); err != nil {
+			t.Fatalf("close node: %v", err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
 	}
 }
 
@@ -217,6 +235,7 @@ func TestPutSpotFundsPnlBoundsLimit_CreatedAccountBarrierIsEnforced(t *testing.T
 		t.Fatalf("SetDefaultGroupCurrency: %v", err)
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,
 		Currency:   "USDT",
@@ -255,6 +274,228 @@ func TestPutSpotFundsPnlBoundsLimit_CreatedAccountBarrierIsEnforced(t *testing.T
 	}
 }
 
+// TestPutSpotFundsPnlBoundsLimit_UnrealizedAndTotalBlockOnNextOrder is the
+// acceptance path for the unrealized and total P&L bounds: a position opened at
+// the mark stays within the bound, a lower mark takes its unrealized loss past
+// it, and the next order is rejected and blocks the account with the one P&L
+// kill-switch code and the SDK text naming the bound. The block survives a
+// restart, and an operator unblock lifts it in Officer and in the engine.
+func TestPutSpotFundsPnlBoundsLimit_UnrealizedAndTotalBlockOnNextOrder(t *testing.T) {
+	for axis, wantDetails := range map[domain.SpotFundsPnlAxis]string{
+		domain.SpotFundsPnlAxisUnrealized: "account unrealized pnl",
+		domain.SpotFundsPnlAxisTotal:      "account total pnl",
+	} {
+		t.Run(string(axis), func(t *testing.T) {
+			ctx := context.Background()
+			path := t.TempDir() + "/officer.db"
+			n, closeNode := openMissingAccountNode(t, path)
+			caller := domain.Caller{
+				Source:    domain.SourcePanel,
+				Principal: domain.PrincipalOperator,
+			}
+			const account = domain.AccountID("upnl-acc")
+
+			if err := n.SetDefaultGroupCurrency(ctx, "USDT", caller); err != nil {
+				t.Fatalf("SetDefaultGroupCurrency: %v", err)
+			}
+			if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+				Axis:       axis,
+				Scope:      domain.ScopeAccount,
+				Account:    account,
+				Currency:   "USDT",
+				LowerBound: "-10",
+			}, domain.MissingAccountCreate, caller); err != nil {
+				t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+			}
+			fundMissingAccount(t, n, caller, account)
+			mark := btcMarker(t, n, caller)
+
+			mark("100")
+			buy := missingAccountOrder(account, "1")
+			if _, result, err := n.SubmitImmediate(
+				ctx, buy, domain.MissingAccountCreate, caller,
+			); err != nil || !result.Accepted {
+				t.Fatalf("buy at the mark: err=%v result=%+v", err, result)
+			}
+			if stored, _, err := n.GetAccountState(ctx, account); err != nil || stored.Blocked {
+				t.Fatalf("account after the buy = %+v (err %v), want not blocked", stored, err)
+			}
+
+			// An unrealized loss of 50 on the one BTC, past the -10 bound.
+			mark("50")
+			if _, result, err := n.SubmitImmediate(
+				ctx, buy, domain.MissingAccountCreate, caller,
+			); err != nil || result.Accepted {
+				t.Fatalf("order after the breach: err=%v result=%+v, want rejected", err, result)
+			}
+			assertPnlBlocked(t, n, account, wantDetails)
+
+			// After a restart the mark is back within the bound, yet the engine
+			// still rejects: it rebuilt the block from the store.
+			closeNode()
+			n, _ = openMissingAccountNode(t, path)
+			assertPnlBlocked(t, n, account, wantDetails)
+			mark = btcMarker(t, n, caller)
+			mark("100")
+			if _, result, err := n.SubmitImmediate(
+				ctx, buy, domain.MissingAccountCreate, caller,
+			); err != nil || result.Accepted {
+				t.Fatalf("order after the restart: err=%v result=%+v, want rejected", err, result)
+			}
+
+			if err := n.SetAccountBlocked(
+				ctx, account, false, "", domain.MissingAccountReject, caller,
+			); err != nil {
+				t.Fatalf("unblock: %v", err)
+			}
+			if stored, _, err := n.GetAccountState(ctx, account); err != nil || stored.Blocked {
+				t.Fatalf("account after the unblock = %+v (err %v), want not blocked", stored, err)
+			}
+			if _, result, err := n.SubmitImmediate(
+				ctx, buy, domain.MissingAccountCreate, caller,
+			); err != nil || !result.Accepted {
+				t.Fatalf("order after the unblock: err=%v result=%+v, want accepted", err, result)
+			}
+		})
+	}
+}
+
+// TestPutSpotFundsPnlBoundsLimit_RestartWithinBoundStaysUnblocked restarts an
+// account that holds a position within its unrealized and total bounds: the
+// rebuilt engine does not block it.
+func TestPutSpotFundsPnlBoundsLimit_RestartWithinBoundStaysUnblocked(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/officer.db"
+	n, closeNode := openMissingAccountNode(t, path)
+	caller := domain.Caller{Source: domain.SourcePanel, Principal: domain.PrincipalOperator}
+	const account = domain.AccountID("restart-acc")
+
+	if err := n.SetDefaultGroupCurrency(ctx, "USDT", caller); err != nil {
+		t.Fatalf("SetDefaultGroupCurrency: %v", err)
+	}
+	for _, axis := range []domain.SpotFundsPnlAxis{
+		domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal,
+	} {
+		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Axis: axis, Scope: domain.ScopeAccount, Account: account,
+			Currency: "USDT", LowerBound: "-1000",
+		}, domain.MissingAccountCreate, caller); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", axis, err)
+		}
+	}
+	fundMissingAccount(t, n, caller, account)
+	btcMarker(t, n, caller)("100")
+	if _, result, err := n.SubmitImmediate(
+		ctx, missingAccountOrder(account, "1"), domain.MissingAccountCreate, caller,
+	); err != nil || !result.Accepted {
+		t.Fatalf("buy at the mark: err=%v result=%+v", err, result)
+	}
+
+	closeNode()
+	n, _ = openMissingAccountNode(t, path)
+	if stored, _, err := n.GetAccountState(ctx, account); err != nil || stored.Blocked {
+		t.Fatalf("account after the restart = %+v (err %v), want not blocked", stored, err)
+	}
+}
+
+// TestPutSpotFundsPnlBoundsLimit_RealizedBlocksAtPreTrade covers the realized
+// bound the same way: a fill past it blocks the account, and once the operator
+// lifts the block with the loss still past the bound, the next order is
+// rejected at pre-trade and blocks the account again.
+func TestPutSpotFundsPnlBoundsLimit_RealizedBlocksAtPreTrade(t *testing.T) {
+	ctx := context.Background()
+	n, caller := newMissingAccountNode(t)
+	const account = domain.AccountID("rpnl-acc")
+
+	if err := n.SetDefaultGroupCurrency(ctx, "USDT", caller); err != nil {
+		t.Fatalf("SetDefaultGroupCurrency: %v", err)
+	}
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
+		Scope:      domain.ScopeAccount,
+		Account:    account,
+		Currency:   "USDT",
+		LowerBound: "-1",
+	}, domain.MissingAccountCreate, caller); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	fundMissingAccount(t, n, caller, account)
+	buy := missingAccountOrder(account, "1")
+	sell := buy
+	sell.Side = domain.OrderSideSell
+	sell.Price = "1"
+	for _, o := range []domain.Order{buy, sell} {
+		if _, result, err := n.SubmitImmediate(
+			ctx, o, domain.MissingAccountCreate, caller,
+		); err != nil || !result.Accepted {
+			t.Fatalf("%s SubmitImmediate: err=%v result=%+v", o.Side, err, result)
+		}
+	}
+	assertPnlBlocked(t, n, account, "realized pnl")
+
+	if err := n.SetAccountBlocked(
+		ctx, account, false, "", domain.MissingAccountReject, caller,
+	); err != nil {
+		t.Fatalf("unblock: %v", err)
+	}
+	if _, result, err := n.SubmitImmediate(
+		ctx, buy, domain.MissingAccountCreate, caller,
+	); err != nil || result.Accepted {
+		t.Fatalf("order after the unblock: err=%v result=%+v, want rejected", err, result)
+	}
+	assertPnlBlocked(t, n, account, "realized pnl")
+}
+
+// btcMarker registers the BTC and USDT assets the test orders trade and
+// returns a function that pushes a BTC/USDT mark to the live engine.
+func btcMarker(t *testing.T, n node.Node, caller domain.Caller) func(price string) {
+	t.Helper()
+	ctx := context.Background()
+	assets, err := n.ListAssets(ctx)
+	if err != nil {
+		t.Fatalf("ListAssets: %v", err)
+	}
+	ids := make(map[string]domain.EngineAssetID, len(assets))
+	for _, asset := range assets {
+		ids[asset.Code] = asset.EngineAssetID
+	}
+	for _, code := range []string{"BTC", "USDT"} {
+		if _, ok := ids[code]; ok {
+			continue
+		}
+		asset, err := n.CreateAsset(ctx, domain.Asset{Code: code}, caller)
+		if err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
+		ids[code] = asset.EngineAssetID
+	}
+	return func(price string) {
+		t.Helper()
+		if err := n.CurrentMarketDataSink().Push(marketdata.QuoteUpdate{
+			AsOf: time.Now(), Base: ids["BTC"], Quote: ids["USDT"], Mark: price,
+		}); err != nil {
+			t.Fatalf("push BTC/USDT mark %s: %v", price, err)
+		}
+	}
+}
+
+// assertPnlBlocked checks the account is blocked with the one P&L kill-switch
+// code and SDK details naming the bound.
+func assertPnlBlocked(
+	t *testing.T, n node.Node, account domain.AccountID, wantDetails string,
+) {
+	t.Helper()
+	stored, _, err := n.GetAccountState(context.Background(), account)
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if !stored.Blocked || stored.BlockCode != domain.RejectCodePnlKillSwitchTriggered ||
+		!strings.Contains(stored.BlockDetails, wantDetails) {
+		t.Fatalf("account = %+v, want blocked by %s with details naming %q",
+			stored, domain.RejectCodePnlKillSwitchTriggered, wantDetails)
+	}
+}
+
 // TestPutSpotFundsPnlBoundsLimit_RejectLeavesNoAccount covers the refusing
 // choice against the real engine: the account stays unknown and no barrier is
 // installed.
@@ -264,6 +505,7 @@ func TestPutSpotFundsPnlBoundsLimit_RejectLeavesNoAccount(t *testing.T) {
 	const account = domain.AccountID("never-created")
 
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,
 		Currency:   "USDT",

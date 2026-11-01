@@ -392,6 +392,7 @@ func accountScopeSites() []scopeSite {
 			name: "PutSpotFundsPnlBoundsLimit/account",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
 				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccount, Account: req.account,
 					Currency: "USD", LowerBound: "-1",
 				}, req.policy)
@@ -403,6 +404,7 @@ func accountScopeSites() []scopeSite {
 			name: "PutSpotFundsPnlBoundsLimit/account_group",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
 				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccountGroup, AccountGroup: scopeClientGroup,
 					Currency: "USD", LowerBound: "-1",
 				}, req.policy)
@@ -856,6 +858,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 			name: "PutSpotFundsPnlBoundsLimit/global",
 			run: func(ctx context.Context, svc *backend.Service) error {
 				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1",
 				}, "")
 			},
@@ -1559,11 +1562,11 @@ func TestService_AccountScopeNarrowsLimits(t *testing.T) {
 			{Scope: domain.ScopeSettlementAsset, Asset: "USD"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
-			{Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
-			{Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
-			{Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
-			{Scope: domain.ScopeGlobal},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal},
 		},
 	}
 	narrowed := node.AccountLimits{
@@ -1666,8 +1669,8 @@ func TestService_AccountScopeNarrowsOverview(t *testing.T) {
 			{Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
-			{Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
+			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
 		},
 	}
 	for _, tc := range []struct {
