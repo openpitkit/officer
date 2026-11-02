@@ -776,6 +776,36 @@ func TestRegisterSingleAccountModeChosenInSetup(t *testing.T) {
 			`"features":{"accounts":false,"account":"default"},"restartRequired":true,"live":false}`)
 }
 
+// TestRegisterMCPServerVersionNonRelease initializes an MCP session over the
+// served /mcp endpoint of the real composition: a test binary carries no
+// release tag, so serverInfo names the server and reports the non-release
+// version "dev", not the engine version.
+func TestRegisterMCPServerVersionNonRelease(t *testing.T) {
+	_, handler := serveSeededApp(t, Config{
+		SQLitePath: filepath.Join(t.TempDir(), "officer.db"),
+	}, nil)
+	accesstest.CompleteOpen(t, handler,
+		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, false)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
+	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
+	if err != nil {
+		t.Fatalf("connect MCP: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	info := session.InitializeResult().ServerInfo
+	if info == nil {
+		t.Fatal("initialize result carries no serverInfo")
+	}
+	if info.Name != "pit-officer" || info.Version != "dev" {
+		t.Fatalf("serverInfo = {name %q, version %q}, want {name %q, version %q}",
+			info.Name, info.Version, "pit-officer", "dev")
+	}
+}
+
 // assertOneAccountSubmitSchema lists the tools over the served MCP endpoint
 // of handler: submit_order neither requires an account nor offers an account
 // group.

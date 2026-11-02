@@ -436,8 +436,8 @@ func (n *localNode) Health(ctx context.Context) (Health, error) {
 	return Health{Engine: engineHealth, Store: storeHealth}, nil
 }
 
-// EngineVersion returns the version of the node's current engine. The MCP
-// version source routes through here so restore-swapped engines are observed.
+// EngineVersion returns the version of the node's current engine, read under
+// the engine lock so a restore-swapped engine is observed.
 func (n *localNode) EngineVersion() string {
 	n.engineMu.RLock()
 	defer n.engineMu.RUnlock()

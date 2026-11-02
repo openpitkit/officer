@@ -259,6 +259,13 @@ list names no status twice. REST answers a value outside these limits with
 
 ## MCP tools
 
+The MCP server answers `initialize`, over stdio and over HTTP, with
+`serverInfo.name` `pit-officer` and `serverInfo.version` the Officer version: on
+a release build the release tag without its leading `v` (`0.2.1` for
+`v0.2.1`), and `dev` on a non-release build - a local binary or image, `edge`
+or a release dry run (see [Building without Just](development.md#building-without-just)).
+The engine version is the `health` tool's `node.engine.version`.
+
 The tool catalog is served by the API and shown in the operator panel. It
 records, per tool, what it does, whether it mutates state, and whether it is
 implemented - a catalogued name that is not implemented is listed but not

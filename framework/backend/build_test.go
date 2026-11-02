@@ -87,6 +87,61 @@ func TestBuildCommitValid(t *testing.T) {
 	}
 }
 
+func TestVersionNonReleaseBuildIsDev(t *testing.T) {
+	original := releaseTag
+	t.Cleanup(func() { releaseTag = original })
+	releaseTag = ""
+	got, err := Version()
+	if err != nil {
+		t.Fatalf("Version() without a release tag: %v", err)
+	}
+	if got != "dev" {
+		t.Fatalf("Version() without a release tag = %q, want %q", got, "dev")
+	}
+}
+
+func TestVersionReleaseBuildDropsLeadingV(t *testing.T) {
+	original := releaseTag
+	t.Cleanup(func() { releaseTag = original })
+	for tag, want := range map[string]string{
+		"v0.2.1":            "0.2.1",
+		"v10.0.3":           "10.0.3",
+		"v0.3.0-rc.1":       "0.3.0-rc.1",
+		"v1.2.3-beta+exp.7": "1.2.3-beta+exp.7",
+		"v1.2.3-0.x-1a":     "1.2.3-0.x-1a",
+		"v1.2.3+build.007":  "1.2.3+build.007",
+	} {
+		releaseTag = tag
+		got, err := Version()
+		if err != nil {
+			t.Errorf("Version() with tag %q: %v", tag, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("Version() with tag %q = %q, want %q", tag, got, want)
+		}
+	}
+}
+
+func TestVersionRejectsMalformedReleaseTag(t *testing.T) {
+	original := releaseTag
+	t.Cleanup(func() { releaseTag = original })
+	for _, tag := range []string{
+		"0.2.1", "v", "v0.2", "v0.2.1.4", "V0.2.1", "v01.2.3", "v0.2.1-",
+		"release", " v0.2.1", "v0.2.1\n", "v1.2.3-rc.01", "v1.2.3-01",
+	} {
+		releaseTag = tag
+		got, err := Version()
+		if err == nil {
+			t.Errorf("Version() with tag %q = %q, want an error", tag, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid release tag") {
+			t.Errorf("Version() with tag %q error = %v, want it to name the invalid release tag", tag, err)
+		}
+	}
+}
+
 func TestReleaseBuild(t *testing.T) {
 	original := releaseTag
 	t.Cleanup(func() { releaseTag = original })

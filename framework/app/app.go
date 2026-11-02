@@ -232,6 +232,12 @@ func (b *Builder) Build(
 	if fatalHook == nil {
 		return nil, errors.New("app: nil fatal shutdown hook")
 	}
+	version, err := backend.Version()
+	if err != nil {
+		return nil, fmt.Errorf("resolve officer version: %w", err)
+	}
+	logger.Info("mcp server version", "version", version,
+		"release_build", backend.ReleaseBuild())
 
 	st, err := b.storeFactory()
 	if err != nil {
@@ -352,7 +358,7 @@ func (b *Builder) Build(
 		trading:        runtime,
 		mcpRegistry:    mcpRegistry,
 		source:         src,
-		version:        nodeVersionSource{node: localNode},
+		version:        officerVersion(version),
 		authorizer:     b.authorizer,
 		callerResolver: b.callerResolver,
 		browserGuards:  b.browserGuards,
@@ -511,10 +517,10 @@ func (a *App) BuildServeHandler(
 	return router, nil
 }
 
-type nodeVersionSource struct {
-	node node.Node
-}
+// officerVersion is the build's Officer version from backend.Version, served
+// as the MCP server version.
+type officerVersion string
 
-func (v nodeVersionSource) Version() string {
-	return v.node.EngineVersion()
+func (v officerVersion) Version() string {
+	return string(v)
 }

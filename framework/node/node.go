@@ -95,8 +95,7 @@ type Node interface {
 	// store.
 	Health(ctx context.Context) (Health, error)
 
-	// EngineVersion returns the version string of the node's current engine. The
-	// version is the source for the MCP server version stamp.
+	// EngineVersion returns the version string of the node's current engine.
 	EngineVersion() string
 
 	// Realm returns the realm the node is bound to. The control plane binds its

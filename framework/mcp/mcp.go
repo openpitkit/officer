@@ -380,9 +380,13 @@ type SubmitDropCopyOrderResult struct {
 	Status domain.OrderStatus
 }
 
-// VersionSource reports the engine version used as the MCP server version.
+// VersionSource reports the MCP server version, the serverInfo.version of the
+// initialize response. Officer serves its build version from backend.Version:
+// the release version on a release build ("0.2.1" for tag "v0.2.1") and
+// backend.NonReleaseVersion, "dev", on a non-release build. It is not the
+// engine version, which the health tool reports.
 type VersionSource interface {
-	// Version returns the engine SDK/runtime version string.
+	// Version returns the MCP server version string.
 	Version() string
 }
 

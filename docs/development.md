@@ -211,6 +211,14 @@ The binary build recipes, including the debug and `-dev` variants, set
 `buildCommit` from `git rev-parse HEAD` and leave `releaseTag` empty. Their
 `-release` suffix selects an optimization profile, not a release identity.
 
+The release tag also gives the version MCP clients see as
+`serverInfo.version`: the tag without its leading `v`, so `v0.2.1` reports
+`0.2.1`. A non-release build reports `dev`. A non-empty `releaseTag` that is
+not `v<major>.<minor>.<patch>`, optionally with a pre-release or build suffix,
+stops `serve` and `mcp` at startup. The start log names the version in its
+`mcp server version` record, with `release_build` saying whether the build is a
+release.
+
 ```bash
 cd web && npm ci && npm run build && cd ..
 CGO_ENABLED=1 go build -ldflags "-X go.openpit.dev/officer/framework/backend.buildCommit=$(git rev-parse HEAD)" -o pit-officer ./cmd/pit-officer
