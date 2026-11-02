@@ -95,7 +95,6 @@ function instance(
     id,
     provider: "alpaca",
     label: id,
-    credentials: "",
     enabled: true,
     state: "running",
     verifiesSymbols: false,

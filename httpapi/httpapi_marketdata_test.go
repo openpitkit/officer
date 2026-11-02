@@ -101,8 +101,8 @@ func TestListMarketData_OK(t *testing.T) {
 	if _, leaked := inst["externalId"]; leaked {
 		t.Fatalf("market-data instance leaked externalId: %v", inst)
 	}
-	if inst["credentials"] != "" {
-		t.Fatalf("credentials = %q, want redacted empty string", inst["credentials"])
+	if _, present := inst["credentials"]; present {
+		t.Fatalf("market-data instance carries credentials: %v", inst)
 	}
 	instruments, _ := inst["instruments"].([]any)
 	if len(instruments) != 1 {
@@ -266,6 +266,9 @@ func TestCreateMarketDataInstance_Created(t *testing.T) {
 	}
 	if instance["id"] != created.ExternalID.String() {
 		t.Fatalf("want created id, got %v", instance["id"])
+	}
+	if _, present := instance["credentials"]; present {
+		t.Fatalf("created market-data instance carries credentials: %v", instance)
 	}
 	// The public create request carries no instance id; the backend assigns it.
 	want := `create:ib:Backup:{"host":"127.0.0.1","port":7496}:true`

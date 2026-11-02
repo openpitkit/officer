@@ -1012,7 +1012,6 @@ export interface MarketDataInstance {
   id: string;
   provider: string;
   label: string;
-  credentials: string;
   settings?: Record<string, unknown>;
   secrets?: Record<string, boolean>;
   enabled: boolean;

@@ -3638,7 +3638,6 @@ describe("market-data client settings payloads", () => {
           id: "md-created",
           provider: "ib",
           label: "IB Gateway",
-          credentials: "",
           enabled: true,
           state: "",
           verifiesSymbols: false,

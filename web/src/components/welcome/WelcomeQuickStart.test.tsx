@@ -65,7 +65,6 @@ function byoInstance(
     id: "byo-1",
     provider: "byo",
     label: "FX (static)",
-    credentials: "",
     settings: {},
     secrets: {},
     enabled: true,

@@ -9175,7 +9175,6 @@ components:
           id,
           provider,
           label,
-          credentials,
           state,
           enabled,
           verifiesSymbols,
@@ -9203,9 +9202,6 @@ components:
         label:
           type: string
           description: Human-readable label shown in the operator panel.
-        credentials:
-          type: string
-          description: Always redacted to an empty string in responses.
         settings:
           type: object
           additionalProperties: true

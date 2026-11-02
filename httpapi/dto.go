@@ -340,10 +340,8 @@ type marketDataInstanceDTO struct {
 	// store surrogate id is never serialized.
 	ID string `json:"id"`
 	// Provider is the provider discriminator (e.g. "ib", "binance").
-	Provider string `json:"provider"`
-	Label    string `json:"label"`
-	// Credentials is accepted on create requests but redacted from responses.
-	Credentials     string                    `json:"credentials"`
+	Provider        string                    `json:"provider"`
+	Label           string                    `json:"label"`
 	State           string                    `json:"state"`
 	Error           string                    `json:"error,omitempty"`
 	Enabled         bool                      `json:"enabled"`
@@ -482,7 +480,6 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 		ID:              status.Instance.ExternalID.String(),
 		Provider:        status.Instance.Provider,
 		Label:           status.Instance.Label,
-		Credentials:     "",
 		State:           status.State,
 		Error:           status.Error,
 		Enabled:         status.Instance.Enabled,

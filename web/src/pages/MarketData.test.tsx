@@ -129,7 +129,6 @@ function ibInstance(
     id: "ib-1",
     provider: "ib",
     label: "IB Gateway",
-    credentials: "",
     settings: {
       host: "127.0.0.1",
       port: 7496,

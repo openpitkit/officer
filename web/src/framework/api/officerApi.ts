@@ -1797,7 +1797,6 @@ function normalizeMarketDataInstance(v: unknown): MarketDataInstance {
     id: asString(pick(o, "id", "ID")),
     provider: asString(pick(o, "provider", "Provider", "type", "Type")),
     label: asString(pick(o, "label", "Label")),
-    credentials: asString(pick(o, "credentials", "Credentials")),
     enabled: asBool(pick(o, "enabled", "Enabled")),
     state: asString(pick(o, "state", "State")),
     verifiesSymbols: asBool(
