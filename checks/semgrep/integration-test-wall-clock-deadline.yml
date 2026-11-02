@@ -1,0 +1,57 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# No wall-clock deadline on a wait in the integration tests (Go).
+#
+# A deadline armed in a test runs while the machine runs everything else: under
+# `-race` and several parallel gates the process can be descheduled for longer
+# than the deadline, which then expires before the awaited call even runs, and
+# the test fails without a defect ("context deadline exceeded").
+#
+# The test waits for the state instead. A request runs under testCtx(t), which
+# ends with the test; an awaited goroutine is received from without a budget.
+# A wait that really hangs is caught by go test's -timeout, which also prints
+# every goroutine's stack. A short window that proves something does NOT
+# happen is not this rule's business: load cannot turn it red.
+
+rules:
+  - id: integration-test-wall-clock-deadline
+    message: >-
+      An integration test bounds a wait by wall-clock time, which a loaded
+      machine can spend before the awaited call runs. Use testCtx(t) for a
+      request and a plain receive for an awaited goroutine; go test's -timeout
+      catches a real hang.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - pattern: context.WithTimeout(...)
+      - pattern: context.WithDeadline(...)
+      - pattern: |
+          select {
+          case <-$CH:
+          case <-time.After($D):
+            $T.Fatal(...)
+          }
+      - pattern: |
+          select {
+          case <-$CH:
+          case <-time.After($D):
+            $T.Fatalf(...)
+          }
+    paths:
+      include:
+        - "/internal/integration/**/*_test.go"

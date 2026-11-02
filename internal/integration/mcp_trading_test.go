@@ -501,7 +501,7 @@ func TestUpdateTradingConnectionPaddedID(t *testing.T) {
 }
 
 func TestUpdateTradingConnectionUnknownFields(t *testing.T) {
-	ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
+	ctx, cancel := context.WithCancel(testCtx(t))
 	defer cancel()
 	src := tradingFixture()
 	server, err := frameworkmcp.Build(officerToolRegistry(), src, nil, httpx.AllowAll{}, operatorCaller())

@@ -25,6 +25,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { filterSetShare, shareLinkParams } from "@/test/pageHelpers";
+import { holdPolling } from "@/test/polling";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -204,6 +205,27 @@ function lastTradeFilters() {
   return calls[calls.length - 1]?.[0];
 }
 
+// Suggestion lookups answer by the queried prefix, ASCII case-insensitively as
+// the store's LIKE does, so a case does not depend on how many debounced
+// lookups typing produced.
+function codesStartingWith(codes: string[], prefix: string) {
+  return codes
+    .filter((item) => item.toLowerCase().startsWith(prefix.toLowerCase()))
+    .map((item) => ({ code: item }));
+}
+
+function answerAccountSuggestions(...codes: string[]) {
+  fetchAccountsMock.mockImplementation(async ({ code }: { code: string }) =>
+    codesStartingWith(codes, code),
+  );
+}
+
+function answerAssetSuggestions(...codes: string[]) {
+  fetchAssetsMock.mockImplementation(async ({ code }: { code: string }) =>
+    codesStartingWith(codes, code),
+  );
+}
+
 function orderFilterWasRequested(
   match: (filters: OrderListFilters) => boolean,
 ): boolean {
@@ -351,7 +373,10 @@ function renderOrders(initialEntry: string) {
 }
 
 beforeEach(async () => {
-  vi.clearAllMocks();
+  // Reset, not clear: clearing keeps queued *Once results, so a case that
+  // ends before its submit (a timeout on a stalled machine) would hand its
+  // queued createOrder result to the next cases.
+  vi.resetAllMocks();
   useTradingMock.mockReturnValue(defaultTradingResult);
   await i18n.changeLanguage("en");
   useOrdersMock.mockReturnValue(readyPage<Order>([]));
@@ -3201,7 +3226,7 @@ describe("Orders filter, debounce, sort and pagination", () => {
 
   it("applies an order account suggestion when it is selected", async () => {
     const user = userEvent.setup();
-    fetchAccountsMock.mockResolvedValueOnce([{ code: "desk-alpha" }]);
+    answerAccountSuggestions("desk-alpha");
     renderOrders("/orders");
 
     await user.type(screen.getByPlaceholderText(/filter by account/i), "des");
@@ -3216,7 +3241,7 @@ describe("Orders filter, debounce, sort and pagination", () => {
 
   it("applies the first order account suggestion on Enter", async () => {
     const user = userEvent.setup();
-    fetchAccountsMock.mockResolvedValueOnce([{ code: "desk-alpha" }]);
+    answerAccountSuggestions("desk-alpha");
     renderOrders("/orders");
 
     await user.type(screen.getByPlaceholderText(/filter by account/i), "DES");
@@ -3232,7 +3257,7 @@ describe("Orders filter, debounce, sort and pagination", () => {
 
   it("applies all edited order identity filters when Enter accepts a suggestion", async () => {
     const user = userEvent.setup();
-    fetchAssetsMock.mockResolvedValueOnce([{ code: "AAPL" }]);
+    answerAssetSuggestions("AAPL");
     renderOrders("/orders");
 
     await user.type(
@@ -3255,7 +3280,7 @@ describe("Orders filter, debounce, sort and pagination", () => {
 
   it("applies a trade asset suggestion when it is selected", async () => {
     const user = userEvent.setup();
-    fetchAssetsMock.mockResolvedValueOnce([{ code: "AAPL" }]);
+    answerAssetSuggestions("AAPL");
     renderOrders("/orders?tab=trades");
     await user.click(screen.getByRole("tab", { name: /^trades$/i }));
 
@@ -5393,22 +5418,7 @@ describe("Order detail venue section", () => {
     fetchEventReproductionMock.mockRejectedValue(
       new Error("Verification fixture intentionally unavailable"),
     );
-    let poll: (() => void) | undefined;
-    const originalSetInterval = window.setInterval.bind(window);
-    const setIntervalSpy = vi
-      .spyOn(window, "setInterval")
-      .mockImplementation((handler, delay, ...args) => {
-        if (delay === 5000 && typeof handler === "function") {
-          poll = () => handler();
-          return 1 as unknown as ReturnType<typeof setInterval>;
-        }
-        return originalSetInterval(
-          handler,
-          delay,
-          ...args,
-        ) as unknown as ReturnType<typeof setInterval>;
-      });
-    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    const polling = holdPolling();
 
     renderOrders("/orders");
     await user.click(screen.getByText(sampleOrder.id));
@@ -5416,7 +5426,7 @@ describe("Order detail venue section", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
+    expect(polling.scheduled()).toBe(1);
 
     const detail = screen.getByRole("dialog", {
       name: `Order ${sampleOrder.id}`,
@@ -5429,10 +5439,10 @@ describe("Order detail venue section", () => {
     const verification = await screen.findByRole("dialog", {
       name: "Reproduce and verify",
     });
-    expect(poll).toBeDefined();
+    expect(polling.scheduled()).toBe(1);
 
     await act(async () => {
-      poll?.();
+      polling.tick();
       await Promise.resolve();
     });
 
@@ -5444,10 +5454,9 @@ describe("Order detail venue section", () => {
       within(detail).getByText("Venue status").parentElement,
     ).toHaveTextContent("Filled");
     expect(verification).toBeInTheDocument();
-    await waitFor(() => expect(clearIntervalSpy).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(polling.scheduled()).toBe(0));
 
-    setIntervalSpy.mockRestore();
-    clearIntervalSpy.mockRestore();
+    polling.restore();
   });
 });
 

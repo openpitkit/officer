@@ -163,8 +163,7 @@ func TestListToolsOverMCP(t *testing.T) {
 
 func TestListToolsSessionContract(t *testing.T) {
 	src := listRowsFixture()
-	ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
-	defer cancel()
+	ctx := testCtx(t)
 	session, closeSession := officerSession(t, ctx, src)
 	defer closeSession()
 

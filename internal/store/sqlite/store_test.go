@@ -55,12 +55,61 @@ import (
 // behaviour is covered by TestRealmDataOpAfterCloseReturnsClosedError.
 func (r *realmStore) rawDB() *sql.DB { return r.store.currentDB() }
 
+// migratedDatabase is a database file migrated once per test binary without
+// options. Migrating from scratch costs about half a second under -race, and
+// paid by each of the package's several hundred cases it put the package past
+// go test's -timeout on a loaded machine.
+var migratedDatabase struct {
+	once  sync.Once
+	bytes []byte
+	err   error
+}
+
+func migratedDatabaseBytes() ([]byte, error) {
+	migratedDatabase.once.Do(func() {
+		dir, err := os.MkdirTemp("", "officer-sqlite-migrated-")
+		if err != nil {
+			migratedDatabase.err = err
+			return
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		path := filepath.Join(dir, "officer.db")
+		s, err := New(path, domain.DefaultRealm)
+		if err != nil {
+			migratedDatabase.err = fmt.Errorf("New: %w", err)
+			return
+		}
+		if err := s.Migrate(context.Background()); err != nil {
+			_ = s.Close()
+			migratedDatabase.err = fmt.Errorf("Migrate: %w", err)
+			return
+		}
+		if err := s.Close(); err != nil {
+			migratedDatabase.err = fmt.Errorf("Close: %w", err)
+			return
+		}
+		migratedDatabase.bytes, migratedDatabase.err = os.ReadFile(path)
+	})
+	return migratedDatabase.bytes, migratedDatabase.err
+}
+
 // newTestStore opens a fresh migrated SQLite store in a temp file and returns it
-// with its default realm handle.
+// with its default realm handle. Without options the file starts as a copy of
+// the once-migrated database; options steer migration itself (the master key's
+// state machine, the pre-migration copy), so with them it migrates from scratch.
 func newTestStore(t *testing.T, opts ...Option) (fwstore.Store, fwstore.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
+	if len(opts) == 0 {
+		migrated, err := migratedDatabaseBytes()
+		if err != nil {
+			t.Fatalf("migrate shared test database: %v", err)
+		}
+		if err := os.WriteFile(path, migrated, 0o600); err != nil {
+			t.Fatalf("copy migrated test database: %v", err)
+		}
+	}
 	s, err := New(path, domain.DefaultRealm, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)

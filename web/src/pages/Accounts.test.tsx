@@ -2125,7 +2125,15 @@ describe("Accounts business CSV", () => {
     const consoleError = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    fetchAssetsMock.mockRejectedValueOnce(error);
+    // The lookup fails for the query typed below, not for the first call: the
+    // dialog opens on the stored "USD", and how many debounced lookups run
+    // before "EU" depends on the machine's speed.
+    fetchAssetsMock.mockImplementation(async ({ code }: { code: string }) => {
+      if (code === "EU") {
+        throw error;
+      }
+      return [];
+    });
     useAccountsMock.mockReturnValue(
       readyPage(
         [

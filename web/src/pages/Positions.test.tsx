@@ -1261,7 +1261,14 @@ describe("Positions adjustment panel", () => {
     const consoleError = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    fetchAssetsMock.mockRejectedValueOnce(error);
+    // The lookup fails for the query typed below, not for the first call: a
+    // slow machine also looks up "A" while "AA" is being typed.
+    fetchAssetsMock.mockImplementation(async ({ code }: { code: string }) => {
+      if (code === "AA") {
+        throw error;
+      }
+      return [];
+    });
     renderPositions();
 
     await user.click(

@@ -25,7 +25,15 @@ import {
 import userEvent from "@testing-library/user-event";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { fetchCredentialStorage } from "@/api/credentialStorage";
 import type {
@@ -43,6 +51,7 @@ import i18n from "@/i18n";
 import { setAccountScope } from "@/lib/accountScope";
 import { TradingConnections } from "@/pages/TradingConnections";
 import { accountRow, renderWithApi } from "@/test/apiClient";
+import { holdPolling } from "@/test/polling";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
@@ -248,8 +257,17 @@ beforeAll(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 
+// The cases count the snapshot reads an action causes, so the 5 s background
+// poll is held: on a slow machine it would otherwise add reads mid-case.
+let polling: ReturnType<typeof holdPolling>;
+
+afterEach(() => {
+  polling.restore();
+});
+
 beforeEach(async () => {
   vi.resetAllMocks();
+  polling = holdPolling();
   await i18n.changeLanguage("en");
   snapshot = {
     providers: [provider],

@@ -18,7 +18,6 @@
 package integration_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -26,7 +25,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/backend"
@@ -42,8 +40,7 @@ var oneAccountFeatures = backend.AccountFeatures{Account: "default"}
 // server built over src.
 func listToolsFor(t *testing.T, src frameworkmcp.Source) map[string]*sdkmcp.Tool {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
-	defer cancel()
+	ctx := testCtx(t)
 	session, closeSession := officerSession(t, ctx, src)
 	list, listErr := session.ListTools(ctx, nil)
 	closeSession()
@@ -399,8 +396,7 @@ func TestRelaxedInputRefusalsWithOneAccount(t *testing.T) {
 			accountFeatures: oneAccountFeatures,
 			checkResult:     domain.CheckResult{Passed: true},
 		}
-		ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
-		defer cancel()
+		ctx := testCtx(t)
 		session, closeSession := officerSession(t, ctx, src)
 		_, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
 			Name:      checkOrderToolName,

@@ -860,8 +860,7 @@ func TestSetLimitRefusesUndeclaredField(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			service, src := tools(t)
-			ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
-			defer cancel()
+			ctx := testCtx(t)
 			session, closeSession := officerSession(t, ctx, src)
 			_, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
 				Name: "set_limit",

@@ -201,6 +201,7 @@ check-semgrep: install-python-tools
     {{ semgrep }} --test --config checks/semgrep/no-local-secret-redaction.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-local-secret-redaction.go
     {{ semgrep }} --test --config checks/semgrep/tailwind-v4-utilities.yml --metrics=off --disable-version-check checks/semgrep/testdata/tailwind-v4-utilities.tsx
     {{ semgrep }} --test --config checks/semgrep/panel-site-link-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-site-link-reuse.tsx
+    {{ semgrep }} --test --config checks/semgrep/integration-test-wall-clock-deadline.yml --metrics=off --disable-version-check checks/semgrep/testdata/integration-test-wall-clock-deadline.go
 
 # Lint all.
 [parallel]

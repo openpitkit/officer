@@ -19,6 +19,7 @@ package integration_test
 
 import (
 	"context"
+	"testing"
 
 	"go.openpit.dev/officer/framework/auth"
 )
@@ -27,4 +28,11 @@ import (
 // every test reaches the service with unless it stamps its own.
 func systemCtx() context.Context {
 	return auth.ContextWithCaller(context.Background(), auth.SystemCaller())
+}
+
+// testCtx is systemCtx ending with t. A call that hangs under it is caught by
+// go test's -timeout, not by a wall-clock deadline: a loaded machine can spend
+// such a deadline before the call even runs.
+func testCtx(t *testing.T) context.Context {
+	return auth.ContextWithCaller(t.Context(), auth.SystemCaller())
 }

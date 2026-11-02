@@ -18,13 +18,11 @@
 package integration_test
 
 import (
-	"context"
 	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -32,8 +30,7 @@ import (
 
 func TestServerToolSnapshot(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(systemCtx(), 5*time.Second)
-	defer cancel()
+	ctx := testCtx(t)
 	session, closeSession := officerSession(t, ctx, &fakeSource{})
 	defer closeSession()
 
