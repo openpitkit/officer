@@ -78,6 +78,9 @@ RUN if [ -z "${OFFICER_COMMIT}" ]; then \
 # Stage 3: runtime image.
 FROM debian:bookworm-slim AS runtime
 
+# Proves to the MCP Registry that this image belongs to the server in server.json.
+LABEL io.modelcontextprotocol.server.name="io.github.openpitkit/officer"
+
 # C runtime required by the openpit binding (libgcc / glibc).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgcc-s1 \

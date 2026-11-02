@@ -2,11 +2,11 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.openpitkit/officer",
   "title": "Pit Officer",
-  "description": "Pre-trade risk limits for AI trading agents: every order is checked before it reaches your broker.",
+  "description": "Let your AI agent trade - with limits it can't bypass. Free, open source, runs on your computer.",
   "repository": {
     "url": "https://github.com/openpitkit/officer",
     "source": "github"
   },
   "websiteUrl": "https://officer.openpit.dev/",
-  "version": "0.1.0"
+  "version": "0.2.1"
 }
