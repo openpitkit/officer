@@ -15,8 +15,8 @@
 #
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
-# Publishes the `serve` image to GHCR after CI on `main` (the edge channel),
-# from version tags (the stable channel and pre-releases), and from a dry-run
+# Publishes the `serve` image to GHCR after CI on `main` (the edge channel)
+# and version tags (the stable channel and pre-releases), and from a dry-run
 # dispatch on the `release-dry-run` branch. A version tag then gets its GitHub
 # release, described by the committed RELEASE_NOTES.md.
 
@@ -24,8 +24,6 @@ name: Release
 
 on:
   workflow_call:
-  push:
-    tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
       dry_run:
@@ -48,7 +46,7 @@ jobs:
   publish:
     name: Publish image (ghcr.io/openpitkit/officer)
     runs-on: ubuntu-latest
-    # Version tags wait for approval in the protected `release` environment.
+    # Version tags bind the protected `release` environment.
     # Main CI and the dry-run dispatch bind no environment.
     environment: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && 'release' || '' }}
     permissions:
