@@ -121,152 +121,250 @@ const CONNECTION_STATE_BADGE: Record<
   stopped: "neutral",
 };
 
+type TradingGuideStep = {
+  textKey: string;
+  /** The step's text while accounts are hidden, when it differs. */
+  singleAccountTextKey?: string;
+  values?: Record<string, string>;
+  links: Array<{ labelKey: string; href: string }>;
+};
+
+const IB_DOWNLOAD_URL =
+  "https://www.interactivebrokers.com/en/trading/ibgateway-stable.php";
+const IB_DOCS_URL =
+  "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/";
+const IB_API_SETTINGS = {
+  settingsPath: "Configure > Settings > API > Settings",
+  socketClients: "Enable ActiveX and Socket Clients",
+  readOnlyApi: "Read-Only API",
+  trustedIPs: "Trusted IPs",
+};
+const IB_KEEP_RUNNING: TradingGuideStep = {
+  textKey: "create.ib.keepRunning",
+  links: [],
+};
+const ALPACA_SIGN_UP = {
+  labelKey: "create.alpaca.signUp",
+  href: "https://app.alpaca.markets/signup",
+};
+const ALPACA_LOG_IN = {
+  labelKey: "create.alpaca.logIn",
+  href: "https://app.alpaca.markets/account/login",
+};
+const ALPACA_OPEN_DASHBOARD = {
+  labelKey: "create.alpaca.openDashboard",
+  href: "https://app.alpaca.markets/dashboard/overview",
+};
+const ALPACA_PAPER_DOCS_URL =
+  "https://docs.alpaca.markets/us/docs/paper-trading";
+const ALPACA_LIVE_DOCS_URL =
+  "https://docs.alpaca.markets/us/docs/authentication";
+const ALPACA_KEEP_DASHBOARD_OPEN: TradingGuideStep = {
+  textKey: "create.alpaca.keepDashboardOpen",
+  links: [],
+};
+const BINANCE_TESTNET_URL = "https://testnet.binance.vision/";
+const BINANCE_LIVE_DOCS_URL =
+  "https://www.binance.com/en/support/faq/how-to-create-api-keys-on-binance-360002502072";
+const BINANCE_KEEP_PAGE_OPEN: TradingGuideStep = {
+  textKey: "create.binance.keepPageOpen",
+  links: [],
+};
+const ETORO_DOCS_URL =
+  "https://api-portal.etoro.com/core/getting-started/authentication";
+const ETORO_LOG_IN: TradingGuideStep = {
+  textKey: "create.etoro.logInAccount",
+  links: [
+    { labelKey: "create.etoro.logIn", href: "https://www.etoro.com/login" },
+  ],
+};
+// Steps that hold for a demo and a real eToro account alike.
+const ETORO_COPY_USER_KEY: TradingGuideStep = {
+  textKey: "create.etoro.copyUserKey",
+  links: [],
+};
+const ETORO_PUBLIC_API_KEY: TradingGuideStep = {
+  textKey: "create.etoro.publicApiKey",
+  links: [
+    { labelKey: "create.etoro.authenticationGuide", href: ETORO_DOCS_URL },
+  ],
+};
+const ETORO_KEEP_DIALOG_OPEN: TradingGuideStep = {
+  textKey: "create.etoro.keepDialogOpen",
+  links: [],
+};
+
+/**
+ * Venue links and account preparation steps, per trading mode: a live
+ * connection needs a real account, which the venues set up differently from
+ * a paper one. The provider picker opens a paper draft, so it links the paper
+ * docs.
+ */
 const TRADING_PROVIDER_GUIDES: Record<
   string,
   {
     siteUrl?: string;
-    docsUrl?: string;
-    /** docsUrl covers paper trading only, so a live connection omits it. */
-    paperDocs?: true;
-    /** Paper preparation steps; the live add dialog shows none. */
-    steps?: Array<{
-      textKey: string;
-      /** The step's text while accounts are hidden, when it differs. */
-      singleAccountTextKey?: string;
-      values?: Record<string, string>;
-      links: Array<{ labelKey: string; href: string }>;
-    }>;
+    docsUrl?: Record<TradingMode, string>;
+    steps?: Record<TradingMode, TradingGuideStep[]>;
   }
 > = {
   ib: {
     siteUrl: "https://www.interactivebrokers.com",
-    docsUrl:
-      "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
-    steps: [
-      {
-        textKey: "create.ib.install",
-        links: [
-          {
-            labelKey: "create.ib.download",
-            href: "https://www.interactivebrokers.com/en/trading/ibgateway-stable.php",
-          },
-        ],
-      },
-      {
-        textKey: "create.ib.enableApi",
-        values: {
-          settingsPath: "Configure > Settings > API > Settings",
-          socketClients: "Enable ActiveX and Socket Clients",
-          readOnlyApi: "Read-Only API",
-          trustedIPs: "Trusted IPs",
+    docsUrl: { paper: IB_DOCS_URL, live: IB_DOCS_URL },
+    steps: {
+      paper: [
+        {
+          textKey: "create.ib.install",
+          links: [{ labelKey: "create.ib.download", href: IB_DOWNLOAD_URL }],
         },
-        links: [
-          {
-            labelKey: "create.ib.documentation",
-            href: "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
-          },
-        ],
-      },
-      { textKey: "create.ib.keepRunning", links: [] },
-      {
-        textKey: "create.ib.grantAccess",
-        singleAccountTextKey: "create.ib.setVenueAccount",
-        values: { paperAccountPrefix: "DU" },
-        links: [],
-      },
-    ],
+        {
+          textKey: "create.ib.enableApi",
+          values: IB_API_SETTINGS,
+          links: [{ labelKey: "create.ib.documentation", href: IB_DOCS_URL }],
+        },
+        IB_KEEP_RUNNING,
+        {
+          textKey: "create.ib.grantAccess",
+          singleAccountTextKey: "create.ib.setVenueAccount",
+          values: { paperAccountPrefix: "DU" },
+          links: [],
+        },
+      ],
+      live: [
+        {
+          textKey: "create.ib.live.install",
+          links: [{ labelKey: "create.ib.download", href: IB_DOWNLOAD_URL }],
+        },
+        {
+          textKey: "create.ib.live.enableApi",
+          values: IB_API_SETTINGS,
+          links: [{ labelKey: "create.ib.documentation", href: IB_DOCS_URL }],
+        },
+        IB_KEEP_RUNNING,
+        {
+          textKey: "create.ib.live.grantAccess",
+          singleAccountTextKey: "create.ib.live.setVenueAccount",
+          links: [],
+        },
+      ],
+    },
   },
   alpaca: {
     siteUrl: "https://alpaca.markets",
-    docsUrl: "https://docs.alpaca.markets/us/docs/paper-trading",
-    paperDocs: true,
-    steps: [
-      {
-        textKey: "create.alpaca.createAccount",
-        links: [
-          {
-            labelKey: "create.alpaca.signUp",
-            href: "https://app.alpaca.markets/signup",
-          },
-          {
-            labelKey: "create.alpaca.logIn",
-            href: "https://app.alpaca.markets/account/login",
-          },
-        ],
-      },
-      {
-        textKey: "create.alpaca.openPaperAccount",
-        links: [
-          {
-            labelKey: "create.alpaca.openDashboard",
-            href: "https://app.alpaca.markets/dashboard/overview",
-          },
-          {
-            labelKey: "create.alpaca.aboutPaperTrading",
-            href: "https://docs.alpaca.markets/us/docs/paper-trading",
-          },
-        ],
-      },
-      {
-        textKey: "create.alpaca.generateKeys",
-        links: [],
-      },
-      {
-        textKey: "create.alpaca.keepDashboardOpen",
-        links: [],
-      },
-    ],
+    docsUrl: { paper: ALPACA_PAPER_DOCS_URL, live: ALPACA_LIVE_DOCS_URL },
+    steps: {
+      paper: [
+        {
+          textKey: "create.alpaca.createAccount",
+          links: [ALPACA_SIGN_UP, ALPACA_LOG_IN],
+        },
+        {
+          textKey: "create.alpaca.openPaperAccount",
+          links: [
+            ALPACA_OPEN_DASHBOARD,
+            {
+              labelKey: "create.alpaca.aboutPaperTrading",
+              href: ALPACA_PAPER_DOCS_URL,
+            },
+          ],
+        },
+        {
+          textKey: "create.alpaca.generateKeys",
+          links: [],
+        },
+        ALPACA_KEEP_DASHBOARD_OPEN,
+      ],
+      live: [
+        {
+          textKey: "create.alpaca.live.openAccount",
+          links: [ALPACA_SIGN_UP, ALPACA_LOG_IN],
+        },
+        {
+          textKey: "create.alpaca.live.generateKeys",
+          links: [
+            ALPACA_OPEN_DASHBOARD,
+            {
+              labelKey: "create.alpaca.live.aboutCredentials",
+              href: ALPACA_LIVE_DOCS_URL,
+            },
+          ],
+        },
+        ALPACA_KEEP_DASHBOARD_OPEN,
+      ],
+    },
   },
   binance: {
     siteUrl: "https://www.binance.com",
-    docsUrl: "https://testnet.binance.vision/",
-    paperDocs: true,
-    steps: [
-      {
-        textKey: "create.binance.openTestnet",
-        links: [
-          {
-            labelKey: "create.binance.openSpotTestnet",
-            href: "https://testnet.binance.vision/",
+    docsUrl: { paper: BINANCE_TESTNET_URL, live: BINANCE_LIVE_DOCS_URL },
+    steps: {
+      paper: [
+        {
+          textKey: "create.binance.openTestnet",
+          links: [
+            {
+              labelKey: "create.binance.openSpotTestnet",
+              href: BINANCE_TESTNET_URL,
+            },
+          ],
+        },
+        {
+          textKey: "create.binance.generateKeys",
+          links: [],
+        },
+        BINANCE_KEEP_PAGE_OPEN,
+      ],
+      live: [
+        {
+          textKey: "create.binance.live.prepareAccount",
+          links: [
+            {
+              labelKey: "create.binance.live.apiKeyGuide",
+              href: BINANCE_LIVE_DOCS_URL,
+            },
+          ],
+        },
+        {
+          textKey: "create.binance.live.createKey",
+          values: {
+            account: "Account",
+            apiManagement: "API Management",
+            createApi: "Create API",
+            systemGenerated: "System generated",
           },
-        ],
-      },
-      {
-        textKey: "create.binance.generateKeys",
-        links: [],
-      },
-      {
-        textKey: "create.binance.keepPageOpen",
-        links: [],
-      },
-    ],
+          links: [],
+        },
+        {
+          textKey: "create.binance.live.restrictKey",
+          values: {
+            editRestrictions: "Edit restrictions",
+            trustedIPs: "Restrict access to trusted IPs only",
+            spotTrading: "Enable Spot & Margin Trading",
+          },
+          links: [],
+        },
+        BINANCE_KEEP_PAGE_OPEN,
+      ],
+    },
   },
   etoro: {
     siteUrl: "https://www.etoro.com",
-    docsUrl: "https://api-portal.etoro.com/core/getting-started/authentication",
-    steps: [
-      {
-        textKey: "create.etoro.logInAccount",
-        links: [
-          {
-            labelKey: "create.etoro.logIn",
-            href: "https://www.etoro.com/login",
-          },
-        ],
-      },
-      { textKey: "create.etoro.createUserKey", links: [] },
-      { textKey: "create.etoro.copyUserKey", links: [] },
-      {
-        textKey: "create.etoro.publicApiKey",
-        links: [
-          {
-            labelKey: "create.etoro.authenticationGuide",
-            href: "https://api-portal.etoro.com/core/getting-started/authentication",
-          },
-        ],
-      },
-      { textKey: "create.etoro.keepDialogOpen", links: [] },
-    ],
+    docsUrl: { paper: ETORO_DOCS_URL, live: ETORO_DOCS_URL },
+    steps: {
+      paper: [
+        ETORO_LOG_IN,
+        { textKey: "create.etoro.createUserKey", links: [] },
+        ETORO_COPY_USER_KEY,
+        ETORO_PUBLIC_API_KEY,
+        ETORO_KEEP_DIALOG_OPEN,
+      ],
+      live: [
+        ETORO_LOG_IN,
+        { textKey: "create.etoro.live.createUserKey", links: [] },
+        ETORO_COPY_USER_KEY,
+        ETORO_PUBLIC_API_KEY,
+        ETORO_KEEP_DIALOG_OPEN,
+      ],
+    },
   },
 };
 
@@ -399,12 +497,10 @@ function IBConnectionFields({
   );
 }
 
-/** Card links of a connection: a live one never links to paper-only docs. */
+/** Card links of a connection: the venue docs for its trading mode. */
 function tradingConnectionLinks(provider: string, mode: TradingMode) {
   const guide = TRADING_PROVIDER_GUIDES[provider];
-  return mode === "live" && guide?.paperDocs
-    ? { siteUrl: guide.siteUrl }
-    : guide;
+  return { siteUrl: guide?.siteUrl, docsUrl: guide?.docsUrl?.[mode] };
 }
 
 function AddTradingConnectionDialog({
@@ -543,48 +639,46 @@ function AddTradingConnectionDialog({
             />
           </fieldset>
           <UnsealedKeysWarning storage={credentialStorage} />
-          {mode === "paper" && (
-            <div className="flex flex-col gap-y-3">
-              <h2 className="text-sm font-bold">
-                {t("create.prepareAccount", { provider: provider.title })}
-              </h2>
-              {guide?.steps && (
-                <ol className="list-outside list-decimal flex flex-col gap-y-4 pl-5 text-sm">
-                  {guide.steps.map((instruction) => (
-                    <li
-                      key={instruction.textKey}
-                      className="flex flex-col gap-y-2 pl-1"
-                    >
-                      <p>
-                        {t(
-                          !accountScope().showsAccounts &&
-                            instruction.singleAccountTextKey !== undefined
-                            ? instruction.singleAccountTextKey
-                            : instruction.textKey,
-                          instruction.values,
-                        )}
-                      </p>
-                      {instruction.links.length > 0 && (
-                        <div className="flex flex-wrap gap-3">
-                          {instruction.links.map((link) => (
-                            <a
-                              key={link.labelKey}
-                              href={link.href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-accent underline underline-offset-4"
-                            >
-                              {t(link.labelKey)}
-                            </a>
-                          ))}
-                        </div>
+          <div className="flex flex-col gap-y-3">
+            <h2 className="text-sm font-bold">
+              {t("create.prepareAccount", { provider: provider.title })}
+            </h2>
+            {guide?.steps && (
+              <ol className="list-outside list-decimal flex flex-col gap-y-4 pl-5 text-sm">
+                {guide.steps[mode].map((instruction) => (
+                  <li
+                    key={instruction.textKey}
+                    className="flex flex-col gap-y-2 pl-1"
+                  >
+                    <p>
+                      {t(
+                        !accountScope().showsAccounts &&
+                          instruction.singleAccountTextKey !== undefined
+                          ? instruction.singleAccountTextKey
+                          : instruction.textKey,
+                        instruction.values,
                       )}
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
-          )}
+                    </p>
+                    {instruction.links.length > 0 && (
+                      <div className="flex flex-wrap gap-3">
+                        {instruction.links.map((link) => (
+                          <a
+                            key={link.labelKey}
+                            href={link.href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-accent underline underline-offset-4"
+                          >
+                            {t(link.labelKey)}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
           {isIB ? (
             <IBConnectionFields
               id={id}
@@ -2162,7 +2256,7 @@ export function TradingConnections() {
             type: provider.type,
             title: provider.title,
             siteUrl: TRADING_PROVIDER_GUIDES[provider.type]?.siteUrl,
-            docsUrl: TRADING_PROVIDER_GUIDES[provider.type]?.docsUrl,
+            docsUrl: TRADING_PROVIDER_GUIDES[provider.type]?.docsUrl?.paper,
           }))}
           onOpenChange={setAddOpen}
           onSelect={(entry) => {

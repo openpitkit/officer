@@ -47,7 +47,13 @@
       "documentation": "TWS API 文档",
       "keepRunning": "保持 IB Gateway 运行并处于登录状态。在下方输入其主机和端口；客户端标识可选。",
       "grantAccess": "创建连接后，请将您的 IB 账户标识（模拟交易以 {{paperAccountPrefix}} 开头）设为交易场所账户并授予访问权限。订单仅能通过绑定该账户的授权发送至 IB。",
-      "setVenueAccount": "创建连接后，请将您的 IB 账户标识（模拟交易以 {{paperAccountPrefix}} 开头）填写为该连接的交易场所账户。订单仅能通过该账户发送至 IB。"
+      "setVenueAccount": "创建连接后，请将您的 IB 账户标识（模拟交易以 {{paperAccountPrefix}} 开头）填写为该连接的交易场所账户。订单仅能通过该账户发送至 IB。",
+      "live": {
+        "install": "安装 IB Gateway（或 TWS），并使用您的实盘交易用户名登录。",
+        "enableApi": "在 {{settingsPath}} 中启用套接字客户端（TWS：\"{{socketClients}}\"），取消勾选 \"{{readOnlyApi}}\" 以接受订单，并记下套接字端口（IB Gateway 实盘交易：4001；TWS 实盘交易：7496）。在 {{trustedIPs}} 中允许 127.0.0.1，或接受连接提示。",
+        "grantAccess": "创建连接后，请将您的 IB 实盘账户标识设为交易场所账户并授予访问权限。订单仅能通过绑定该账户的授权发送至 IB。",
+        "setVenueAccount": "创建连接后，请将您的 IB 实盘账户标识填写为该连接的交易场所账户。订单仅能通过该账户发送至 IB。"
+      }
     },
     "title": "添加 {{provider}} 连接",
     "chooseVenue": "选择交易场所",
@@ -61,22 +67,36 @@
       "openDashboard": "打开 Alpaca 控制面板",
       "aboutPaperTrading": "关于模拟交易",
       "generateKeys": "生成模拟交易 API 密钥：选择 Paper Trading 后，在控制面板中找到 API Keys 面板，然后点击 Generate New Key。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。模拟交易密钥仅适用于模拟交易账户。",
-      "keepDashboardOpen": "请保持控制面板打开 - 下方字段需要填写这两个值。"
+      "keepDashboardOpen": "请保持控制面板打开 - 下方字段需要填写这两个值。",
+      "live": {
+        "openAccount": "开设实盘经纪账户：在 Alpaca 控制面板中使用政府签发的身份证件提交开户申请，申请获批后为账户注资。实盘订单需要已获批且已注资的账户。",
+        "generateKeys": "生成实盘 API 密钥：在控制面板左上角选择 Live Trading，找到 API Keys 面板并生成新密钥。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。实盘密钥与模拟交易密钥不同，不适用于模拟交易账户。",
+        "aboutCredentials": "关于实盘凭据"
+      }
     },
     "binance": {
       "openTestnet": "请打开 Binance 现货测试网，并使用 GitHub 账户登录。",
       "openSpotTestnet": "打开现货测试网",
       "generateKeys": "请在该页面生成使用 HMAC-SHA256 算法的 API 密钥，并复制 API key 和 API secret。模拟交易连接使用现货测试网；测试网密钥仅适用于该测试网。",
-      "keepPageOpen": "请保持页面打开 - 下方字段需要填写这两个值。"
+      "keepPageOpen": "请保持页面打开 - 下方字段需要填写这两个值。",
+      "live": {
+        "prepareAccount": "请满足 Binance 签发 API 密钥的账户要求：完成身份认证、启用双重验证，并向现货钱包存入任意金额。",
+        "apiKeyGuide": "如何创建 API 密钥",
+        "createKey": "创建 API 密钥：点击个人资料图标，然后点击 {{account}}，进入 {{apiManagement}} 并点击 {{createApi}}。选择 {{systemGenerated}} - Officer 使用 HMAC-SHA256 签名请求 - 输入标签并完成双重验证。复制 API key 和 API secret。",
+        "restrictKey": "点击 {{editRestrictions}}，选择 {{trustedIPs}}，并输入运行 Officer 的计算机的公网 IPv4 地址：未设置该限制时，系统生成的密钥只能读取。然后勾选 {{spotTrading}}，以便 Officer 下单，且不要启用其他权限。"
+      }
     },
     "etoro": {
       "logInAccount": "请登录您的 eToro 账户。",
       "logIn": "登录 eToro",
       "createUserKey": "创建用户密钥：在 eToro 中打开设置，然后进入交易，向下滚动至 API Key Management 并点击 Create New Key。请选择模拟环境 - 每个密钥仅适用于一个环境，Officer 在模拟交易模式下连接模拟账户。请选择写入权限 - 只读权限仅可查看投资组合数据，无法下单。点击 Generate Key，并输入 eToro 发送到您手机的验证码。",
       "copyUserKey": "请从 Generated Keys 列表中复制新密钥，并填入 User key 字段。",
-      "publicApiKey": "Public API key 用于标识应用程序。eToro 身份验证指南说明了该密钥的签发方式。",
+      "publicApiKey": "Public API key 用于标识应用程序。请将其填入 Public API key 字段。",
       "authenticationGuide": "eToro 身份验证指南",
-      "keepDialogOpen": "请保持此对话框打开 - 下方字段需要填写这两个值。"
+      "keepDialogOpen": "请保持此对话框打开 - 下方字段需要填写这两个值。",
+      "live": {
+        "createUserKey": "创建用户密钥：在 eToro 中打开设置，然后进入交易，向下滚动至 API Key Management 并点击 Create New Key。请选择真实环境 - 每个密钥仅适用于一个环境，Officer 在实盘交易模式下连接真实账户。请选择写入权限 - 只读权限仅可查看投资组合数据，无法下单。点击 Generate Key，并输入 eToro 发送到您手机的验证码。API Key Management 仅在您的 eToro 账户完成验证后显示。"
+      }
     }
   },
   "setup": {

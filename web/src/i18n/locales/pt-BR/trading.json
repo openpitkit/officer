@@ -47,7 +47,13 @@
       "documentation": "Documentação da TWS API",
       "keepRunning": "Mantenha o IB Gateway em execução e com a sessão iniciada. Informe o host e a porta abaixo; o ID do cliente é opcional.",
       "grantAccess": "Após criar a conexão, conceda acesso com seu ID de conta IB (começa com {{paperAccountPrefix}} na negociação simulada) como conta na plataforma. As ordens chegam ao IB somente por uma permissão vinculada a essa conta.",
-      "setVenueAccount": "Após criar a conexão, informe seu ID de conta IB (começa com {{paperAccountPrefix}} na negociação simulada) como a conta na plataforma dela. As ordens chegam ao IB somente por essa conta."
+      "setVenueAccount": "Após criar a conexão, informe seu ID de conta IB (começa com {{paperAccountPrefix}} na negociação simulada) como a conta na plataforma dela. As ordens chegam ao IB somente por essa conta.",
+      "live": {
+        "install": "Instale o IB Gateway (ou TWS) e entre com seu nome de usuário de negociação real.",
+        "enableApi": "Em {{settingsPath}}, habilite os clientes de socket (TWS: \"{{socketClients}}\"), desmarque \"{{readOnlyApi}}\" para aceitar ordens e anote a porta de socket (IB Gateway real: 4001; TWS real: 7496). Permita 127.0.0.1 em {{trustedIPs}} ou aceite a solicitação de conexão.",
+        "grantAccess": "Após criar a conexão, conceda acesso com o ID da sua conta real IB como conta na plataforma. As ordens chegam ao IB somente por uma permissão vinculada a essa conta.",
+        "setVenueAccount": "Após criar a conexão, informe o ID da sua conta real IB como a conta na plataforma dela. As ordens chegam ao IB somente por essa conta."
+      }
     },
     "title": "Adicionar conexão {{provider}}",
     "chooseVenue": "Escolher plataforma",
@@ -61,22 +67,36 @@
       "openDashboard": "Abrir o painel da Alpaca",
       "aboutPaperTrading": "Sobre a negociação simulada",
       "generateKeys": "Gere chaves de API simuladas: com Paper Trading selecionado, localize o quadro API Keys no painel da Alpaca e clique em Generate New Key. Copie a API key e o API secret - a Alpaca mostra o API secret somente uma vez. As chaves simuladas funcionam somente com a conta simulada.",
-      "keepDashboardOpen": "Mantenha o painel da Alpaca aberto - os campos abaixo pedem os dois valores."
+      "keepDashboardOpen": "Mantenha o painel da Alpaca aberto - os campos abaixo pedem os dois valores.",
+      "live": {
+        "openAccount": "Abra uma conta de corretagem real: solicite-a no painel da Alpaca com um documento de identidade oficial e, após a aprovação da solicitação, deposite fundos na conta. As ordens reais exigem uma conta aprovada e com fundos.",
+        "generateKeys": "Gere chaves de API reais: no canto superior esquerdo do painel, selecione Live Trading, localize o quadro API Keys e gere novas chaves. Copie a API key e o API secret - a Alpaca mostra o API secret somente uma vez. As chaves reais são diferentes das simuladas e não funcionam com a conta simulada.",
+        "aboutCredentials": "Sobre as credenciais reais"
+      }
     },
     "binance": {
       "openTestnet": "Abra a rede de testes de negociação à vista da Binance e entre com uma conta do GitHub.",
       "openSpotTestnet": "Abrir a rede de testes de negociação à vista",
       "generateKeys": "Gere uma chave de API HMAC-SHA256 nessa página e copie a API key e o API secret. As conexões simuladas usam a rede de testes de negociação à vista; as chaves de teste funcionam somente nessa rede.",
-      "keepPageOpen": "Mantenha a página aberta - os campos abaixo pedem os dois valores."
+      "keepPageOpen": "Mantenha a página aberta - os campos abaixo pedem os dois valores.",
+      "live": {
+        "prepareAccount": "Cumpra os requisitos da Binance para emitir chaves de API: verificação de identidade, autenticação de dois fatores e um depósito de qualquer valor na carteira à vista.",
+        "apiKeyGuide": "Como criar chaves de API",
+        "createKey": "Crie uma chave de API: clique no ícone do perfil, depois em {{account}}, acesse {{apiManagement}} e clique em {{createApi}}. Escolha {{systemGenerated}} - o Officer assina as solicitações com HMAC-SHA256 - informe um rótulo e conclua a verificação de dois fatores. Copie a API key e o API secret.",
+        "restrictKey": "Clique em {{editRestrictions}}, selecione {{trustedIPs}} e informe o endereço IPv4 público do computador em que o Officer é executado: sem essa restrição, uma chave gerada pelo sistema permite somente leitura. Depois marque {{spotTrading}} para que o Officer possa enviar ordens e não habilite outras permissões."
+      }
     },
     "etoro": {
       "logInAccount": "Entre em sua conta eToro.",
       "logIn": "Entrar na eToro",
       "createUserKey": "Crie uma chave de usuário: na eToro, abra Configurações e depois Negociação, role até API Key Management e clique em Create New Key. Selecione o ambiente de demonstração - cada chave funciona em apenas um ambiente, e o Officer conecta a conta de demonstração no modo simulado. Selecione a permissão de escrita - a permissão somente de leitura mostra dados da carteira e não permite enviar ordens. Clique em Generate Key e informe o código de verificação que a eToro envia ao seu telefone.",
       "copyUserKey": "Copie a nova chave da lista Generated Keys para o campo User key.",
-      "publicApiKey": "A Public API key identifica o aplicativo. O guia de autenticação da eToro explica como ela é emitida.",
+      "publicApiKey": "A Public API key identifica o aplicativo. Informe-a no campo Public API key.",
       "authenticationGuide": "Guia de autenticação da eToro",
-      "keepDialogOpen": "Mantenha este diálogo aberto - os campos abaixo pedem os dois valores."
+      "keepDialogOpen": "Mantenha este diálogo aberto - os campos abaixo pedem os dois valores.",
+      "live": {
+        "createUserKey": "Crie uma chave de usuário: na eToro, abra Configurações e depois Negociação, role até API Key Management e clique em Create New Key. Selecione o ambiente real - cada chave funciona em apenas um ambiente, e o Officer conecta a conta real no modo real. Selecione a permissão de escrita - a permissão somente de leitura mostra dados da carteira e não permite enviar ordens. Clique em Generate Key e informe o código de verificação que a eToro envia ao seu telefone. O API Key Management só aparece depois que sua conta eToro é verificada."
+      }
     }
   },
   "setup": {

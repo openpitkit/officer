@@ -47,7 +47,13 @@
       "documentation": "TWS API documentation",
       "keepRunning": "Keep IB Gateway running and logged in. Enter its host and port below; the client ID is optional.",
       "grantAccess": "After creating the connection, grant access with your IB account ID (starts with {{paperAccountPrefix}} for paper trading) as the venue account. Orders reach IB only through a grant bound to that account.",
-      "setVenueAccount": "After creating the connection, enter your IB account ID (starts with {{paperAccountPrefix}} for paper trading) as its venue account. Orders reach IB only through that account."
+      "setVenueAccount": "After creating the connection, enter your IB account ID (starts with {{paperAccountPrefix}} for paper trading) as its venue account. Orders reach IB only through that account.",
+      "live": {
+        "install": "Install IB Gateway (or TWS) and log in with your live trading username.",
+        "enableApi": "In {{settingsPath}}, enable socket clients (TWS: \"{{socketClients}}\"), clear \"{{readOnlyApi}}\" so orders are accepted, and note the socket port (IB Gateway live: 4001; TWS live: 7496). Allow 127.0.0.1 in {{trustedIPs}}, or accept the connection prompt.",
+        "grantAccess": "After creating the connection, grant access with the account ID of your live IB account as the venue account. Orders reach IB only through a grant bound to that account.",
+        "setVenueAccount": "After creating the connection, enter the account ID of your live IB account as its venue account. Orders reach IB only through that account."
+      }
     },
     "title": "Add {{provider}} connection",
     "chooseVenue": "Choose venue",
@@ -61,22 +67,36 @@
       "openDashboard": "Open the Alpaca dashboard",
       "aboutPaperTrading": "About paper trading",
       "generateKeys": "Generate paper API keys: with Paper Trading selected, find the API Keys panel on the dashboard and click Generate New Key. Copy the API key and the secret - Alpaca shows the secret only once. Paper keys work only for the paper account.",
-      "keepDashboardOpen": "Keep the dashboard open - the fields below ask for both values."
+      "keepDashboardOpen": "Keep the dashboard open - the fields below ask for both values.",
+      "live": {
+        "openAccount": "Open a live brokerage account: apply in the Alpaca dashboard with a government-issued ID and, once Alpaca approves the application, fund the account. Live orders need an approved, funded account.",
+        "generateKeys": "Generate live API keys: in the top left corner of the dashboard, select Live Trading, find the API Keys panel and generate new keys. Copy the API key and the secret - Alpaca shows the secret only once. Live keys differ from paper keys and do not work with the paper account.",
+        "aboutCredentials": "About live credentials"
+      }
     },
     "binance": {
       "openTestnet": "Open the Binance Spot Testnet and log in with a GitHub account.",
       "openSpotTestnet": "Open Spot Testnet",
       "generateKeys": "Generate an HMAC-SHA256 API key there and copy the API key and the secret key. Paper connections use the Spot Testnet; testnet keys work only there.",
-      "keepPageOpen": "Keep the page open - the fields below ask for both values."
+      "keepPageOpen": "Keep the page open - the fields below ask for both values.",
+      "live": {
+        "prepareAccount": "Meet Binance's account requirements for API keys: identity verification, two-factor authentication and a deposit of any amount to the Spot Wallet.",
+        "apiKeyGuide": "How to create API keys",
+        "createKey": "Create an API key: click the profile icon, then {{account}}, go to {{apiManagement}} and click {{createApi}}. Choose {{systemGenerated}} - Officer signs requests with HMAC-SHA256 - enter a label and complete the two-factor verification. Copy the API key and the secret key.",
+        "restrictKey": "Click {{editRestrictions}}, select {{trustedIPs}} and enter the public IPv4 address of the machine running Officer: without that restriction, a system-generated key can only read. Then check {{spotTrading}} so Officer can place orders, and enable no other permission."
+      }
     },
     "etoro": {
       "logInAccount": "Log in to your eToro account.",
       "logIn": "Log in at eToro",
       "createUserKey": "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Demo environment - each key works for one environment only, and Officer connects the demo account in paper mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone.",
       "copyUserKey": "Copy the new key from the Generated Keys list into the User key field.",
-      "publicApiKey": "The Public API key identifies the application. eToro's Authentication guide explains how it is issued.",
+      "publicApiKey": "The Public API key identifies the application. Enter it in the Public API key field.",
       "authenticationGuide": "eToro authentication guide",
-      "keepDialogOpen": "Keep this dialog open - the fields below ask for both values."
+      "keepDialogOpen": "Keep this dialog open - the fields below ask for both values.",
+      "live": {
+        "createUserKey": "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Real environment - each key works for one environment only, and Officer connects the real account in live mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone. API Key Management appears only once your eToro account is verified."
+      }
     }
   },
   "setup": {

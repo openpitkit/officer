@@ -762,14 +762,16 @@ describe("Trading connections", () => {
     const paper = await card();
     const live = await card("Alpaca live");
     const unavailable = await card("Alpaca unavailable");
-    // Alpaca's docs link covers paper trading only: a live card omits it.
+    // Alpaca's paper docs cover paper trading only: a live card links the
+    // docs for live credentials instead.
     expect(live.getByRole("link", { name: "Provider site" })).toHaveAttribute(
       "href",
       "https://alpaca.markets",
     );
-    expect(
-      live.queryByRole("link", { name: "Provider docs" }),
-    ).not.toBeInTheDocument();
+    expect(live.getByRole("link", { name: "Provider docs" })).toHaveAttribute(
+      "href",
+      "https://docs.alpaca.markets/us/docs/authentication",
+    );
     expect(paper.getByRole("link", { name: "Provider docs" })).toHaveAttribute(
       "href",
       "https://docs.alpaca.markets/us/docs/paper-trading",
@@ -4202,11 +4204,16 @@ describe("IB trading connections", () => {
       const user = userEvent.setup();
       renderTrading();
       const dialog = await openIBCreate(user);
-      const step = dialog.getAllByRole("listitem")[3];
-      expect(step).toHaveTextContent(
+      expect(dialog.getAllByRole("listitem")[3]).toHaveTextContent(
         mode === "single-account"
           ? "After creating the connection, enter your IB account ID (starts with DU for paper trading) as its venue account."
           : "After creating the connection, grant access with your IB account ID (starts with DU for paper trading) as the venue account.",
+      );
+      await user.click(dialog.getByRole("button", { name: "Live" }));
+      expect(dialog.getAllByRole("listitem")[3]).toHaveTextContent(
+        mode === "single-account"
+          ? "After creating the connection, enter the account ID of your live IB account as its venue account."
+          : "After creating the connection, grant access with the account ID of your live IB account as the venue account.",
       );
     },
   );
@@ -4406,6 +4413,116 @@ describe("Add trading connection dialog", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
+  it.each([
+    {
+      venue: {
+        ...provider,
+        type: "ib",
+        title: "Interactive Brokers",
+        venueAccounts: true,
+      },
+      paperFirst:
+        "Install IB Gateway (or TWS) and log in with your paper trading username.",
+      live: [
+        "Install IB Gateway (or TWS) and log in with your live trading username.",
+        'In Configure > Settings > API > Settings, enable socket clients (TWS: "Enable ActiveX and Socket Clients"), clear "Read-Only API" so orders are accepted, and note the socket port (IB Gateway live: 4001; TWS live: 7496). Allow 127.0.0.1 in Trusted IPs, or accept the connection prompt.',
+        "Keep IB Gateway running and logged in. Enter its host and port below; the client ID is optional.",
+        "After creating the connection, grant access with the account ID of your live IB account as the venue account. Orders reach IB only through a grant bound to that account.",
+      ],
+      docs: {
+        name: "TWS API documentation",
+        href: "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
+      },
+    },
+    {
+      venue: { ...provider, type: "binance", title: "Binance" },
+      paperFirst:
+        "Open the Binance Spot Testnet and log in with a GitHub account.",
+      live: [
+        "Meet Binance's account requirements for API keys: identity verification, two-factor authentication and a deposit of any amount to the Spot Wallet.",
+        "Create an API key: click the profile icon, then Account, go to API Management and click Create API. Choose System generated - Officer signs requests with HMAC-SHA256 - enter a label and complete the two-factor verification. Copy the API key and the secret key.",
+        "Click Edit restrictions, select Restrict access to trusted IPs only and enter the public IPv4 address of the machine running Officer: without that restriction, a system-generated key can only read. Then check Enable Spot & Margin Trading so Officer can place orders, and enable no other permission.",
+        "Keep the page open - the fields below ask for both values.",
+      ],
+      docs: {
+        name: "How to create API keys",
+        href: "https://www.binance.com/en/support/faq/how-to-create-api-keys-on-binance-360002502072",
+      },
+    },
+    {
+      venue: { ...provider, type: "etoro", title: "eToro" },
+      paperFirst: "Log in to your eToro account.",
+      live: [
+        "Log in to your eToro account.",
+        "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Real environment - each key works for one environment only, and Officer connects the real account in live mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone. API Key Management appears only once your eToro account is verified.",
+        "Copy the new key from the Generated Keys list into the User key field.",
+        "The Public API key identifies the application. Enter it in the Public API key field.",
+        "Keep this dialog open - the fields below ask for both values.",
+      ],
+      docs: {
+        name: "eToro authentication guide",
+        href: "https://api-portal.etoro.com/core/getting-started/authentication",
+      },
+    },
+    {
+      venue: provider,
+      paperFirst: "Create an Alpaca account.",
+      live: [
+        "Open a live brokerage account: apply in the Alpaca dashboard with a government-issued ID and, once Alpaca approves the application, fund the account. Live orders need an approved, funded account.",
+        "Generate live API keys: in the top left corner of the dashboard, select Live Trading, find the API Keys panel and generate new keys. Copy the API key and the secret - Alpaca shows the secret only once. Live keys differ from paper keys and do not work with the paper account.",
+        "Keep the dashboard open - the fields below ask for both values.",
+      ],
+      docs: {
+        name: "About live credentials",
+        href: "https://docs.alpaca.markets/us/docs/authentication",
+      },
+    },
+  ])(
+    "switches $venue.title between the paper and the live account steps",
+    async ({ venue, paperFirst, live, docs }) => {
+      const user = userEvent.setup();
+      snapshot = { providers: [venue], connections: [] };
+      renderTrading();
+      await user.click(
+        await screen.findByRole("button", { name: /^Add trading connection/ }),
+      );
+      await user.click(
+        within(
+          screen.getByRole("dialog", { name: "Add trading connection" }),
+        ).getByRole("button", { name: venue.title }),
+      );
+      const dialog = within(
+        screen.getByRole("dialog", { name: `Add ${venue.title} connection` }),
+      );
+      const mode = within(dialog.getByRole("group", { name: "Mode" }));
+      const paperSteps = dialog
+        .getAllByRole("listitem")
+        .map((step) => step.textContent);
+      expect(paperSteps[0]).toContain(paperFirst);
+      await user.click(mode.getByRole("button", { name: "Live" }));
+      expect(
+        dialog.getByRole("heading", {
+          name: `Prepare your ${venue.title} account`,
+        }),
+      ).toBeInTheDocument();
+      const steps = dialog.getAllByRole("listitem");
+      expect(steps).toHaveLength(live.length);
+      live.forEach((text, index) =>
+        expect(
+          within(steps[index]).getByText(text, { exact: true }),
+        ).toBeInTheDocument(),
+      );
+      const link = dialog.getByRole("link", { name: docs.name });
+      expect(link).toHaveAttribute("href", docs.href);
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      await user.click(mode.getByRole("button", { name: "Paper" }));
+      expect(
+        dialog.getAllByRole("listitem").map((step) => step.textContent),
+      ).toEqual(paperSteps);
+    },
+  );
+
   it("shows a provider without instructions or external links", async () => {
     const user = userEvent.setup();
     snapshot.providers.push({
@@ -4461,7 +4578,7 @@ describe("Add trading connection dialog", () => {
     { sealed: false, warning: true },
     { sealed: true, warning: false },
   ])(
-    "creates live without paper steps when credential storage sealed is $sealed",
+    "creates live with the live account steps when credential storage sealed is $sealed",
     async ({ sealed, warning }) => {
       const user = userEvent.setup();
       credentialStorage = storage(sealed);
@@ -4474,13 +4591,31 @@ describe("Add trading connection dialog", () => {
         "true",
       );
       expect(
-        dialog.queryByRole("heading", { name: "Prepare your Alpaca account" }),
-      ).not.toBeInTheDocument();
-      expect(dialog.queryByRole("listitem")).not.toBeInTheDocument();
-      // The only link left is the unsealed warning's own.
+        dialog.getByRole("heading", { name: "Prepare your Alpaca account" }),
+      ).toBeInTheDocument();
+      expect(
+        dialog.getAllByRole("listitem").map((step) => step.textContent),
+      ).toEqual([
+        "Open a live brokerage account: apply in the Alpaca dashboard with a government-issued ID and, once Alpaca approves the application, fund the account. Live orders need an approved, funded account.Sign up at AlpacaLog in",
+        "Generate live API keys: in the top left corner of the dashboard, select Live Trading, find the API Keys panel and generate new keys. Copy the API key and the secret - Alpaca shows the secret only once. Live keys differ from paper keys and do not work with the paper account.Open the Alpaca dashboardAbout live credentials",
+        "Keep the dashboard open - the fields below ask for both values.",
+      ]);
+      // The account links stay; the live docs replace the paper docs.
       expect(
         dialog.queryAllByRole("link").map((link) => link.textContent),
-      ).toEqual(warning ? ["How to set a master key"] : []);
+      ).toEqual([
+        ...(warning ? ["How to set a master key"] : []),
+        "Sign up at Alpaca",
+        "Log in",
+        "Open the Alpaca dashboard",
+        "About live credentials",
+      ]);
+      expect(
+        dialog.getByRole("link", { name: "About live credentials" }),
+      ).toHaveAttribute(
+        "href",
+        "https://docs.alpaca.markets/us/docs/authentication",
+      );
       const warningText = "Keys will be stored unencrypted";
       if (warning) {
         expect(dialog.getByRole("alert")).toHaveTextContent(warningText);
@@ -4957,7 +5092,7 @@ describe("Trading provider credential fields", () => {
       "Log in to your eToro account.",
       "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Demo environment - each key works for one environment only, and Officer connects the demo account in paper mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone.",
       "Copy the new key from the Generated Keys list into the User key field.",
-      "The Public API key identifies the application. eToro's Authentication guide explains how it is issued.",
+      "The Public API key identifies the application. Enter it in the Public API key field.",
       "Keep this dialog open - the fields below ask for both values.",
     ];
     expect(steps).toHaveLength(texts.length);

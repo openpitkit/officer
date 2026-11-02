@@ -70,7 +70,8 @@ rules:
         # Provider UI and field labels, written as the provider documents them.
           Public\ API\ key | User\ key | API\ Key\ Management
         | Create\ New\ Key | Generated\ Keys | Generate\ Key
-        | API\ Keys | API\ key | API\ secret | Paper\ Trading | Generate\ New\ Key
+        | API\ Keys | API\ key | API\ secret | Paper\ Trading | Live\ Trading
+        | Generate\ New\ Key
         | Client\ ID | Con\ ID | Account\ ID | Host | Port | Token
         # Product, venue, provider, company and Pit dialect names.
         | Pit\ Officer | OpenPit | Officer | The\ Pit\ Project\ Owners | Pit
@@ -83,6 +84,7 @@ rules:
         | ChatGPT | GPT | Codex | Cursor | GitHub | OpenSSH
         # Protocol, format, platform, language and key names.
         | MCP | REST | FIX | OpenAPI | Swagger | streamable\ HTTP | HTTPS | HTTP
+        | IPv4
         | stdio | WebSocket | WebCrypto | JSON | CSV | ZIP | PEM | PKCS
         | Ed25519 | HMAC-SHA256 | raw-base64 | base64url | base64 | authorized_keys
         | crypto/ed25519 | JavaScript | Go | macOS | Windows | Linux | Docker
