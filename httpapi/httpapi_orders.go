@@ -262,8 +262,8 @@ func buildEventReproduction(
 	if err != nil {
 		// An envelope that fails to decode is presentation-only degradation: the
 		// event row and its attestation metadata stay authoritative, so the bundle
-		// still returns with the canonical bytes, request, response and public key
-		// omitted.
+		// still returns with the canonical bytes, request, response, public key and
+		// signature omitted, and reason names the failure.
 		bundle.Reason = "persisted attestation envelope could not be decoded"
 		return bundle, nil
 	}

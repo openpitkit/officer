@@ -9904,8 +9904,12 @@ components:
         can never drift from real API output. Only public artifacts appear;
         private key material never does. `attestation`, `request`, `response`,
         `canonicalApproval` and `publicKey` are `null` when the event carries no
-        persisted attestation envelope, and `reason` then explains why. `publicKey`
-        is also `null` and `signature` empty under alg `none`.
+        persisted attestation envelope, and `reason` then explains why. When the
+        persisted envelope cannot be decoded, `attestation` is present but
+        `request`, `response`, `canonicalApproval` and `publicKey` are `null`,
+        `signature` is empty, and `reason` says the envelope could not be
+        decoded. `publicKey` is also `null` and `signature` empty under alg
+        `none`.
       properties:
         requestType:
           type: string
@@ -9934,7 +9938,8 @@ components:
         response:
           description: >
             The exact type-specific API response the robot received for this
-            request (envelope verbatim), or `null` when the event has no attestation.
+            request (envelope verbatim), or `null` when the event has no
+            attestation or the persisted envelope cannot be decoded.
           oneOf:
             - $ref: "#/components/schemas/EventReproductionResponse"
             - type: "null"
@@ -9947,8 +9952,8 @@ components:
         publicKey:
           description: >
             The public key matching this attestation's `keyId`, resolved
-            rotation-safe by id. `null` under alg `none` or when no signature is
-            present.
+            rotation-safe by id. `null` under alg `none`, when the event has no
+            attestation, or when the persisted envelope cannot be decoded.
           oneOf:
             - $ref: "#/components/schemas/PublicKeyMaterial"
             - type: "null"
@@ -9971,10 +9976,12 @@ components:
         signature:
           type: string
           description: >
-            The base64 envelope signature; empty under alg `none` or when the
-            event has no attestation.
+            The base64 envelope signature; empty under alg `none`, when the
+            event has no attestation, or when the persisted envelope cannot be
+            decoded.
         reason:
           type: string
           description: >
-            Explains a `null` attestation (e.g. the request was not attested);
-            empty when an attestation is present.
+            Explains a `null` attestation (the event was not attested) or a
+            present attestation whose persisted envelope cannot be decoded;
+            empty otherwise.

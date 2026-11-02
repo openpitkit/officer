@@ -854,6 +854,71 @@ func TestEventReproduction_NoAttestation(t *testing.T) {
 	}
 }
 
+// TestEventReproduction_UndecodableEnvelope verifies the documented contract of
+// an event whose persisted attestation envelope cannot be decoded: the
+// attestation metadata and the event stay present, request, response,
+// canonicalApproval and publicKey are null, signature is empty, no key lookup
+// runs, and reason names the decode failure.
+func TestEventReproduction_UndecodableEnvelope(t *testing.T) {
+	id := extID("repro-undecodable")
+	const envelope = "!not-a-base64url-envelope"
+	att := &domain.EventAttestation{
+		SignedEnvelope: envelope,
+		KeyID:          "key-1",
+		Alg:            fwsigning.AlgEd25519,
+		RequestType:    domain.AttestationRequestSubmit,
+		Mode:           "immediate",
+		IssuedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	svc := &fakeService{orderDetail: reproDetail(id, att)}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, reproURL(id), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+
+	eventDTO, _ := m["event"].(map[string]any)
+	if eventDTO["id"] != reproEventID().String() {
+		t.Errorf("want event id=%s, got %v", reproEventID(), eventDTO["id"])
+	}
+	if m["requestType"] != string(domain.AttestationRequestSubmit) {
+		t.Errorf("want requestType=submit, got %v", m["requestType"])
+	}
+	attestation, ok := m["attestation"].(map[string]any)
+	if !ok {
+		t.Fatalf("want attestation present on decode failure, got %T", m["attestation"])
+	}
+	if attestation["signedEnvelope"] != envelope {
+		t.Errorf("want attestation.signedEnvelope verbatim, got %v", attestation["signedEnvelope"])
+	}
+	for _, field := range []string{"request", "response", "canonicalApproval", "publicKey"} {
+		if v, present := m[field]; !present || v != nil {
+			t.Errorf("want null %s when the envelope cannot be decoded, got %v (present=%v)", field, v, present)
+		}
+	}
+	if sig, present := m["signature"]; !present || sig != "" {
+		t.Errorf("want empty signature when the envelope cannot be decoded, got %v (present=%v)", sig, present)
+	}
+	if svc.keyByIDLast != "" {
+		t.Errorf("public key lookup must not run for an undecodable envelope, got %q", svc.keyByIDLast)
+	}
+	esign, _ := m["eSign"].(map[string]any)
+	if esign["alg"] != fwsigning.AlgEd25519 {
+		t.Errorf("want eSign.alg=%s from the attestation metadata, got %v", fwsigning.AlgEd25519, esign["alg"])
+	}
+	if esign["signed"] != true {
+		t.Errorf("want eSign.signed=true from the attestation metadata, got %v", esign["signed"])
+	}
+	if reason, _ := m["reason"].(string); !strings.Contains(reason, "could not be decoded") {
+		t.Errorf("want reason naming the decode failure, got %q", reason)
+	}
+}
+
 // TestEventReproduction_OrderNotFound verifies an unknown order external id
 // surfaces the store's not-found as a 404.
 func TestEventReproduction_OrderNotFound(t *testing.T) {

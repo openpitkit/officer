@@ -738,21 +738,24 @@ type eventReproductionDTO struct {
 	Request *eventReproductionRequestDTO `json:"request"`
 	// Response is the exact type-specific API response the robot received for this
 	// request, reconstructed from persisted state through the SAME serializer
-	// (envelope verbatim); null when the event has no attestation.
+	// (envelope verbatim); null when the event has no attestation or the envelope
+	// cannot be decoded.
 	Response *eventReproductionResponseDTO `json:"response"`
 	// CanonicalApproval is the exact signed bytes as a string: the attestation
 	// payload in its canonical signed form, byte-identical to what was signed.
 	// Null when the event has no attestation or the envelope cannot be decoded.
 	CanonicalApproval *string `json:"canonicalApproval"`
 	// PublicKey is the public key matching this attestation's keyId, resolved
-	// rotation-safe by id. Null under alg "none" / no signature.
+	// rotation-safe by id. Null under alg "none", when the event has no
+	// attestation, or when the envelope cannot be decoded.
 	PublicKey *publicKeyMaterialDTO `json:"publicKey"`
 	// ESign reports the signing mode and whether this event was signed.
 	ESign eventReproductionESignDTO `json:"eSign"`
-	// Signature is the base64 envelope signature; empty under alg "none".
+	// Signature is the base64 envelope signature; empty under alg "none", when
+	// the event has no attestation, or when the envelope cannot be decoded.
 	Signature string `json:"signature"`
-	// Reason explains a null attestation (e.g. the request was not attested);
-	// empty when an attestation is present.
+	// Reason explains a null attestation (the event was not attested) or a
+	// present attestation whose envelope cannot be decoded; empty otherwise.
 	Reason string `json:"reason"`
 }
 
