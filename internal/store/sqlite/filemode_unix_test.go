@@ -177,7 +177,7 @@ func TestEnsurePrivateDatabaseFileNarrowsExistingSidecars(t *testing.T) {
 func TestNewRejectsDanglingDatabaseSymlink(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "officer.db")
-	target := filepath.Join(dir, "volume", "officer.db")
+	target := filepath.Join(dir, "volume.db")
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
