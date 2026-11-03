@@ -36,8 +36,7 @@ func DatabasePath(releasePath, commit string) (string, error) {
 	if commit == "" {
 		return "", fmt.Errorf("nonrelease: empty commit %q", commit)
 	}
-	if releasePath == "" || releasePath == ":memory:" ||
-		strings.HasPrefix(releasePath, "file:") || strings.Contains(releasePath, "?") {
+	if file, err := sqlite.DatabaseFilePath(releasePath); err != nil || file != releasePath {
 		return "", fmt.Errorf("nonrelease: release path %q is not a plain file path", releasePath)
 	}
 	return releasePath + ".non-release-" + commit, nil

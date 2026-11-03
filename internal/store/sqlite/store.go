@@ -139,7 +139,32 @@ func New(
 	return s, nil
 }
 
+// databaseFileMode is the only mode a database file the store opens keeps: the
+// database holds credentials, so no other host user may read it.
+const databaseFileMode os.FileMode = 0o600
+
+// DatabaseFilePath returns the file SQLite opens for a store path: the path up
+// to a "?" query, which the driver strips before opening it. An empty name, an
+// in-memory database and a "file:" URI name no file the store can keep
+// private, and are errors.
+func DatabaseFilePath(path string) (string, error) {
+	name, _, _ := strings.Cut(path, "?")
+	if name == "" || name == ":memory:" || strings.HasPrefix(name, "file:") {
+		return "", fmt.Errorf("store: database path %q is not a file path", path)
+	}
+	return name, nil
+}
+
+// openSQLiteDB makes the database file at path and its sidecars private, then
+// opens it.
 func openSQLiteDB(path string) (*sql.DB, error) {
+	file, err := DatabaseFilePath(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensurePrivateDatabaseFile(file); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open(driverName, sqliteDSN(path))
 	if err != nil {
 		return nil, err
@@ -410,11 +435,8 @@ func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("store: reset close temporary sqlite file: %w", err)
 	}
-	if err := os.Remove(tmpPath); err != nil &&
-		!errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("store: reset remove temporary sqlite %q: %w", tmpPath, err)
-	}
 
+	// SQLite opens the empty temporary file as an empty database.
 	tmpDB, err := openSQLiteDB(tmpPath)
 	if err != nil {
 		return fmt.Errorf("store: reset open temporary sqlite at %q: %w", tmpPath, err)

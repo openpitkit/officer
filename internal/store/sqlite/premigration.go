@@ -92,7 +92,7 @@ func (s *sqliteStore) writePreMigrationCopy(ctx context.Context) (result error) 
 	if err := Snapshot(ctx, s.path, tmpPath); err != nil {
 		return fmt.Errorf("snapshot database: %w", err)
 	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
+	if err := os.Chmod(tmpPath, databaseFileMode); err != nil {
 		return fmt.Errorf("set copy permissions: %w", err)
 	}
 	if err := os.Link(tmpPath, copyPath); err != nil {
