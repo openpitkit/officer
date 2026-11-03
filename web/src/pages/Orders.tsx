@@ -234,8 +234,7 @@ const VENUE_ORDER_OPTIONS: Record<
       limit: IB_TIME_IN_FORCE,
       market: IB_TIME_IN_FORCE,
     },
-    docsUrl:
-      "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
+    docsUrl: "https://www.interactivebrokers.com/docs/tws-api/doc/",
   },
 };
 

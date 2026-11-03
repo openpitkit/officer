@@ -89,7 +89,7 @@
     "etoro": {
       "logInAccount": "Log in to your eToro account.",
       "logIn": "Log in at eToro",
-      "createUserKey": "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Demo environment - each key works for one environment only, and Officer connects the demo account in paper mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone.",
+      "createUserKey": "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Demo environment - each key works for one environment only, and Officer connects the demo account in paper mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone. API Key Management appears only once your eToro account is verified.",
       "copyUserKey": "Copy the new key from the Generated Keys list into the User key field.",
       "publicApiKey": "The Public API key identifies the application. Enter it in the Public API key field.",
       "authenticationGuide": "eToro authentication guide",

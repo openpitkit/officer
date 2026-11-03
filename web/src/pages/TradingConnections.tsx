@@ -131,8 +131,7 @@ type TradingGuideStep = {
 
 const IB_DOWNLOAD_URL =
   "https://www.interactivebrokers.com/en/trading/ibgateway-stable.php";
-const IB_DOCS_URL =
-  "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/";
+const IB_DOCS_URL = "https://www.interactivebrokers.com/docs/tws-api/doc/";
 const IB_API_SETTINGS = {
   settingsPath: "Configure > Settings > API > Settings",
   socketClients: "Enable ActiveX and Socket Clients",

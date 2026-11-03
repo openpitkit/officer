@@ -4045,7 +4045,7 @@ describe("IB trading connections", () => {
         dialog.getByRole("link", { name: "TWS API documentation" }),
       ).toHaveAttribute(
         "href",
-        "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
+        "https://www.interactivebrokers.com/docs/tws-api/doc/",
       );
       if (clientId !== "")
         await user.type(dialog.getByLabelText("Client ID"), clientId);
@@ -4449,7 +4449,7 @@ describe("Add trading connection dialog", () => {
       ],
       docs: {
         name: "TWS API documentation",
-        href: "https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/",
+        href: "https://www.interactivebrokers.com/docs/tws-api/doc/",
       },
     },
     {
@@ -5108,7 +5108,7 @@ describe("Trading provider credential fields", () => {
     const steps = dialog.getAllByRole("listitem");
     const texts = [
       "Log in to your eToro account.",
-      "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Demo environment - each key works for one environment only, and Officer connects the demo account in paper mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone.",
+      "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Demo environment - each key works for one environment only, and Officer connects the demo account in paper mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone. API Key Management appears only once your eToro account is verified.",
       "Copy the new key from the Generated Keys list into the User key field.",
       "The Public API key identifies the application. Enter it in the Public API key field.",
       "Keep this dialog open - the fields below ask for both values.",

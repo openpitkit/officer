@@ -89,7 +89,7 @@
     "etoro": {
       "logInAccount": "请登录您的 eToro 账户。",
       "logIn": "登录 eToro",
-      "createUserKey": "创建用户密钥：在 eToro 中打开设置，然后进入交易，向下滚动至 API Key Management 并点击 Create New Key。请选择模拟环境 - 每个密钥仅适用于一个环境，Officer 在模拟交易模式下连接模拟账户。请选择写入权限 - 只读权限仅可查看投资组合数据，无法下单。点击 Generate Key，并输入 eToro 发送到您手机的验证码。",
+      "createUserKey": "创建用户密钥：在 eToro 中打开设置，然后进入交易，向下滚动至 API Key Management 并点击 Create New Key。请选择模拟环境 - 每个密钥仅适用于一个环境，Officer 在模拟交易模式下连接模拟账户。请选择写入权限 - 只读权限仅可查看投资组合数据，无法下单。点击 Generate Key，并输入 eToro 发送到您手机的验证码。API Key Management 仅在您的 eToro 账户完成验证后显示。",
       "copyUserKey": "请从 Generated Keys 列表中复制新密钥，并填入 User key 字段。",
       "publicApiKey": "Public API key 用于标识应用程序。请将其填入 Public API key 字段。",
       "authenticationGuide": "eToro 身份验证指南",

@@ -89,7 +89,7 @@
     "etoro": {
       "logInAccount": "Inicie sesión en su cuenta de eToro.",
       "logIn": "Iniciar sesión en eToro",
-      "createUserKey": "Cree una clave de usuario: en eToro, abra Configuración y luego Negociación, desplácese hasta API Key Management y haga clic en Create New Key. Seleccione el entorno de demostración - cada clave funciona en un solo entorno y Officer conecta la cuenta de demostración en modo simulado. Seleccione el permiso de escritura - el permiso de solo lectura muestra datos de la cartera y no permite enviar órdenes. Haga clic en Generate Key e introduzca el código de verificación que eToro envía a su teléfono.",
+      "createUserKey": "Cree una clave de usuario: en eToro, abra Configuración y luego Negociación, desplácese hasta API Key Management y haga clic en Create New Key. Seleccione el entorno de demostración - cada clave funciona en un solo entorno y Officer conecta la cuenta de demostración en modo simulado. Seleccione el permiso de escritura - el permiso de solo lectura muestra datos de la cartera y no permite enviar órdenes. Haga clic en Generate Key e introduzca el código de verificación que eToro envía a su teléfono. API Key Management solo aparece cuando su cuenta de eToro está verificada.",
       "copyUserKey": "Copie la nueva clave de la lista Generated Keys en el campo User key.",
       "publicApiKey": "La Public API key identifica la aplicación. Introdúzcala en el campo Public API key.",
       "authenticationGuide": "Guía de autenticación de eToro",
