@@ -842,6 +842,43 @@ func TestAssetEngineIDIsNotSerialized(t *testing.T) {
 	}
 }
 
+func TestSpotFundsPnlBoundsAxisIsSerialized(t *testing.T) {
+	t.Parallel()
+
+	limit := domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisUnrealized,
+		Scope:      domain.ScopeGlobal,
+		Currency:   "USD",
+		LowerBound: "-1000",
+	}
+	payload, err := json.Marshal(limit)
+	if err != nil {
+		t.Fatalf("Marshal LimitSpotFundsPnlBounds: %v", err)
+	}
+	const want = `{"Axis":"unrealized","Scope":"global","Account":"",` +
+		`"AccountGroup":"","Currency":"USD","LowerBound":"-1000",` +
+		`"UpperBound":""}`
+	if string(payload) != want {
+		t.Fatalf("LimitSpotFundsPnlBounds JSON = %s, want %s", payload, want)
+	}
+	var decoded domain.LimitSpotFundsPnlBounds
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("Unmarshal LimitSpotFundsPnlBounds: %v", err)
+	}
+	if decoded != limit {
+		t.Fatalf("decoded = %+v, want %+v", decoded, limit)
+	}
+
+	limit.Axis = ""
+	payload, err = json.Marshal(limit)
+	if err != nil {
+		t.Fatalf("Marshal LimitSpotFundsPnlBounds without axis: %v", err)
+	}
+	if strings.Contains(string(payload), "Axis") {
+		t.Fatalf("a barrier without an axis encodes one: %s", payload)
+	}
+}
+
 func TestValidateEngineGroupID(t *testing.T) {
 	t.Parallel()
 	ok := []domain.EngineGroupID{

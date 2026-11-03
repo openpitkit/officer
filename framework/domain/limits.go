@@ -91,9 +91,11 @@ type LimitOrderSize struct {
 type LimitSpotFundsPnlBounds struct {
 	// Axis is the account P&L measure the bounds apply to. Each axis is a
 	// policy of its own (SpotFundsPnlAxis.Policy) with its own cascade. A
-	// backup archive files barriers in one list per axis, so the list carries
-	// the axis and the field is not encoded.
-	Axis SpotFundsPnlAxis `json:"-"`
+	// backup archive files barriers in one list per axis and clears the axis
+	// of every barrier it lists (backup.Data.SetSpotFundsPnlBounds), so there
+	// the list carries the axis; any other JSON form of a barrier carries it
+	// in this field.
+	Axis SpotFundsPnlAxis `json:",omitempty"`
 	// Scope is the cascade tier this barrier applies to.
 	Scope LimitScope
 	// Account is required only for the account scope.
