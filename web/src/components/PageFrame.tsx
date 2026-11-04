@@ -22,13 +22,15 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/sidebar-context";
+import { cn } from "@/lib/utils";
 
 export interface PageFrameProps {
   title: string;
   /**
    * Optional controls at the right of the top bar. When they overflow, the
    * frame raises the bar's compact level step by step, and the stylesheet
-   * hides control labels per level.
+   * hides control labels per level. Without controls, the title takes the
+   * whole width of the bar.
    */
   controls?: ReactNode;
   children: ReactNode;
@@ -47,6 +49,7 @@ export function PageFrame({ title, controls, children }: PageFrameProps) {
   const headerRef = useRef<HTMLElement | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const [compactLevel, setCompactLevel] = useState(0);
+  const hasControls = controls != null;
 
   useLayoutEffect(() => {
     const header = headerRef.current;
@@ -93,22 +96,32 @@ export function PageFrame({ title, controls, children }: PageFrameProps) {
         data-topbar-compact-level={compactLevel}
         className="ledger-masthead flex h-[var(--topbar-height)] shrink-0 items-center gap-2 overflow-hidden bg-bg px-[var(--dens-shell-x)]"
       >
-        <div className="flex min-w-0 shrink-0 items-center gap-2 overflow-hidden">
+        <div
+          className={cn(
+            "flex min-w-0 items-center gap-2 overflow-hidden",
+            hasControls && "shrink-0",
+          )}
+        >
           <Button
             variant="outline"
             size="icon"
-            className="md:hidden"
+            className="shrink-0 md:hidden"
             aria-label={t("topBar.toggleNav")}
             onClick={toggle}
           >
             <Menu />
           </Button>
-          <span className="hidden h-5 w-px bg-accent sm:block" />
-          <h1 className="ledger-title min-w-0 max-w-[40vw] truncate text-[length:var(--dens-title-fz)] font-bold text-text">
+          <span className="hidden h-5 w-px shrink-0 bg-accent sm:block" />
+          <h1
+            className={cn(
+              "ledger-title min-w-0 truncate text-[length:var(--dens-title-fz)] font-bold text-text",
+              hasControls && "max-w-[40vw]",
+            )}
+          >
             {title}
           </h1>
         </div>
-        {controls != null && (
+        {hasControls && (
           <div
             ref={controlsRef}
             className="topbar-actions ml-auto flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2 overflow-hidden whitespace-nowrap"

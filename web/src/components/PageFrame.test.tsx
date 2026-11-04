@@ -75,4 +75,33 @@ describe("PageFrame", () => {
     expect(topBar.querySelector(".topbar-actions")).toBeNull();
     expect(within(topBar).getAllByRole("button")).toHaveLength(1);
   });
+
+  it("caps the title width and keeps its group unshrunk beside controls", () => {
+    renderFrame(
+      <PageFrame
+        title="Orders"
+        controls={<button type="button">Refresh</button>}
+      >
+        content
+      </PageFrame>,
+    );
+
+    const title = screen.getByRole("heading", { level: 1 });
+    expect(title).toHaveClass("min-w-0", "truncate", "max-w-[40vw]");
+    expect(title.parentElement).toHaveClass("min-w-0", "shrink-0");
+  });
+
+  it("lets the title take the whole bar and still truncate without controls", () => {
+    renderFrame(<PageFrame title="Orders">content</PageFrame>);
+
+    const title = screen.getByRole("heading", { level: 1 });
+    expect(title).toHaveClass("min-w-0", "truncate");
+    expect(title).not.toHaveClass("max-w-[40vw]");
+    expect(title.parentElement).toHaveClass("min-w-0");
+    expect(title.parentElement).not.toHaveClass("shrink-0");
+    expect(
+      screen.getByRole("button", { name: "Toggle navigation" }),
+    ).toHaveClass("shrink-0");
+    expect(title.previousElementSibling).toHaveClass("bg-accent", "shrink-0");
+  });
 });
