@@ -115,6 +115,20 @@ The SPA is a thin consumer of the same library: `src/main.tsx` imports
 `src/register.ts`, injects `baseUrl: "/app/api/v1"`, mounts the allow-all
 `AuthProvider`, and renders the framework shell.
 
+`react`, `react-dom`, `react-router-dom`, `i18next`,
+`i18next-browser-languagedetector` and `react-i18next` are peer dependencies:
+the host installs them and the framework shares the host's instance, so
+`AppRoutes` and `Sidebar` render inside the host's router. The panel
+stylesheet is published separately and imported once by the host:
+
+```ts
+import "@openpit/officer-web/styles.css";
+```
+
+The stylesheet names JetBrains Mono but does not carry its font files: the host
+loads the 400, 500 and 700 weights itself, as `src/main.tsx` does with
+`@fontsource/jetbrains-mono`.
+
 Host applications provide transport through `createApiClient`,
 `createOfficerApi`, and `ApiClientProvider`. `ApiClientProvider` accepts the
 base URL plus optional `fetch`, static `headers`, async `getHeaders`,

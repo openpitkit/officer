@@ -32,19 +32,23 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     lib: {
-      entry: fileURLToPath(
-        new URL("./src/framework/index.ts", import.meta.url),
-      ),
+      entry: fileURLToPath(new URL("./src/library.ts", import.meta.url)),
       formats: ["es"],
       fileName: "index",
+      // The stylesheet the entry imports is extracted beside the bundle and
+      // published as the package's "./styles.css" export.
+      cssFileName: "styles",
     },
     rollupOptions: {
+      // Peer dependencies stay external so the host and the framework share
+      // one instance, and with it one router and one i18n context.
       external: [
         "i18next",
         "i18next-browser-languagedetector",
         "react",
         "react-dom",
         "react-i18next",
+        "react-router-dom",
         "react/jsx-runtime",
       ],
     },
