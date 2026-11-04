@@ -28,7 +28,7 @@ import {
   type ResolvedTheme,
   type ThemeContextValue,
   type ThemeMode,
-} from "@/theme/theme-context";
+} from "./theme-context";
 import {
   readStoredPreference,
   writeStoredPreference,
