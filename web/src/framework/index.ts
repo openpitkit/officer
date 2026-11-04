@@ -68,6 +68,8 @@ export {
   TabsContent,
 } from "../components/ui/tabs";
 export { Notice, type NoticeProps } from "../components/Notice";
+export { PageFrame, type PageFrameProps } from "../components/PageFrame";
+export { ErrorBanner } from "../components/PageStates";
 export { AuthScreen } from "../components/AuthScreen";
 export { TextField } from "../components/TextField";
 export { Button } from "../components/ui/button";
