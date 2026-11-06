@@ -129,6 +129,11 @@ The stylesheet names JetBrains Mono but does not carry its font files: the host
 loads the 400, 500 and 700 weights itself, as `src/main.tsx` does with
 `@fontsource/jetbrains-mono`.
 
+The package also publishes the Pit Officer favicon as
+`@openpit/officer-web/favicon.svg`, the same file the panel serves at
+`/favicon.svg`. A host links it instead of copying it; for example, a Vite host
+imports it as an asset URL.
+
 Host applications provide transport through `createApiClient`,
 `createOfficerApi`, and `ApiClientProvider`. `ApiClientProvider` accepts the
 base URL plus optional `fetch`, static `headers`, async `getHeaders`,

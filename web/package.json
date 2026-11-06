@@ -80,7 +80,8 @@
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
     },
-    "./styles.css": "./lib/styles.css"
+    "./styles.css": "./lib/styles.css",
+    "./favicon.svg": "./lib/favicon.svg"
   },
   "peerDependencies": {
     "i18next": "26.3.1",

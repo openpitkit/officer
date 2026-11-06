@@ -20,7 +20,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  publicDir: false,
+  // public/ (the Pit Officer favicon) is copied into lib/ and published as
+  // the package's "./favicon.svg" export.
   plugins: [react()],
   resolve: {
     alias: {
