@@ -202,7 +202,7 @@ func newNonReleaseGate(
 	panel.Register(nonrelease.BuildRoute(g.status))
 	panel.Register(nonrelease.DatabaseRoute(g.choose))
 	handler, err := httpx.NewRouter(httpx.RouterConfig{
-		Routes: &httpx.RouteRegistry{}, PanelRoutes: panel, Guards: guards,
+		Surfaces: httpx.V1Surfaces(&httpx.RouteRegistry{}, panel), Guards: guards,
 		SPA: spa, BodyLimit: httpapi.BodyLimitPolicy(),
 		ExtraMounts: httpapi.ExtraMounts(),
 		MCP: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

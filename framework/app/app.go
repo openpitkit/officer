@@ -76,12 +76,24 @@ type ServiceFactory func(
 
 // RouteConfig carries an app's registered HTTP surface.
 type RouteConfig struct {
+	// Routes is required and supplies Officer's V1 route pair.
 	Routes *httpx.RouteRegistry
 	// PanelRoutes are routes served only on the panel mirror /app/api/v1; nil
 	// means none.
 	PanelRoutes *httpx.RouteRegistry
-	BodyLimit   func(*http.Request) int64
-	ExtraMounts []httpx.ExtraMount
+	// Surfaces adds prefixes after Officer's V1 pair; see [httpx.Surface]
+	// for the routing and caller-source contract.
+	// Leave Manifest false: Officer's /api/v1 surface carries the single route
+	// manifest, which also lists these routes.
+	Surfaces []httpx.Surface
+	// NotFound handles unmatched paths; see [httpx.RouterConfig]. The router
+	// refuses it when a SPA is configured.
+	NotFound http.Handler
+	// MethodNotAllowed handles 405 responses; see [httpx.RouterConfig] for
+	// the hook's status, body, and Allow header contract.
+	MethodNotAllowed http.Handler
+	BodyLimit        func(*http.Request) int64
+	ExtraMounts      []httpx.ExtraMount
 	// AccessMode reports the access state of the service. The router calls it
 	// on every route manifest request, concurrently from request goroutines,
 	// so it must be safe for concurrent use. A value that is not an
@@ -96,7 +108,9 @@ type RouteConfigBuilder func(backend.ControlPlane, httpx.LogSource) RouteConfig
 // ToolRegistrar registers an app's MCP tools and catalogue entries.
 type ToolRegistrar func(*frameworkmcp.ToolRegistry, frameworkmcp.Source)
 
-// SPAFactory loads the embedded dashboard filesystem.
+// SPAFactory loads the dashboard filesystem. It is optional: without one,
+// unmatched paths use the router's typed JSON 404 unless NotFound is set.
+// A configured factory must return a non-nil filesystem or an error.
 type SPAFactory func() (fs.FS, error)
 
 // Builder collects the concrete hooks that make one composition.
@@ -173,7 +187,8 @@ func (b *Builder) AddToolRegistrar(registrar ToolRegistrar) {
 	}
 }
 
-// SetSPAFactory sets the embedded dashboard filesystem hook.
+// SetSPAFactory sets the dashboard filesystem hook. Nil disables the SPA;
+// unmatched paths use the router's typed JSON 404 unless NotFound is set.
 func (b *Builder) SetSPAFactory(factory SPAFactory) {
 	b.spaFactory = factory
 }
@@ -385,8 +400,6 @@ func (b *Builder) validate() error {
 		return errors.New("app: nil service factory")
 	case b.routeConfig == nil:
 		return errors.New("app: nil route config builder")
-	case b.spaFactory == nil:
-		return errors.New("app: nil SPA factory")
 	}
 	if b.mdRegistry == nil {
 		b.mdRegistry = marketdata.NewRegistry()
@@ -477,15 +490,23 @@ func (a *App) BuildServeHandler(
 	mcpPath string,
 	extraRoutes ...httpx.Route,
 ) (http.Handler, error) {
-	spa, err := a.spaFactory()
-	if err != nil {
-		return nil, fmt.Errorf("load embedded dashboard: %w", err)
+	var spa fs.FS
+	if a.spaFactory != nil {
+		var err error
+		spa, err = a.spaFactory()
+		if err != nil {
+			return nil, fmt.Errorf("load embedded dashboard: %w", err)
+		}
+		if spa == nil {
+			return nil, errors.New("load embedded dashboard: nil filesystem")
+		}
 	}
 	routes := a.routeConfig(a.service, logs)
-	if routes.Routes != nil {
-		for _, route := range extraRoutes {
-			routes.Routes.Register(route)
-		}
+	if routes.Routes == nil {
+		return nil, errors.New("app: nil route registry")
+	}
+	for _, route := range extraRoutes {
+		routes.Routes.Register(route)
 	}
 	mcpHandler, err := frameworkmcp.Handler(
 		a.mcpRegistry,
@@ -498,18 +519,19 @@ func (a *App) BuildServeHandler(
 		return nil, fmt.Errorf("build mcp handler: %w", err)
 	}
 	router, err := httpx.NewRouter(httpx.RouterConfig{
-		Routes:         routes.Routes,
-		PanelRoutes:    routes.PanelRoutes,
-		Authorizer:     a.authorizer,
-		CallerResolver: a.callerResolver,
-		SPA:            spa,
-		MCP:            http.StripPrefix(mcpPath, mcpHandler),
-		MCPPath:        mcpPath,
-		Logs:           logs,
-		BodyLimit:      routes.BodyLimit,
-		ExtraMounts:    routes.ExtraMounts,
-		Guards:         a.browserGuards,
-		AccessMode:     routes.AccessMode,
+		Surfaces:         append(httpx.V1Surfaces(routes.Routes, routes.PanelRoutes), routes.Surfaces...),
+		Authorizer:       a.authorizer,
+		CallerResolver:   a.callerResolver,
+		SPA:              spa,
+		NotFound:         routes.NotFound,
+		MethodNotAllowed: routes.MethodNotAllowed,
+		MCP:              http.StripPrefix(mcpPath, mcpHandler),
+		MCPPath:          mcpPath,
+		Logs:             logs,
+		BodyLimit:        routes.BodyLimit,
+		ExtraMounts:      routes.ExtraMounts,
+		Guards:           a.browserGuards,
+		AccessMode:       routes.AccessMode,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build router: %w", err)

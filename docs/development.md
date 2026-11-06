@@ -45,7 +45,8 @@ is a command or under `internal/`, and cannot be imported:
 - `framework/store/schema` - the canonical store schema every connector shares.
 - `framework/trading` - trading connectors, providers, registry, and the runtime
   that sends held orders to venues and takes their executions back.
-- `framework/web/httpapi` - the HTTP router, route registry, and `Authorizer`.
+- `framework/web/httpapi` - the HTTP router, surfaces, route registry, and
+  `Authorizer`.
 
 `checks/public-packages.txt` is meant to hold these packages and the two
 commands, `cmd/pit-officer` and `examples/customhost`; `just lint-go` fails
@@ -122,26 +123,39 @@ without all three guards, so a builder that skips `Register` sets them with
 `SetBrowserGuards`; `framework/web/httpapi` builds the default ones with
 `AllowedHosts`, `SameOrigin`, and `JSONBody`.
 
-A host that composes its own `app.RouteConfig` sets its `AccessMode`, a
-function the route manifest calls on every request, and the `Access` of each
-extra mount, `public` or `agent`. `BuildServeHandler` fails without them, and on
-an extra mount or an MCP path at or under `/api/v1` or `/app/api/v1`. The router
-serves a `PanelRoutes` route marked `Public` without resolving or authorizing a
-caller. `AccessMode` and `Access` are reported by the route manifest.
+The dashboard is optional: leave `SetSPAFactory` unset, or pass nil to remove
+the one `Register` installed. Unmatched paths then answer the typed JSON 404.
+A configured factory must return a non-nil filesystem or an error.
+`app.RouteConfig.NotFound` and `MethodNotAllowed` pass through to the router;
+their contract is in `framework/web/httpapi.RouterConfig`. The router refuses
+a `NotFound` hook together with a SPA.
+
+A host that composes its own `app.RouteConfig` sets its required `Routes`
+registry and `AccessMode` callback, called on every route manifest request,
+and the `Access` of each extra mount, `public` or `agent`.
+`BuildServeHandler` fails without them, and on
+an extra mount or an MCP path at or under any surface prefix, including
+Officer's `/api/v1` and `/app/api/v1`. A route marked `Public` is valid only on
+a `SourcePanel` surface; `NewRouter` panics on it elsewhere. `AccessMode` and
+`Access` are reported by the route manifest.
 `DuringSetup` is also reported, and Officer's resolver and authorizer enforce
 it in `setup`: only a panel route marked with it is admitted. The flag does not
-open the corresponding `/api/v1` route. Public panel routes bypass the
-authorizer, so their handlers must enforce any setup restriction themselves.
+open the corresponding `/api/v1` route. Public panel routes bypass caller
+resolution and the authorizer, so their handlers must enforce any setup
+restriction themselves.
 
 `BuildServeHandler` also refuses an operation mounted twice: each method and
-path, parameter names ignored, may be mounted only once across the REST routes
-on both prefixes, `PanelRoutes`, the route manifest, the MCP methods, the extra
-mounts, and the dashboard's `GET /*`.
+path, parameter names ignored, may be mounted only once across the surfaces,
+the route manifest, the MCP methods, the extra mounts, and the dashboard's
+`GET /*` when enabled.
 
 A host extends the route surface `Register` installs by wrapping
 `builder.RouteConfigBuilder()` and setting the wrapper with
 `SetRouteConfigBuilder`, as `examples/customhost/main.go` does, so the account
-mode and the access mode stay served.
+mode and the access mode stay served. Append prefixes to `RouteConfig.Surfaces`;
+`BuildServeHandler` mounts them after Officer's V1 pair, through the same caller
+resolver and authorizer. The example serves `/example/api/v1/host` this way,
+with its own route ID and the existing host handler, without a separate router.
 
 `Register` adds a node hook that builds the access service whatever factories
 a host replaces. A store without Officer's access state or seal-report reader

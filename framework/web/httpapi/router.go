@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -39,8 +40,8 @@ const (
 // ones NewRouter routes to the MCP handler.
 var mcpMethods = []string{http.MethodGet, http.MethodPost, http.MethodDelete}
 
-// ExtraMount is a non-v1 route the host application mounts before the SPA
-// fallback; NewRouter refuses one on /api/v1, /app/api/v1 or under either.
+// ExtraMount is a route the host application mounts before the SPA fallback;
+// NewRouter refuses one at or under any configured surface prefix.
 type ExtraMount struct {
 	Method  string
 	Pattern string
@@ -56,49 +57,93 @@ type LogSource interface {
 	Snapshot() []string
 }
 
+// Surface is one REST prefix NewRouter mounts. Source is stamped in the request
+// context and passed to the caller resolver; only SourceAPI and SourcePanel are
+// valid. Public routes are valid only on a SourcePanel surface. Manifest mounts
+// the runtime route manifest under this prefix.
+type Surface struct {
+	Prefix   string
+	Source   domain.Source
+	Routes   []Route
+	Manifest bool
+}
+
+// V1Surfaces snapshots Officer's API routes and their panel mirror, followed by
+// the panel-only routes. A nil panelRoutes adds none. A nil routes returns nil,
+// which NewRouter refuses with "httpapi: nil route registry".
+func V1Surfaces(routes, panelRoutes *RouteRegistry) []Surface {
+	if routes == nil {
+		return nil
+	}
+	return []Surface{
+		{Prefix: apiPrefix, Source: domain.SourceAPI, Routes: routes.Routes(), Manifest: true},
+		{Prefix: panelPrefix, Source: domain.SourcePanel, Routes: slices.Concat(routes.Routes(), panelRoutes.Routes())},
+	}
+}
+
 // RouterConfig configures NewRouter.
 type RouterConfig struct {
-	Routes *RouteRegistry
-	// PanelRoutes are routes served only on /app/api/v1, after the Routes
-	// mirror and through the same chain; nil means none.
-	PanelRoutes    *RouteRegistry
+	Surfaces       []Surface
 	Authorizer     Authorizer
 	CallerResolver auth.CallerResolver
-	SPA            fs.FS
-	MCP            http.Handler
-	MCPPath        string
-	Logs           LogSource
-	BodyLimit      func(*http.Request) int64
-	ExtraMounts    []ExtraMount
-	Guards         BrowserGuards
+	// SPA serves unmatched paths outside the surfaces. Nil disables the SPA
+	// and omits GET /* from the manifest. It cannot be set with NotFound.
+	SPA fs.FS
+	// NotFound handles unmatched paths at the root and inside every surface.
+	// Nil uses the SPA at the root when set, otherwise the typed JSON 404;
+	// inside surfaces nil always uses the typed JSON 404.
+	NotFound http.Handler
+	// MethodNotAllowed handles 405 responses after Allow is set to the
+	// matched path's supported methods, sorted lexicographically. The hook
+	// writes the status and body. Nil keeps chi's default 405 everywhere.
+	MethodNotAllowed http.Handler
+	MCP              http.Handler
+	MCPPath          string
+	Logs             LogSource
+	BodyLimit        func(*http.Request) int64
+	ExtraMounts      []ExtraMount
+	Guards           BrowserGuards
 	// AccessMode reports the access state of the service. The router calls it
 	// on every route manifest request, concurrently from request goroutines,
 	// so it must be safe for concurrent use. A value that is not an AccessMode
-	// constant answers an internal error; NewRouter refuses a nil one.
+	// constant answers an internal error. It is required only when a surface
+	// has Manifest set to true.
 	AccessMode func() AccessMode
 }
 
-// NewRouter builds the framework HTTP handler. It panics on a public Routes
-// route and on an extra mount without a valid access kind, and refuses an
-// operation mounted twice, a route id in both Routes and PanelRoutes, and an
-// extra mount or MCP path under a v1 prefix. Behind Guards, the MCP mount
-// refuses, with domain.ErrOriginNotAllowed, a request a browser sent from
-// another origin on every method, GET included. Every v1 route and the MCP
-// mount carry their surface in the request context for SurfaceFromContext:
-// domain.SourceAPI on /api/v1, domain.SourcePanel on /app/api/v1 and
-// domain.SourceMCP on the MCP path.
+// NewRouter builds the framework HTTP handler, mounting Surfaces in list order.
+// It requires at least one surface with a non-empty, slash-prefixed literal
+// prefix without a trailing slash or any '{', '}' or '*'. Prefixes must not be
+// equal or nested, and sources must be SourceAPI or SourcePanel. At most one
+// surface may mount the manifest; that surface requires a non-nil AccessMode.
+// It panics on a public route outside a SourcePanel surface and on an extra
+// mount without a valid access kind. It refuses empty route IDs, duplicate
+// route IDs within a surface, duplicate operations, and extra mounts or MCP
+// paths at or under any surface prefix. No surfaces returns
+// "httpapi: nil route registry".
+// Behind Guards, the MCP mount refuses, with domain.ErrOriginNotAllowed, a
+// request a browser sent from another origin on every method, GET included.
+// Every surface route carries its
+// configured Source in the request context for SurfaceFromContext; the MCP
+// mount carries domain.SourceMCP.
+// SPA is optional: without it, unmatched paths answer the typed JSON 404.
+// NotFound overrides that response at the root and inside every surface;
+// setting both SPA and NotFound returns an error. MethodNotAllowed, when set,
+// receives Allow computed from the mounted chi tree and writes the response.
+// A nil MethodNotAllowed preserves chi's default 405.
 func NewRouter(cfg RouterConfig) (http.Handler, error) {
-	if cfg.Routes == nil {
+	if len(cfg.Surfaces) == 0 {
 		return nil, errors.New("httpapi: nil route registry")
 	}
+	cfg.Surfaces = slices.Clone(cfg.Surfaces)
 	if cfg.Authorizer == nil {
 		return nil, errors.New("httpapi: nil authorizer")
 	}
 	if cfg.CallerResolver == nil {
 		return nil, errors.New("httpapi: nil caller resolver")
 	}
-	if cfg.SPA == nil {
-		return nil, errors.New("httpapi: nil SPA filesystem")
+	if cfg.SPA != nil && cfg.NotFound != nil {
+		return nil, errors.New("httpapi: SPA and NotFound cannot both be set")
 	}
 	if cfg.BodyLimit == nil {
 		return nil, errors.New("httpapi: nil body limit policy")
@@ -112,12 +157,12 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	if cfg.Guards.ContentType == nil {
 		return nil, errors.New("httpapi: nil content-type guard")
 	}
-	if cfg.AccessMode == nil {
-		return nil, errors.New("httpapi: nil access mode")
+	for _, surface := range cfg.Surfaces {
+		if surface.Manifest && cfg.AccessMode == nil {
+			return nil, errors.New("httpapi: nil access mode")
+		}
 	}
 
-	routes := cfg.Routes.Routes()
-	panelRoutes := cfg.PanelRoutes.Routes()
 	mcpPath := ""
 	if cfg.MCP != nil {
 		mcpPath = cfg.MCPPath
@@ -126,7 +171,7 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 		}
 	}
 	operations, err := mountedOperations(
-		routes, panelRoutes, mcpPath, cfg.ExtraMounts,
+		cfg.Surfaces, mcpPath, cfg.ExtraMounts, cfg.SPA != nil,
 	)
 	if err != nil {
 		return nil, err
@@ -138,29 +183,21 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	router.Use(cfg.Guards.Host)
 	router.Use(cfg.Guards.Origin)
 	router.Use(cfg.Guards.ContentType)
+	notFound := cfg.NotFound
+	if notFound == nil {
+		notFound = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			WriteErr(w, domain.ErrNotFound)
+		})
+	}
 
-	mountV1(
-		router,
-		apiPrefix,
-		routes,
-		cfg.Authorizer,
-		cfg.CallerResolver,
-		domain.SourceAPI,
-		cfg.BodyLimit,
-		newRuntimeRouteManifestHandler(
-			cfg.AccessMode, operations, cfg.Authorizer,
-		),
-	)
-	mountV1(
-		router,
-		panelPrefix,
-		slices.Concat(routes, panelRoutes),
-		cfg.Authorizer,
-		cfg.CallerResolver,
-		domain.SourcePanel,
-		cfg.BodyLimit,
-		nil,
-	)
+	surfaceAllows := make(map[string]func(string) string, len(cfg.Surfaces))
+	for _, surface := range cfg.Surfaces {
+		var manifest http.Handler
+		if surface.Manifest {
+			manifest = newRuntimeRouteManifestHandler(cfg.AccessMode, operations, cfg.Authorizer)
+		}
+		surfaceAllows[surface.Prefix] = mountSurface(router, surface, cfg.Authorizer, cfg.CallerResolver, cfg.BodyLimit, manifest, notFound, cfg.MethodNotAllowed)
+	}
 
 	if cfg.MCP != nil {
 		// The MCP handler resolves the caller itself, so the surface is stamped
@@ -178,36 +215,49 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 		register(router, mount.Method, mount.Pattern, mount.Handler)
 	}
 
-	spa, err := newSPAHandler(cfg.SPA)
-	if err != nil {
-		return nil, err
+	if cfg.SPA != nil {
+		spa, err := newSPAHandler(cfg.SPA)
+		if err != nil {
+			return nil, err
+		}
+		notFound = spa
 	}
-	router.NotFound(spa.ServeHTTP)
+	router.NotFound(notFound.ServeHTTP)
+	if cfg.MethodNotAllowed != nil {
+		rootAllow := allowedMethods(router)
+		router.MethodNotAllowed(methodNotAllowed(func(path string) string {
+			if prefix := surfacePrefixOf(path, cfg.Surfaces); prefix != "" {
+				path = strings.TrimPrefix(path, prefix)
+				if path == "" {
+					path = "/"
+				}
+				return surfaceAllows[prefix](path)
+			}
+			return rootAllow(path)
+		}, cfg.MethodNotAllowed))
+	}
 
 	return router, nil
 }
 
-func mountV1(
+func mountSurface(
 	router chi.Router,
-	prefix string,
-	routes []Route,
+	surface Surface,
 	authorizer Authorizer,
 	callerResolver auth.CallerResolver,
-	source domain.Source,
 	bodyLimit func(*http.Request) int64,
 	manifest http.Handler,
-) {
-	router.Route(prefix, func(v1 chi.Router) {
-		// An unknown path under an API prefix names no panel route: it answers
-		// the typed 404 rather than the SPA shell the root falls back to.
-		v1.NotFound(func(w http.ResponseWriter, _ *http.Request) {
-			WriteErr(w, domain.ErrNotFound)
-		})
+	notFound http.Handler,
+	methodNotAllowedHook http.Handler,
+) func(string) string {
+	var allow func(string) string
+	router.Route(surface.Prefix, func(v1 chi.Router) {
+		v1.NotFound(notFound.ServeHTTP)
 		limit := LimitBody(bodyLimit)
-		base := Chain{limit, ResolveCaller(callerResolver, source)}
+		base := Chain{limit, ResolveCaller(callerResolver, surface.Source)}
 		// A public route carries no credentials: nothing resolves a caller for
 		// it or authorizes it, so only the surface is stamped.
-		public := Chain{limit, withSurface(source)}
+		public := Chain{limit, withSurface(surface.Source)}
 		if manifest != nil {
 			register(
 				v1,
@@ -216,7 +266,7 @@ func mountV1(
 				base.Then(manifest),
 			)
 		}
-		for _, route := range routes {
+		for _, route := range surface.Routes {
 			if route.Public {
 				register(v1, route.Method, route.Pattern, public.Then(route.Handler))
 				continue
@@ -225,7 +275,48 @@ func mountV1(
 				Chain{AuthorizeMiddleware(authorizer, route.ID)})
 			register(v1, route.Method, route.Pattern, chain.Then(route.Handler))
 		}
+		if methodNotAllowedHook != nil {
+			allow = allowedMethods(v1)
+			v1.MethodNotAllowed(methodNotAllowed(allow, methodNotAllowedHook))
+		}
 	})
+	return allow
+}
+
+func allowedMethods(router chi.Routes) func(string) string {
+	var routedMethods []string
+	for _, route := range router.Routes() {
+		for method := range route.Handlers {
+			if method != "*" && !slices.Contains(routedMethods, method) {
+				routedMethods = append(routedMethods, method)
+			}
+		}
+	}
+	slices.Sort(routedMethods)
+
+	return func(path string) string {
+		var methods []string
+		for _, method := range routedMethods {
+			if router.Match(chi.NewRouteContext(), method, path) {
+				methods = append(methods, method)
+			}
+		}
+		return strings.Join(methods, ", ")
+	}
+}
+
+func methodNotAllowed(allow func(string) string, hook http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := chi.RouteContext(r.Context()).RoutePath
+		if path == "" {
+			path = r.URL.Path
+			if r.URL.RawPath != "" {
+				path = r.URL.RawPath
+			}
+		}
+		w.Header().Set("Allow", allow(path))
+		hook.ServeHTTP(w, r)
+	}
 }
 
 func register(r chi.Router, method, pattern string, handler http.Handler) {
