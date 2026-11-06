@@ -116,12 +116,24 @@ operation is allowed.
 
 `onFatal` receives an unrecoverable persistence error; `cmd/pit-officer` logs it
 and exits. It is required: `Build` rejects a nil hook.
+
 `officerApp.RunMCPStdio` serves MCP over stdio as a given caller, and
 `officerApp.BuildServeHandler` returns the HTTP handler for the dashboard, REST,
 and MCP over HTTP; `cmd/pit-officer` runs both. `BuildServeHandler` fails
 without all three guards, so a builder that skips `Register` sets them with
 `SetBrowserGuards`; `framework/web/httpapi` builds the default ones with
 `AllowedHosts`, `SameOrigin`, and `JSONBody`.
+
+`BuildOver` composes over a ready node, signer, and running market-data and
+trading runtimes supplied by the host through a factory. Like `Build`, it
+requires an authorizer, caller resolver, service factory, and route config
+builder; unlike `Build`, it takes no fatal hook; its factory receives the
+builder's market-data and trading registries.
+It refuses a builder with a store factory, node builder, node hook, or signing
+factory, including one filled by `Register`. The factory owns its parts until
+it returns successfully and releases them itself on error; after success,
+`BuildOver` releases them if composition fails, joining any release error with
+the composition error, or transfers them to the App for `Close`.
 
 The dashboard is optional: leave `SetSPAFactory` unset, or pass nil to remove
 the one `Register` installed. Unmatched paths then answer the typed JSON 404.

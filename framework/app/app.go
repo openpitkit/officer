@@ -26,6 +26,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"reflect"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
@@ -62,8 +63,23 @@ type NodeHook func(context.Context, store.Store, node.Node) error
 // SigningFactory builds the approval signing service.
 type SigningFactory func(store.RealmStore) (signing.Service, error)
 
+// NodeRuntime holds a running node and its services. All four parts are required
+// by BuildOver; the signer has no separate shutdown operation.
+type NodeRuntime struct {
+	Node       node.Node
+	Signing    signing.Service
+	MarketData backend.MarketDataRuntime
+	Trading    backend.TradingRuntime
+}
+
+// NodeRuntimeFactory supplies running parts using the builder's provider
+// registries. On error it must release everything it created. On success it
+// transfers ownership to BuildOver, including when a part is missing.
+type NodeRuntimeFactory func(context.Context, *marketdata.Registry, *trading.Registry) (NodeRuntime, error)
+
 // ServiceFactory builds the framework control plane service over the node.
-// The context is Build's: the factory may read the node while it builds.
+// The context is Build's or BuildOver's: the factory may read the node while it
+// builds.
 type ServiceFactory func(
 	context.Context,
 	node.Node,
@@ -247,12 +263,10 @@ func (b *Builder) Build(
 	if fatalHook == nil {
 		return nil, errors.New("app: nil fatal shutdown hook")
 	}
-	version, err := backend.Version()
+	version, err := resolveVersion(logger)
 	if err != nil {
-		return nil, fmt.Errorf("resolve officer version: %w", err)
+		return nil, err
 	}
-	logger.Info("mcp server version", "version", version,
-		"release_build", backend.ReleaseBuild())
 
 	st, err := b.storeFactory()
 	if err != nil {
@@ -361,6 +375,79 @@ func (b *Builder) Build(
 		_ = localNode.Close()
 		return nil, fmt.Errorf("start trading runtime: %w", err)
 	}
+	return b.compose(NodeRuntime{
+		Node: localNode, Signing: signer, MarketData: manager, Trading: runtime,
+	}, service, mcpRegistry, version), nil
+}
+
+// BuildOver composes over a host's running node and runtimes, without opening a
+// store or starting any runtime. It refuses local-node factories and hooks.
+// After the factory succeeds, a failure stops trading, stops market data, then
+// closes the node. On success the returned App owns that shutdown sequence.
+func (b *Builder) BuildOver(ctx context.Context, logger *slog.Logger, factory NodeRuntimeFactory) (*App, error) {
+	switch {
+	case b == nil:
+		return nil, errors.New("app: nil builder")
+	case factory == nil:
+		return nil, errors.New("app: nil node runtime factory")
+	case b.storeFactory != nil:
+		return nil, errors.New("app: BuildOver refuses a store factory")
+	case b.nodeBuilder != nil:
+		return nil, errors.New("app: BuildOver refuses a node builder")
+	case len(b.nodeHooks) != 0:
+		return nil, errors.New("app: BuildOver refuses node hooks")
+	case b.signingFactory != nil:
+		return nil, errors.New("app: BuildOver refuses a signing factory")
+	}
+	if err := b.validateCommon(false); err != nil {
+		return nil, err
+	}
+	version, err := resolveVersion(logger)
+	if err != nil {
+		return nil, err
+	}
+
+	runtime, err := factory(ctx, b.mdRegistry, b.tradingRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("build node runtime: %w", err)
+	}
+	closeRuntime := func() error {
+		return (&App{node: runtime.Node, marketData: runtime.MarketData, trading: runtime.Trading}).Close()
+	}
+	var missing string
+	switch {
+	case isNilPart(runtime.Node):
+		missing = "node"
+	case isNilPart(runtime.Signing):
+		missing = "signing service"
+	case isNilPart(runtime.MarketData):
+		missing = "market-data runtime"
+	case isNilPart(runtime.Trading):
+		missing = "trading runtime"
+	}
+	if missing != "" {
+		return nil, errors.Join(fmt.Errorf("app: node runtime factory returned no %s", missing), closeRuntime())
+	}
+	mcpRegistry := frameworkmcp.NewToolRegistry()
+	service, err := b.serviceFactory(ctx, runtime.Node, runtime.MarketData, runtime.Trading,
+		runtime.Signing, b.mdRegistry, mcpRegistry)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("build service: %w", err), closeRuntime())
+	}
+	return b.compose(runtime, service, mcpRegistry, version), nil
+}
+
+func resolveVersion(logger *slog.Logger) (string, error) {
+	version, err := backend.Version()
+	if err != nil {
+		return "", fmt.Errorf("resolve officer version: %w", err)
+	}
+	logger.Info("mcp server version", "version", version,
+		"release_build", backend.ReleaseBuild())
+	return version, nil
+}
+
+func (b *Builder) compose(runtime NodeRuntime, service backend.ControlPlane, mcpRegistry *frameworkmcp.ToolRegistry, version string) *App {
 	src := frameworkmcp.SourceFor(service)
 	for _, registrar := range b.toolRegistrars {
 		registrar(mcpRegistry, src)
@@ -368,9 +455,9 @@ func (b *Builder) Build(
 
 	return &App{
 		service:        service,
-		node:           localNode,
-		marketData:     manager,
-		trading:        runtime,
+		node:           runtime.Node,
+		marketData:     runtime.MarketData,
+		trading:        runtime.Trading,
 		mcpRegistry:    mcpRegistry,
 		source:         src,
 		version:        officerVersion(version),
@@ -379,10 +466,14 @@ func (b *Builder) Build(
 		browserGuards:  b.browserGuards,
 		routeConfig:    b.routeConfig,
 		spaFactory:     b.spaFactory,
-	}, nil
+	}
 }
 
 func (b *Builder) validate() error {
+	return b.validateCommon(true)
+}
+
+func (b *Builder) validateCommon(local bool) error {
 	switch {
 	case b == nil:
 		return errors.New("app: nil builder")
@@ -390,11 +481,11 @@ func (b *Builder) validate() error {
 		return errors.New("app: nil authorizer")
 	case b.callerResolver == nil:
 		return errors.New("app: nil caller resolver")
-	case b.storeFactory == nil:
+	case local && b.storeFactory == nil:
 		return errors.New("app: nil store factory")
-	case b.nodeBuilder == nil:
+	case local && b.nodeBuilder == nil:
 		return errors.New("app: nil node builder")
-	case b.signingFactory == nil:
+	case local && b.signingFactory == nil:
 		return errors.New("app: nil signing factory")
 	case b.serviceFactory == nil:
 		return errors.New("app: nil service factory")
@@ -414,8 +505,8 @@ func (b *Builder) validate() error {
 type App struct {
 	service        backend.ControlPlane
 	node           node.Node
-	marketData     *marketdata.Manager
-	trading        *trading.Runtime
+	marketData     backend.MarketDataRuntime
+	trading        backend.TradingRuntime
 	mcpRegistry    *frameworkmcp.ToolRegistry
 	source         frameworkmcp.Source
 	version        frameworkmcp.VersionSource
@@ -455,20 +546,33 @@ func (a *App) RecordServiceLifecycle(
 
 // Close stops producers before closing the node and engine.
 func (a *App) Close() error {
-	if a.trading != nil {
+	if !isNilPart(a.trading) {
 		a.trading.Stop()
 	}
 	// Quote producers must stop before the node closes the engine and its
 	// market-data service; pushing into that closed service would be use-after-free.
-	if a.marketData != nil {
+	if !isNilPart(a.marketData) {
 		a.marketData.Stop()
 	}
-	if a.node != nil {
+	if !isNilPart(a.node) {
 		if err := a.node.Close(); err != nil {
 			return fmt.Errorf("close node: %w", err)
 		}
 	}
 	return nil
+}
+
+func isNilPart(part any) bool {
+	if part == nil {
+		return true
+	}
+	v := reflect.ValueOf(part)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // RunMCPStdio serves the registered MCP surface over stdio.
