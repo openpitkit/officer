@@ -50,8 +50,7 @@ func SystemCaller() domain.Caller {
 
 // ContextWithCaller returns a copy of ctx carrying caller. Each surface
 // resolves the caller server-side and stamps it here; the source is never read
-// from a client-supplied header or body. Once authentication lands, the
-// resolved principal (and role) ride the same value.
+// from a client-supplied header or body.
 func ContextWithCaller(ctx context.Context, caller domain.Caller) context.Context {
 	return context.WithValue(ctx, callerContextKey{}, caller)
 }
