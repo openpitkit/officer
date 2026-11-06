@@ -57,6 +57,11 @@ func readAuth(t *testing.T, ctx context.Context, conn *websocket.Conn) bool {
 		t.Error("auth frame missing")
 		return false
 	}
+	return checkAuthFrame(t, raw)
+}
+
+func checkAuthFrame(t *testing.T, raw []byte) bool {
+	t.Helper()
 	var auth map[string]string
 	if json.Unmarshal(raw, &auth) != nil || len(auth) != 3 || auth["action"] != "auth" || auth["key"] != "test-key-marker" || auth["secret"] != "test-secret-marker" {
 		t.Error("incorrect auth frame")

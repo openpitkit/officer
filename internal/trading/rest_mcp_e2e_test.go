@@ -79,15 +79,19 @@ func (l *tradingE2ELog) String() string {
 }
 
 type tradingE2E struct {
-	t              *testing.T
-	ctx            context.Context
-	caller         domain.Caller
-	builder        *app.Builder
-	app            *app.App
-	router         http.Handler
-	realm          store.RealmStore
-	logs           tradingE2ELog
-	venueMu        sync.Mutex
+	t       *testing.T
+	ctx     context.Context
+	caller  domain.Caller
+	builder *app.Builder
+	app     *app.App
+	router  http.Handler
+	realm   store.RealmStore
+	logs    tradingE2ELog
+	venueMu sync.Mutex
+	// closing, guarded by venueMu, marks app shutdown, when the connector
+	// may abandon a dialed stream before sending its auth frame. Such an
+	// abandoned stream does not count as a missing auth frame.
+	closing        bool
 	fees           []map[string]string
 	accountError   bool
 	accountRefusal string
@@ -138,7 +142,17 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 				return
 			}
 			defer func() { _ = conn.CloseNow() }()
-			if !readAuth(t, ctx, conn) {
+			_, raw, err := conn.Read(ctx)
+			if err != nil {
+				f.venueMu.Lock()
+				closing := f.closing
+				f.venueMu.Unlock()
+				if !closing {
+					t.Error("auth frame missing")
+				}
+				return
+			}
+			if !checkAuthFrame(t, raw) {
 				return
 			}
 			f.venueMu.Lock()
@@ -319,6 +333,9 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 
 func (f *tradingE2E) start() {
 	f.t.Helper()
+	f.venueMu.Lock()
+	f.closing = false
+	f.venueMu.Unlock()
 	var err error
 	f.app, err = f.builder.Build(auth.ContextWithCaller(f.ctx, f.caller), slog.Default(), func(err error) { f.t.Errorf("fatal app shutdown: %v", err) })
 	tradingE2EMust(f.t, err)
@@ -348,7 +365,12 @@ func (f *tradingE2E) waitStreams() {
 
 func (f *tradingE2E) close() {
 	f.t.Helper()
-	defer func() { tradingE2EMust(f.t, f.app.Close()) }()
+	defer func() {
+		f.venueMu.Lock()
+		f.closing = true
+		f.venueMu.Unlock()
+		tradingE2EMust(f.t, f.app.Close())
+	}()
 	f.waitStreams()
 }
 
