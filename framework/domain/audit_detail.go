@@ -92,6 +92,7 @@ const (
 	AuditDetailAutoCreateAccount               AuditDetailCode = "auto_create_account"
 	AuditDetailSetAccountNotes                 AuditDetailCode = "set_account_notes"
 	AuditDetailDeleteAccount                   AuditDetailCode = "delete_account"
+	AuditDetailDeleteAccountForceRefused       AuditDetailCode = "delete_account_force_refused"
 	AuditDetailUpdateAccount                   AuditDetailCode = "update_account"
 	AuditDetailRenameAccountNewRecord          AuditDetailCode = "rename_account_new_record"
 	AuditDetailRenameAccountOldRecord          AuditDetailCode = "rename_account_old_record"
@@ -120,6 +121,7 @@ const (
 	AuditDetailUnblockGroup                    AuditDetailCode = "unblock_group"
 	AuditDetailUnblockGroupReason              AuditDetailCode = "unblock_group_reason"
 	AuditDetailDeleteGroup                     AuditDetailCode = "delete_group"
+	AuditDetailDeleteGroupForceRefused         AuditDetailCode = "delete_group_force_refused"
 	AuditDetailDeleteGroupDetachAccount        AuditDetailCode = "delete_group_detach_account"
 	AuditDetailDeleteGroupCurrencyRefused      AuditDetailCode = "delete_group_currency_refused"
 	AuditDetailCreateAsset                     AuditDetailCode = "create_asset"
@@ -128,11 +130,13 @@ const (
 	AuditDetailRenameAssetNewRecord            AuditDetailCode = "rename_asset_new_record"
 	AuditDetailRenameAssetOldRecord            AuditDetailCode = "rename_asset_old_record"
 	AuditDetailDeleteAsset                     AuditDetailCode = "delete_asset"
+	AuditDetailDeleteAssetForceRefused         AuditDetailCode = "delete_asset_force_refused"
 	AuditDetailDeleteAssetResolverFailed       AuditDetailCode = "delete_asset_resolver_failed"
 	AuditDetailDeleteAssetResolverReconciled   AuditDetailCode = "delete_asset_resolver_reconciled"
 	AuditDetailCreateAssetClass                AuditDetailCode = "create_asset_class"
 	AuditDetailUpdateAssetClass                AuditDetailCode = "update_asset_class"
 	AuditDetailDeleteAssetClass                AuditDetailCode = "delete_asset_class"
+	AuditDetailDeleteAssetClassForceRefused    AuditDetailCode = "delete_asset_class_force_refused"
 	AuditDetailSetLimit                        AuditDetailCode = "set_limit"
 	AuditDetailDeleteLimit                     AuditDetailCode = "delete_limit"
 	AuditDetailCreateTradingConnection         AuditDetailCode = "create_trading_connection"
@@ -160,6 +164,7 @@ const (
 	AuditDetailSubmitOrderCommitted            AuditDetailCode = "submit_order_committed"
 	AuditDetailSubmitOrderRejected             AuditDetailCode = "submit_order_rejected"
 	AuditDetailExecutionReport                 AuditDetailCode = "execution_report"
+	AuditDetailExecutionReportForceRefused     AuditDetailCode = "execution_report_force_refused"
 	AuditDetailAdjustmentAccepted              AuditDetailCode = "adjustment_accepted"
 	AuditDetailAdjustmentRejected              AuditDetailCode = "adjustment_rejected"
 	AuditDetailAdjustmentRefAccepted           AuditDetailCode = "adjustment_ref_accepted"
@@ -200,6 +205,7 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 	AuditDetailAutoCreateAccount:               "Account {{account}} created automatically by {{operation}}",
 	AuditDetailSetAccountNotes:                 "Account {{account}} notes changed",
 	AuditDetailDeleteAccount:                   "Account {{account}} deleted",
+	AuditDetailDeleteAccountForceRefused:       "Account {{account}} forced deletion refused: {{refusal}}",
 	AuditDetailUpdateAccount:                   "Account {{account}} updated",
 	AuditDetailRenameAccountNewRecord:          "Account {{from}} → {{to}} updated (record under the new code)",
 	AuditDetailRenameAccountOldRecord:          "Account {{from}} → {{to}} updated (record under the old code)",
@@ -228,6 +234,7 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 	AuditDetailUnblockGroup:                    "Group {{group}} unblocked",
 	AuditDetailUnblockGroupReason:              "Group {{group}} unblocked: {{reason}}",
 	AuditDetailDeleteGroup:                     "Group {{group}} deleted; accounts detached: {{detachedAccounts}}, P&L bounds removed: {{destroyedSpotFundsPnlBounds}}",
+	AuditDetailDeleteGroupForceRefused:         "Group {{group}} forced deletion refused: {{refusal}}",
 	AuditDetailDeleteGroupDetachAccount:        "Group {{group}} deleted; account {{account}} detached",
 	AuditDetailDeleteGroupCurrencyRefused:      "Group {{group}} deletion with currency {{currency}} refused: {{refusal}}",
 	AuditDetailCreateAsset:                     "Asset {{asset}} created",
@@ -236,11 +243,13 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 	AuditDetailRenameAssetNewRecord:            "Asset {{from}} → {{to}} updated (record under the new code)",
 	AuditDetailRenameAssetOldRecord:            "Asset {{from}} → {{to}} updated (record under the old code)",
 	AuditDetailDeleteAsset:                     "Asset {{asset}} deleted",
+	AuditDetailDeleteAssetForceRefused:         "Asset {{asset}} forced deletion refused: {{refusal}}",
 	AuditDetailDeleteAssetResolverFailed:       "Asset {{asset}} deleted (removal from the code index failed)",
 	AuditDetailDeleteAssetResolverReconciled:   "Asset {{asset}} deleted (removal from the code index failed, reconciled)",
 	AuditDetailCreateAssetClass:                "Asset class {{class}} created",
 	AuditDetailUpdateAssetClass:                "Asset class {{from}} → {{to}} updated",
 	AuditDetailDeleteAssetClass:                "Asset class {{class}} deleted",
+	AuditDetailDeleteAssetClassForceRefused:    "Asset class {{class}} forced deletion refused: {{refusal}}",
 	AuditDetailSetLimit:                        "Limit set: {{policy}} ({{scope}})",
 	AuditDetailDeleteLimit:                     "Limit deleted: {{policy}} ({{scope}})",
 	AuditDetailCreateTradingConnection:         "Trading connection {{connection}} created ({{provider}}, {{connectionMode}})",
@@ -268,6 +277,7 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 	AuditDetailSubmitOrderCommitted:            "Order {{order}} submitted, account {{account}}, {{base}}/{{quote}}, {{side}}: committed",
 	AuditDetailSubmitOrderRejected:             "Order {{order}} submitted, account {{account}}, {{base}}/{{quote}}, {{side}}: rejected",
 	AuditDetailExecutionReport:                 "Execution report for order {{order}}, account {{account}}, {{base}}/{{quote}}: qty {{qty}}, remaining {{leavesQty}}, {{status}}, blocks: {{blocks}}",
+	AuditDetailExecutionReportForceRefused:     "Forced execution report for order {{order}} (account {{account}}) refused: {{refusal}}",
 	AuditDetailAdjustmentAccepted:              "Adjustment for account {{account}}, asset {{asset}}, type {{adjustmentType}}: accepted",
 	AuditDetailAdjustmentRejected:              "Adjustment for account {{account}}, asset {{asset}}, type {{adjustmentType}}: rejected",
 	AuditDetailAdjustmentRefAccepted:           "Adjustment for account {{account}}, asset {{asset}}, type {{adjustmentType}}, ID {{ref}}: accepted",

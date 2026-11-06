@@ -101,6 +101,18 @@ keep `builder.Authorizer()` in its authorizer chain; the refusals
 `builder.Authorizer()` returns in `setup` carry `domain.ErrSetupRequired`'s
 message, which names the panel instead of an address.
 
+For a surface caller (the panel, the REST API, MCP), the authorizer set with
+`SetAuthorizer` is also asked before a forced deletion of an account, group,
+asset or asset class and before a forced execution report, using
+`force:<audit action>` identifiers from the `backend.Force*` constants.
+Officer's own processing (`domain.SourceSystem`) is not asked. A refusal
+returns the authorizer's error (`domain.ErrForbidden` answers HTTP 403 with
+code `forbidden`) and is recorded in the audit log. A host replacing the
+service factory passes `backend.WithForceAuthorizer(builder.Authorizer())`
+to `backend.New` itself, reading the authorizer inside the factory at `Build`
+so a wrapper set later is the one asked. Without the option, every forced
+operation is allowed.
+
 `onFatal` receives an unrecoverable persistence error; `cmd/pit-officer` logs it
 and exits. It is required: `Build` rejects a nil hook.
 `officerApp.RunMCPStdio` serves MCP over stdio as a given caller, and

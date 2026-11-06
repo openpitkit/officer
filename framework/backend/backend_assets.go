@@ -172,6 +172,15 @@ func (s *Service) DeleteAssetClass(ctx context.Context, code string, force bool)
 	if err != nil {
 		return err
 	}
+	if force {
+		if err := s.authorizeForce(ctx, caller, ForceDeleteAssetClass,
+			store.AuditEntry{Action: domain.AuditActionDeleteAssetClass},
+			domain.AuditDetailDeleteAssetClassForceRefused,
+			domain.AuditDetailParams{"class": code},
+		); err != nil {
+			return err
+		}
+	}
 	return s.node.DeleteAssetClass(ctx, code, force, caller)
 }
 
@@ -181,14 +190,23 @@ func (s *Service) DeleteAsset(ctx context.Context, code string, force bool) erro
 	if err := domain.ValidateAsset(code); err != nil {
 		return err
 	}
-	s.marketDataMu.Lock()
-	defer s.marketDataMu.Unlock()
-
-	n := s.node
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
 		return err
 	}
+	if force {
+		if err := s.authorizeForce(ctx, caller, ForceDeleteAsset,
+			store.AuditEntry{Action: domain.AuditActionDeleteAsset, Asset: code},
+			domain.AuditDetailDeleteAssetForceRefused,
+			domain.AuditDetailParams{"asset": code},
+		); err != nil {
+			return err
+		}
+	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
+	n := s.node
 	if err := n.DeleteAsset(ctx, code, force, caller); err != nil {
 		return err
 	}

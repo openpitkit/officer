@@ -27,6 +27,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
@@ -604,8 +605,9 @@ type Node interface {
 
 	// AppendAudit persists one audit row stamped with the caller. It is the seam
 	// the backend uses to record control-plane actions that have no node-mutating
-	// counterpart (signing-key management, signing config, and signed approval
-	// issue/confirm/cancel). The entry's Actor and Source are taken from caller.
+	// counterpart (signing-key management, signing config, signed approval
+	// issue/confirm/cancel, and force refusals). The entry's Actor and Source are
+	// taken from caller.
 	AppendAudit(ctx context.Context, entry store.AuditEntry, caller domain.Caller) error
 
 	// ListMcpAccess returns the stored per-command MCP enable/disable overrides
@@ -819,4 +821,22 @@ type Node interface {
 	// Close shuts the node down: it stops the engine and closes the store.
 	// After Close the node is no longer usable. Close is idempotent.
 	Close() error
+}
+
+// AuditRefusal records a refused action through n.AppendAudit and returns
+// refusal unchanged. It adds "refusal" = refusal.Error() to params and appends
+// the row under a context that ignores the caller's cancellation. An append
+// failure is returned as "audit refused <what> (<refusal>): <err>", wrapping
+// the append error.
+func AuditRefusal(
+	ctx context.Context, n Node, caller domain.Caller, entry store.AuditEntry,
+	code domain.AuditDetailCode, params domain.AuditDetailParams,
+	refusal error, what string,
+) error {
+	params["refusal"] = refusal.Error()
+	entry.Detail = domain.NewAuditDetail(code, params)
+	if err := n.AppendAudit(context.WithoutCancel(ctx), entry, caller); err != nil {
+		return fmt.Errorf("audit refused %s (%v): %w", what, refusal, err)
+	}
+	return refusal
 }

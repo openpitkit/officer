@@ -231,6 +231,8 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 			fwbackend.WithTradingRuntime(rt),
 			fwbackend.WithMCPCatalogProvider(mcpRegistry),
 			fwbackend.WithAccountScope(scope),
+			// Read at Build so a host's wrapper also governs forced operations.
+			fwbackend.WithForceAuthorizer(b.Authorizer()),
 		}
 		if !fwbackend.ReleaseBuild() {
 			opts = append(opts, fwbackend.WithNonReleaseBuild())

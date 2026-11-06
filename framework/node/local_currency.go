@@ -711,12 +711,7 @@ func (n *localNode) auditCurrencyChangeRefusal(
 	ctx context.Context, caller domain.Caller, entry store.AuditEntry,
 	code domain.AuditDetailCode, params domain.AuditDetailParams, refusal error,
 ) error {
-	params["refusal"] = refusal.Error()
-	entry.Detail = domain.NewAuditDetail(code, params)
-	if err := n.audit(context.WithoutCancel(ctx), caller, entry); err != nil {
-		return fmt.Errorf("audit refused currency change (%v): %w", refusal, err)
-	}
-	return refusal
+	return AuditRefusal(ctx, n, caller, entry, code, params, refusal, "currency change")
 }
 
 // currencyDetailParams names both sides of a denomination change next to the

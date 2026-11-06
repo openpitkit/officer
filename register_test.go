@@ -557,6 +557,92 @@ func TestRESTMutationAuditUsesResolvedPrincipal(t *testing.T) {
 	}
 }
 
+func TestRegisterRESTForceUsesHostAuthorizer(t *testing.T) {
+	for _, wrapped := range []bool{true, false} {
+		t.Run(fmt.Sprintf("wrapped=%t", wrapped), func(t *testing.T) {
+			const principal = "alice"
+			const class = "equity"
+			refusal := fmt.Errorf("forced deletion denied: %w", domain.ErrForbidden)
+			forceCalls := 0
+			app, realm, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
+				return domain.Caller{Principal: principal, Role: "admin"}, nil
+			}, nil, func(builder *frameworkapp.Builder) {
+				if !wrapped {
+					return
+				}
+				installed := builder.Authorizer()
+				builder.SetAuthorizer(accessAuthorizer(func(
+					ctx context.Context, caller domain.Caller, identifier string,
+				) error {
+					if identifier == backend.ForceDeleteAssetClass {
+						forceCalls++
+						if caller.Principal != principal || caller.Source != domain.SourceAPI {
+							t.Errorf("force caller = %+v, want %s from API", caller, principal)
+						}
+						return refusal
+					}
+					return installed.Authorize(ctx, caller, identifier)
+				}))
+			})
+			ctx := context.Background()
+			if err := realm.CreatePrincipal(ctx, domain.Principal{Code: principal}); err != nil {
+				t.Fatalf("CreatePrincipal: %v", err)
+			}
+			handler, err := app.BuildServeHandler(nil, "/mcp")
+			if err != nil {
+				t.Fatalf("BuildServeHandler: %v", err)
+			}
+			accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+			restCall(t, handler, http.MethodPost, "/asset-classes",
+				`{"code":"equity"}`, http.StatusCreated)
+			if !wrapped {
+				rec := serveREST(handler, http.MethodDelete, "/asset-classes/"+class+"?force=true", "")
+				if rec.Code != http.StatusNoContent {
+					t.Fatalf("open forced delete = %d, body = %s", rec.Code, rec.Body)
+				}
+			} else {
+				refused := restCall(t, handler, http.MethodDelete,
+					"/asset-classes/"+class+"?force=true", "", http.StatusForbidden)
+				if errObj, _ := refused["error"].(map[string]any); errObj["code"] != "forbidden" {
+					t.Fatalf("error code = %v, want forbidden", errObj["code"])
+				}
+				readCtx := auth.ContextWithCaller(ctx, auth.SystemCaller())
+				classes, err := app.Service().ListAssetClasses(readCtx)
+				if err != nil || len(classes) != 1 || classes[0].Code != class {
+					t.Fatalf("classes after refusal = %+v, %v, want %s", classes, err, class)
+				}
+				rows, err := app.Service().ListAudit(readCtx, 100)
+				if err != nil {
+					t.Fatalf("ListAudit: %v", err)
+				}
+				deletes := 0
+				for _, row := range rows {
+					if row.Action != domain.AuditActionDeleteAssetClass {
+						continue
+					}
+					deletes++
+					if row.Detail.Code != domain.AuditDetailDeleteAssetClassForceRefused ||
+						row.Detail.Params["class"] != class || row.Detail.Params["refusal"] != refusal.Error() ||
+						row.Actor != principal || row.Source != domain.SourceAPI {
+						t.Fatalf("refusal audit = %+v", row)
+					}
+				}
+				if deletes != 1 {
+					t.Fatalf("delete audit rows = %d, want 1", deletes)
+				}
+				rec := serveREST(handler, http.MethodDelete, "/asset-classes/"+class, "")
+				if rec.Code != http.StatusNoContent || forceCalls != 1 {
+					t.Fatalf("unforced delete = %d, force calls = %d: %s", rec.Code, forceCalls, rec.Body)
+				}
+			}
+			classes, err := app.Service().ListAssetClasses(auth.ContextWithCaller(ctx, auth.SystemCaller()))
+			if err != nil || len(classes) != 0 {
+				t.Fatalf("classes after deletion = %+v, %v, want none", classes, err)
+			}
+		})
+	}
+}
+
 func TestRecordServiceLifecycleUsesContextCaller(t *testing.T) {
 	const principal = "lifecycle-admin"
 	app, realm, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
@@ -1971,11 +2057,13 @@ func firstOf(items []any) any {
 // buildTestApp builds Register's composition, over a fake engine, on a fresh
 // database and returns the app, its realm and the store Register opened.
 // resolver replaces Register's caller resolver and serviceFactory its service
-// factory; nil keeps Register's.
+// factory; nil keeps Register's. configure runs on the builder last, after
+// Register and the replacements, before Build.
 func buildTestApp(
 	t *testing.T,
 	resolver func(*http.Request) (domain.Caller, error),
 	serviceFactory frameworkapp.ServiceFactory,
+	configure ...func(*frameworkapp.Builder),
 ) (*frameworkapp.App, store.RealmStore, store.Store) {
 	t.Helper()
 	ctx := context.Background()
@@ -2002,6 +2090,9 @@ func buildTestApp(
 	builder.SetSPAFactory(func() (fs.FS, error) {
 		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
 	})
+	for _, configureBuilder := range configure {
+		configureBuilder(builder)
+	}
 	app, err := builder.Build(ctx, slog.Default(), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("Build: %v", err)

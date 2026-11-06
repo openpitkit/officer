@@ -236,6 +236,15 @@ func (s *Service) DeleteGroup(ctx context.Context, code string, force bool) erro
 	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
+	if force {
+		if err := s.authorizeForce(ctx, caller, ForceDeleteGroup,
+			store.AuditEntry{Action: domain.AuditActionDeleteGroup, Group: code},
+			domain.AuditDetailDeleteGroupForceRefused,
+			domain.AuditDetailParams{"group": code},
+		); err != nil {
+			return err
+		}
+	}
 	return s.node.DeleteGroup(ctx, code, force, caller)
 }
 

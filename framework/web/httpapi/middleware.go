@@ -26,8 +26,11 @@ import (
 )
 
 // Authorizer decides whether caller may use a stable surface identifier.
-// Caller.Source identifies the identifier namespace: SourceMCP uses MCP tool
-// names, while SourcePanel and SourceAPI use REST route IDs.
+// An identifier starting with "force:" names a backend.Force* operation,
+// asked for a surface caller whatever its Source when
+// backend.WithForceAuthorizer installs it, as officer.Register does.
+// Otherwise Caller.Source identifies the namespace: SourceMCP uses MCP tool
+// names; SourcePanel and SourceAPI use REST route IDs.
 // Route.DuringSetup reaches an Authorizer through DuringSetupFromContext.
 type Authorizer interface {
 	Authorize(ctx context.Context, caller domain.Caller, identifier string) error
