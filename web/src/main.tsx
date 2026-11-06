@@ -30,7 +30,9 @@ import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import "@fontsource/jetbrains-mono/700.css";
 import "@/index.css";
-import "@/register";
+import { registerOfficerDefaults } from "@openpit/officer-web";
+
+registerOfficerDefaults();
 
 const container = document.getElementById("root");
 if (!container) {

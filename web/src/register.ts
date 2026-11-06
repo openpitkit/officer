@@ -77,9 +77,17 @@ import {
   TradingConnectionsCard,
 } from "@/pages/dashboard/widgets";
 
-// This module is the application's complete registration against the framework
-// extension points. Stable ids let consumers replace entries by re-registering
-// the id or remove entries through the matching unregister API.
+/**
+ * Register the open panel's routes, page overrides, navigation, widgets, row
+ * actions, vocabulary, and locale resource map.
+ * Importing the package initializes the host-shared i18next instance with the
+ * panel's locale catalogs and language detector. It registers no routes, page
+ * overrides, navigation, widgets, row actions, or vocabulary.
+ * A host calls this once before rendering, then reads stable ids through
+ * getRoutes(), getNav(section), getPage(id), getWidgets(), getRowActions(scope),
+ * getScopes(), and getPolicies(). It replaces entries by re-registering their
+ * ids or removes them through the matching unregister API.
+ */
 export function registerOfficerDefaults(): void {
   // Locale catalogs: en, ru, zh-CN, es, pt-BR, all namespaces from
   // src/i18n/locales.
@@ -371,5 +379,3 @@ export function registerOfficerDefaults(): void {
   // account-audit, account-delete, group-delete, limit-edit, limit-delete.
   registerAppRowActions();
 }
-
-registerOfficerDefaults();

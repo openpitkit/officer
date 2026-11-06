@@ -86,23 +86,27 @@ build-js: ensure-node
 build-js-lib: ensure-node
     cd web && npm run build:lib
 
+# Test the published frontend library package after building it.
+test-js-lib: build-js-lib
+    cd web && npm run test:lib
+
 # Check formatting, lint, build, and test the result.
 check: check-release
 
 # Check formatting, lint, build, and test the debug result.
-check-debug: check-dry-debug build-js build-js-lib
+check-debug: check-dry-debug build-js test-js-lib
 
 # Check formatting, lint, build, and test the optimized result.
-check-release: check-dry-release build-js build-js-lib
+check-release: check-dry-release build-js test-js-lib
 
 # Check formatting, lint, build, and test against a local Pit checkout.
 check-dev pit_checkout="../pit": (check-release-dev pit_checkout)
 
 # Check formatting, lint, build, and test a debug local Pit checkout.
-check-debug-dev pit_checkout="../pit": (check-dry-debug-dev pit_checkout) build-js build-js-lib
+check-debug-dev pit_checkout="../pit": (check-dry-debug-dev pit_checkout) build-js test-js-lib
 
 # Check formatting, lint, build, and test an optimized local Pit checkout.
-check-release-dev pit_checkout="../pit": (check-dry-release-dev pit_checkout) build-js build-js-lib
+check-release-dev pit_checkout="../pit": (check-dry-release-dev pit_checkout) build-js test-js-lib
 
 # Lint and test the result (non-mutating).
 check-dry: check-dry-release
@@ -163,7 +167,7 @@ check-go-dry-debug-dev pit_checkout="../pit": (lint-go-debug-dev pit_checkout) (
 check-go-dry-release-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout) (build-go-release-dev pit_checkout) (test-go-release-dev pit_checkout) (test-go-race-dev pit_checkout)
 
 # Lint, build, and test JS/TypeScript.
-check-js: check-js-dry build-js build-js-lib
+check-js: check-js-dry build-js test-js-lib
 
 # Lint and test JS/TypeScript (non-mutating).
 [parallel]

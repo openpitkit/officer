@@ -16,3 +16,4 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 export * from "./framework";
+export { registerOfficerDefaults } from "./register";

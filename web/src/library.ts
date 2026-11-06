@@ -15,10 +15,10 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Entry of the library build only. The bundle is the framework barrel; the
-// stylesheet imported here is extracted into lib/styles.css, which a host
-// imports once as "@openpit/officer-web/styles.css". Declarations come from
-// src/index.ts, so this side-effect import never reaches lib/*.d.ts.
+// Entry of the library build only. The bundle and declarations share the
+// exports in src/index.ts. The stylesheet is extracted into lib/styles.css,
+// which a host imports once as "@openpit/officer-web/styles.css"; this import
+// never reaches lib/*.d.ts.
 import "./index.css";
 
-export * from "./framework";
+export * from "./index";

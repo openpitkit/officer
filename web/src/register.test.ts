@@ -21,8 +21,9 @@ import { getNav, getPage, getRoutes, getWidgets } from "@/framework";
 import { setAccountScope } from "@/lib/accountScope";
 import { Account } from "@/pages/Account";
 import { Accounts } from "@/pages/Accounts";
-// Side-effect import: the application's own registration.
-import "@/register";
+import { registerOfficerDefaults } from "@/register";
+
+registerOfficerDefaults();
 
 function indexOf(ids: string[], id: string): number {
   const index = ids.indexOf(id);
