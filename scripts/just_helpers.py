@@ -812,7 +812,28 @@ def check_committed_release_notes(version: str) -> None:
 
 
 def command_check_release_notes(args: argparse.Namespace) -> None:
-    check_committed_release_notes(release_version(args.version))
+    version = release_version(args.version)
+    check_committed_release_notes(version)
+    check_release_version(version)
+
+
+def check_release_version(version: str) -> None:
+    server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    if server["version"] != version:
+        raise SystemExit(
+            f"server.json version {server['version']!r} differs from release {version}"
+        )
+    if "packages" in server:
+        for index, package in enumerate(server["packages"]):
+            if package["version"] != version:
+                raise SystemExit(
+                    f"server.json packages[{index}].version {package['version']!r} "
+                    f"differs from release {version}"
+                )
+
+
+def command_check_release_version(args: argparse.Namespace) -> None:
+    check_release_version(release_version(args.version))
 
 
 def next_release_version(kind: str) -> str:
@@ -860,7 +881,17 @@ def command_release(args: argparse.Namespace) -> None:
         raise SystemExit(f"tag {tag} already exists")
 
     shutil.copyfile(notes, ROOT / RELEASE_NOTES)
-    run(["git", "add", "--", RELEASE_NOTES])
+    server_path = ROOT / "server.json"
+    server = json.loads(server_path.read_text(encoding="utf-8"))
+    server["version"] = version
+    if "packages" in server:
+        for package in server["packages"]:
+            package["version"] = version
+    server_path.write_text(
+        json.dumps(server, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    check_release_version(version)
+    run(["git", "add", "--", RELEASE_NOTES, "server.json"])
     run(["git", "commit", "--message", f"Release {version}"])
     run(["git", "tag", "--annotate", tag, "--message", f"Release {version}"])
     check_committed_release_notes(version)
@@ -940,6 +971,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparser = subparsers.add_parser("check-release-notes")
     subparser.add_argument("version")
     subparser.set_defaults(func=command_check_release_notes)
+
+    subparser = subparsers.add_parser("check-release-version")
+    subparser.add_argument("version")
+    subparser.set_defaults(func=command_check_release_version)
 
     subparser = subparsers.add_parser("release-version")
     subparser.add_argument("kind", choices=RELEASE_KINDS)

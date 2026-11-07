@@ -260,20 +260,24 @@ test-all: test-all-release
 
 # Run all tests with debug compiler flags.
 [parallel]
-test-all-debug: test-go-debug test-go-race test-js
+test-all-debug: test-go-debug test-go-race test-js test-python
 
 # Run all optimized tests.
 [parallel]
-test-all-release: test-go-release test-go-race test-js
+test-all-release: test-go-release test-go-race test-js test-python
 
 # Run all tests against a local Pit checkout.
 test-all-dev pit_checkout="../pit": (test-all-release-dev pit_checkout)
 
 # Run all tests against a debug local Pit checkout.
-test-all-debug-dev pit_checkout="../pit": (test-go-debug-dev pit_checkout) (test-go-race-dev pit_checkout) test-js
+test-all-debug-dev pit_checkout="../pit": (test-go-debug-dev pit_checkout) (test-go-race-dev pit_checkout) test-js test-python
 
 # Run all tests against an optimized local Pit checkout.
-test-all-release-dev pit_checkout="../pit": (test-go-release-dev pit_checkout) (test-go-race-dev pit_checkout) test-js
+test-all-release-dev pit_checkout="../pit": (test-go-release-dev pit_checkout) (test-go-race-dev pit_checkout) test-js test-python
+
+# Test the release tooling without cutting a release.
+test-python:
+    {{ python }} -m unittest discover -s scripts -p '*_test.py'
 
 # Run all Go tests.
 test-go: test-go-release
@@ -389,9 +393,13 @@ release kind notes_file: check
 release-version kind:
     {{ python }} {{ just_helper }} release-version {{ quote(kind) }}
 
-# Require RELEASE_NOTES.md committed at HEAD for exactly this version.
+# Require committed release notes and matching MCP metadata for this version.
 check-release-notes version:
     {{ python }} {{ just_helper }} check-release-notes {{ quote(version) }}
+
+# Require the MCP server and every package to match the release version.
+check-release-version version:
+    {{ python }} {{ just_helper }} check-release-version {{ quote(version) }}
 
 # Build the native OpenPit runtime library from a local Pit checkout.
 dylib-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
