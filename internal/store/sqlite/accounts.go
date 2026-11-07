@@ -1847,14 +1847,16 @@ func realGroupWhere(where string) string {
 	return where + " AND g.code <> ''"
 }
 
+const likeClause = " LIKE ? ESCAPE '" + string(fwstore.LikeEscape) + "'"
+
 func appendMatcher(
 	clauses *[]string, args *[]any, column string, matcher fwstore.TextMatcher,
 ) {
-	pattern, ok := likePattern(matcher)
+	pattern, ok := matcher.LikePattern()
 	if !ok {
 		return
 	}
-	*clauses = append(*clauses, column+" LIKE ? ESCAPE '\\'")
+	*clauses = append(*clauses, column+likeClause)
 	*args = append(*args, pattern)
 }
 
@@ -1863,13 +1865,13 @@ func appendMatcher(
 func appendMatcherAny(
 	clauses *[]string, args *[]any, columns []string, matcher fwstore.TextMatcher,
 ) {
-	pattern, ok := likePattern(matcher)
+	pattern, ok := matcher.LikePattern()
 	if !ok {
 		return
 	}
 	ors := make([]string, 0, len(columns))
 	for _, column := range columns {
-		ors = append(ors, column+" LIKE ? ESCAPE '\\'")
+		ors = append(ors, column+likeClause)
 		*args = append(*args, pattern)
 	}
 	*clauses = append(*clauses, "("+strings.Join(ors, " OR ")+")")
@@ -1935,44 +1937,6 @@ func appendCountRangeFilter(
 		}
 		*args = append(*args, *filter.Max)
 	}
-}
-
-func likePattern(matcher fwstore.TextMatcher) (string, bool) {
-	fragments := make([]string, 0, len(matcher.Fragments))
-	for _, fragment := range matcher.Fragments {
-		if fragment != "" {
-			fragments = append(fragments, escapeLike(fragment))
-		}
-	}
-	if len(fragments) == 0 {
-		return "", false
-	}
-	var b strings.Builder
-	if !matcher.AnchorStart {
-		b.WriteByte('%')
-	}
-	for i, fragment := range fragments {
-		if i > 0 {
-			b.WriteByte('%')
-		}
-		b.WriteString(fragment)
-	}
-	if !matcher.AnchorEnd {
-		b.WriteByte('%')
-	}
-	return b.String(), true
-}
-
-func escapeLike(value string) string {
-	var b strings.Builder
-	for _, r := range value {
-		switch r {
-		case '\\', '%', '_':
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
 
 func scanAccountRow(row *sql.Row) (domain.Account, error) {

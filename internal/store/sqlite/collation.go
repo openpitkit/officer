@@ -20,8 +20,9 @@ package sqlite
 import (
 	"strings"
 
-	"github.com/shopspring/decimal"
 	sqlite "modernc.org/sqlite"
+
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // decimalCollationName is the SQLite collation that {{DECIMAL}} columns carry.
@@ -36,45 +37,8 @@ const decimalCollationName = "DECIMAL"
 // matched by text); any other failure is a programming error surfaced loudly.
 func init() {
 	if err := sqlite.RegisterCollationUtf8(
-		decimalCollationName, compareDecimalStrings,
+		decimalCollationName, fwstore.CompareDecimalStrings,
 	); err != nil && !strings.Contains(err.Error(), "already registered") {
 		panic(err)
-	}
-}
-
-// compareDecimalStrings is the DECIMAL collation comparator. It returns -1, 0 or
-// +1 for left vs right under a total order that is numeric for decimal values:
-//
-//   - the empty string is a sentinel (an unset price or average entry price) and
-//     sorts below every number, so SQLite gathers unset rows at the low end;
-//   - two parseable decimals compare by numeric value, so "100.50" and "100.5"
-//     are equal and negatives order correctly;
-//   - any other (non-decimal) text is pushed above all numbers and, against
-//     another non-decimal, falls back to byte order, so the relation stays a
-//     total order as the collation contract requires.
-//
-// The empty-string ordering is part of the collation contract: any code that
-// merges or re-sorts listed rows must order them the same way.
-func compareDecimalStrings(left, right string) int {
-	leftEmpty, rightEmpty := left == "", right == ""
-	switch {
-	case leftEmpty && rightEmpty:
-		return 0
-	case leftEmpty:
-		return -1
-	case rightEmpty:
-		return 1
-	}
-	leftDec, leftErr := decimal.NewFromString(left)
-	rightDec, rightErr := decimal.NewFromString(right)
-	switch {
-	case leftErr == nil && rightErr == nil:
-		return leftDec.Cmp(rightDec)
-	case leftErr != nil && rightErr != nil:
-		return strings.Compare(left, right)
-	case leftErr != nil:
-		return 1
-	default:
-		return -1
 	}
 }

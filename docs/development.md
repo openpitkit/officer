@@ -41,7 +41,8 @@ is a command or under `internal/`, and cannot be imported:
 - `framework/secret` - sealing of secret values under a master key, and
   redaction of stored credential values.
 - `framework/signing` - the approval-signing seam and the approval envelope.
-- `framework/store` - the database connector seam, scoped by realm.
+- `framework/store` - the database connector seam, scoped by realm, plus a
+  TextMatcher's LIKE pattern and the decimal money order every connector shares.
 - `framework/store/schema` - the canonical store schema every connector shares.
 - `framework/trading` - trading connectors, providers, registry, and the runtime
   that sends held orders to venues and takes their executions back.

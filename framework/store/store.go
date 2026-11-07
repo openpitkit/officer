@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -116,6 +117,56 @@ type TextMatcher struct {
 	Fragments   []string
 	AnchorStart bool
 	AnchorEnd   bool
+}
+
+// LikeEscape is the escape character LikePattern writes before a literal
+// '%', '_' or itself. A store names it in its LIKE clause's ESCAPE.
+const LikeEscape = '\\'
+
+// LikePattern returns a SQL-dialect-independent pattern: non-empty literal
+// fragments are escaped and joined by '%', with a leading '%' unless AnchorStart
+// and a trailing '%' unless AnchorEnd. Empty fragments are skipped. If no
+// non-empty fragment remains, it returns ("", false): the matcher restricts
+// nothing and the store adds no clause.
+//
+// The LIKE operator, ESCAPE clause, case handling and placeholders stay with
+// each store. SQLite's LIKE folds ASCII case; PostgreSQL's does not.
+func (m TextMatcher) LikePattern() (string, bool) {
+	fragments := make([]string, 0, len(m.Fragments))
+	for _, fragment := range m.Fragments {
+		if fragment != "" {
+			fragments = append(fragments, escapeLike(fragment))
+		}
+	}
+	if len(fragments) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	if !m.AnchorStart {
+		b.WriteByte('%')
+	}
+	for i, fragment := range fragments {
+		if i > 0 {
+			b.WriteByte('%')
+		}
+		b.WriteString(fragment)
+	}
+	if !m.AnchorEnd {
+		b.WriteByte('%')
+	}
+	return b.String(), true
+}
+
+func escapeLike(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case LikeEscape, '%', '_':
+			b.WriteRune(LikeEscape)
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // The bounds TextMatcher.Validate holds a list filter's matcher to.

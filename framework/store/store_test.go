@@ -95,6 +95,64 @@ func TestTextMatcherMaxRunesCoversStoredText(t *testing.T) {
 	}
 }
 
+func TestTextMatcherLikePattern(t *testing.T) {
+	t.Parallel()
+	if LikeEscape != '\\' {
+		t.Fatalf("LikeEscape = %q, want '\\\\'", LikeEscape)
+	}
+	for _, tc := range []struct {
+		name    string
+		matcher TextMatcher
+		want    string
+		ok      bool
+	}{
+		{name: "no_fragments"},
+		{name: "no_fragments_start", matcher: TextMatcher{AnchorStart: true}},
+		{name: "no_fragments_end", matcher: TextMatcher{AnchorEnd: true}},
+		{name: "no_fragments_both", matcher: TextMatcher{AnchorStart: true, AnchorEnd: true}},
+		{name: "empty_fragments", matcher: TextMatcher{Fragments: []string{"", ""}}},
+		{name: "empty_fragments_start", matcher: TextMatcher{
+			Fragments: []string{"", ""}, AnchorStart: true,
+		}},
+		{name: "empty_fragments_end", matcher: TextMatcher{
+			Fragments: []string{"", ""}, AnchorEnd: true,
+		}},
+		{name: "empty_fragments_both", matcher: TextMatcher{
+			Fragments: []string{"", ""}, AnchorStart: true, AnchorEnd: true,
+		}},
+		{name: "unanchored", matcher: TextMatcher{
+			Fragments: []string{"abc"},
+		}, want: "%abc%", ok: true},
+		{name: "anchor_start", matcher: TextMatcher{
+			Fragments: []string{"abc"}, AnchorStart: true,
+		}, want: "abc%", ok: true},
+		{name: "anchor_end", matcher: TextMatcher{
+			Fragments: []string{"abc"}, AnchorEnd: true,
+		}, want: "%abc", ok: true},
+		{name: "both_anchors", matcher: TextMatcher{
+			Fragments: []string{"abc"}, AnchorStart: true, AnchorEnd: true,
+		}, want: "abc", ok: true},
+		{name: "fragments_skip_empty", matcher: TextMatcher{
+			Fragments: []string{"", "abc", "", "def", "ghi", ""},
+		}, want: "%abc%def%ghi%", ok: true},
+		{name: "escape", matcher: TextMatcher{
+			Fragments: []string{`50%_a\b`},
+		}, want: `%50\%\_a\\b%`, ok: true},
+		{name: "non_ascii", matcher: TextMatcher{
+			Fragments: []string{"字", "ёж𠀀"},
+		}, want: "%字%ёж𠀀%", ok: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := tc.matcher.LikePattern()
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("LikePattern() = (%q, %t), want (%q, %t)",
+					got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func TestTextMatcherValidate(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
