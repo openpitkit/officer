@@ -71,8 +71,6 @@ type Caller struct {
 	// user. The default composition stamps PrincipalOperator; a composition with
 	// its own auth.CallerResolver stamps the code of the principal it resolved.
 	Principal string
-	// Role is reserved for future authorisation checks; leave empty now.
-	Role string
 }
 
 // TightenOnly reports whether the caller may only tighten risk state and

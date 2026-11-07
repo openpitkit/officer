@@ -271,7 +271,7 @@ func TestCustomSurfaceChain(t *testing.T) {
 				if !DuringSetupFromContext(r.Context()) {
 					t.Error("resolver DuringSetup = false, want true")
 				}
-				return domain.Caller{Principal: "alice", Role: "admin"}, nil
+				return domain.Caller{Principal: "alice"}, nil
 			}
 			cfg.Surfaces = []Surface{{
 				Prefix: "/ext/v1", Source: source,
@@ -302,7 +302,7 @@ func TestCustomSurfaceChain(t *testing.T) {
 				t.Errorf("chain = %v, want [limit resolve handler]", events)
 			}
 			want := []authorizationCall{{
-				source: source, principal: "alice", role: "admin", identifier: "ext.read", duringSetup: true,
+				source: source, principal: "alice", identifier: "ext.read", duringSetup: true,
 			}}
 			if !slices.Equal(authorizer.calls, want) {
 				t.Errorf("authorization = %+v, want %+v", authorizer.calls, want)

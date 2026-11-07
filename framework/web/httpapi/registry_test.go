@@ -737,7 +737,7 @@ func TestRouteAuthorizerReceivesRouteID(t *testing.T) {
 		Surfaces:   V1Surfaces(&registry, nil),
 		Authorizer: authorizer,
 		CallerResolver: func(*http.Request) (domain.Caller, error) {
-			return domain.Caller{Principal: "alice", Role: "admin"}, nil
+			return domain.Caller{Principal: "alice"}, nil
 		},
 		SPA: fstest.MapFS{
 			"index.html": {Data: []byte("<html></html>")},
@@ -760,7 +760,7 @@ func TestRouteAuthorizerReceivesRouteID(t *testing.T) {
 	}
 	call := authorizer.calls[0]
 	if call.identifier != "route.stable-id" || call.source != domain.SourceAPI ||
-		call.principal != "alice" || call.role != "admin" {
+		call.principal != "alice" {
 		t.Fatalf("authorization call = %+v, want API route ID", call)
 	}
 }
@@ -1223,7 +1223,6 @@ var _ Authorizer = allowIdentifiers(nil)
 type authorizationCall struct {
 	source      domain.Source
 	principal   string
-	role        string
 	identifier  string
 	duringSetup bool
 }
@@ -1240,7 +1239,6 @@ func (a *recordingAuthorizer) Authorize(
 	a.calls = append(a.calls, authorizationCall{
 		source:      caller.Source,
 		principal:   caller.Principal,
-		role:        caller.Role,
 		identifier:  identifier,
 		duringSetup: DuringSetupFromContext(ctx),
 	})

@@ -255,7 +255,7 @@ func TestBuildRejectsNilAuthorizer(t *testing.T) {
 
 func TestBuildRunsToolAsItsCaller(t *testing.T) {
 	src := &callerSource{}
-	caller := domain.Caller{Source: domain.SourcePanel, Principal: "build-caller", Role: "ops"}
+	caller := domain.Caller{Source: domain.SourcePanel, Principal: "build-caller"}
 	server, err := Build(callerRegistry(), src, nil, allowAuthorizer{}, caller)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)

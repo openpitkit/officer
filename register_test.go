@@ -523,7 +523,7 @@ func failOnFatal(t *testing.T) frameworkapp.FatalShutdownHook {
 func TestRESTMutationAuditUsesResolvedPrincipal(t *testing.T) {
 	const principal = "alice"
 	app, realm, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
-		return domain.Caller{Principal: principal, Role: "admin"}, nil
+		return domain.Caller{Principal: principal}, nil
 	}, nil)
 	if err := realm.CreatePrincipal(context.Background(), domain.Principal{Code: principal}); err != nil {
 		t.Fatalf("CreatePrincipal: %v", err)
@@ -565,7 +565,7 @@ func TestRegisterRESTForceUsesHostAuthorizer(t *testing.T) {
 			refusal := fmt.Errorf("forced deletion denied: %w", domain.ErrForbidden)
 			forceCalls := 0
 			app, realm, _ := buildTestApp(t, func(*http.Request) (domain.Caller, error) {
-				return domain.Caller{Principal: principal, Role: "admin"}, nil
+				return domain.Caller{Principal: principal}, nil
 			}, nil, func(builder *frameworkapp.Builder) {
 				if !wrapped {
 					return
@@ -651,7 +651,7 @@ func TestRecordServiceLifecycleUsesContextCaller(t *testing.T) {
 	if err := realm.CreatePrincipal(context.Background(), domain.Principal{Code: principal}); err != nil {
 		t.Fatalf("CreatePrincipal: %v", err)
 	}
-	caller := domain.Caller{Source: domain.SourcePanel, Principal: principal, Role: "admin"}
+	caller := domain.Caller{Source: domain.SourcePanel, Principal: principal}
 	if err := app.RecordServiceLifecycle(
 		auth.ContextWithCaller(context.Background(), caller),
 		domain.AuditActionRestartService,
