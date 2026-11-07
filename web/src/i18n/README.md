@@ -7,15 +7,16 @@ consumers that add their own locale namespaces.
 
 ## How it is wired
 
-- `index.ts` initializes i18next with the React binding and the browser
-  language detector. **Resources are discovered by glob** -
+- `initOfficerI18n()` in `index.ts` explicitly initializes i18next with the
+  React binding and the browser language detector.
+  **Resources are discovered by glob** -
   `import.meta.glob('./locales/**/*.json', { eager: true })` - and folded into
   `{ [locale]: { [namespace]: json } }` from each path
   `./locales/<locale>/<namespace>.json`. Adding a namespace or language file
   needs **no edit** to `index.ts`.
 - Framework consumers can call `registerLocaleResources(locale, namespace,
-  catalog)` or `registerLocaleResourceMap(resources)` from module top level.
-  The helper uses i18next `addResourceBundle` with deep merge and overwrite, so
+  catalog)` or `registerLocaleResourceMap(resources)` after initializing
+  i18next. The helper uses `addResourceBundle` with deep merge and overwrite, so
   extensions can add namespaces or intentionally replace keys after init.
 - `locales.ts` is the built-in supported-locale list (`{ code, endonym }`). External
   consumers can pair `registerLocale({ code, endonym })` with
@@ -29,10 +30,12 @@ consumers that add their own locale namespaces.
 
 ## Framework seams
 
-Call resource registration before rendering components that read the new
-namespace. The app initializes i18next synchronously at module import, so a
-host application can import `@openpit/officer-web` and register its catalogs at
-module top level before mounting its composed app.
+Importing `@openpit/officer-web` initializes and registers nothing. Call
+`initOfficerI18n()` once for the panel's catalogs and language detector, or
+initialize the shared i18next in the host, before calling
+`registerOfficerDefaults` or registering resources. Register resources before
+rendering components that read the new namespace. Resource registration
+throws if i18next is not initialized.
 
 The frontend auth predicate is intentionally rendering-only. It mirrors the
 backend authorizer conceptually, but only hides navigation, routes, pages, and

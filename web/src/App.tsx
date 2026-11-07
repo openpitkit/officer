@@ -20,10 +20,10 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { SidebarProvider } from "@/components/SidebarContext";
 import { NonReleaseGate } from "@/components/NonReleaseGate";
-import { StartupGate } from "@/components/StartupGate";
 import { AppRoutes, Sidebar } from "@/framework";
 import { panelSession } from "@/lib/panelSession";
 import { Setup, SetupReview } from "@/pages/Setup";
+import { StartupGate } from "@openpit/officer-web";
 
 export default function App() {
   return (

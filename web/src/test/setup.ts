@@ -22,10 +22,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { afterEach, beforeEach } from "vitest";
 
-// Side-effect import: runs the app's i18next .init() and loads every catalog.
-import "@/i18n";
+import { initOfficerI18n } from "@/i18n";
 import { setAccountScope } from "@/lib/accountScope";
 import "@/test/registerDefaults";
+
+void initOfficerI18n();
 
 // A findBy or waitFor gives up after this long. The 1 s default is a hang
 // detector sized for an idle machine; under gate load a suggestion lookup

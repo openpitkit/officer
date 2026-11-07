@@ -80,9 +80,9 @@ import {
 /**
  * Register the open panel's routes, page overrides, navigation, widgets, row
  * actions, vocabulary, and locale resource map.
- * Importing the package initializes the host-shared i18next instance with the
- * panel's locale catalogs and language detector. It registers no routes, page
- * overrides, navigation, widgets, row actions, or vocabulary.
+ * Importing the package initializes and registers nothing. Initialize i18next
+ * first through initOfficerI18n() or the host's own init(), because this
+ * function registers the locale resource map.
  * A host calls this once before rendering, then reads stable ids through
  * getRoutes(), getNav(section), getPage(id), getWidgets(), getRowActions(scope),
  * getScopes(), and getPolicies(). It replaces entries by re-registering their

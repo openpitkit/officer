@@ -74,8 +74,9 @@ base URL is implemented there. New framework consumers should import from
 
 ## App composition
 
-The SPA is a thin framework consumer. `src/main.tsx` initializes i18n,
-calls `registerOfficerDefaults`, injects the same-origin API client with
+The SPA is a thin framework consumer. `src/main.tsx` explicitly initializes
+i18n with `initOfficerI18n()`, calls `registerOfficerDefaults`, injects the
+same-origin API client with
 `baseUrl: "/app/api/v1"`, mounts the allow-all `AuthProvider`, and renders the
 framework shell.
 
@@ -113,9 +114,10 @@ The SPA is a thin consumer of the same library: `src/main.tsx` calls its
 `registerOfficerDefaults` export, injects `baseUrl: "/app/api/v1"`, mounts the
 allow-all `AuthProvider`, and renders the framework shell.
 
-Importing the package initializes the host-shared i18next instance with the
-panel's locale catalogs and language detector. It registers no routes, page
-overrides, navigation, widgets, row actions, or vocabulary.
+Importing the package initializes and registers nothing. A host calls
+`initOfficerI18n()` once to use the panel's catalogs and language detector, or
+initializes the shared i18next itself. Either must happen before calling
+`registerOfficerDefaults` or `registerLocaleResources`.
 
 A host calls `registerOfficerDefaults` once before rendering to register the
 open panel's routes, page overrides, navigation, widgets, row actions,
@@ -124,10 +126,11 @@ vocabulary, and locale resource map. After the call, it reads stable ids through
 `getRowActions(scope)`, `getScopes()`, and `getPolicies()`, then replaces an entry
 by re-registering its id or removes it with the matching unregister API.
 
-The caller must load the panel's account scope and session before rendering
-these pages or evaluating navigation predicates. They read
-`src/lib/accountScope.ts` and `src/lib/panelSession.ts`, which throw while not
-loaded; the panel's `StartupGate` loads both before the shell renders.
+A host either mounts the exported `StartupGate`, as the open panel does, or
+provides the account scope and session with `setAccountScope(features)` and
+`setPanelSession(mode)` before rendering pages or evaluating navigation
+predicates. `StartupGate` loads both and shows login or recovery in `token`
+mode; wire `checkSession` to `ApiClientProvider`'s `onUnauthorized`.
 
 `react`, `react-dom`, `react-router-dom`, `i18next`,
 `i18next-browser-languagedetector` and `react-i18next` are peer dependencies:

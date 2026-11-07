@@ -23,15 +23,19 @@ import App from "@/App";
 import { ApiClientProvider, AuthProvider } from "@/framework";
 import i18n from "@/i18n";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
-import { checkSession } from "@/lib/panelSession";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import "@fontsource/jetbrains-mono/700.css";
 import "@/index.css";
-import { registerOfficerDefaults } from "@openpit/officer-web";
+import {
+  checkSession,
+  initOfficerI18n,
+  registerOfficerDefaults,
+} from "@openpit/officer-web";
 
+void initOfficerI18n();
 registerOfficerDefaults();
 
 const container = document.getElementById("root");

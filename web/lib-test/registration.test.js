@@ -16,10 +16,12 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import * as officer from "@openpit/officer-web";
-import { describe, expect, it } from "vitest";
+import { cleanup, render } from "@testing-library/react";
+import i18next from "i18next";
+import React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import * as source from "../src/framework";
-import { registerOfficerDefaults } from "../src/register";
+import * as source from "../src/index";
 
 const sections = ["primary", "footer"];
 const rowActionScopes = ["account", "group", "limit"];
@@ -69,12 +71,25 @@ function inventory(registry) {
 }
 
 describe("published officer defaults", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   it("resolves the package exports to the built library", () => {
     expect(officer.getRoutes).not.toBe(source.getRoutes);
     expect(officer.registerOfficerDefaults).toBeTypeOf("function");
   });
 
-  it("registers nothing on import", () => {
+  it("initializes and registers nothing on import", () => {
+    expect(i18next.isInitialized, "i18next before explicit init").toBeFalsy();
+    expect(i18next.modules.languageDetector).toBeUndefined();
+    expect(localStorage.getItem("pit-officer-lang")).toBeNull();
+    expect(() =>
+      officer.registerLocaleResources("en", "host", { title: "Host" }),
+    ).toThrowError(
+      "i18next is not initialized; call initOfficerI18n() or the host's own i18next init() first",
+    );
+
     for (const registry of [officer, source]) {
       expect(registry.getRoutes(), "routes before registration").toEqual([]);
       expect(
@@ -101,12 +116,110 @@ describe("published officer defaults", () => {
     }
   });
 
+  it("explicitly initializes the shared i18next with the panel detector", async () => {
+    await officer.initOfficerI18n();
+
+    expect(i18next.isInitialized).toBe(true);
+    expect(i18next.modules.languageDetector).toBeDefined();
+    expect(i18next.t("common:nav.accounts", { lng: "en" })).toBe("Accounts");
+    expect(localStorage.getItem("pit-officer-lang")).toBe(i18next.language);
+  });
+
   it("registers the same entries as the open panel", () => {
     officer.registerOfficerDefaults();
-    registerOfficerDefaults();
+    source.registerOfficerDefaults();
 
-    // Inspect predicates without running them: account scope and panel session
-    // are deliberately not loaded in this consumer.
     expect(inventory(officer)).toEqual(inventory(source));
+  });
+
+  it("uses the account scope and session provided through the package", () => {
+    expect(officer.setAccountScope).toBeTypeOf("function");
+    expect(officer.setPanelSession).toBeTypeOf("function");
+    const accounts = officer
+      .getNav("primary")
+      .find(({ id }) => id === "accounts");
+    const account = officer
+      .getNav("primary")
+      .find(({ id }) => id === "account");
+    const logout = officer.getNav("footer").find(({ id }) => id === "logout");
+
+    officer.setAccountScope({ accounts: false, account: "primary" });
+    officer.setPanelSession("token");
+    expect(accounts.when()).toBe(false);
+    expect(account.when()).toBe(true);
+    expect(logout.when()).toBe(true);
+
+    officer.setAccountScope({ accounts: true, account: "" });
+    officer.setPanelSession("open");
+    expect(accounts.when()).toBe(true);
+    expect(account.when()).toBe(false);
+    expect(logout.when()).toBe(false);
+  });
+
+  it("loads the account scope and session through the exported StartupGate", async () => {
+    expect(officer.StartupGate).toBeTypeOf("function");
+    officer.setAccountScope({ accounts: true, account: "" });
+    officer.setPanelSession("open");
+    const fetch = vi.fn(async (url) => {
+      if (url === "/host/api/session") {
+        return Response.json({
+          accessMode: "token",
+          setupComplete: true,
+          authenticated: true,
+        });
+      }
+      if (url === "/host/api/account-mode") {
+        return Response.json({
+          mode: "single",
+          account: "loaded",
+          features: { accounts: false, account: "loaded" },
+          restartRequired: false,
+          live: false,
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const view = render(
+      React.createElement(
+        officer.ApiClientProvider,
+        {
+          config: {
+            baseUrl: "/host/api",
+            fetch,
+            onUnauthorized: officer.checkSession,
+          },
+        },
+        React.createElement(
+          officer.StartupGate,
+          null,
+          React.createElement("div", null, "Host content"),
+        ),
+      ),
+    );
+
+    await view.findByText("Host content");
+    expect(fetch).toHaveBeenCalledWith("/host/api/session", expect.any(Object));
+    expect(fetch).toHaveBeenCalledWith(
+      "/host/api/account-mode",
+      expect.any(Object),
+    );
+    expect(
+      officer
+        .getNav("primary")
+        .find(({ id }) => id === "accounts")
+        .when(),
+    ).toBe(false);
+    expect(
+      officer
+        .getNav("primary")
+        .find(({ id }) => id === "account")
+        .when(),
+    ).toBe(true);
+    expect(
+      officer
+        .getNav("footer")
+        .find(({ id }) => id === "logout")
+        .when(),
+    ).toBe(true);
   });
 });
