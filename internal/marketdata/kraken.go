@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -338,9 +339,7 @@ func (c *krakenConnector) stream(
 	if err != nil {
 		return false, err
 	}
-	defer func() {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-	}()
+	defer closeStream("kraken", conn)
 
 	payload, err := krakenSubscribePayload(subs)
 	if err != nil {
@@ -424,7 +423,11 @@ func fetchKrakenSymbols(ctx context.Context) (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("kraken AssetPairs: close response body", "error", err)
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("kraken AssetPairs: unexpected status %d", resp.StatusCode)
 	}

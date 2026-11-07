@@ -1102,7 +1102,7 @@ func (rt *restoreTx) restoreTradingAccess(
 // the grants before it, and asks the provider lookup only when the rule
 // refuses one. It reads the final table state, so a target connection or grant
 // the restore kept counts like an archived one in every mode.
-func (rt *restoreTx) validateTradingAccessFeeAccounts(ctx context.Context) error {
+func (rt *restoreTx) validateTradingAccessFeeAccounts(ctx context.Context) (resultErr error) {
 	rows, err := rt.tx.QueryContext(
 		ctx,
 		`SELECT c.external_id, c.label, c.provider
@@ -1116,7 +1116,7 @@ func (rt *restoreTx) validateTradingAccessFeeAccounts(ctx context.Context) error
 	if err != nil {
 		return fmt.Errorf("store: restore trading connections without a fee account: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	type feeLessConnection struct {
 		id              domain.ExternalID
 		label, provider string

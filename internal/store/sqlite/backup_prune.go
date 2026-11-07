@@ -332,16 +332,18 @@ func (rt *restoreTx) pruneLimitTable(
 			acc, asset sql.NullString
 		)
 		if err := rows.Scan(&id, &scopeStr, &acc, &asset); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return fmt.Errorf("store: prune %s row: %w", table, err)
 		}
 		out = append(out, limitRow{id: id, scope: scopeStr, a: acc.String, ast: asset.String})
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return fmt.Errorf("store: prune %s iterate: %w", table, err)
 	}
-	_ = rows.Close()
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store: close %s rows for pruning: %w", table, err)
+	}
 	for _, l := range out {
 		if keep[limitKey(l.scope, domain.AccountID(l.a), l.ast)] ||
 			!limitAxisInScope(selector, accounts, l.a) {
@@ -385,7 +387,7 @@ func (rt *restoreTx) pruneSpotFundsPnlBoundsLimits(
 			account, group sql.NullString
 		)
 		if err := rows.Scan(&id, &axis, &scopeStr, &account, &group); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return fmt.Errorf("store: prune limit_spot_funds_pnl_bound row: %w", err)
 		}
 		out = append(out, limitRow{
@@ -397,10 +399,12 @@ func (rt *restoreTx) pruneSpotFundsPnlBoundsLimits(
 		})
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return fmt.Errorf("store: prune limit_spot_funds_pnl_bound iterate: %w", err)
 	}
-	_ = rows.Close()
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store: close spot funds pnl bounds rows for pruning: %w", err)
+	}
 	for _, l := range out {
 		if keep[spotFundsPnlBoundsLimitKey(
 			l.axis,
@@ -487,21 +491,23 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 			symbol string
 		)
 		if err := instrRows.Scan(&id, &extID, &symbol); err != nil {
-			_ = instrRows.Close()
+			err = errors.Join(err, instrRows.Close())
 			return fmt.Errorf("store: prune md instrument row: %w", err)
 		}
 		xid, err := domain.ExternalIDFromBytes(extID)
 		if err != nil {
-			_ = instrRows.Close()
+			err = errors.Join(err, instrRows.Close())
 			return fmt.Errorf("store: prune md instrument external id: %w", err)
 		}
 		instrs = append(instrs, instrRow{id: id, key: xid.String() + "\x00" + symbol})
 	}
 	if err := instrRows.Err(); err != nil {
-		_ = instrRows.Close()
+		err = errors.Join(err, instrRows.Close())
 		return fmt.Errorf("store: prune md instruments iterate: %w", err)
 	}
-	_ = instrRows.Close()
+	if err := instrRows.Close(); err != nil {
+		return fmt.Errorf("store: close md instruments for pruning: %w", err)
+	}
 	for _, instr := range instrs {
 		if keepInstr[instr.key] {
 			continue
@@ -534,21 +540,23 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 			extID []byte
 		)
 		if err := instRows.Scan(&id, &extID); err != nil {
-			_ = instRows.Close()
+			err = errors.Join(err, instRows.Close())
 			return fmt.Errorf("store: prune md instance row: %w", err)
 		}
 		xid, err := domain.ExternalIDFromBytes(extID)
 		if err != nil {
-			_ = instRows.Close()
+			err = errors.Join(err, instRows.Close())
 			return fmt.Errorf("store: prune md instance external id: %w", err)
 		}
 		insts = append(insts, instRow{id: id, key: xid.String()})
 	}
 	if err := instRows.Err(); err != nil {
-		_ = instRows.Close()
+		err = errors.Join(err, instRows.Close())
 		return fmt.Errorf("store: prune md instances iterate: %w", err)
 	}
-	_ = instRows.Close()
+	if err := instRows.Close(); err != nil {
+		return fmt.Errorf("store: close md instances for pruning: %w", err)
+	}
 	for _, inst := range insts {
 		if keepInst[inst.key] {
 			continue
@@ -691,17 +699,19 @@ func (rt *restoreTx) pruneExecutionReports(
 	for rows.Next() {
 		var row reportRow
 		if err := rows.Scan(&row.id, &row.account); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return fmt.Errorf("store: prune execution report row: %w", err)
 		}
 		row.id = append([]byte(nil), row.id...)
 		stored = append(stored, row)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return fmt.Errorf("store: prune execution reports iterate: %w", err)
 	}
-	_ = rows.Close()
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store: close execution reports for pruning: %w", err)
+	}
 	for _, row := range stored {
 		id, err := domain.ExternalIDFromBytes(row.id)
 		if err != nil {
@@ -750,7 +760,7 @@ func (rt *restoreTx) pruneExecutionReportLinks(
 		if err := rows.Scan(
 			&row.reportID, &row.eventID, &row.eventRowID, &row.account,
 		); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return fmt.Errorf("store: prune execution report link row: %w", err)
 		}
 		row.reportID = append([]byte(nil), row.reportID...)
@@ -758,10 +768,12 @@ func (rt *restoreTx) pruneExecutionReportLinks(
 		stored = append(stored, row)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return fmt.Errorf("store: prune execution report links iterate: %w", err)
 	}
-	_ = rows.Close()
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store: close execution report links for pruning: %w", err)
+	}
 	for _, row := range stored {
 		reportID, err := domain.ExternalIDFromBytes(row.reportID)
 		if err != nil {
@@ -817,7 +829,7 @@ func (rt *restoreTx) pruneByExternalID(
 			account string
 		)
 		if err := rows.Scan(&extID, &account); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return fmt.Errorf("store: prune %s row: %w", table, err)
 		}
 		stored := make([]byte, len(extID))
@@ -825,10 +837,12 @@ func (rt *restoreTx) pruneByExternalID(
 		out = append(out, idRow{extID: stored, account: account})
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return fmt.Errorf("store: prune %s iterate: %w", table, err)
 	}
-	_ = rows.Close()
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store: close %s rows for pruning: %w", table, err)
+	}
 	for _, r := range out {
 		xid, err := domain.ExternalIDFromBytes(r.extID)
 		if err != nil {
@@ -875,7 +889,7 @@ func (rt *restoreTx) pruneAudit(
 			account sql.NullString
 		)
 		if err := rows.Scan(&extID, &account); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return fmt.Errorf("store: prune audit row: %w", err)
 		}
 		stored := make([]byte, len(extID))
@@ -883,10 +897,12 @@ func (rt *restoreTx) pruneAudit(
 		out = append(out, auditRow{extID: stored, account: account.String})
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return fmt.Errorf("store: prune audit iterate: %w", err)
 	}
-	_ = rows.Close()
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store: close audit rows for pruning: %w", err)
+	}
 	for _, r := range out {
 		xid, err := domain.ExternalIDFromBytes(r.extID)
 		if err != nil {
@@ -910,8 +926,8 @@ func (rt *restoreTx) pruneAudit(
 type codePair struct{ a, b string }
 
 // scanCodePairs scans a two-text-column result into code pairs and closes it.
-func scanCodePairs(rows *sql.Rows) ([]codePair, error) {
-	defer func() { _ = rows.Close() }()
+func scanCodePairs(rows *sql.Rows) (result []codePair, resultErr error) {
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	out := make([]codePair, 0)
 	for rows.Next() {
 		var p codePair
@@ -927,11 +943,11 @@ func scanCodePairs(rows *sql.Rows) ([]codePair, error) {
 }
 
 // scanStrings scans a single-text-column result into a slice and closes it.
-func scanStrings(rows *sql.Rows, err error) ([]string, error) {
+func scanStrings(rows *sql.Rows, err error) (result []string, resultErr error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	out := make([]string, 0)
 	for rows.Next() {
 		var s string

@@ -15,8 +15,10 @@
 #
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
-# framework/ is the importable library whose callers rely on returned errors,
-# so discarded-error's blanket Close exemption does not hold there.
+# A discarded Close error is a silent fallback in every package: Close on a
+# written file, SQLite handle, or rows iterator can report a real failure.
+# Tests are excluded because pure teardown has no dependent operation; tests
+# that rely on the closed resource must check Close errors explicitly.
 # Bare `$X.Close()` statements and `defer $X.Close()` with an error result
 # belong to golangci-lint's errcheck, not this rule.
 
@@ -28,8 +30,6 @@ rules:
     languages: [go]
     pattern: _ = $X.Close(...)
     paths:
-      include:
-        - "/framework/**"
       exclude:
         - "**/*_test.go"
         - "/checks/semgrep/testdata/**"

@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -183,7 +184,11 @@ func (c *Client) Signed(ctx context.Context, method, path string,
 	if err != nil {
 		return 0, c.wrap("request", err, signedRedactor)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("binance: close response body", "error", c.wrap("close response", err, signedRedactor))
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		payload, err := io.ReadAll(resp.Body)
 		if err != nil {

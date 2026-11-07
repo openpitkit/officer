@@ -163,7 +163,7 @@ func (r *realmStore) ListBalances(
 // bounds do.
 func (r *realmStore) ListAccountsBlockingCurrencyChange(
 	ctx context.Context, accounts []domain.AccountID,
-) ([]fwstore.CurrencyChangeBlocker, error) {
+) (value []fwstore.CurrencyChangeBlocker, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -242,7 +242,7 @@ ORDER BY code`
 	if err != nil {
 		return nil, fmt.Errorf("store: list currency change blockers: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	result := make([]fwstore.CurrencyChangeBlocker, 0)
 	for rows.Next() {
 		var blocker fwstore.CurrencyChangeBlocker
@@ -265,7 +265,7 @@ ORDER BY code`
 // paging.
 func (r *realmStore) ListBalanceRows(
 	ctx context.Context, filter fwstore.BalanceListFilter,
-) (fwstore.BalanceListPage, error) {
+) (value fwstore.BalanceListPage, resultErr error) {
 	if err := filter.Validate(); err != nil {
 		return fwstore.BalanceListPage{}, err
 	}
@@ -290,7 +290,7 @@ func (r *realmStore) ListBalanceRows(
 	if err != nil {
 		return fwstore.BalanceListPage{}, fmt.Errorf("store: list balance rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]fwstore.BalanceListRow, 0)
 	for rows.Next() {

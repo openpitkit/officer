@@ -30,6 +30,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -184,7 +185,7 @@ func (r *realmStore) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, e
 // non-positive n returns an empty slice.
 func (r *realmStore) ListAuditFiltered(
 	ctx context.Context, filter domain.AuditFilter, n int,
-) ([]domain.AuditRow, error) {
+) (value []domain.AuditRow, resultErr error) {
 	if n <= 0 {
 		return make([]domain.AuditRow, 0), nil
 	}
@@ -206,7 +207,7 @@ func (r *realmStore) ListAuditFiltered(
 	if err != nil {
 		return nil, fmt.Errorf("store: list audit: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.AuditRow, 0, n)
 	for rows.Next() {
@@ -269,7 +270,7 @@ func buildAuditFilteredQuery(
 // paging.
 func (r *realmStore) ListAuditRows(
 	ctx context.Context, filter fwstore.AuditListFilter,
-) (fwstore.AuditListPage, error) {
+) (value fwstore.AuditListPage, resultErr error) {
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return fwstore.AuditListPage{}, err
@@ -294,7 +295,7 @@ func (r *realmStore) ListAuditRows(
 	if err != nil {
 		return fwstore.AuditListPage{}, fmt.Errorf("store: list audit rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.AuditRow, 0)
 	for rows.Next() {

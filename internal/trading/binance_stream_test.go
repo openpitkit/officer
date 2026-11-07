@@ -413,7 +413,9 @@ func TestBinanceStreamVenueReconnect(t *testing.T) {
 					binanceConfirm(t, conn, id)
 					if attempt == 1 {
 						if reason == "close frame" {
-							_ = conn.Close(websocket.StatusGoingAway, "restart")
+							if err := conn.Close(websocket.StatusGoingAway, "restart"); err != nil {
+								t.Error(err)
+							}
 							return
 						}
 						binanceWriteFrame(t, conn, map[string]any{

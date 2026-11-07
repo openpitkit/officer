@@ -27,9 +27,9 @@
 # moves the problem somewhere less watched.
 #
 # The only exemption is `_ = $X.Close(...)` (with or without arguments, so it
-# also covers websocket-style `conn.Close(status, reason)`): best-effort
-# teardown outside framework/. In framework/, discarded-close-error takes over:
-# its callers rely on returned errors. Every other discard is a finding, including
+# also covers websocket-style `conn.Close(status, reason)`): the shape is owned
+# by discarded-close-error everywhere; pattern-not only avoids a double report.
+# Every other discard is a finding, including
 # `_ = tx.Rollback()`/`_ = rows.Err()`-shaped calls in internal/store/sqlite,
 # which this exemption deliberately does not cover.
 

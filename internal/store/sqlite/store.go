@@ -133,7 +133,7 @@ func New(
 	if dictionaries, err := loadEnumDictionaries(context.Background(), db); err == nil {
 		s.enumCodes.Store(dictionaries)
 	} else if !isSQLiteMissingTable(err) && !errors.Is(err, errEnumDictionaryCodeMissing) {
-		_ = db.Close()
+		err = errors.Join(err, db.Close())
 		return nil, fmt.Errorf("store: load enum dictionaries: %w", err)
 	}
 	return s, nil
@@ -443,7 +443,7 @@ func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 	}
 	snapshot, err := s.migrateDB(ctx, tmpDB)
 	if err != nil {
-		_ = tmpDB.Close()
+		err = errors.Join(err, tmpDB.Close())
 		return fmt.Errorf("store: reset migrate: %w", err)
 	}
 	if err := tmpDB.Close(); err != nil {
@@ -777,7 +777,7 @@ func loadEnumDictionaries(
 			var id int64
 			var code string
 			if err := rows.Scan(&id, &code); err != nil {
-				_ = rows.Close()
+				err = errors.Join(err, rows.Close())
 				return nil, fmt.Errorf(
 					"store: scan %s dictionary: %w", dictionary.Table, err,
 				)
@@ -786,7 +786,7 @@ func loadEnumDictionaries(
 			ids[id] = code
 		}
 		if err := rows.Err(); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return nil, fmt.Errorf(
 				"store: iterate %s dictionary: %w", dictionary.Table, err,
 			)

@@ -709,7 +709,9 @@ func TestEtoroStreamRedaction(t *testing.T) {
 				switch site {
 				case "close-error":
 					// One spelling fits the websocket close reason limit.
-					_ = conn.Close(websocket.StatusPolicyViolation, spellings[0])
+					if err := conn.Close(websocket.StatusPolicyViolation, spellings[0]); err != nil {
+						t.Error(err)
+					}
 				case "diagnostic":
 					etoroPush(t, ctx, conn, leak, leak)
 				case "invalid-envelope":

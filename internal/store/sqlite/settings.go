@@ -91,7 +91,7 @@ func (r *realmStore) DeleteSetting(ctx context.Context, key string) error {
 
 // ListMcpAccess returns the stored per-command MCP enable/disable overrides,
 // keyed by command name. An empty table returns a non-nil empty map.
-func (r *realmStore) ListMcpAccess(ctx context.Context) (map[string]bool, error) {
+func (r *realmStore) ListMcpAccess(ctx context.Context) (result map[string]bool, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (r *realmStore) ListMcpAccess(ctx context.Context) (map[string]bool, error)
 	if err != nil {
 		return nil, fmt.Errorf("store: list mcp access: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	access := make(map[string]bool)
 	for rows.Next() {

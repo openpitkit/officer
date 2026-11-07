@@ -91,9 +91,13 @@ A miss or a false positive found in practice is a rule bug, fixed in the rule.
 ### `discarded-close-error`
 
 `checks/semgrep/discarded-close-error.yml` forbids `_ = X.Close(...)` in
-production Go under `framework/`, including inside deferred functions. The
-importable library's callers rely on returned errors; join the Close error
-into the returned error or report it. Tests and rule fixtures are excluded.
+every production Go package, public and internal, including inside deferred
+functions. A discarded Close error is a silent fallback: written files,
+SQLite handles, and rows iterators can report real failures on Close. Return
+the Close error, join it into the returned error, or report it through the
+existing reporting path. Tests and rule fixtures are excluded. Pure test
+teardown may discard Close errors; a test that relies on the closed resource
+(for example, by reopening it or asserting persistence) must check them.
 Bare Close calls with an error result are checked by golangci-lint's errcheck.
 Its fixture runs through `check-semgrep`.
 

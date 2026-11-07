@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -337,9 +338,7 @@ func (c *bybitConnector) stream(
 		return false, err
 	}
 	c.reportStatus(true, "")
-	defer func() {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-	}()
+	defer closeStream("bybit", conn)
 
 	payload, err := bybitSubscribePayload(subs)
 	if err != nil {
@@ -535,15 +534,14 @@ func fetchBybitSymbols(
 		}
 		var payload bybitInstrumentsResponse
 		decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
-		closeErr := resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("bybit instruments: close response body", "error", err)
+		}
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("bybit instruments: unexpected status %d", resp.StatusCode)
 		}
 		if decodeErr != nil {
 			return nil, fmt.Errorf("bybit instruments: decode: %w", decodeErr)
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("bybit instruments: close body: %w", closeErr)
 		}
 		if payload.RetCode != 0 {
 			msg := strings.TrimSpace(payload.RetMsg)

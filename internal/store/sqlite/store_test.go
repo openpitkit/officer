@@ -855,7 +855,11 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 		if err != nil {
 			t.Fatalf("New(%s): %v", realm, err)
 		}
-		defer func() { _ = s.Close() }()
+		defer func() {
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 		if err := s.Migrate(ctx); err != nil {
 			return err, nil
 		}
@@ -879,7 +883,9 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 		t.Fatalf("New(b): %v", err)
 	}
 	_, bindErr := foreign.ForRealm(ctx, "b")
-	_ = foreign.Close()
+	if err := foreign.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if !errors.Is(bindErr, domain.ErrInvalid) {
 		t.Fatalf("ForRealm(b) on a database bound to a = %v, want ErrInvalid", bindErr)
 	}

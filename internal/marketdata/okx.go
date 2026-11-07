@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -309,9 +310,7 @@ func (c *okxConnector) stream(
 		return false, err
 	}
 	c.reportStatus(true, "")
-	defer func() {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-	}()
+	defer closeStream("okx", conn)
 
 	payload, err := okxSubscribePayload(subs)
 	if err != nil {
@@ -445,7 +444,11 @@ func fetchOKXSymbols(ctx context.Context) (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("okx instruments: close response body", "error", err)
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("okx instruments: unexpected status %d", resp.StatusCode)
 	}

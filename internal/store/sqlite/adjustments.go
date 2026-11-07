@@ -29,6 +29,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -284,7 +285,7 @@ func (r *realmStore) ListAdjustments(
 	account domain.AccountID,
 	source domain.Source,
 	n int,
-) ([]domain.AccountAdjustmentRecord, error) {
+) (value []domain.AccountAdjustmentRecord, resultErr error) {
 	if n <= 0 {
 		return make([]domain.AccountAdjustmentRecord, 0), nil
 	}
@@ -318,7 +319,7 @@ func (r *realmStore) ListAdjustments(
 	if err != nil {
 		return nil, fmt.Errorf("store: list adjustments: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return nil, err
@@ -342,7 +343,7 @@ func (r *realmStore) ListAdjustments(
 // before paging.
 func (r *realmStore) ListAdjustmentRows(
 	ctx context.Context, filter fwstore.AdjustmentListFilter,
-) (fwstore.AdjustmentListPage, error) {
+) (value fwstore.AdjustmentListPage, resultErr error) {
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, err
@@ -378,7 +379,7 @@ LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: list adjustment rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.AccountAdjustmentRecord, 0)
 	for rows.Next() {

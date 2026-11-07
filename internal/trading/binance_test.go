@@ -465,7 +465,9 @@ func TestBinanceSendOutcome(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			_ = conn.Close()
+			if err := conn.Close(); err != nil {
+				t.Error(err)
+			}
 		})
 		_, err := c.Send(context.Background(), binanceTestOrder())
 		if err == nil || errors.Is(err, fwtrading.ErrRejected) {

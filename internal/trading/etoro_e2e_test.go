@@ -276,7 +276,9 @@ func (h *etoroRuntimeTest) serve(w http.ResponseWriter, r *http.Request) {
 				h.t.Error("could not drop accepted POST response")
 				return
 			}
-			_ = conn.Close()
+			if err := conn.Close(); err != nil {
+				h.t.Error(err)
+			}
 			return
 		}
 		if action == "close" {

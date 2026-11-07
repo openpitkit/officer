@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
@@ -101,7 +102,11 @@ func handleDownloadPreMigrationBackup(source PreMigrationBackupSource) http.Hand
 			httpx.WriteErr(w, err)
 			return
 		}
-		defer func() { _ = file.Close() }()
+		defer func() {
+			if err := file.Close(); err != nil {
+				slog.Error("close pre-migration backup download", "name", name, "error", err)
+			}
+		}()
 		if err := source.Audit(context.WithoutCancel(r.Context()),
 			domain.AuditActionDownloadPreMigrationBackup,
 			domain.NewAuditDetail(domain.AuditDetailDownloadPreMigrationBackup,

@@ -279,13 +279,13 @@ func (s *sqliteStore) sealTextKeyedSecrets(
 	for rows.Next() {
 		var item storedSecret
 		if err := rows.Scan(&item.id, &item.value); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return 0, fmt.Errorf("store: scan %s for sealing: %w", noun, err)
 		}
 		secrets = append(secrets, item)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return 0, fmt.Errorf("store: iterate %s rows for sealing: %w", noun, err)
 	}
 	if err := rows.Close(); err != nil {
@@ -335,12 +335,12 @@ func (s *sqliteStore) sealCredentials(
 	for rows.Next() {
 		var rawID, credentials []byte
 		if err := rows.Scan(&rawID, &credentials); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return 0, fmt.Errorf("store: scan %s credentials for sealing: %w", noun, err)
 		}
 		externalID, err := domain.ExternalIDFromBytes(rawID)
 		if err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return 0, fmt.Errorf(
 				"store: decode %s external id for sealing: %w", noun, err,
 			)
@@ -350,7 +350,7 @@ func (s *sqliteStore) sealCredentials(
 		})
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return 0, fmt.Errorf("store: iterate %s credentials for sealing: %w", noun, err)
 	}
 	if err := rows.Close(); err != nil {

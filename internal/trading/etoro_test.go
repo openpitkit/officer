@@ -115,7 +115,9 @@ func newEtoroTestVenue(t *testing.T, demo bool, overrides map[string]etoroTestRe
 				t.Error("hijack test connection failed")
 				return
 			}
-			_ = conn.Close()
+			if err := conn.Close(); err != nil {
+				t.Error(err)
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

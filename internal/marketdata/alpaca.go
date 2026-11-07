@@ -257,9 +257,7 @@ func (c *alpacaConnector) stream(
 	if err != nil {
 		return false, err
 	}
-	defer func() {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-	}()
+	defer closeStream("alpaca", conn)
 
 	if err := alpaca.WriteStreamAuth(ctx, conn, c.credentials); err != nil {
 		return false, err

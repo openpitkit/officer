@@ -133,7 +133,7 @@ func (r *realmStore) GetSigningKey(
 // ListSigningKeys returns all keys ordered by created_at DESC (newest first).
 // PrivateKey is deliberately NOT populated: a listing never carries private
 // material; callers use GetSigningKey/GetActiveSigningKey for that.
-func (r *realmStore) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error) {
+func (r *realmStore) ListSigningKeys(ctx context.Context) (result []domain.SigningKey, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -146,7 +146,7 @@ func (r *realmStore) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, 
 	if err != nil {
 		return nil, fmt.Errorf("store: list signing keys: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	keys := make([]domain.SigningKey, 0)
 	for rows.Next() {

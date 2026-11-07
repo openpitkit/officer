@@ -575,7 +575,9 @@ func TestStreamFailureReports(t *testing.T) {
 			return
 		}
 		if attempt == 2 {
-			_ = conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker")
+			if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil {
+				t.Error(err)
+			}
 			return
 		}
 		if attempt > 2 {
