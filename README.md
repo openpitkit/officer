@@ -4,6 +4,8 @@
 
 Website: [officer.openpit.dev](https://officer.openpit.dev)
 
+Contact: [info@openpit.dev](mailto:info@openpit.dev).
+
 Pit Officer lets you manage trading accounts, set risk limits, connect to
 brokers, and send orders from a web panel. The [OpenPit](https://openpit.dev)
 risk engine checks each order before Officer sends it through a trading
