@@ -149,8 +149,8 @@ and the `Access` of each extra mount, `public` or `agent`.
 `BuildServeHandler` fails without them, and on
 an extra mount or an MCP path at or under any surface prefix, including
 Officer's `/api/v1` and `/app/api/v1`. A route marked `Public` is valid only on
-a `SourcePanel` surface; `NewRouter` panics on it elsewhere. `AccessMode` and
-`Access` are reported by the route manifest.
+a `SourcePanel` surface; `NewRouter` and `BuildServeHandler` return an error
+for it elsewhere. `AccessMode` and `Access` are reported by the route manifest.
 `DuringSetup` is also reported, and Officer's resolver and authorizer enforce
 it in `setup`: only a panel route marked with it is admitted. The flag does not
 open the corresponding `/api/v1` route. Public panel routes bypass caller

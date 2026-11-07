@@ -455,65 +455,6 @@ func TestRuntimeRouteManifestReadsAccessModeOnEveryRequest(t *testing.T) {
 	}
 }
 
-// TestNewRouterPanicsOnUndeclaredAccess checks that NewRouter refuses to
-// register a public route outside a SourcePanel surface and an extra mount
-// that does not declare public or agent access.
-func TestNewRouterPanicsOnUndeclaredAccess(t *testing.T) {
-	t.Parallel()
-
-	extraMount := func(access Access) func(*RouterConfig) {
-		return func(cfg *RouterConfig) {
-			cfg.ExtraMounts = []ExtraMount{{
-				Method: http.MethodGet, Pattern: "/extra",
-				Handler: http.NotFoundHandler(), Access: access,
-			}}
-		}
-	}
-	for _, tc := range []struct {
-		name  string
-		setup func(*RouterConfig)
-		want  string
-	}{
-		{
-			name: "public route in Routes",
-			setup: func(cfg *RouterConfig) {
-				cfg.Surfaces[0].Routes = append(cfg.Surfaces[0].Routes, Route{
-					ID: "session.get", Method: http.MethodGet, Pattern: "/session",
-					Handler: http.NotFoundHandler(), Public: true,
-				})
-			},
-			want: `httpapi: route "session.get" is public on non-panel surface "/api/v1"`,
-		},
-		{
-			name:  "extra mount without access",
-			setup: extraMount(""),
-			want:  "httpapi: extra mount GET /extra has no valid access kind",
-		},
-		{
-			name:  "extra mount with API access",
-			setup: extraMount(AccessAPI),
-			want:  "httpapi: extra mount GET /extra has no valid access kind",
-		},
-		{
-			name:  "extra mount with panel access",
-			setup: extraMount(AccessPanel),
-			want:  "httpapi: extra mount GET /extra has no valid access kind",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := guardedRouterConfig(&RouteRegistry{}, testGuards(t))
-			tc.setup(&cfg)
-			defer func() {
-				if got := recover(); got != tc.want {
-					t.Fatalf("NewRouter panic = %v, want %q", got, tc.want)
-				}
-			}()
-			_, _ = NewRouter(cfg)
-		})
-	}
-}
-
 // TestNewRouterRefusesDuplicateOperations checks that an operation mounted
 // twice - whichever mounts collide, and however the parameter names, the
 // regexp anchors or the method case differ - a route id twice in one surface,

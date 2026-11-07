@@ -337,6 +337,25 @@ func TestSurfaceWithoutManifestAllowsNilAccessMode(t *testing.T) {
 	}
 }
 
+func TestNewRouterRefusesUndeclaredExtraMountAccess(t *testing.T) {
+	t.Parallel()
+	for _, access := range []Access{"", AccessAPI, AccessPanel} {
+		t.Run(string(access), func(t *testing.T) {
+			t.Parallel()
+			cfg := guardedRouterConfig(&RouteRegistry{}, testGuards(t))
+			cfg.ExtraMounts = []ExtraMount{{
+				Method: http.MethodGet, Pattern: "/extra",
+				Handler: http.NotFoundHandler(), Access: access,
+			}}
+			_, err := NewRouter(cfg)
+			const want = "httpapi: extra mount GET /extra has no valid access kind"
+			if err == nil || err.Error() != want {
+				t.Fatalf("NewRouter error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
 func TestSurfaceValidation(t *testing.T) {
 	api := func(prefix string) Surface { return Surface{Prefix: prefix, Source: domain.SourceAPI} }
 	for _, tc := range []struct {
@@ -345,7 +364,6 @@ func TestSurfaceValidation(t *testing.T) {
 		mcpPath   string
 		extraPath string
 		want      string
-		panic     bool
 	}{
 		{name: "no surfaces", want: "httpapi: nil route registry"},
 		{name: "empty prefix", surfaces: []Surface{api("")}, want: `httpapi: invalid surface prefix ""`},
@@ -376,7 +394,7 @@ func TestSurfaceValidation(t *testing.T) {
 		}}}, want: `httpapi: route id "ext.read" appears twice in surface "/ext/v1"`},
 		{name: "public API route", surfaces: []Surface{{Prefix: "/ext/v1", Source: domain.SourceAPI, Routes: []Route{
 			{ID: "ext.public", Method: http.MethodGet, Pattern: "/public", Handler: http.NotFoundHandler(), Public: true},
-		}}}, want: `httpapi: route "ext.public" is public on non-panel surface "/ext/v1"`, panic: true},
+		}}}, want: `httpapi: route "ext.public" is public on non-panel surface "/ext/v1"`},
 		{name: "extra at prefix", surfaces: []Surface{api("/ext/v1")}, extraPath: "/ext/v1", want: "httpapi: extra mount GET /ext/v1 is under /ext/v1"},
 		{name: "extra under prefix", surfaces: []Surface{api("/ext/v1")}, extraPath: "/ext/v1/extra", want: "httpapi: extra mount GET /ext/v1/extra is under /ext/v1"},
 		{name: "MCP at prefix", surfaces: []Surface{api("/ext/v1")}, mcpPath: "/ext/v1", want: "httpapi: MCP path /ext/v1 is under /ext/v1"},
@@ -391,17 +409,8 @@ func TestSurfaceValidation(t *testing.T) {
 			if tc.extraPath != "" {
 				cfg.ExtraMounts = []ExtraMount{{Method: http.MethodGet, Pattern: tc.extraPath, Handler: http.NotFoundHandler(), Access: AccessPublic}}
 			}
-			defer func() {
-				got := recover()
-				if tc.panic && got != tc.want {
-					t.Errorf("NewRouter panic = %v, want %q", got, tc.want)
-				}
-				if !tc.panic && got != nil {
-					t.Errorf("NewRouter panicked: %v, want error %q", got, tc.want)
-				}
-			}()
 			_, err := NewRouter(cfg)
-			if !tc.panic && (err == nil || err.Error() != tc.want) {
+			if err == nil || err.Error() != tc.want {
 				t.Errorf("NewRouter error = %v, want %q", err, tc.want)
 			}
 		})

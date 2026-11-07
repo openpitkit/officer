@@ -83,7 +83,7 @@ type runtimeRouteManifestEntry struct {
 // fallback (GET /*). It validates surfaces and refuses duplicate route IDs
 // within a surface, operations chi routes as one
 // (see routingKey), and extra mounts or MCP paths at or under a surface prefix.
-// It panics on public routes outside SourcePanel and extra mounts without a
+// It refuses public routes outside SourcePanel and extra mounts without a
 // valid access kind.
 func mountedOperations(
 	surfaces []Surface,
@@ -139,7 +139,7 @@ func mountedOperations(
 			}
 			if route.Public {
 				if surface.Source != domain.SourcePanel {
-					panic(fmt.Sprintf("httpapi: route %q is public on non-panel surface %q", route.ID, surface.Prefix))
+					return nil, fmt.Errorf("httpapi: route %q is public on non-panel surface %q", route.ID, surface.Prefix)
 				}
 				entry.Access, entry.routeID = AccessPublic, ""
 			}
@@ -167,10 +167,10 @@ func mountedOperations(
 	}
 	for _, mount := range extraMounts {
 		if mount.Access != AccessPublic && mount.Access != AccessAgent {
-			panic(fmt.Sprintf(
+			return nil, fmt.Errorf(
 				"httpapi: extra mount %s %s has no valid access kind",
 				mount.Method, mount.Pattern,
-			))
+			)
 		}
 		if prefix := surfacePrefixOf(mount.Pattern, surfaces); prefix != "" {
 			return nil, fmt.Errorf(

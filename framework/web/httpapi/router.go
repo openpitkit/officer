@@ -48,7 +48,7 @@ type ExtraMount struct {
 	Handler http.Handler
 	// Access is what the mount requires. Extra mounts bypass ResolveCaller and
 	// Authorize, so each declares it; only AccessPublic and AccessAgent are
-	// valid, and NewRouter panics on any other.
+	// valid, and NewRouter returns an error for any other.
 	Access Access
 }
 
@@ -116,8 +116,8 @@ type RouterConfig struct {
 // prefix without a trailing slash or any '{', '}' or '*'. Prefixes must not be
 // equal or nested, and sources must be SourceAPI or SourcePanel. At most one
 // surface may mount the manifest; that surface requires a non-nil AccessMode.
-// It panics on a public route outside a SourcePanel surface and on an extra
-// mount without a valid access kind. It refuses empty route IDs, duplicate
+// It returns an error for a public route outside a SourcePanel surface or an
+// extra mount without a valid access kind. It refuses empty route IDs, duplicate
 // route IDs within a surface, duplicate operations, and extra mounts or MCP
 // paths at or under any surface prefix. No surfaces returns
 // "httpapi: nil route registry".
