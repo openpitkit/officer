@@ -497,7 +497,7 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 		xid, err := domain.ExternalIDFromBytes(extID)
 		if err != nil {
 			err = errors.Join(err, instrRows.Close())
-			return fmt.Errorf("store: prune md instrument external id: %w", err)
+			return fmt.Errorf("store: prune md instrument external id: %v", err)
 		}
 		instrs = append(instrs, instrRow{id: id, key: xid.String() + "\x00" + symbol})
 	}
@@ -546,7 +546,7 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 		xid, err := domain.ExternalIDFromBytes(extID)
 		if err != nil {
 			err = errors.Join(err, instRows.Close())
-			return fmt.Errorf("store: prune md instance external id: %w", err)
+			return fmt.Errorf("store: prune md instance external id: %v", err)
 		}
 		insts = append(insts, instRow{id: id, key: xid.String()})
 	}
@@ -715,7 +715,7 @@ func (rt *restoreTx) pruneExecutionReports(
 	for _, row := range stored {
 		id, err := domain.ExternalIDFromBytes(row.id)
 		if err != nil {
-			return fmt.Errorf("store: prune execution report id: %w", err)
+			return fmt.Errorf("store: prune execution report id: %v", err)
 		}
 		if keep[id.String()] || !accounts.in(row.account) {
 			continue
@@ -777,11 +777,11 @@ func (rt *restoreTx) pruneExecutionReportLinks(
 	for _, row := range stored {
 		reportID, err := domain.ExternalIDFromBytes(row.reportID)
 		if err != nil {
-			return fmt.Errorf("store: prune linked execution report id: %w", err)
+			return fmt.Errorf("store: prune linked execution report id: %v", err)
 		}
 		eventID, err := domain.ExternalIDFromBytes(row.eventID)
 		if err != nil {
-			return fmt.Errorf("store: prune linked execution event id: %w", err)
+			return fmt.Errorf("store: prune linked execution event id: %v", err)
 		}
 		if keep[reportID.String()+"\x00"+eventID.String()] || !accounts.in(row.account) {
 			continue
@@ -846,7 +846,7 @@ func (rt *restoreTx) pruneByExternalID(
 	for _, r := range out {
 		xid, err := domain.ExternalIDFromBytes(r.extID)
 		if err != nil {
-			return fmt.Errorf("store: prune %s external id: %w", table, err)
+			return fmt.Errorf("store: prune %s external id: %v", table, err)
 		}
 		if keep[xid.String()] || !accounts.in(r.account) {
 			continue
@@ -906,7 +906,7 @@ func (rt *restoreTx) pruneAudit(
 	for _, r := range out {
 		xid, err := domain.ExternalIDFromBytes(r.extID)
 		if err != nil {
-			return fmt.Errorf("store: prune audit external id: %w", err)
+			return fmt.Errorf("store: prune audit external id: %v", err)
 		}
 		if keep[xid.String()] || !auditRowInScope(selector, accounts, r.account) {
 			continue

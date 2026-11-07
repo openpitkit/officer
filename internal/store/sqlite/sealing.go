@@ -342,7 +342,7 @@ func (s *sqliteStore) sealCredentials(
 		if err != nil {
 			err = errors.Join(err, rows.Close())
 			return 0, fmt.Errorf(
-				"store: decode %s external id for sealing: %w", noun, err,
+				"store: decode %s external id for sealing: %v", noun, err,
 			)
 		}
 		secrets = append(secrets, storedCredential{

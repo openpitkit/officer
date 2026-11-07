@@ -590,7 +590,7 @@ func adjustmentFromScanned(
 	xid, err := domain.ExternalIDFromBytes(extID)
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf(
-			"store: decode adjustment external id: %w", err,
+			"store: decode adjustment external id: %v", err,
 		)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)

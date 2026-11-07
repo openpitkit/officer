@@ -754,7 +754,7 @@ func scanOrderListRow(
 	id, err := optionalExternalIDFromBytes(connectionID)
 	if err != nil {
 		return fwstore.OrderListRow{}, fmt.Errorf(
-			"store: decode order venue connection id: %w", err)
+			"store: decode order venue connection id: %v", err)
 	}
 	row.VenueConnection = id
 	return row, nil
@@ -794,7 +794,7 @@ func scanOrderInto(
 	}
 	xid, err := domain.ExternalIDFromBytes(extID)
 	if err != nil {
-		return fmt.Errorf("store: decode order external id: %w", err)
+		return fmt.Errorf("store: decode order external id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
@@ -974,7 +974,7 @@ func scanOrderEvent(
 	}
 	xid, err := domain.ExternalIDFromBytes(extID)
 	if err != nil {
-		return domain.OrderEvent{}, fmt.Errorf("store: decode event external id: %w", err)
+		return domain.OrderEvent{}, fmt.Errorf("store: decode event external id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
@@ -1471,7 +1471,7 @@ func scanTradeListRow(
 	id, err := optionalExternalIDFromBytes(connectionID)
 	if err != nil {
 		return fwstore.TradeListRow{}, fmt.Errorf(
-			"store: decode trade venue connection id: %w", err)
+			"store: decode trade venue connection id: %v", err)
 	}
 	row.VenueConnection = id
 	return row, nil
@@ -1520,11 +1520,11 @@ func tradeFromScanned(
 ) (domain.Trade, error) {
 	tradeXID, err := domain.ExternalIDFromBytes(tradeExtID)
 	if err != nil {
-		return domain.Trade{}, fmt.Errorf("store: decode trade external id: %w", err)
+		return domain.Trade{}, fmt.Errorf("store: decode trade external id: %v", err)
 	}
 	orderXID, err := domain.ExternalIDFromBytes(orderExtID)
 	if err != nil {
-		return domain.Trade{}, fmt.Errorf("store: decode trade order external id: %w", err)
+		return domain.Trade{}, fmt.Errorf("store: decode trade order external id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
@@ -1781,7 +1781,7 @@ WHERE t.commission_amount <> ''
 		if err != nil {
 			err = errors.Join(err, rows.Close())
 			return fmt.Errorf(
-				"store: decode order commission external id: %w", err)
+				"store: decode order commission external id: %v", err)
 		}
 		if err := rollup.add(
 			order,
@@ -1822,7 +1822,7 @@ WHERE o.external_id IN (`+placeholders+`)`,
 		if err != nil {
 			err = errors.Join(err, eventRows.Close())
 			return fmt.Errorf(
-				"store: decode order event commission external id: %w", err)
+				"store: decode order event commission external id: %v", err)
 		}
 		var payload domain.OrderEventPayload
 		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {

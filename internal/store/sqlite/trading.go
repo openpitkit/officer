@@ -237,7 +237,7 @@ func scanTradingConnection(
 	xid, err := domain.ExternalIDFromBytes(rawID)
 	if err != nil {
 		return domain.TradingConnection{},
-			fmt.Errorf("store: decode trading connection external id: %w", err)
+			fmt.Errorf("store: decode trading connection external id: %v", err)
 	}
 	connection.ExternalID = xid
 	connection.FeeAccount = domain.AccountID(feeAccount.String)
@@ -504,7 +504,7 @@ func scanTradingInstrument(
 	connection, err := domain.ExternalIDFromBytes(rawID)
 	if err != nil {
 		return domain.TradingInstrument{}, fmt.Errorf(
-			"store: decode trading instrument connection external id: %w", err,
+			"store: decode trading instrument connection external id: %v", err,
 		)
 	}
 	instrument.Connection = connection
@@ -601,7 +601,7 @@ func (r *realmStore) ListTradingAccess(
 		connection, err := domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode trading access connection external id: %w", err,
+				"store: decode trading access connection external id: %v", err,
 			)
 		}
 		access.Connection = connection
@@ -1013,12 +1013,12 @@ func scanVenueOrder(scanner sqlScanner) (domain.VenueOrder, error) {
 	orderID, err := domain.ExternalIDFromBytes(rawOrder)
 	if err != nil {
 		return domain.VenueOrder{},
-			fmt.Errorf("store: decode venue order Officer id: %w", err)
+			fmt.Errorf("store: decode venue order Officer id: %v", err)
 	}
 	connectionID, err := domain.ExternalIDFromBytes(rawConnection)
 	if err != nil {
 		return domain.VenueOrder{},
-			fmt.Errorf("store: decode venue order connection id: %w", err)
+			fmt.Errorf("store: decode venue order connection id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {

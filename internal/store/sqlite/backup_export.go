@@ -213,11 +213,11 @@ func (r *realmStore) exportExecutionReports(
 		}
 		reportID, err := domain.ExternalIDFromBytes(reportRaw)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan execution report id: %w", err)
+			return nil, fmt.Errorf("store: scan execution report id: %v", err)
 		}
 		orderID, err := domain.ExternalIDFromBytes(orderRaw)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan execution report order id: %w", err)
+			return nil, fmt.Errorf("store: scan execution report order id: %v", err)
 		}
 		at, err := time.Parse(time.RFC3339Nano, atRaw)
 		if err != nil {
@@ -261,11 +261,11 @@ func (r *realmStore) exportExecutionReportEvents(
 		}
 		reportID, err := domain.ExternalIDFromBytes(reportRaw)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan linked report id: %w", err)
+			return nil, fmt.Errorf("store: scan linked report id: %v", err)
 		}
 		eventID, err := domain.ExternalIDFromBytes(eventRaw)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan linked event id: %w", err)
+			return nil, fmt.Errorf("store: scan linked event id: %v", err)
 		}
 		out = append(out, backup.ExecutionReportEventLink{
 			Report: reportID,
@@ -367,7 +367,7 @@ func (r *realmStore) exportMarketDataInstances(
 		}
 		externalID, err := domain.ExternalIDFromBytes(rawID)
 		if err != nil {
-			return nil, fmt.Errorf("store: decode market-data instance external id for export: %w", err)
+			return nil, fmt.Errorf("store: decode market-data instance external id for export: %v", err)
 		}
 		instance.ExternalID = externalID
 		out = append(out, instance)
@@ -443,7 +443,7 @@ func (r *realmStore) exportTradingConnections(
 		connection.ExternalID, err = domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode trading connection external id for export: %w", err,
+				"store: decode trading connection external id for export: %v", err,
 			)
 		}
 		out = append(out, connection)
@@ -490,7 +490,7 @@ func (r *realmStore) exportTradingInstruments(
 		instrument.Connection, err = domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode trading instrument connection for export: %w", err,
+				"store: decode trading instrument connection for export: %v", err,
 			)
 		}
 		out = append(out, instrument)
@@ -538,7 +538,7 @@ func (r *realmStore) exportTradingAccess(
 		access.Connection, err = domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode trading access connection for export: %w", err,
+				"store: decode trading access connection for export: %v", err,
 			)
 		}
 		out = append(out, access)
@@ -588,12 +588,12 @@ func (r *realmStore) exportVenueOrders(
 		}
 		venueOrder.Order, err = domain.ExternalIDFromBytes(rawOrder)
 		if err != nil {
-			return nil, fmt.Errorf("store: decode venue order id for export: %w", err)
+			return nil, fmt.Errorf("store: decode venue order id for export: %v", err)
 		}
 		venueOrder.Connection, err = domain.ExternalIDFromBytes(rawConnection)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode venue order connection for export: %w", err,
+				"store: decode venue order connection for export: %v", err,
 			)
 		}
 		venueOrder.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)

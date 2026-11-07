@@ -1131,7 +1131,7 @@ func (rt *restoreTx) validateTradingAccessFeeAccounts(ctx context.Context) (resu
 			return fmt.Errorf("store: scan restored trading connection: %w", err)
 		}
 		if connection.id, err = domain.ExternalIDFromBytes(rawID); err != nil {
-			return fmt.Errorf("store: decode restored trading connection external id: %w", err)
+			return fmt.Errorf("store: decode restored trading connection external id: %v", err)
 		}
 		connections = append(connections, connection)
 	}

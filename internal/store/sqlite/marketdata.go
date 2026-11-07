@@ -259,7 +259,7 @@ func scanMDInstance(scanner sqlScanner, store *sqliteStore) (domain.MarketDataIn
 	}
 	xid, err := domain.ExternalIDFromBytes(rawID)
 	if err != nil {
-		return domain.MarketDataInstance{}, fmt.Errorf("store: decode instance external id: %w", err)
+		return domain.MarketDataInstance{}, fmt.Errorf("store: decode instance external id: %v", err)
 	}
 	inst.ExternalID = xid
 	plaintext, err := store.openValue(
@@ -467,7 +467,7 @@ func scanMDInstrument(rows *sql.Rows) (domain.MarketDataInstrument, error) {
 	xid, err := domain.ExternalIDFromBytes(rawXID)
 	if err != nil {
 		return domain.MarketDataInstrument{},
-			fmt.Errorf("store: decode instrument instance external id: %w", err)
+			fmt.Errorf("store: decode instrument instance external id: %v", err)
 	}
 	instr.Instance = xid
 	return instr, nil

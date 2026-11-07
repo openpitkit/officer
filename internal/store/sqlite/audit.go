@@ -483,7 +483,7 @@ func auditRowFromScanned(
 ) (domain.AuditRow, error) {
 	xid, err := domain.ExternalIDFromBytes(extID)
 	if err != nil {
-		return domain.AuditRow{}, fmt.Errorf("store: decode audit external id: %w", err)
+		return domain.AuditRow{}, fmt.Errorf("store: decode audit external id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
