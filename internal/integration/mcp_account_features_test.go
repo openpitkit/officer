@@ -19,6 +19,7 @@ package integration_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -403,7 +405,8 @@ func TestRelaxedInputRefusalsWithOneAccount(t *testing.T) {
 			Arguments: orderInput(map[string]any{"undeclared": "x"}),
 		})
 		closeSession()
-		if err == nil || !strings.Contains(err.Error(), `unknown field "undeclared"`) {
+		var rpcErr *jsonrpc.Error
+		if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams || !strings.Contains(err.Error(), `unknown field "undeclared"`) {
 			t.Fatalf("call error = %v, want the undeclared field refused", err)
 		}
 		if len(src.checkProbes) != 0 {

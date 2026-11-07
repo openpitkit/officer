@@ -104,8 +104,8 @@ func TestService_SetSettingRoutesKeyValueAndCaller(t *testing.T) {
 	caller := domain.Caller{Source: domain.SourcePanel, Principal: "settings-operator"}
 	ctx := auth.ContextWithCaller(context.Background(), caller)
 
-	if err := svc.SetSetting(context.Background(), "k", "v"); err == nil {
-		t.Fatal("SetSetting without a caller succeeded, want an error")
+	if err := svc.SetSetting(context.Background(), "k", "v"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("got %v, want domain.ErrInvalid for the missing caller", err)
 	}
 	if len(fn.setSettingCalls) != 0 || len(fn.settings) != 0 {
 		t.Fatalf("SetSetting without a caller reached the node: calls = %+v, settings = %v",

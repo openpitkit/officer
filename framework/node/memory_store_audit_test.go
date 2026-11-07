@@ -100,7 +100,7 @@ func TestLocalNodeValidatesAuditDecisionBeforeStore(t *testing.T) {
 			Verdict: "accept",
 		})
 		const want = "store: audit action \"create_account\" has decision metadata: invalid"
-		if err == nil || err.Error() != want {
+		if !errors.Is(err, domain.ErrInvalid) || err.Error() != want {
 			t.Fatalf("audit error = %v, want %q", err, want)
 		}
 		if realm.appendCalls != 0 {
@@ -121,7 +121,7 @@ func TestLocalNodeValidatesAuditDecisionBeforeStore(t *testing.T) {
 			},
 		})
 		const want = "store: audit action \"create_account\" has decision metadata: invalid"
-		if err == nil || err.Error() != want {
+		if !errors.Is(err, domain.ErrInvalid) || err.Error() != want {
 			t.Fatalf("auditBatch error = %v, want %q", err, want)
 		}
 		if realm.appendBatchCalls != 0 {

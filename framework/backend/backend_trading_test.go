@@ -711,7 +711,9 @@ func TestTradingCreateBlankCredentialKeepsRefusalText(t *testing.T) {
 	c := tradingTestConnection()
 	c.Credentials = `{"apiKey":" ","apiSecret":"test-secret-value"}`
 	_, err := s.CreateTradingConnection(systemCtx(), c, false)
-	if err == nil || err.Error() != "alpaca: apiKey is required" {
+	if !errors.Is(err, domain.ErrInvalid) || err.Error() != "alpaca: apiKey is required" ||
+		domain.ValidationPointer(err) != "/credentials/apiKey" ||
+		domain.ValidationConstraint(err) != "required" {
 		t.Fatalf("blank key refusal = %v, want the text intact", err)
 	}
 }

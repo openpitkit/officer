@@ -347,8 +347,8 @@ func TestHandlerEndsSessionOpenedUnderOtherAccountFeatures(t *testing.T) {
 
 	stale := connectHTTPClient(t, httpServer.URL, transport)
 	src.set(backend.AccountFeatures{Account: "default"})
-	if _, err := stale.CallTool(ctx, &sdkmcp.CallToolParams{Name: "caller"}); err == nil {
-		t.Fatal("tool call over a session opened under other account features succeeded")
+	if _, err := stale.CallTool(ctx, &sdkmcp.CallToolParams{Name: "caller"}); !errors.Is(err, sdkmcp.ErrSessionMissing) {
+		t.Fatalf("stale session CallTool: got %v, want sdkmcp.ErrSessionMissing", err)
 	}
 	_ = stale.Close()
 

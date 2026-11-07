@@ -2181,7 +2181,7 @@ func TestLocalNode_ApplyExecutionReportNilPersistenceErrors(t *testing.T) {
 	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
 		t.Fatalf("ApplyExecutionReport nil persistence = %v, want retry-unsafe marker", err)
 	}
-	if fatalErr == nil || !strings.Contains(
+	if !errors.Is(fatalErr, domain.ErrInvalid) || !strings.Contains(
 		fatalErr.Error(), "post-engine persistence failure",
 	) {
 		t.Fatalf("fatal error = %v, want post-engine persistence failure", fatalErr)

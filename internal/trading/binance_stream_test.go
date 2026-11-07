@@ -20,6 +20,7 @@ package trading
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -784,8 +785,8 @@ func TestBinanceRedaction(t *testing.T) {
 	defer c.Close()
 	reports := binanceRecordReports(c)
 	_, sendErr := c.Send(context.Background(), binanceTestOrder())
-	if sendErr == nil {
-		t.Fatal("expected venue rejection")
+	if !errors.Is(sendErr, fwtrading.ErrRejected) {
+		t.Fatalf("Send: got %v, want fwtrading.ErrRejected", sendErr)
 	}
 	_, err = c.Subscribe(context.Background())
 	if err != nil {

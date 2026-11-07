@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/engine"
 	"go.openpit.dev/officer/framework/auth"
@@ -870,7 +871,8 @@ func TestSetLimitRefusesUndeclaredField(t *testing.T) {
 				},
 			})
 			closeSession()
-			if err == nil || !strings.Contains(err.Error(), `unknown field "undeclared"`) {
+			var rpcErr *jsonrpc.Error
+			if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams || !strings.Contains(err.Error(), `unknown field "undeclared"`) {
 				t.Fatalf("call error = %v, want the undeclared field refused", err)
 			}
 			requireNoLimits(t, service)

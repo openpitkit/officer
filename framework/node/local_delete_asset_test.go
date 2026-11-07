@@ -1493,8 +1493,8 @@ func TestLocalNode_DeleteAssetAuditFailureFatals(t *testing.T) {
 	if err := n.DeleteAsset(ctx, asset.Code, false, testCaller); !errors.Is(err, auditErr) {
 		t.Fatalf("DeleteAsset = %v, want audit failure", err)
 	}
-	if fatalErr == nil {
-		t.Fatal("delete asset audit failure did not invoke the fatal hook")
+	if !errors.Is(fatalErr, auditErr) {
+		t.Fatalf("fatal delete asset audit error: got %v, want %v", fatalErr, auditErr)
 	}
 	if !strings.Contains(fatalErr.Error(), `operation="audit delete asset"`) ||
 		!strings.Contains(fatalErr.Error(), "asset=GOLD") {

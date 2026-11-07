@@ -38,6 +38,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/etoro"
 )
 
 const (
@@ -541,13 +542,18 @@ func TestEtoroConstructor(t *testing.T) {
 	for _, tc := range []struct {
 		mode        domain.TradingMode
 		credentials string
+		wantErr     error
 	}{
-		{domain.TradingMode("unknown"), etoroTestCredentials},
-		{domain.TradingModePaper, `{}`},
-		{domain.TradingModeLive, `null`},
+		{domain.TradingMode("unknown"), etoroTestCredentials, nil},
+		{domain.TradingModePaper, `{}`, domain.ErrInvalid},
+		{domain.TradingModeLive, `null`, domain.ErrInvalid},
 	} {
-		if _, err := newEtoroConnector(domain.TradingConnection{Mode: tc.mode, Credentials: tc.credentials}, "http://127.0.0.1:1"); err == nil {
+		_, err := newEtoroConnector(domain.TradingConnection{Mode: tc.mode, Credentials: tc.credentials}, "http://127.0.0.1:1")
+		if err == nil {
 			t.Fatal("invalid constructor input accepted")
+		}
+		if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+			t.Fatalf("newEtoroConnector: got %v, want %v", err, tc.wantErr)
 		}
 	}
 }
@@ -1421,20 +1427,21 @@ func TestEtoroCatalogueFailures(t *testing.T) {
 		for _, tc := range []struct {
 			name, path string
 			reply      etoroTestReply
+			wantErr    error
 		}{
-			{"catalogue-http", "catalogue", etoroTestReply{503, `{"errorMessage":"unavailable"}`}},
-			{"catalogue-unauthorized", "catalogue", etoroTestReply{401, `{"errorMessage":"unauthorized"}`}},
-			{"catalogue-decode", "catalogue", etoroTestReply{200, `{`}},
-			{"catalogue-missing-results", "catalogue", etoroTestReply{200, `{}`}},
-			{"catalogue-bad-id", "catalogue", etoroTestReply{200, `{"results":[{"instrumentId":0}]}`}},
-			{"catalogue-too-many", "catalogue", etoroTestReply{200, `{"results":[` + strings.TrimSuffix(strings.Repeat(`{"instrumentId":1001},`, 51), ",") + `]}`}},
-			{"eligibility-http", "eligibility", etoroTestReply{503, `{"errorMessage":"unavailable"}`}},
-			{"eligibility-404", "eligibility", etoroTestReply{404, `{"errorMessage":"not found"}`}},
-			{"eligibility-transport", "eligibility", etoroTestReply{-1, ``}},
-			{"eligibility-decode", "eligibility", etoroTestReply{200, `{`}},
-			{"eligibility-absent", "eligibility", etoroTestReply{200, `{"eligibilities":[]}`}},
-			{"eligibility-missing-open", "eligibility", etoroTestReply{200, `{"eligibilities":[{"instrumentId":1001}]}`}},
-			{"eligibility-invalid-config", "eligibility", etoroTestReply{200, strings.Replace(etoroTestEligibility, `"direction":"long"`, `"direction":"unknown"`, 1)}},
+			{"catalogue-http", "catalogue", etoroTestReply{503, `{"errorMessage":"unavailable"}`}, nil},
+			{"catalogue-unauthorized", "catalogue", etoroTestReply{401, `{"errorMessage":"unauthorized"}`}, nil},
+			{"catalogue-decode", "catalogue", etoroTestReply{200, `{`}, io.ErrUnexpectedEOF},
+			{"catalogue-missing-results", "catalogue", etoroTestReply{200, `{}`}, domain.ErrUpstream},
+			{"catalogue-bad-id", "catalogue", etoroTestReply{200, `{"results":[{"instrumentId":0}]}`}, domain.ErrUpstream},
+			{"catalogue-too-many", "catalogue", etoroTestReply{200, `{"results":[` + strings.TrimSuffix(strings.Repeat(`{"instrumentId":1001},`, 51), ",") + `]}`}, domain.ErrUpstream},
+			{"eligibility-http", "eligibility", etoroTestReply{503, `{"errorMessage":"unavailable"}`}, nil},
+			{"eligibility-404", "eligibility", etoroTestReply{404, `{"errorMessage":"not found"}`}, nil},
+			{"eligibility-transport", "eligibility", etoroTestReply{-1, ``}, io.EOF},
+			{"eligibility-decode", "eligibility", etoroTestReply{200, `{`}, io.ErrUnexpectedEOF},
+			{"eligibility-absent", "eligibility", etoroTestReply{200, `{"eligibilities":[]}`}, fwtrading.ErrRejected},
+			{"eligibility-missing-open", "eligibility", etoroTestReply{200, `{"eligibilities":[{"instrumentId":1001}]}`}, domain.ErrUpstream},
+			{"eligibility-invalid-config", "eligibility", etoroTestReply{200, strings.Replace(etoroTestEligibility, `"direction":"long"`, `"direction":"unknown"`, 1)}, domain.ErrUpstream},
 		} {
 			if tc.name == "catalogue-too-many" && operation == "verify" {
 				continue
@@ -1462,6 +1469,15 @@ func TestEtoroCatalogueFailures(t *testing.T) {
 				}
 				if err == nil {
 					t.Fatal("catalogue/eligibility failure must fail the operation")
+				}
+				if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+					t.Fatalf("catalogue/eligibility: got %v, want %v", err, tc.wantErr)
+				}
+				if tc.reply.status >= 400 {
+					var apiErr *etoro.APIError
+					if !errors.As(err, &apiErr) || apiErr.Status != tc.reply.status {
+						t.Fatalf("catalogue/eligibility: got %v, want an HTTP %d *etoro.APIError", err, tc.reply.status)
+					}
 				}
 			})
 		}
@@ -1543,8 +1559,9 @@ func TestEtoroCatalogueCredentialRedaction(t *testing.T) {
 			case "search", "search-eligibility":
 				_, err = v.c.SearchSymbols(context.Background(), "Apple")
 			}
-			if err == nil {
-				t.Fatal("upstream refusal must fail")
+			var apiErr *etoro.APIError
+			if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
+				t.Fatalf("upstream refusal: got %v, want an HTTP 401 *etoro.APIError", err)
 			}
 			for _, spelling := range spellings {
 				if strings.Contains(err.Error(), spelling) {

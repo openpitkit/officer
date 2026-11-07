@@ -20,11 +20,13 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -192,8 +194,9 @@ func TestListToolsSessionContract(t *testing.T) {
 			Name:      "list_orders",
 			Arguments: map[string]any{"limit": "10"},
 		})
-		if err == nil {
-			t.Fatalf("string limit was accepted: %+v", res)
+		var rpcErr *jsonrpc.Error
+		if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams {
+			t.Fatalf("string limit: result=%+v, got %v, want JSON-RPC invalid params", res, err)
 		}
 		if !strings.Contains(err.Error(), "cannot unmarshal") || !strings.Contains(err.Error(), "limit") {
 			t.Fatalf("string limit error = %v, want the SDK's argument decoding error", err)

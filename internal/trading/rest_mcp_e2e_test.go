@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/shopspring/decimal"
 
@@ -1166,8 +1167,9 @@ func TestTradingSendPaperRefusalsEndToEnd(t *testing.T) {
 				input["destination"].(map[string]any)["route"] = route
 				if surface == "MCP" && route != nil {
 					_, err := f.callMCP("send_paper_order", input)
-					if err == nil || !strings.Contains(err.Error(), "unmarshaling") {
-						t.Fatal("MCP must refuse a non-object route at decode")
+					var rpcErr *jsonrpc.Error
+					if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams || !strings.Contains(err.Error(), "unmarshaling") {
+						t.Fatalf("non-object route: got %v, want JSON-RPC invalid params at decode", err)
 					}
 					tradingE2ENoSecrets(t, "MCP route decode", []byte(err.Error()))
 				} else {

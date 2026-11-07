@@ -21,7 +21,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -358,8 +360,8 @@ func TestStreamHealthyConnection(t *testing.T) {
 			defer cancel()
 			events := make(chan fwtrading.Event, 2)
 			healthy, err := c.stream(ctx, events)
-			if err == nil || !healthy {
-				t.Fatal("healthy connection did not allow backoff reset")
+			if !errors.Is(err, io.EOF) || !healthy {
+				t.Fatalf("stream healthy=%v: got %v, want io.EOF after a healthy connection", healthy, err)
 			}
 			if nextEvent(t, events).Kind != fwtrading.EventConnected {
 				t.Fatal("Connected missing")

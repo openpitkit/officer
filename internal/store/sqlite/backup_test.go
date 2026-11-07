@@ -4659,8 +4659,8 @@ func TestBackupRestoreAtomicityLeavesRealmUnchanged(t *testing.T) {
 	)
 	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: scope, Mode: backup.RestoreModeReplaceAll,
-	}); err == nil {
-		t.Fatal("RestoreBackup succeeded, want a mid-restore failure")
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup: got %v, want domain.ErrInvalid", err)
 	}
 
 	// The pre-existing account survived: the prune was rolled back with the rest of

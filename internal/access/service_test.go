@@ -1008,11 +1008,11 @@ func TestRegenerateTokenInvalidatesTheOldValue(t *testing.T) {
 	assertNoSecret(t, records, nil, before.APIToken, before.AgentToken,
 		after.APIToken, after.AgentToken)
 
-	if _, err := h.service.Token(TokenKind("other")); err == nil {
-		t.Error("Token(unknown kind) = <nil>, want an error")
+	if _, err := h.service.Token(TokenKind("other")); !errors.Is(err, errUnknownTokenKind) {
+		t.Errorf("Token(unknown kind): got %v, want errUnknownTokenKind", err)
 	}
-	if _, err := h.service.RegenerateToken(ctx, TokenKind("other")); err == nil {
-		t.Error("RegenerateToken(unknown kind) = <nil>, want an error")
+	if _, err := h.service.RegenerateToken(ctx, TokenKind("other")); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("RegenerateToken(unknown kind): got %v, want domain.ErrInvalid", err)
 	}
 	if h.store.Snapshot() != after {
 		t.Error("an unknown kind changed a token")

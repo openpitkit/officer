@@ -595,20 +595,29 @@ func TestPreCheckUsesCallerContext(t *testing.T) {
 					t.Fatal("Stop returned before the in-flight pre-check finished")
 				default:
 				}
+				select {
+				case err := <-result:
+					if !errors.Is(err, domain.ErrConflict) {
+						t.Fatalf("cancelled pre-check: got %v, want %v", err, domain.ErrConflict)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("cancelled pre-check did not return promptly")
+				}
 				release()
 				select {
 				case <-stopDone:
 				case <-time.After(2 * time.Second):
 					t.Fatal("Stop did not return promptly after pre-check abandonment")
 				}
-			}
-			select {
-			case err := <-result:
-				if err == nil {
-					t.Fatal("cancelled pre-check succeeded")
+			} else {
+				select {
+				case err := <-result:
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("cancelled pre-check: got %v, want %v", err, context.Canceled)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("cancelled pre-check did not return promptly")
 				}
-			case <-time.After(2 * time.Second):
-				t.Fatal("cancelled pre-check did not return promptly")
 			}
 		})
 	}

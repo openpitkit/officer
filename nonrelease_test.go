@@ -531,8 +531,8 @@ func TestPublishNonReleaseDatabaseRefusesExistingFile(t *testing.T) {
 	if err := os.WriteFile(own, want, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishNonReleaseDatabase(tmp, own); err == nil {
-		t.Error("publication accepted existing own database")
+	if err := publishNonReleaseDatabase(tmp, own); !errors.Is(err, os.ErrExist) {
+		t.Errorf("publication: got %v, want os.ErrExist", err)
 	}
 	got, err := os.ReadFile(own)
 	if err != nil {

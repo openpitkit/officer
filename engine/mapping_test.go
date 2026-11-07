@@ -1148,14 +1148,15 @@ func TestIDResolver_AssetRenameRejectsWithoutChangingAliases(t *testing.T) {
 	for _, rename := range []struct {
 		oldCode string
 		asset   domain.Asset
+		wantErr error
 	}{
-		{oldCode: "missing", asset: domain.Asset{Code: "asset-c", EngineAssetID: 11}},
-		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 99}},
-		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-b", EngineAssetID: 11}},
-		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 0}},
+		{oldCode: "missing", asset: domain.Asset{Code: "asset-c", EngineAssetID: 11}, wantErr: domain.ErrInvalid},
+		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 99}, wantErr: domain.ErrInvalid},
+		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-b", EngineAssetID: 11}, wantErr: domain.ErrAlreadyExists},
+		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 0}, wantErr: domain.ErrInvalid},
 	} {
-		if err := res.renameAssetResolverEntry(rename.oldCode, rename.asset); err == nil {
-			t.Errorf("rename %+v: want error", rename)
+		if err := res.renameAssetResolverEntry(rename.oldCode, rename.asset); !errors.Is(err, rename.wantErr) {
+			t.Errorf("rename %+v: got %v, want %v", rename, err, rename.wantErr)
 		}
 	}
 
@@ -1191,47 +1192,54 @@ func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
 	accountMutations := []struct {
 		name string
 		err  error
+		want error
 	}{
 		{
 			name: "duplicate alias",
+			want: domain.ErrAlreadyExists,
 			err: res.addAccountResolverEntry(domain.Account{
 				Code: "account-a", EngineAccountID: 11,
 			}),
 		},
 		{
 			name: "duplicate engine id",
+			want: domain.ErrInvalid,
 			err: res.addAccountResolverEntry(domain.Account{
 				Code: "account-c", EngineAccountID: 7,
 			}),
 		},
 		{
 			name: "unknown old alias",
+			want: domain.ErrInvalid,
 			err: res.renameAccountResolverEntry("account-missing", domain.Account{
 				Code: "account-c", EngineAccountID: 7,
 			}),
 		},
 		{
 			name: "mismatched target id",
+			want: domain.ErrInvalid,
 			err: res.renameAccountResolverEntry("account-a", domain.Account{
 				Code: "account-c", EngineAccountID: 12,
 			}),
 		},
 		{
 			name: "duplicate target alias",
+			want: domain.ErrAlreadyExists,
 			err: res.renameAccountResolverEntry("account-a", domain.Account{
 				Code: "account-b", EngineAccountID: 7,
 			}),
 		},
 		{
 			name: "corrupt target id",
+			want: domain.ErrInvalid,
 			err: res.renameAccountResolverEntry("account-a", domain.Account{
 				Code: "account-c", EngineAccountID: 0,
 			}),
 		},
 	}
 	for _, mutation := range accountMutations {
-		if mutation.err == nil {
-			t.Errorf("%s: want error", mutation.name)
+		if !errors.Is(mutation.err, mutation.want) {
+			t.Errorf("%s: got %v, want %v", mutation.name, mutation.err, mutation.want)
 		}
 	}
 	for code, want := range map[domain.AccountID]uint64{
@@ -1268,8 +1276,12 @@ func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
 		}),
 	}
 	for i, mutationErr := range groupMutations {
-		if mutationErr == nil {
-			t.Errorf("group mutation %d: want error", i)
+		want := []error{
+			domain.ErrAlreadyExists, domain.ErrInvalid, domain.ErrInvalid,
+			domain.ErrInvalid, domain.ErrAlreadyExists, domain.ErrInvalid,
+		}[i]
+		if !errors.Is(mutationErr, want) {
+			t.Errorf("group mutation %d: got %v, want %v", i, mutationErr, want)
 		}
 	}
 	for code, want := range map[string]uint32{"group-a": 9, "group-b": 10} {
@@ -1568,6 +1580,20 @@ func applyAssetResolverMutation(
 		t.Fatalf("%s error = %v, want success %t", mutation, err, wantSuccess)
 	}
 	if err != nil {
+		wantErr := domain.ErrInvalid
+		if idValid {
+			_, targetExists := model[mutation.asset.Code]
+			currentID, oldExists := model[mutation.oldCode]
+			if mutation.kind == assetResolverAdd && targetExists ||
+				mutation.kind == assetResolverRename && oldExists &&
+					currentID == mutation.asset.EngineAssetID &&
+					mutation.oldCode != mutation.asset.Code && targetExists {
+				wantErr = domain.ErrAlreadyExists
+			}
+		}
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("%s: got %v, want %v", mutation, err, wantErr)
+		}
 		after := captureAssetResolverState(res)
 		if !reflect.DeepEqual(after, before) {
 			t.Fatalf(

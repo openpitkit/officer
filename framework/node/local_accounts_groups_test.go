@@ -551,8 +551,8 @@ func TestLocalNode_SetAccountGroupAuditFailureFatals(t *testing.T) {
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("SetAccountGroup error = %v, want audit failure", err)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire on post-engine set-group audit failure")
+	if !errors.Is(fatalErr, auditErr) {
+		t.Fatalf("fatal set-group audit error: got %v, want %v", fatalErr, auditErr)
 	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="audit set account group"`) ||
@@ -597,8 +597,8 @@ func TestLocalNode_SetGroupBlockedAuditFailureFatals(t *testing.T) {
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("SetGroupBlocked error = %v, want audit failure", err)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire on post-engine group-block audit failure")
+	if !errors.Is(fatalErr, auditErr) {
+		t.Fatalf("fatal group-block audit error: got %v, want %v", fatalErr, auditErr)
 	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="audit group block"`) ||

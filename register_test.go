@@ -685,7 +685,7 @@ func TestRecordServiceLifecycleRejectsUnresolvedCaller(t *testing.T) {
 		ctx, domain.AuditActionRestartService,
 		domain.NewAuditDetail(domain.AuditDetailRestartService, nil),
 	)
-	if err == nil || !strings.Contains(err.Error(), "no caller in context") {
+	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "no caller in context") {
 		t.Errorf("RecordServiceLifecycle without a caller = %v, want the missing caller named", err)
 	}
 	after, err := realm.ListAudit(ctx, 1000)
@@ -1301,8 +1301,8 @@ func TestRegisterPreMigrationBackups(t *testing.T) {
 
 func TestRegisterPreMigrationBackupMissingInputs(t *testing.T) {
 	source := preMigrationBackupSource(filepath.Join(t.TempDir(), "missing", "officer.db"), nil)
-	if copies, err := source.List(); err == nil {
-		t.Fatalf("missing directory list = %+v, want error", copies)
+	if copies, err := source.List(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing directory list = %+v, got %v, want os.ErrNotExist", copies, err)
 	}
 	if err := source.Audit(context.Background(), domain.AuditActionDownloadPreMigrationBackup,
 		domain.NewAuditDetail(domain.AuditDetailDownloadPreMigrationBackup, domain.AuditDetailParams{"name": "copy"})); err == nil || !strings.Contains(err.Error(), "nil node") {

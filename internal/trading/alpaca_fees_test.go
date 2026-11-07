@@ -20,6 +20,7 @@ package trading
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/alpaca"
 )
 
 func TestFeesMapping(t *testing.T) {
@@ -255,7 +257,9 @@ func TestFeesReturnProgressBeforeAssetFailure(t *testing.T) {
 	}))
 	defer server.Close()
 	fees, next, err := testAlpacaConnector(t, server).Fees(context.Background(), time.Now(), "")
-	if err == nil || len(fees) != 1 || fees[0].ID != "first" || next != "" {
+	var apiErr *alpaca.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusInternalServerError ||
+		len(fees) != 1 || fees[0].ID != "first" || next != "" {
 		t.Fatalf("asset failure lost prior progress or skipped the failed fee: fees=%v next=%s err=%v", fees, next, err)
 	}
 }
@@ -286,6 +290,12 @@ func TestFeesReadErrors(t *testing.T) {
 			fees, _, err := testAlpacaConnector(t, server).Fees(context.Background(), time.Now(), after)
 			if err == nil || len(fees) != 0 {
 				t.Fatal("fee read error was hidden or partial fees returned")
+			}
+			if failure != "pagination" {
+				var apiErr *alpaca.APIError
+				if !errors.As(err, &apiErr) || apiErr.Status != http.StatusInternalServerError || apiErr.Code != 500 {
+					t.Fatalf("Fees: got %v, want an HTTP 500 *alpaca.APIError with code 500", err)
+				}
 			}
 			if strings.Contains(err.Error(), "test-secret-marker") || strings.Contains(err.Error(), "test-key-marker") {
 				t.Fatal("fee read error leaked credentials")

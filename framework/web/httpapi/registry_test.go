@@ -970,8 +970,8 @@ func TestPublicPanelRouteRunsWithoutCaller(t *testing.T) {
 		t.Fatalf("public route = %d %s, served %q; want 204 from its handler",
 			rec.Code, rec.Body, served)
 	}
-	if callerErr == nil {
-		t.Fatal("the public route's handler found a caller in the request context")
+	if !errors.Is(callerErr, domain.ErrInvalid) {
+		t.Fatalf("public route caller: got %v, want domain.ErrInvalid", callerErr)
 	}
 
 	for _, path := range []string{

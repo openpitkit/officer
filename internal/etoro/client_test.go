@@ -387,6 +387,12 @@ func TestRequestErrorsRedacted(t *testing.T) {
 					if err == nil {
 						t.Fatal("request failure was swallowed")
 					}
+					if operation == "encode request" {
+						var marshalErr *json.MarshalerError
+						if !errors.As(err, &marshalErr) {
+							t.Fatalf("request encoding: got %v, want *json.MarshalerError", err)
+						}
+					}
 					assertNoCredentials(t, err.Error())
 					if strings.Contains(err.Error(), spelling) || operation != "create request" && !strings.Contains(err.Error(), "[redacted]") {
 						t.Fatal("request error did not redact the credential spelling")

@@ -1038,8 +1038,9 @@ func TestFinnhubRESTHelpersRedactTokenInTransportErrors(t *testing.T) {
 
 	check := func(name string, err error) {
 		t.Helper()
-		if err == nil {
-			t.Fatalf("%s error = nil, want transport error", name)
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) || urlErr.Op != "Get" {
+			t.Fatalf("%s: got %v, want a Get *url.Error", name, err)
 		}
 		if strings.Contains(err.Error(), token) {
 			t.Fatalf("%s leaked token: %v", name, err)

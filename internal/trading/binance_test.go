@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -563,14 +564,16 @@ func TestBinanceLookupFailures(t *testing.T) {
 		name, body string
 		status     int
 		notFound   bool
+		wantErr    error
+		wantAPI    *binance.APIError
 	}{
-		{"absent", `{"code":-2013,"msg":"Order does not exist"}`, 400, true},
-		{"other", `{"code":-2015,"msg":"Invalid key"}`, 400, false},
-		{"wrong status", `{"code":-2013,"msg":"Unavailable"}`, 500, false},
-		{"bad body", `{`, 200, false},
-		{"missing id", `{}`, 200, false},
+		{"absent", `{"code":-2013,"msg":"Order does not exist"}`, 400, true, nil, nil},
+		{"other", `{"code":-2015,"msg":"Invalid key"}`, 400, false, nil, &binance.APIError{Status: 400, Code: -2015}},
+		{"wrong status", `{"code":-2013,"msg":"Unavailable"}`, 500, false, nil, &binance.APIError{Status: 500, Code: -2013}},
+		{"bad body", `{`, 200, false, io.ErrUnexpectedEOF, nil},
+		{"missing id", `{}`, 200, false, domain.ErrUpstream, nil},
 		{"bad qty", `{"orderId":1,"status":"NEW","origQty":"bad",` +
-			`"executedQty":"0"}`, 200, false},
+			`"executedQty":"0"}`, 200, false, domain.ErrUpstream, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newBinanceTest(t, func(w http.ResponseWriter, r *http.Request) {
@@ -582,6 +585,15 @@ func TestBinanceLookupFailures(t *testing.T) {
 			})
 			if found || (err == nil) != tc.notFound {
 				t.Fatalf("found=%t: %v", found, err)
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Lookup: got %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantAPI != nil {
+				var apiErr *binance.APIError
+				if !errors.As(err, &apiErr) || apiErr.Status != tc.wantAPI.Status || apiErr.Code != tc.wantAPI.Code {
+					t.Fatalf("Lookup: got %v, want *binance.APIError with status %d and code %d", err, tc.wantAPI.Status, tc.wantAPI.Code)
+				}
 			}
 		})
 	}

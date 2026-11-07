@@ -46,6 +46,8 @@ import (
 	fwstore "go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/store/schema"
 	"go.openpit.dev/officer/internal/access"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // rawDB returns the realm's shared connection pool directly, for tests that
@@ -157,8 +159,9 @@ func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 		ctx,
 		`INSERT INTO account (code, group_id) VALUES ('x', 999999)`,
 	)
-	if err == nil {
-		t.Fatal("expected foreign-key violation inserting dangling group_id, got nil")
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY {
+		t.Fatalf("got %v, want SQLITE_CONSTRAINT_FOREIGNKEY for dangling group_id", err)
 	}
 
 	// The store handle is usable: an empty dictionary lists as a non-nil empty

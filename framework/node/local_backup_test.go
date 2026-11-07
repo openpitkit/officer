@@ -951,8 +951,9 @@ func TestLocalNode_RestoreBackupPostSwapMirrorFailureDoesNotRollback(t *testing.
 		Scope: backup.Scope{All: true},
 		Mode:  backup.RestoreModeReplaceAll,
 	}, testCaller)
-	if err == nil {
-		t.Fatal("RestoreBackup succeeded, want post-swap mirror failure")
+	var mutationErr internalPostCommitNodeMutationFailure
+	if !errors.As(err, &mutationErr) {
+		t.Fatalf("RestoreBackup: got %v, want internalPostCommitNodeMutationFailure", err)
 	}
 	if fatalErr == nil {
 		t.Fatal("fatal error = nil after post-swap mirror failure")
@@ -1078,8 +1079,8 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnAuditFailureWithoutRuntime(t *te
 		// non-runtime and remains safely rollback-capable.
 		Scope: backup.Scope{All: true},
 		Mode:  backup.RestoreModeReplaceAll,
-	}, testCaller); err == nil {
-		t.Fatal("RestoreBackup succeeded, want audit failure")
+	}, testCaller); !errors.Is(err, errRestoreAuditFailed) {
+		t.Fatalf("RestoreBackup: got %v, want errRestoreAuditFailed", err)
 	}
 	if fatalErr != nil {
 		t.Fatalf("fatal error = %v, want non-runtime rollback", fatalErr)

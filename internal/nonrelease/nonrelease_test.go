@@ -61,8 +61,11 @@ func TestReleaseDatabaseExists(t *testing.T) {
 	if got, err := ReleaseDatabaseExists(dir); got || err == nil {
 		t.Fatalf("directory = %v, %v", got, err)
 	}
-	if _, err := ReleaseDatabaseExists(filepath.Join(dir, "invalid\x00.db")); err == nil {
-		t.Fatal("stat failure was treated as an absent database")
+	invalidPath := filepath.Join(dir, "invalid\x00.db")
+	_, err := ReleaseDatabaseExists(invalidPath)
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) || pathErr.Op != "stat" || pathErr.Path != invalidPath {
+		t.Fatalf("ReleaseDatabaseExists: got %v, want a stat *os.PathError for %q", err, invalidPath)
 	}
 }
 
@@ -103,8 +106,8 @@ func TestRemoveStalePreservesOwnDatabaseFiles(t *testing.T) {
 
 func TestRemoveStaleReturnsDirectoryAndRemovalErrors(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := RemoveStale(filepath.Join(dir, "absent", "release.db"), "own"); err == nil {
-		t.Fatal("missing directory was treated as an empty list")
+	if _, err := RemoveStale(filepath.Join(dir, "absent", "release.db"), "own"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("got %v, want os.ErrNotExist", err)
 	}
 	release := filepath.Join(dir, "release.db")
 	blocked := release + ".non-release-a"
@@ -118,8 +121,10 @@ func TestRemoveStaleReturnsDirectoryAndRemovalErrors(t *testing.T) {
 	if err := os.WriteFile(later, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RemoveStale(release, "own"); err == nil || !strings.Contains(err.Error(), blocked) {
-		t.Fatalf("removal failure error = %v, want path %q", err, blocked)
+	_, err := RemoveStale(release, "own")
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) || pathErr.Op != "remove" || pathErr.Path != blocked || !strings.Contains(err.Error(), blocked) {
+		t.Fatalf("removal failure error = %v, want a remove *os.PathError for %q", err, blocked)
 	}
 	if _, err := os.Stat(later); err != nil {
 		t.Fatalf("cleanup continued past removal failure: %v", err)

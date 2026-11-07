@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -405,8 +406,8 @@ func TestTradingRequiredFields(t *testing.T) {
 		t.Run(tool.name+"/both", func(t *testing.T) {
 			src := tradingFixture()
 			src.err = domain.ValidateTradingAccess(domain.TradingAccess{Connection: domain.ExternalID("conn"), Account: domain.AccountID("acc"), AccountGroup: "desks"})
-			if src.err == nil {
-				t.Fatal("domain accepted both subjects")
+			if !errors.Is(src.err, domain.ErrInvalid) {
+				t.Fatalf("got %v, want domain.ErrInvalid for both subjects", src.err)
 			}
 			res := callTool[map[string]any](t, src, tool.name, map[string]any{"connection": "conn", "account": "acc", "accountGroup": "desks"})
 			requireToolError(t, res.IsError)
@@ -531,7 +532,8 @@ func TestUpdateTradingConnectionUnknownFields(t *testing.T) {
 				Name:      "update_trading_connection",
 				Arguments: map[string]any{"connection": "conn", field: true},
 			})
-			if err == nil || !strings.Contains(err.Error(), `unknown field "`+field+`"`) {
+			var rpcErr *jsonrpc.Error
+			if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams || !strings.Contains(err.Error(), `unknown field "`+field+`"`) {
 				t.Fatalf("unknown field %s was not refused: %v", field, err)
 			}
 			if len(src.calls) != 0 {

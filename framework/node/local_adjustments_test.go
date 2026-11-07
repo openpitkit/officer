@@ -858,8 +858,8 @@ func TestLocalNode_ApplyAdjustmentStoreFailureFatalsWithoutCompensation(t *testi
 	if len(eng.adjustmentCalls) != 1 {
 		t.Fatalf("engine adjustment calls = %+v, want only the requested apply", eng.adjustmentCalls)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire on post-engine adjustment persistence failure")
+	if !errors.Is(fatalErr, storeErr) {
+		t.Fatalf("fatal adjustment persistence error: got %v, want %v", fatalErr, storeErr)
 	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="record account adjustment"`) ||

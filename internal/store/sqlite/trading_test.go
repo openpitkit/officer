@@ -30,6 +30,8 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestCredentialsSealed(t *testing.T) {
@@ -305,8 +307,10 @@ func TestTradingSchemaModeVocabulary(t *testing.T) {
 		}
 	}
 	for _, mode := range []string{"test", "real"} {
-		if _, err := db.ExecContext(ctx, "UPDATE trading_connection SET mode = ? WHERE external_id = ?", mode, connection.ExternalID.Bytes()); err == nil {
-			t.Fatalf("schema accepted old mode %q", mode)
+		_, err := db.ExecContext(ctx, "UPDATE trading_connection SET mode = ? WHERE external_id = ?", mode, connection.ExternalID.Bytes())
+		var sqliteErr *sqlitedriver.Error
+		if !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_CHECK {
+			t.Fatalf("old mode %q: got %v, want SQLITE_CONSTRAINT_CHECK", mode, err)
 		}
 	}
 }
