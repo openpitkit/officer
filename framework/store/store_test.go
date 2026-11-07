@@ -162,6 +162,11 @@ func TestTextMatcherValidate(t *testing.T) {
 	}{
 		{name: "zero", matcher: TextMatcher{}},
 		{name: "exact", matcher: ExactTextMatcher("acc-1")},
+		{
+			name:    "nul_in_fragment",
+			matcher: TextMatcher{Fragments: []string{"acc", "a\x00b"}},
+			want:    "code: fragment contains a NUL byte: invalid",
+		},
 		{name: "most_fragments", matcher: fragments(TextMatcherMaxFragments)},
 		{name: "most_runes", matcher: runes(TextMatcherMaxRunes)},
 		{name: "most_runes_multibyte", matcher: TextMatcher{

@@ -187,8 +187,9 @@ func (m TextMatcher) Empty() bool {
 
 // Validate reports whether the matcher is within the list-filter bounds: at
 // most TextMatcherMaxFragments fragments, holding at most TextMatcherMaxRunes
-// code points together, so the store never matches rows against an unbounded
-// pattern. field names the filter in the returned error. It is the core rule
+// code points together, with no NUL byte in any fragment, so the store never
+// matches rows against an unbounded or truncated pattern. field names the
+// filter in the returned error. It is the core rule
 // the MCP list tools and REST apply, through their list filter's Validate,
 // before the read; REST does not check it while it parses the query.
 func (m TextMatcher) Validate(field string) error {
@@ -200,6 +201,9 @@ func (m TextMatcher) Validate(field string) error {
 	}
 	runes := 0
 	for _, fragment := range m.Fragments {
+		if strings.ContainsRune(fragment, '\x00') {
+			return fmt.Errorf("%s: fragment contains a NUL byte: %w", field, domain.ErrInvalid)
+		}
 		runes += utf8.RuneCountInString(fragment)
 	}
 	if runes > TextMatcherMaxRunes {

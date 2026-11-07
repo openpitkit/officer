@@ -253,9 +253,10 @@ the engine's decimal: at most 28 fractional digits, trailing zeros aside, and
 its digits, read as one integer, at most 79228162514264337593543950335. A zero
 written with an exponent - its e-part less its fractional digits - outside
 -92..28 is refused. A text filter takes at most 16 fragments and 4096
-characters across them, the longest text Officer stores, and an order status
-list names no status twice. REST answers a value outside these limits with
-`422` and code `validation`, the MCP list tools with `validation: <message>`.
+characters across them, the longest text Officer stores; a fragment containing
+NUL is refused, and an order status list names no status twice. REST answers a
+value outside these limits with `422` and code `validation`, the MCP list tools
+with `validation: <message>`.
 
 ## MCP tools
 
