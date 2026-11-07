@@ -22,7 +22,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"strings"
@@ -30,6 +29,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.openpit.dev/officer/internal/logtest"
 )
 
 type streamCloseFunc func(websocket.StatusCode, string) error
@@ -51,15 +51,7 @@ func TestCloseStream(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
-			previous := slog.Default()
-			previousWriter := log.Writer()
-			previousFlags := log.Flags()
-			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-			t.Cleanup(func() {
-				slog.SetDefault(previous)
-				log.SetOutput(previousWriter)
-				log.SetFlags(previousFlags)
-			})
+			logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 
 			called := false
 			closeStream("test venue", streamCloseFunc(func(code websocket.StatusCode, reason string) error {
@@ -89,15 +81,7 @@ func TestCloseStream(t *testing.T) {
 
 func TestCloseStreamRedactsError(t *testing.T) {
 	var logs bytes.Buffer
-	previous := slog.Default()
-	previousWriter := log.Writer()
-	previousFlags := log.Flags()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() {
-		slog.SetDefault(previous)
-		log.SetOutput(previousWriter)
-		log.SetFlags(previousFlags)
-	})
+	logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 
 	const token = "secret-token"
 	closeStream("finnhub", streamCloseFunc(func(websocket.StatusCode, string) error {

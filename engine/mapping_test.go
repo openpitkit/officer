@@ -50,6 +50,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/logtest"
 )
 
 func TestMergeBalanceOutcomes_PreservesOrderedPhaseEffects(t *testing.T) {
@@ -104,9 +105,7 @@ func TestMergeBalanceOutcomes_PreservesOrderedPhaseEffects(t *testing.T) {
 
 func TestSpotFundsAccountPnlFromList_NoOutcomeDoesNotWarn(t *testing.T) {
 	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(previous)
+	logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 
 	pnl, halt, err := spotFundsAccountPnlFromList(
 		param.NewAccountIDFromUint64(7), nil,
@@ -121,9 +120,7 @@ func TestSpotFundsAccountPnlFromList_NoOutcomeDoesNotWarn(t *testing.T) {
 
 func TestSettlementPrice_MultiplePricesWarnAndEmptyIsSilent(t *testing.T) {
 	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(previous)
+	logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 
 	price := settlementPrice([]string{"99", "100"}, "order-1")
 	if price != "100" {
@@ -2386,9 +2383,7 @@ func TestEngine_CheckOrderMultiplePricesUsesDryRunIdentifier(t *testing.T) {
 	e := newLockSpyTestEngine(t, &executionLockSpy{price: price})
 
 	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(previous)
+	logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 
 	out, err := materializeCheckedOrder(
 		e,

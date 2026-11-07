@@ -39,6 +39,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/logtest"
 )
 
 // newTestSink builds a real market-data service (through the engine builder, as
@@ -256,9 +257,7 @@ func TestMarketDataSink_SourceAgeExpiresOldQuoteImmediately(t *testing.T) {
 // Not parallel: it swaps the process-wide slog default to capture the warning.
 func TestMarketDataSink_WarnsOnlyBeyondFutureSkew(t *testing.T) {
 	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(previous)
+	logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 
 	tests := []struct {
 		name     string

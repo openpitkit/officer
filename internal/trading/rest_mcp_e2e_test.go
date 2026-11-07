@@ -57,6 +57,7 @@ import (
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
+	"go.openpit.dev/officer/internal/logtest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 	"go.openpit.dev/officer/signing"
@@ -322,9 +323,7 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 	})
 	f.builder.SetSPAFactory(func() (fs.FS, error) { return fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("test")}}, nil })
 	tradingE2EMust(t, f.builder.RegisterTradingProvider(provider))
-	oldLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&f.logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+	logtest.SetDefault(t, slog.NewTextHandler(&f.logs, nil))
 	f.start()
 	t.Cleanup(f.close)
 	for _, code := range []string{"desk", "other", "fees"} {

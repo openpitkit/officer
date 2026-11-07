@@ -35,6 +35,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/secret"
+	"go.openpit.dev/officer/internal/logtest"
 	sqlitedriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -1233,9 +1234,7 @@ func openSQLiteStoreForTest(t *testing.T, path string, opts ...Option) *sqliteSt
 func captureSlogForTest(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var output bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	logtest.SetDefault(t, slog.NewTextHandler(&output, nil))
 	return &output
 }
 

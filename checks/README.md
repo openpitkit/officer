@@ -46,7 +46,8 @@ it: `default-domain-status.go`, `discarded-close-error.go`, `discarded-error.go`
 `panel-download-reuse.tsx`, `panel-code-label.tsx`,
 `no-legacy-database-probe.go`, `venue-connector-reuse.go`,
 `no-local-secret-redaction.go`,
-`tailwind-v4-utilities.tsx` and `panel-site-link-reuse.tsx`. A fixture runs only
+`tailwind-v4-utilities.tsx`, `panel-site-link-reuse.tsx` and
+`test-slog-default-restore.go`. A fixture runs only
 through its own `--test` line in `check-semgrep`, after the tree scan, so a new
 fixture adds its own line there. A rule with a fixture keeps its fixture out of
 its `paths`, so the tree scan does not report the fixture. The directory is
@@ -87,6 +88,18 @@ which review still catches:
   exercise the parser").
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
+
+### `test-slog-default-restore`
+
+`checks/semgrep/test-slog-default-restore.yml` forbids direct `slog.SetDefault`
+calls in Go test files. Use `internal/logtest.SetDefault(t, handler)` to restore
+the previous slog logger, standard log writer and flags at cleanup. Restoring
+only slog leaves the standard logger redirected to the finished test's buffer
+without its original flags. Tests using the helper must not run in parallel
+with other tests that log or capture logs. Its fixture runs through
+`check-semgrep`.
+
+This rule has no approval marker or baseline.
 
 ### `discarded-error`
 

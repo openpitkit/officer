@@ -42,6 +42,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	fwstore "go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/internal/logtest"
 )
 
 // newRealmStore opens a fresh migrated store bound to realm and returns both the
@@ -610,9 +611,7 @@ func TestBackupRestoreSealedCredentialsWithSameKey(t *testing.T) {
 func TestBackupRestoreUnavailableSealedCredentialsDisablesNamedInstance(t *testing.T) {
 	ctx := context.Background()
 	var logs bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 	_, src := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x63)))
 	mustCreateAsset(t, ctx, src, domain.Asset{Code: "AAPL"})
 	mustCreateAsset(t, ctx, src, domain.Asset{Code: "USD"})
@@ -3818,9 +3817,7 @@ func TestBackupRestoreUnavailableSealedTradingCredentials(t *testing.T) {
 	}
 
 	var logs bytes.Buffer
-	oldLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+	logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 	_, target := newRealmStoreWithOptions(
 		t, "sealed-trading-target", WithMasterKey(mustStoreMasterKey(t, 0x72)),
 	)

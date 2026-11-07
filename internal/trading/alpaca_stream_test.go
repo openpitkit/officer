@@ -40,6 +40,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/logtest"
 )
 
 func acceptAlpaca(t *testing.T, w http.ResponseWriter, r *http.Request) *websocket.Conn {
@@ -533,9 +534,7 @@ func TestStreamReportsUnparsableOncePerConnectionAndEveryOverfill(t *testing.T) 
 func captureStreamLogs(t *testing.T) *lockedLogBuffer {
 	t.Helper()
 	logs := &lockedLogBuffer{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	logtest.SetDefault(t, slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	return logs
 }
 
