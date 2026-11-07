@@ -46,7 +46,8 @@ it: `default-domain-status.go`, `discarded-close-error.go`, `discarded-error.go`
 `panel-download-reuse.tsx`, `panel-code-label.tsx`,
 `no-legacy-database-probe.go`, `venue-connector-reuse.go`,
 `no-local-secret-redaction.go`,
-`tailwind-v4-utilities.tsx`, `panel-site-link-reuse.tsx` and
+`tailwind-v4-utilities.tsx`, `panel-site-link-reuse.tsx`,
+`integration-test-wall-clock-deadline.go` and
 `test-slog-default-restore.go`. A fixture runs only
 through its own `--test` line in `check-semgrep`, after the tree scan, so a new
 fixture adds its own line there. A rule with a fixture keeps its fixture out of
