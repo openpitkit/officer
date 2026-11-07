@@ -40,10 +40,10 @@ type CallerResolver func(*http.Request) (domain.Caller, error)
 type callerContextKey struct{}
 
 // SystemCaller is the attribution of an action the service takes on its own
-// behalf: SourceSystem and no principal, so its audit and record rows store a
-// NULL actor reference while the source marks the channel. Every internal entry
-// point stamps it explicitly with ContextWithCaller; nothing infers it from an
-// unstamped context.
+// behalf: SourceSystem and no principal. Its audit rows store empty actor code
+// and title; adjustment, order_record, order_event and trade rows store a NULL
+// principal_id. Every internal entry point stamps it explicitly with
+// ContextWithCaller; nothing infers it from an unstamped context.
 func SystemCaller() domain.Caller {
 	return domain.Caller{Source: domain.SourceSystem}
 }

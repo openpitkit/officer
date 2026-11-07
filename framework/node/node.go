@@ -603,11 +603,9 @@ type Node interface {
 		ctx context.Context, filter store.AuditListFilter,
 	) (store.AuditListPage, error)
 
-	// AppendAudit persists one audit row stamped with the caller. It is the seam
-	// the backend uses to record control-plane actions that have no node-mutating
-	// counterpart (signing-key management, signing config, signed approval
-	// issue/confirm/cancel, and force refusals). The entry's Actor and Source are
-	// taken from caller.
+	// AppendAudit persists one audit row for a control-plane action that has no
+	// node mutation of its own to carry the row; a node mutation appends its own
+	// row. It stamps the entry's Actor and Source from caller.
 	AppendAudit(ctx context.Context, entry store.AuditEntry, caller domain.Caller) error
 
 	// ListMcpAccess returns the stored per-command MCP enable/disable overrides
