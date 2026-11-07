@@ -46,6 +46,25 @@ type recordingNode struct {
 	closeErr error
 }
 
+type recordingStore struct {
+	store.Store
+	calls      *[]string
+	migrateErr error
+	closeErr   error
+}
+
+func (s *recordingStore) Migrate(context.Context) error {
+	*s.calls = append(*s.calls, "store.Migrate")
+	return s.migrateErr
+}
+
+func (s *recordingStore) Path() string { return "test store" }
+
+func (s *recordingStore) Close() error {
+	*s.calls = append(*s.calls, "store.Close")
+	return s.closeErr
+}
+
 func (n *recordingNode) Close() error {
 	*n.calls = append(*n.calls, "node.Close")
 	return n.closeErr
@@ -317,6 +336,52 @@ func TestBuildOverMissingPart(t *testing.T) {
 				t.Fatalf("missing part = %v, %v; want explicit missing %s error", a, err, tc.name)
 			}
 			requireCalls(t, calls, tc.wantCalls)
+		})
+	}
+}
+
+func TestBuildJoinsCloseErrors(t *testing.T) {
+	for _, name := range []string{"node-hook", "store-migrate"} {
+		t.Run(name, func(t *testing.T) {
+			b := configuredBuilder(t, app.NewBuilder())
+			var calls []string
+			cause := errors.New("build failure")
+			closeErr := errors.New("close failure")
+			st := &recordingStore{calls: &calls}
+			n := &recordingNode{calls: &calls}
+			var hookErr error
+			wantCalls := []string{"store.Migrate", "node.Close"}
+			if name == "node-hook" {
+				hookErr, n.closeErr = cause, closeErr
+			} else {
+				st.migrateErr, st.closeErr = cause, closeErr
+				wantCalls = []string{"store.Migrate", "store.Close"}
+			}
+			b.SetStoreFactory(func() (store.Store, error) { return st, nil })
+			b.SetNodeBuilder(func(context.Context, store.Store,
+				app.FatalShutdownHook) (node.Node, engine.Engine, error) {
+				return n, struct{ engine.Engine }{}, nil
+			})
+			b.SetSigningFactory(func(store.RealmStore) (signing.Service, error) {
+				t.Fatal("unexpected signing factory call")
+				return nil, nil
+			})
+			b.AddNodeHook(func(context.Context, store.Store, node.Node) error {
+				return hookErr
+			})
+			a, err := b.Build(context.Background(), quietLogger(), func(err error) {
+				t.Fatalf("unexpected fatal shutdown: %v", err)
+			})
+			if a != nil {
+				t.Fatal("Build returned an app after a failure")
+			}
+			if !errors.Is(err, cause) {
+				t.Fatalf("Build error = %v; want build cause %v", err, cause)
+			}
+			if !errors.Is(err, closeErr) {
+				t.Fatalf("Build error = %v; want joined close error %v", err, closeErr)
+			}
+			requireCalls(t, calls, wantCalls)
 		})
 	}
 }

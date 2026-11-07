@@ -1626,8 +1626,8 @@ func TestRegisterNodeHooksRunInOrderBeforeServices(t *testing.T) {
 		_ = app.Close()
 		t.Fatal("Build returned an app after a node hook failed")
 	}
-	if err != wantErr {
-		t.Fatalf("Build error = %v, want unchanged hook error %v", err, wantErr)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Build error = %v, want hook error %v", err, wantErr)
 	}
 	if !slices.Equal(calls, []string{"first", "second"}) {
 		t.Fatalf("node hook order = %v, want [first second]", calls)

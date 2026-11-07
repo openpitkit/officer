@@ -274,32 +274,27 @@ func (b *Builder) Build(
 		return nil, fmt.Errorf("open store: %w", err)
 	}
 	if err := st.Migrate(ctx); err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("migrate store: %w", err)
+		return nil, errors.Join(fmt.Errorf("migrate store: %w", err), st.Close())
 	}
 	logger.Info("store migrated", "path", st.Path())
 
 	localNode, eng, err := b.nodeBuilder(ctx, st, fatalHook)
 	if err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("build node: %w", err)
+		return nil, errors.Join(fmt.Errorf("build node: %w", err), st.Close())
 	}
 	if localNode == nil {
 		if eng != nil {
 			eng.Stop()
 			eng.CloseMarketDataService()
 		}
-		_ = st.Close()
-		return nil, errors.New("build node: node builder returned no node")
+		return nil, errors.Join(errors.New("build node: node builder returned no node"), st.Close())
 	}
 	if eng == nil {
-		_ = localNode.Close()
-		return nil, errors.New("build node: node builder returned no engine")
+		return nil, errors.Join(errors.New("build node: node builder returned no engine"), localNode.Close())
 	}
 	for _, hook := range b.nodeHooks {
 		if err := hook(ctx, st, localNode); err != nil {
-			_ = localNode.Close()
-			return nil, err
+			return nil, errors.Join(err, localNode.Close())
 		}
 	}
 	logger.Info(
@@ -310,14 +305,12 @@ func (b *Builder) Build(
 
 	realm, err := st.ForRealm(ctx, localNode.Realm())
 	if err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("bind realm: %w", err)
+		return nil, errors.Join(fmt.Errorf("bind realm: %w", err), localNode.Close())
 	}
 
 	signer, err := b.signingFactory(realm)
 	if err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build signing service: %w", err)
+		return nil, errors.Join(fmt.Errorf("build signing service: %w", err), localNode.Close())
 	}
 
 	manager, err := marketdata.NewManager(
@@ -327,8 +320,7 @@ func (b *Builder) Build(
 		logger,
 	)
 	if err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build market-data manager: %w", err)
+		return nil, errors.Join(fmt.Errorf("build market-data manager: %w", err), localNode.Close())
 	}
 	// Resolve the live engine sink on every push: the engine (and its sink) is
 	// rebuilt on account/group/asset changes, so a cached sink would go stale
@@ -336,8 +328,7 @@ func (b *Builder) Build(
 	manager.UseSinkProvider(localNode.CurrentMarketDataSink)
 	if err := manager.Start(ctx); err != nil {
 		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("start market-data manager: %w", err)
+		return nil, errors.Join(fmt.Errorf("start market-data manager: %w", err), localNode.Close())
 	}
 
 	mcpRegistry := frameworkmcp.NewToolRegistry()
@@ -359,22 +350,19 @@ func (b *Builder) Build(
 		}, logger)
 	if err != nil {
 		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build trading runtime: %w", err)
+		return nil, errors.Join(fmt.Errorf("build trading runtime: %w", err), localNode.Close())
 	}
 	service, err = b.serviceFactory(ctx, localNode, manager, runtime, signer, b.mdRegistry, mcpRegistry)
 	if err != nil {
 		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build service: %w", err)
+		return nil, errors.Join(fmt.Errorf("build service: %w", err), localNode.Close())
 	}
 	// Build's signal context can end before Close; Stop owns runtime
 	// cancellation.
 	if err := runtime.Start(context.WithoutCancel(ctx)); err != nil {
 		runtime.Stop()
 		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("start trading runtime: %w", err)
+		return nil, errors.Join(fmt.Errorf("start trading runtime: %w", err), localNode.Close())
 	}
 	return b.compose(NodeRuntime{
 		Node: localNode, Signing: signer, MarketData: manager, Trading: runtime,

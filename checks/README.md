@@ -39,7 +39,8 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 
 `testdata/` holds rule fixtures: deliberate violations and non-violations
 annotated for `semgrep --test`, one file per rule that has one, named after
-it: `default-domain-status.go`, `locale-latin-words.txt`,
+it: `default-domain-status.go`, `discarded-close-error.go`,
+`locale-latin-words.txt`,
 `locale-english-words.txt`, `locale-pnl-spelling.txt`,
 `file-header-site-link.txt`, `panel-access-reuse.tsx`,
 `panel-download-reuse.tsx`, `panel-code-label.tsx`,
@@ -86,6 +87,17 @@ which review still catches:
   exercise the parser").
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
+
+### `discarded-close-error`
+
+`checks/semgrep/discarded-close-error.yml` forbids `_ = X.Close(...)` in
+production Go under `framework/`, including inside deferred functions. The
+importable library's callers rely on returned errors; join the Close error
+into the returned error or report it. Tests and rule fixtures are excluded.
+Bare Close calls with an error result are checked by golangci-lint's errcheck.
+Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker.
 
 ### `default-domain-status`
 
