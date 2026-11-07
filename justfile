@@ -193,6 +193,7 @@ install-python-tools:
 check-semgrep: install-python-tools
     {{ semgrep }} --config checks/semgrep/ --error --metrics=off --disable-version-check .
     {{ semgrep }} --test --config checks/semgrep/discarded-close-error.yml --metrics=off --disable-version-check checks/semgrep/testdata/discarded-close-error.go
+    {{ semgrep }} --test --config checks/semgrep/discarded-error.yml --metrics=off --disable-version-check checks/semgrep/testdata/discarded-error.go
     {{ semgrep }} --test --config checks/semgrep/default-domain-status.yml --metrics=off --disable-version-check checks/semgrep/testdata/default-domain-status.go
     {{ semgrep }} --test --config checks/semgrep/locale-latin-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-latin-words.txt
     {{ semgrep }} --test --config checks/semgrep/locale-english-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-english-words.txt

@@ -63,7 +63,9 @@ func handleExportBackup(svc backend.ControlPlane) http.HandlerFunc {
 			w.Header().Set("Content-Disposition",
 				`attachment; filename="`+zipFilename+`"`)
 			w.Header().Set("Content-Type", "application/zip")
-			_, _ = w.Write(payload)
+			if _, err := w.Write(payload); err != nil {
+				slog.Error("write backup zip response", "error", err)
+			}
 			return
 		}
 		w.Header().Set("Content-Disposition",
@@ -108,7 +110,9 @@ func handleExportBusinessCSV(svc backend.ControlPlane) http.HandlerFunc {
 		w.Header().Set("Content-Disposition",
 			`attachment; filename="`+file.Name+`"`)
 		w.Header().Set("Content-Type", file.ContentType)
-		_, _ = w.Write(file.Body)
+		if _, err := w.Write(file.Body); err != nil {
+			slog.Error("write business CSV response", "error", err)
+		}
 	}
 }
 

@@ -587,7 +587,9 @@ func (c *serviceLifecycleController) handler(action lifecycleAction) http.Handle
 		c.pending = true
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"accepted":true}` + "\n"))
+		if _, err := w.Write([]byte(`{"accepted":true}` + "\n")); err != nil {
+			slog.Error("write lifecycle acceptance response", "error", err)
+		}
 		c.requests <- action
 	})
 }

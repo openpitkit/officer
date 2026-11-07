@@ -39,7 +39,7 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 
 `testdata/` holds rule fixtures: deliberate violations and non-violations
 annotated for `semgrep --test`, one file per rule that has one, named after
-it: `default-domain-status.go`, `discarded-close-error.go`,
+it: `default-domain-status.go`, `discarded-close-error.go`, `discarded-error.go`,
 `locale-latin-words.txt`,
 `locale-english-words.txt`, `locale-pnl-spelling.txt`,
 `file-header-site-link.txt`, `panel-access-reuse.tsx`,
@@ -87,6 +87,23 @@ which review still catches:
   exercise the parser").
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
+
+### `discarded-error`
+
+`checks/semgrep/discarded-error.yml` forbids all-blank call assignments in
+production Go, with any number of blanks and a call on the right, including
+untyped `var` declarations. The default
+errcheck configuration has `check-blank` disabled, so it accepts these explicit
+discards. Return the error, join it into the returned error, or report it
+through the existing reporting path. `_ = X.Close(...)` belongs to
+`discarded-close-error`; `var _ T = f()` interface assertions and Go test files
+are excluded. Receive, index, type assertion and slice right sides are also
+excluded, even when they contain calls. Bare calls remain errcheck's
+responsibility, including its default exclusions such as `(hash.Hash).Write`,
+which never returns an error.
+Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
 
 ### `discarded-close-error`
 

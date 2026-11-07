@@ -20,6 +20,7 @@ package httpapi
 import (
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -79,7 +80,9 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *spaHandler) serveIndex(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(h.indexPage)
+	if _, err := w.Write(h.indexPage); err != nil {
+		slog.Error("write SPA index response", "error", err)
+	}
 }
 
 // assetExists reports whether name resolves to a regular file in the embedded

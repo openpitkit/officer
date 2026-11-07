@@ -27,6 +27,7 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 
 	frameworkapp "go.openpit.dev/officer/framework/app"
@@ -343,7 +344,9 @@ func registerDuringSetup(
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	if _, err := w.Write([]byte("ok")); err != nil {
+		slog.Error("write healthz response", "error", err)
+	}
 }
 
 // handleV1Health is the JSON liveness endpoint.

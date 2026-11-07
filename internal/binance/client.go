@@ -114,7 +114,7 @@ func refuseRedirect(*http.Request, []*http.Request) error {
 
 func sign(payload, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(payload))
+	mac.Write([]byte(payload))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
