@@ -26,7 +26,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"reflect"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
@@ -75,6 +74,8 @@ type NodeRuntime struct {
 // NodeRuntimeFactory supplies running parts using the builder's provider
 // registries. On error it must release everything it created. On success it
 // transfers ownership to BuildOver, including when a part is missing.
+// A missing part is a nil interface value. A typed nil pointer stored in a field
+// is a present part, and the factory must not return one.
 type NodeRuntimeFactory func(context.Context, *marketdata.Registry, *trading.Registry) (NodeRuntime, error)
 
 // ServiceFactory builds the framework control plane service over the node.
@@ -416,13 +417,13 @@ func (b *Builder) BuildOver(ctx context.Context, logger *slog.Logger, factory No
 	}
 	var missing string
 	switch {
-	case isNilPart(runtime.Node):
+	case runtime.Node == nil:
 		missing = "node"
-	case isNilPart(runtime.Signing):
+	case runtime.Signing == nil:
 		missing = "signing service"
-	case isNilPart(runtime.MarketData):
+	case runtime.MarketData == nil:
 		missing = "market-data runtime"
-	case isNilPart(runtime.Trading):
+	case runtime.Trading == nil:
 		missing = "trading runtime"
 	}
 	if missing != "" {
@@ -546,33 +547,20 @@ func (a *App) RecordServiceLifecycle(
 
 // Close stops producers before closing the node and engine.
 func (a *App) Close() error {
-	if !isNilPart(a.trading) {
+	if a.trading != nil {
 		a.trading.Stop()
 	}
 	// Quote producers must stop before the node closes the engine and its
 	// market-data service; pushing into that closed service would be use-after-free.
-	if !isNilPart(a.marketData) {
+	if a.marketData != nil {
 		a.marketData.Stop()
 	}
-	if !isNilPart(a.node) {
+	if a.node != nil {
 		if err := a.node.Close(); err != nil {
 			return fmt.Errorf("close node: %w", err)
 		}
 	}
 	return nil
-}
-
-func isNilPart(part any) bool {
-	if part == nil {
-		return true
-	}
-	v := reflect.ValueOf(part)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	default:
-		return false
-	}
 }
 
 // RunMCPStdio serves the registered MCP surface over stdio.

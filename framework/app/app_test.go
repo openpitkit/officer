@@ -287,56 +287,36 @@ func TestBuildOverFactoryError(t *testing.T) {
 func TestBuildOverMissingPart(t *testing.T) {
 	cases := []struct {
 		name      string
-		remove    func(*app.NodeRuntime, bool)
+		remove    func(*app.NodeRuntime)
 		wantCalls []string
 	}{
-		{"node", func(r *app.NodeRuntime, typed bool) {
+		{"node", func(r *app.NodeRuntime) {
 			r.Node = nil
-			if typed {
-				r.Node = (*recordingNode)(nil)
-			}
 		}, []string{"trading.Stop", "marketData.Stop"}},
-		{"signing service", func(r *app.NodeRuntime, typed bool) {
+		{"signing service", func(r *app.NodeRuntime) {
 			r.Signing = nil
-			if typed {
-				r.Signing = (*testSigner)(nil)
-			}
 		}, []string{"trading.Stop", "marketData.Stop", "node.Close"}},
-		{"market-data runtime", func(r *app.NodeRuntime, typed bool) {
+		{"market-data runtime", func(r *app.NodeRuntime) {
 			r.MarketData = nil
-			if typed {
-				r.MarketData = (*recordingMarketData)(nil)
-			}
 		}, []string{"trading.Stop", "node.Close"}},
-		{"trading runtime", func(r *app.NodeRuntime, typed bool) {
+		{"trading runtime", func(r *app.NodeRuntime) {
 			r.Trading = nil
-			if typed {
-				r.Trading = (*recordingTrading)(nil)
-			}
 		}, []string{"marketData.Stop", "node.Close"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, typed := range []bool{false, true} {
-				name := "nil"
-				if typed {
-					name = "typed_nil"
-				}
-				t.Run(name, func(t *testing.T) {
-					b := configuredBuilder(t, app.NewBuilder())
-					var calls []string
-					parts := runningParts(&calls)
-					tc.remove(&parts, typed)
-					a, err := b.BuildOver(context.Background(), quietLogger(), func(context.Context,
-						*marketdata.Registry, *trading.Registry) (app.NodeRuntime, error) {
-						return parts, nil
-					})
-					if a != nil || err == nil || !strings.Contains(err.Error(), "returned no "+tc.name) {
-						t.Fatalf("missing part = %v, %v; want explicit missing %s error", a, err, tc.name)
-					}
-					requireCalls(t, calls, tc.wantCalls)
-				})
+			b := configuredBuilder(t, app.NewBuilder())
+			var calls []string
+			parts := runningParts(&calls)
+			tc.remove(&parts)
+			a, err := b.BuildOver(context.Background(), quietLogger(), func(context.Context,
+				*marketdata.Registry, *trading.Registry) (app.NodeRuntime, error) {
+				return parts, nil
+			})
+			if a != nil || err == nil || !strings.Contains(err.Error(), "returned no "+tc.name) {
+				t.Fatalf("missing part = %v, %v; want explicit missing %s error", a, err, tc.name)
 			}
+			requireCalls(t, calls, tc.wantCalls)
 		})
 	}
 }
