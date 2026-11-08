@@ -32,7 +32,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -1632,12 +1631,12 @@ func commissionSubtotals(
 // Currencies are grouped, never converted or collapsed, and amounts are summed
 // as exact decimals.
 type commissionRollup struct {
-	byOrder map[domain.ExternalID]map[string]decimal.Decimal
+	byOrder map[domain.ExternalID]*domain.CommissionAccumulator
 }
 
 func newCommissionRollup(orders int) *commissionRollup {
 	return &commissionRollup{
-		byOrder: make(map[domain.ExternalID]map[string]decimal.Decimal, orders),
+		byOrder: make(map[domain.ExternalID]*domain.CommissionAccumulator, orders),
 	}
 }
 
@@ -1646,21 +1645,12 @@ func newCommissionRollup(orders int) *commissionRollup {
 func (rollup *commissionRollup) add(
 	order domain.ExternalID, commission *domain.Commission,
 ) error {
-	if commission == nil || commission.Amount == "" || commission.Currency == "" {
-		return nil
-	}
-	amount, err := decimal.NewFromString(commission.Amount)
-	if err != nil {
-		return fmt.Errorf(
-			"store: parse commission amount %q: %w", commission.Amount, err)
-	}
 	amounts := rollup.byOrder[order]
 	if amounts == nil {
-		amounts = make(map[string]decimal.Decimal)
+		amounts = new(domain.CommissionAccumulator)
 		rollup.byOrder[order] = amounts
 	}
-	amounts[commission.Currency] = amounts[commission.Currency].Add(amount)
-	return nil
+	return amounts.Add(commission)
 }
 
 // addEvent folds one lifecycle event's commission, which counts only when no
@@ -1670,8 +1660,12 @@ func (rollup *commissionRollup) addEvent(
 	eventType domain.OrderEventType,
 	payload domain.OrderEventPayload,
 ) error {
-	return rollup.add(
-		order, feeOnlyExecutionReportCommission(eventType, payload))
+	amounts := rollup.byOrder[order]
+	if amounts == nil {
+		amounts = new(domain.CommissionAccumulator)
+		rollup.byOrder[order] = amounts
+	}
+	return amounts.AddEvent(eventType, payload)
 }
 
 // subtotals returns one order's per-currency subtotals; empty when the order
@@ -1679,36 +1673,10 @@ func (rollup *commissionRollup) addEvent(
 func (rollup *commissionRollup) subtotals(
 	order domain.ExternalID,
 ) []domain.Commission {
-	return commissionsFromAmountMap(rollup.byOrder[order])
-}
-
-// feeOnlyExecutionReportCommission returns the commission of an execution
-// report that no trade row represents. A report without a fill writes no trade,
-// so its event is the only record of the fee and dropping it would
-// lose the fee outright. Reports carrying a fill are accounted from their trade
-// instead: the same report may persist both a fill event and a terminal-status
-// event, so reading commission from those events would count it twice. Of the
-// events one report writes, only its lifecycle or dedicated commission event
-// contributes.
-func feeOnlyExecutionReportCommission(
-	eventType domain.OrderEventType,
-	payload domain.OrderEventPayload,
-) *domain.Commission {
-	report := payload.ExecutionReport
-	if report == nil || report.Commission == nil ||
-		report.FillQuantity != "" || report.FillPrice != "" {
-		return nil
+	if amounts := rollup.byOrder[order]; amounts != nil {
+		return amounts.Subtotals()
 	}
-	canonicalEvent, ok := domain.ExecutionReportStatusChangeEvent(report.OrderStatus)
-	if !ok && (report.OrderStatus == domain.OrderStatusFilled ||
-		report.OrderStatus == domain.OrderStatusPartiallyFilled) {
-		canonicalEvent = domain.OrderEventCommission
-		ok = true
-	}
-	if !ok || eventType != canonicalEvent {
-		return nil
-	}
-	return report.Commission
+	return []domain.Commission{}
 }
 
 // commissionSubtotalsByOrder rolls up recorded commissions for a list page. The
@@ -1851,25 +1819,6 @@ WHERE o.external_id IN (`+placeholders+`)`,
 		return fmt.Errorf("store: close order event commission subtotals: %w", err)
 	}
 	return nil
-}
-
-func commissionsFromAmountMap(amounts map[string]decimal.Decimal) []domain.Commission {
-	if len(amounts) == 0 {
-		return []domain.Commission{}
-	}
-	currencies := make([]string, 0, len(amounts))
-	for currency := range amounts {
-		currencies = append(currencies, currency)
-	}
-	sort.Strings(currencies)
-	out := make([]domain.Commission, 0, len(currencies))
-	for _, currency := range currencies {
-		out = append(out, domain.Commission{
-			Amount:   amounts[currency].String(),
-			Currency: currency,
-		})
-	}
-	return out
 }
 
 // --- Settlement -------------------------------------------------------------

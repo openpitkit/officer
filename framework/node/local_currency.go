@@ -106,6 +106,7 @@ func (n *localNode) SetAccountCurrency(
 			state.err = n.auditCurrencyChangeRefusal(state.ctx, caller, store.AuditEntry{
 				Action:  domain.AuditActionSetAccountCurrency,
 				Account: account, AccountTitle: previous.Title,
+				AccountIdentity: previous.EngineAccountID,
 			}, domain.AuditDetailSetAccountCurrencyRefused, currencyDetailParams(
 				domain.AuditDetailParams{"account": account.String()},
 				previous.Currency, currency,
@@ -135,9 +136,10 @@ func (n *localNode) SetAccountCurrency(
 		state.persistenceCompleted = true
 		state.failureOperation = "audit account currency"
 		if err := n.audit(mutationCtx, caller, store.AuditEntry{
-			Action:       domain.AuditActionSetAccountCurrency,
-			Account:      account,
-			AccountTitle: state.previous.Title,
+			Action:          domain.AuditActionSetAccountCurrency,
+			Account:         account,
+			AccountTitle:    state.previous.Title,
+			AccountIdentity: state.previous.EngineAccountID,
 			Detail: domain.NewAuditDetail(
 				domain.AuditDetailSetAccountCurrency,
 				currencyDetailParams(
@@ -265,6 +267,7 @@ func (n *localNode) ensureAccountCurrencyAssetRegisteredExclusive(
 		return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionSetAccountCurrency,
 			Account: account, AccountTitle: previous.Title,
+			AccountIdentity: previous.EngineAccountID,
 		}, domain.AuditDetailSetAccountCurrencyRefused, currencyDetailParams(
 			domain.AuditDetailParams{"account": account.String()},
 			previous.Currency, currency,
@@ -385,6 +388,7 @@ func (n *localNode) setGroupCurrency(
 			}
 			return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 				Action: domain.AuditActionSetGroupCurrency, Group: code,
+				GroupIdentity: prev.EngineGroupID,
 			}, domain.AuditDetailSetGroupCurrencyRefused, currencyDetailParams(
 				domain.AuditDetailParams{"group": code}, prevCurrency, currency,
 			), domain.NewCurrencyChangeBlockedError(
@@ -474,8 +478,9 @@ func (n *localNode) setGroupCurrency(
 			}
 			persistFailure = "audit group currency"
 			if err := n.audit(mutationCtx, caller, store.AuditEntry{
-				Action: domain.AuditActionSetGroupCurrency,
-				Group:  code,
+				Action:        domain.AuditActionSetGroupCurrency,
+				Group:         code,
+				GroupIdentity: current.EngineGroupID,
 				Detail: domain.NewAuditDetail(detailCode, currencyDetailParams(
 					detailTarget, current.Currency, currency,
 				)),
@@ -558,6 +563,7 @@ func (n *localNode) validateGroupCurrencyChange(
 	}
 	return domain.AccountGroup{}, n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetGroupCurrency, Group: code,
+		GroupIdentity: current.EngineGroupID,
 	}, domain.AuditDetailSetGroupCurrencyRefused, currencyDetailParams(
 		domain.AuditDetailParams{"group": code}, current.Currency, currency,
 	), domain.NewCurrencyChangeBlockedError(

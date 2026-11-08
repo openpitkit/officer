@@ -78,9 +78,10 @@ func (n *localNode) ensureAutoCreatedAccount(
 		)
 	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
-		Action:       domain.AuditActionCreateAccount,
-		Account:      account.Code,
-		AccountTitle: account.Title,
+		Action:          domain.AuditActionCreateAccount,
+		AccountIdentity: account.EngineAccountID,
+		Account:         account.Code,
+		AccountTitle:    account.Title,
 		Detail: domain.NewAuditDetail(domain.AuditDetailAutoCreateAccount, domain.AuditDetailParams{
 			"account":   account.Code.String(),
 			"operation": operation,

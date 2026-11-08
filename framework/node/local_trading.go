@@ -250,10 +250,14 @@ func (n *localNode) PutTradingAccess(
 			}
 		}
 	}
+	audit, err := n.captureAuditTarget(ctx, tradingAccessAudit(true, access))
+	if err != nil {
+		return err
+	}
 	if err := n.realm.PutTradingAccess(ctx, access); err != nil {
 		return fmt.Errorf("put trading access: %w", err)
 	}
-	if err := n.audit(ctx, caller, tradingAccessAudit(true, access)); err != nil {
+	if err := n.audit(ctx, caller, audit); err != nil {
 		return fmt.Errorf("audit put trading access: %w", err)
 	}
 	return nil
@@ -301,16 +305,17 @@ func (n *localNode) SetTradingConnectionFeeAccount(
 			}
 		}
 	}
+	audit, err := n.captureAuditTarget(ctx, store.AuditEntry{
+		Action: domain.AuditActionSetTrading, Account: auditAccount,
+		Detail: domain.NewAuditDetail(detailCode, domain.AuditDetailParams{"connection": connection.String()}),
+	})
+	if err != nil {
+		return err
+	}
 	if err := n.realm.SetTradingConnectionFeeAccount(ctx, connection, account); err != nil {
 		return fmt.Errorf("set trading connection fee account: %w", err)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionSetTrading,
-		Account: auditAccount,
-		Detail: domain.NewAuditDetail(
-			detailCode, domain.AuditDetailParams{"connection": connection.String()},
-		),
-	}); err != nil {
+	if err := n.audit(ctx, caller, audit); err != nil {
 		return fmt.Errorf("audit set trading connection fee account: %w", err)
 	}
 	return nil
@@ -378,12 +383,19 @@ func (n *localNode) RemoveTradingAccess(
 			}
 		}
 	}
+	if err := domain.ValidateTradingAccess(domain.TradingAccess{Account: account, AccountGroup: accountGroup, Connection: connection}); err != nil {
+		return err
+	}
+	audit, err := n.captureAuditTarget(ctx, tradingAccessAudit(false, domain.TradingAccess{
+		Account: account, AccountGroup: accountGroup, Connection: connection,
+	}))
+	if err != nil {
+		return err
+	}
 	if err := n.realm.RemoveTradingAccess(ctx, connection, account, accountGroup); err != nil {
 		return fmt.Errorf("remove trading access: %w", err)
 	}
-	if err := n.audit(ctx, caller, tradingAccessAudit(false, domain.TradingAccess{
-		Account: account, AccountGroup: accountGroup, Connection: connection,
-	})); err != nil {
+	if err := n.audit(ctx, caller, audit); err != nil {
 		return fmt.Errorf("audit remove trading access: %w", err)
 	}
 	return nil

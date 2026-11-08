@@ -78,6 +78,8 @@ func pnlBoundV1Fixture(t *testing.T) string {
 		INSERT INTO limit_spot_funds_pnl_bound (scope, currency_asset_id, upper_bound)
 		VALUES ('account_group', (SELECT id FROM asset WHERE code = 'USD'), '500');
 		DELETE FROM schema_migration WHERE version > 1;
+		ALTER TABLE audit DROP COLUMN account_identity;
+		ALTER TABLE audit DROP COLUMN group_identity;
 	`); err != nil {
 		t.Fatalf("build 0.1 P&L-bound fixture with raw SQL: %v", err)
 	}

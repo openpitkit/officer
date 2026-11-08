@@ -27,7 +27,8 @@ func (sqliteDialect) BindVar(int) string {
 }
 
 // PrimaryKey renders the surrogate PK as an autoincrementing integer rowid. The
-// key is sequential and internal; it never appears on the wire.
+// key is sequential and never reused. Trusted identity restrictions may carry
+// it; it is not a public object handle.
 func (sqliteDialect) PrimaryKey() string {
 	return "INTEGER PRIMARY KEY AUTOINCREMENT"
 }

@@ -606,7 +606,11 @@ type Data struct {
 	TradingAccess []TradingAccess `json:"tradingAccess,omitempty"`
 	// VenueOrders link Officer orders to the venue orders sent for them.
 	VenueOrders []VenueOrder `json:"venueOrders,omitempty"`
-	// Audit is the append-only audit trail (by external id).
+	// Audit is the append-only audit trail (by external id). Restore preserves
+	// the history but marks target identities unavailable: source database IDs
+	// are not receiver identities and are never remapped by mutable codes.
+	// Identity-restricted reads of restored target-owned records consequently
+	// return domain.ErrAuditIdentityUnavailable; unrestricted reads retain them.
 	Audit []domain.AuditRow `json:"audit,omitempty"`
 	// MarketDataInstances are configured market-data sources (by external id).
 	MarketDataInstances []MarketDataInstance `json:"marketDataInstances,omitempty"`

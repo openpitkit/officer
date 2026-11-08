@@ -2069,6 +2069,7 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 // --- Restore: audit ---------------------------------------------------------
 
 func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) error {
+	identitiesUnavailable := false
 	for _, row := range rows {
 		if err := restoreValidationError(validateAuditDecision(
 			row.Action, row.OrderID, row.Verdict, row.RejectCode,
@@ -2135,6 +2136,12 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 			return fmt.Errorf("store: restore audit %q: %w", row.ExternalID, err)
 		}
 		rt.summary.AddApplied(backup.SectionAuditLog, 1)
+		if row.Account != "" || row.Group != "" {
+			identitiesUnavailable = true
+		}
+	}
+	if identitiesUnavailable {
+		slog.Warn("restored audit target identities are unavailable; identity-restricted reads will fail")
 	}
 	return nil
 }

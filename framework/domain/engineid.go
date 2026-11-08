@@ -46,7 +46,7 @@ const (
 // EngineAccountID is the integer id the engine runs a single account on. It is
 // the account row's surrogate id, passed straight to the engine via its uint64
 // account-id constructor. It is internal: it is never the public handle and
-// never leaves the store on the wire. Zero means "unassigned".
+// is not a public handle. Trusted node restrictions may carry it. Zero means "unassigned".
 type EngineAccountID uint64
 
 // Uint64 returns the raw engine account id.
@@ -64,7 +64,7 @@ func (id EngineAssetID) Uint64() uint64 { return uint64(id) }
 
 // EngineGroupID is the integer id the engine runs an account group on. It is the
 // group row's surrogate id, passed straight to the engine via its uint32 group-id
-// constructor. It is internal: never the public handle, never on the wire. Zero
+// constructor. It is internal: never the public handle, carried only by trusted node identity restrictions. Zero
 // means "unassigned".
 type EngineGroupID uint32
 

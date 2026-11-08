@@ -135,9 +135,10 @@ func (n *localNode) CreateAccount(
 	}
 
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
-		Action:       domain.AuditActionCreateAccount,
-		Account:      created.Code,
-		AccountTitle: created.Title,
+		Action:          domain.AuditActionCreateAccount,
+		AccountIdentity: created.EngineAccountID,
+		Account:         created.Code,
+		AccountTitle:    created.Title,
 		Detail: domain.NewAuditDetail(
 			domain.AuditDetailCreateAccount,
 			domain.AuditDetailParams{"account": created.Code.String()},
@@ -385,10 +386,11 @@ func (n *localNode) SetAccountBlocked(
 			)
 		}
 		if auditErr := n.audit(mutationCtx, caller, store.AuditEntry{
-			Action:       domain.AuditActionBlock,
-			Account:      account,
-			AccountTitle: previous.Title,
-			Detail:       blockDetail(account, reason),
+			Action:          domain.AuditActionBlock,
+			Account:         account,
+			AccountTitle:    previous.Title,
+			AccountIdentity: previous.EngineAccountID,
+			Detail:          blockDetail(account, reason),
 		}); auditErr != nil {
 			return n.fatalPostCommitAudit(
 				"audit account block",
@@ -451,10 +453,11 @@ func (n *localNode) SetAccountBlocked(
 		}
 		state.failureOperation = "audit account block"
 		if err := n.audit(mutationCtx, caller, store.AuditEntry{
-			Action:       action,
-			Account:      account,
-			AccountTitle: state.previous.Title,
-			Detail:       detail,
+			Action:          action,
+			Account:         account,
+			AccountTitle:    state.previous.Title,
+			AccountIdentity: state.previous.EngineAccountID,
+			Detail:          detail,
 		}); err != nil {
 			state.err = fmt.Errorf("audit account block: %w", err)
 			return state.err
@@ -536,6 +539,7 @@ func blockOperation(blocked bool) string {
 func (n *localNode) mirrorEngineBlocksAudit(
 	ctx context.Context, order domain.ExternalID,
 	blocks []domain.AccountBlock,
+	identity domain.EngineAccountID,
 ) error {
 	for _, block := range blocks {
 		// A kill-switch block is engine-initiated: it carries no actor principal
@@ -543,10 +547,11 @@ func (n *localNode) mirrorEngineBlocksAudit(
 		// Actor is empty for system origin). SourceSystem marks the engine channel,
 		// and the detail names the engine cause.
 		if err := n.realm.AppendAudit(ctx, store.AuditEntry{
-			Source:  domain.SourceSystem,
-			Action:  domain.AuditActionBlock,
-			Account: block.Account,
-			Detail:  engineBlockDetail(order, block),
+			Source:          domain.SourceSystem,
+			Action:          domain.AuditActionBlock,
+			Account:         block.Account,
+			Detail:          engineBlockDetail(order, block),
+			AccountIdentity: identity,
 		}); err != nil {
 			return fmt.Errorf("audit engine block: %w", err)
 		}
@@ -606,10 +611,11 @@ func (n *localNode) mirrorPolicyConfigurationBlocks(
 			)
 		}
 		if err := n.realm.AppendAudit(ctx, store.AuditEntry{
-			Source:  domain.SourceSystem,
-			Action:  domain.AuditActionBlock,
-			Account: block.Account,
-			Detail:  policyConfigurationBlockDetail(policy, block),
+			Source:          domain.SourceSystem,
+			Action:          domain.AuditActionBlock,
+			Account:         block.Account,
+			Detail:          policyConfigurationBlockDetail(policy, block),
+			AccountIdentity: account.EngineAccountID,
 		}); err != nil {
 			return n.fatalPostEngineAuditByCode(
 				"audit policy configuration block", "account", block.Account.String(),
@@ -794,11 +800,12 @@ func (n *localNode) SetAccountGroup(
 			entries := make([]store.AuditEntry, 0, len(groupCodes))
 			for _, code := range groupCodes {
 				entries = append(entries, store.AuditEntry{
-					Action:       domain.AuditActionSetGroup,
-					Account:      account,
-					AccountTitle: current.Title,
-					Group:        code,
-					Detail:       detail,
+					Action:          domain.AuditActionSetGroup,
+					Account:         account,
+					AccountTitle:    current.Title,
+					AccountIdentity: current.EngineAccountID,
+					Group:           code,
+					Detail:          detail,
 				})
 			}
 			persistFailure = "audit set account group"
@@ -920,7 +927,8 @@ func (n *localNode) validateAccountGroupMove(
 		ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionSetGroup,
 			Account: account, AccountTitle: current.Title,
-			Group: groupCode,
+			AccountIdentity: current.EngineAccountID,
+			Group:           groupCode,
 		},
 		domain.AuditDetailSetAccountGroupCurrencyRefused,
 		currencyDetailParams(
@@ -959,13 +967,21 @@ func (n *localNode) SetAccountNotes(
 		return err
 	}
 	defer n.endMutation()
+	target, found, err := n.realm.GetAccount(ctx, account)
+	if err != nil {
+		return fmt.Errorf("read account for notes: %w", err)
+	}
+	if !found {
+		return domain.ErrNotFound
+	}
 
 	if err := n.realm.SetAccountNotes(ctx, account, notes); err != nil {
 		return fmt.Errorf("set account notes: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionSetNotes,
-		Account: account,
+		Action:          domain.AuditActionSetNotes,
+		AccountIdentity: target.EngineAccountID,
+		Account:         account,
 		Detail: domain.NewAuditDetail(
 			domain.AuditDetailSetAccountNotes,
 			domain.AuditDetailParams{"account": account.String()},
@@ -1032,9 +1048,10 @@ func (n *localNode) UpdateAccount(
 	// A renamed account is filed under both codes, and each record says which
 	// filing it is; a title-only update has no transition to state.
 	entries := []store.AuditEntry{{
-		Action:       domain.AuditActionUpdateAccount,
-		Account:      updated.Code,
-		AccountTitle: updated.Title,
+		Action:          domain.AuditActionUpdateAccount,
+		AccountIdentity: updated.EngineAccountID,
+		Account:         updated.Code,
+		AccountTitle:    updated.Title,
 		Detail: domain.NewAuditDetail(
 			domain.AuditDetailUpdateAccount,
 			domain.AuditDetailParams{"account": updated.Code.String()},
@@ -1048,9 +1065,10 @@ func (n *localNode) UpdateAccount(
 			domain.AuditDetailRenameAccountNewRecord, rename,
 		)
 		entries = append([]store.AuditEntry{{
-			Action:       domain.AuditActionUpdateAccount,
-			Account:      prev.Code,
-			AccountTitle: prev.Title,
+			Action:          domain.AuditActionUpdateAccount,
+			AccountIdentity: prev.EngineAccountID,
+			Account:         prev.Code,
+			AccountTitle:    prev.Title,
 			Detail: domain.NewAuditDetail(
 				domain.AuditDetailRenameAccountOldRecord, rename,
 			),
@@ -1126,9 +1144,10 @@ func (n *localNode) DeleteAccount(
 		)
 	}
 	if err := n.audit(durableCtx, caller, store.AuditEntry{
-		Action:       domain.AuditActionDeleteAccount,
-		Account:      account.Code,
-		AccountTitle: account.Title,
+		Action:          domain.AuditActionDeleteAccount,
+		AccountIdentity: account.EngineAccountID,
+		Account:         account.Code,
+		AccountTitle:    account.Title,
 		Detail: domain.NewAuditDetail(
 			domain.AuditDetailDeleteAccount,
 			domain.AuditDetailParams{"account": account.Code.String()},

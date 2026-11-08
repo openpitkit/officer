@@ -802,7 +802,7 @@ GROUP BY g.id` + having
 	// the SQLite connector serializes on a single connection, so a second query
 	// issued while a result set is still open would deadlock on the pool.
 	groups := make([]fwstore.GroupListRow, 0)
-	if filter.Page.Offset <= 0 && filter.Restriction.Account == "" {
+	if filter.Page.Offset <= 0 && !filter.Restriction.Restricted() {
 		defaultRow, ok, err := r.defaultGroupRow(ctx, filter)
 		if err != nil {
 			return fwstore.GroupListPage{}, err
@@ -1821,7 +1821,7 @@ func groupListWhere(
 ) (string, []any, error) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
-	appendAccountRestriction(&clauses, &args, "a.code", "", filter.Restriction)
+	appendGroupRestriction(&clauses, &args, tableAlias+".id", filter.Restriction)
 	appendMatcherAny(
 		&clauses, &args,
 		[]string{tableAlias + ".code", tableAlias + ".title"}, filter.Code,

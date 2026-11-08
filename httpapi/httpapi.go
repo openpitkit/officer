@@ -83,6 +83,7 @@ func RegisterRoutes(
 	if sealReports == nil {
 		panic("httpapi: RegisterRoutes needs a seal report source")
 	}
+	RegisterListRoutes(registry, svc)
 	register(registry, "health.get", http.MethodGet, "/health", handleV1Health)
 	register(registry, "status.get", http.MethodGet, "/status", handleV1Status(svc))
 	register(registry, "service.get", http.MethodGet, "/service", handleServiceInfo(svc))
@@ -102,17 +103,14 @@ func RegisterRoutes(
 	register(registry, "business-csv.export.post", http.MethodPost, "/business-csv/export", handleExportBusinessCSV(svc))
 	register(registry, "database.reset.post", http.MethodPost, "/database/reset", handleResetDatabase(svc))
 
-	register(registry, "assets.list.get", http.MethodGet, "/assets", handleListAssets(svc))
 	register(registry, "assets.create.post", http.MethodPost, "/assets", handleCreateAsset(svc))
 	register(registry, "assets.update.put", http.MethodPut, "/assets/{code}", handleUpdateAsset(svc))
 	register(registry, "assets.delete.delete", http.MethodDelete, "/assets/{code}", handleDeleteAsset(svc))
 
-	register(registry, "asset_classes.list.get", http.MethodGet, "/asset-classes", handleListAssetClasses(svc))
 	register(registry, "asset_classes.create.post", http.MethodPost, "/asset-classes", handleCreateAssetClass(svc))
 	register(registry, "asset_classes.update.put", http.MethodPut, "/asset-classes/{code}", handleUpdateAssetClass(svc))
 	register(registry, "asset_classes.delete.delete", http.MethodDelete, "/asset-classes/{code}", handleDeleteAssetClass(svc))
 
-	registerDuringSetup(registry, "accounts.list.get", http.MethodGet, "/accounts", handleListAccounts(svc))
 	register(registry, "accounts.create.post", http.MethodPost, "/accounts", handleCreateAccount(svc))
 	register(registry, "accounts.get", http.MethodGet, "/accounts/{code}", handleGetAccount(svc))
 	register(registry, "accounts.update.put", http.MethodPut, "/accounts/{code}", handleUpdateAccount(svc))
@@ -122,11 +120,9 @@ func RegisterRoutes(
 	register(registry, "accounts.group.put", http.MethodPut, "/accounts/{code}/group", handleSetAccountGroup(svc))
 	register(registry, "accounts.currency.put", http.MethodPut, "/accounts/{code}/currency", handleSetAccountCurrency(svc))
 	register(registry, "accounts.notes.put", http.MethodPut, "/accounts/{code}/notes", handleSetAccountNotes(svc))
-	register(registry, "accounts.adjustments.list.get", http.MethodGet, "/accounts/{code}/adjustments", handleListAccountAdjustments(svc))
 	register(registry, "accounts.adjustments.apply.post", http.MethodPost, "/accounts/{code}/adjustments", handleApplyAdjustment(svc))
 	register(registry, "accounts.balances.realized_pnl.put", http.MethodPut, "/accounts/{code}/balances/realized-pnl", handleSetBalanceRealizedPnl(svc))
 
-	register(registry, "groups.list.get", http.MethodGet, "/groups", handleListGroups(svc))
 	register(registry, "groups.create.post", http.MethodPost, "/groups", handleCreateGroup(svc))
 	register(registry, "groups.default.currency.put", http.MethodPut, "/groups/-/default/currency", handleSetDefaultGroupCurrency(svc))
 	register(registry, "groups.get", http.MethodGet, "/groups/{code}", handleGetGroup(svc))
@@ -137,17 +133,11 @@ func RegisterRoutes(
 	register(registry, "groups.unblock.post", http.MethodPost, "/groups/{code}/unblock", handleUnblockGroup(svc))
 	register(registry, "groups.delete", http.MethodDelete, "/groups/{code}", handleDeleteGroup(svc))
 
-	register(registry, "balances.list.get", http.MethodGet, "/balances", handleListBalances(svc))
-	register(registry, "adjustments.list.get", http.MethodGet, "/adjustments", handleListAdjustments(svc))
-
 	register(registry, "orders.check.post", http.MethodPost, "/orders/check", handleCheckOrder(svc))
-	register(registry, "orders.list.get", http.MethodGet, "/orders", handleListOrders(svc))
 	register(registry, "orders.get", http.MethodGet, "/orders/{id}", handleGetOrder(svc))
 	register(registry, "orders.events.reproduction.get", http.MethodGet, "/orders/{id}/events/{eventId}/reproduction", handleGetOrderEventReproduction(svc))
 	register(registry, "orders.execution-reports.post", http.MethodPost, "/orders/{id}/execution-reports", handleApplyExecutionReport(svc))
-	register(registry, "trades.list.get", http.MethodGet, "/trades", handleListTrades(svc))
 
-	register(registry, "limits.list.get", http.MethodGet, "/limits", handleListLimits(svc))
 	register(registry, "limits.rate.put", http.MethodPut, "/limits/rate", handlePutRateLimit(svc))
 	register(registry, "limits.order-size.put", http.MethodPut, "/limits/order-size", handlePutOrderSizeLimit(svc))
 	register(registry, "limits.spot-funds-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisRealized))
@@ -157,7 +147,6 @@ func RegisterRoutes(
 	registerDuringSetup(registry, "limits.spot-funds-limit-mode.put", http.MethodPut, "/limits/spot-funds-limit-mode", handlePutSpotFundsLimitMode(svc))
 	register(registry, "limits.delete", http.MethodDelete, "/limits", handleDeleteLimit(svc))
 
-	register(registry, "audit.list.get", http.MethodGet, "/audit", handleListAudit(svc))
 	register(registry, "audit.actions.get", http.MethodGet, "/audit/actions", handleListAuditActions())
 
 	register(registry, "mcp-access.list.get", http.MethodGet, "/mcp-access", handleListMcpAccess(svc))
@@ -203,6 +192,23 @@ func RegisterRoutes(
 	register(registry, "trading.fee-account.put", http.MethodPut, "/trading/connections/{id}/fee-account", handleSetTradingFeeAccount(svc))
 	register(registry, "trading.fee-account.delete", http.MethodDelete, "/trading/connections/{id}/fee-account", handleDeleteTradingFeeAccount(svc))
 	register(registry, "accounts.trading-destinations.list.get", http.MethodGet, "/accounts/{code}/trading-destinations", handleListTradingDestinations(svc))
+}
+
+// RegisterListRoutes registers the read-only dictionary and paginated domain
+// lists. It installs no mutation, credential, signing, or trading routes.
+// The host supplies authentication, authorization, and the account scope.
+func RegisterListRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane) {
+	register(registry, "assets.list.get", http.MethodGet, "/assets", handleListAssets(svc))
+	register(registry, "asset_classes.list.get", http.MethodGet, "/asset-classes", handleListAssetClasses(svc))
+	registerDuringSetup(registry, "accounts.list.get", http.MethodGet, "/accounts", handleListAccounts(svc))
+	register(registry, "accounts.adjustments.list.get", http.MethodGet, "/accounts/{code}/adjustments", handleListAccountAdjustments(svc))
+	register(registry, "groups.list.get", http.MethodGet, "/groups", handleListGroups(svc))
+	register(registry, "balances.list.get", http.MethodGet, "/balances", handleListBalances(svc))
+	register(registry, "adjustments.list.get", http.MethodGet, "/adjustments", handleListAdjustments(svc))
+	register(registry, "orders.list.get", http.MethodGet, "/orders", handleListOrders(svc))
+	register(registry, "trades.list.get", http.MethodGet, "/trades", handleListTrades(svc))
+	register(registry, "limits.list.get", http.MethodGet, "/limits", handleListLimits(svc))
+	register(registry, "audit.list.get", http.MethodGet, "/audit", handleListAudit(svc))
 }
 
 // NewRouteRegistry builds the application's v1 route registry. sealReports

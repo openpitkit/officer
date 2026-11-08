@@ -133,6 +133,13 @@ func (n *localNode) PutRateLimit(
 	); err != nil {
 		return nil, err
 	}
+	audit, err := n.captureAuditTarget(ctx, store.AuditEntry{
+		Action: domain.AuditActionSetLimit, Account: target.Account,
+		Detail: setRateLimitDetail(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	snapshot, _, err := n.loadSnapshot(ctx)
 	if err != nil {
@@ -162,11 +169,7 @@ func (n *localNode) PutRateLimit(
 		}
 	}
 	ctx = context.WithoutCancel(ctx)
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionSetLimit,
-		Account: target.Account,
-		Detail:  setRateLimitDetail(limit),
-	}); err != nil {
+	if err := n.audit(ctx, caller, audit); err != nil {
 		return sink, n.fatalPostEngineAuditByCode(
 			"audit rate limit", "policy", domain.PolicyRateLimit,
 			fmt.Errorf("audit set limit: %w", err),
@@ -212,6 +215,13 @@ func (n *localNode) PutOrderSizeLimit(
 	); err != nil {
 		return nil, err
 	}
+	audit, err := n.captureAuditTarget(ctx, store.AuditEntry{
+		Action: domain.AuditActionSetLimit, Account: target.Account,
+		Detail: setOrderSizeLimitDetail(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	snapshot, _, err := n.loadSnapshot(ctx)
 	if err != nil {
@@ -245,11 +255,7 @@ func (n *localNode) PutOrderSizeLimit(
 		}
 	}
 	ctx = context.WithoutCancel(ctx)
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionSetLimit,
-		Account: target.Account,
-		Detail:  setOrderSizeLimitDetail(limit),
-	}); err != nil {
+	if err := n.audit(ctx, caller, audit); err != nil {
 		return sink, n.fatalPostEngineAuditByCode(
 			"audit order-size limit", "policy", domain.PolicyOrderSizeLimit,
 			fmt.Errorf("audit set limit: %w", err),
@@ -302,6 +308,13 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 		return nil, err
 	}
 
+	audit, err := n.captureAuditTarget(ctx, store.AuditEntry{
+		Action: domain.AuditActionSetLimit, Account: target.Account, Group: target.AccountGroup,
+		Detail: setSpotFundsPnlBoundsLimitDetail(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
 	if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
 		return nil, fmt.Errorf("put spot funds pnl-bounds limit: %w", err)
 	}
@@ -318,11 +331,7 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	}
 	ctx = context.WithoutCancel(ctx)
 
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionSetLimit,
-		Account: target.Account,
-		Detail:  setSpotFundsPnlBoundsLimitDetail(limit),
-	}); err != nil {
+	if err := n.audit(ctx, caller, audit); err != nil {
 		return sink, n.fatalPostEngineAuditByCode(
 			"audit spot funds pnl-bounds limit", "policy",
 			policy,
@@ -517,6 +526,13 @@ func (n *localNode) DeleteLimit(
 	}
 	defer n.endLivePolicyConfiguration()
 
+	audit, err := n.captureAuditTarget(ctx, store.AuditEntry{
+		Action: domain.AuditActionDeleteLimit, Account: target.Account, Group: target.AccountGroup,
+		Detail: deleteLimitDetail(target),
+	})
+	if err != nil {
+		return nil, err
+	}
 	sink, prepared, err := n.deleteLastPolicyBarrierPrepared(ctx, target)
 	if err != nil {
 		return sink, fmt.Errorf("delete last policy barrier: %w", err)
@@ -532,11 +548,7 @@ func (n *localNode) DeleteLimit(
 		}
 	}
 	ctx = context.WithoutCancel(ctx)
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionDeleteLimit,
-		Account: target.Account,
-		Detail:  deleteLimitDetail(target),
-	}); err != nil {
+	if err := n.audit(ctx, caller, audit); err != nil {
 		return sink, n.fatalPostEngineAuditByCode(
 			"audit delete limit", "policy", target.Policy,
 			fmt.Errorf("audit delete limit: %w", err),

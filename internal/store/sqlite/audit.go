@@ -45,7 +45,8 @@ const auditSelect = `
 SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
        au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
        au.source_id, au.detail, au.detail_code, au.detail_params,
-       au.detail_fields, au.order_id, au.verdict, au.reject_code
+       au.detail_fields, au.order_id, au.verdict, au.reject_code,
+       au.account_identity, au.group_identity
 FROM audit au`
 
 // auditRestrictionColumn and auditUnownedPredicate address the account
@@ -160,12 +161,14 @@ func appendAudit(
 		`INSERT INTO audit
 		 (external_id, account_code, account_title, asset_code,
 		  group_code, actor_code, actor_title, at, action_id, source_id, detail,
-		  detail_code, detail_params, detail_fields, order_id, verdict, reject_code)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  detail_code, detail_params, detail_fields, order_id, verdict, reject_code,
+		  account_identity, group_identity)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), entry.Account.String(), accountTitle, entry.Asset,
 		entry.Group, entry.Actor, actorTitle, nowStr(), actionID, sourceID,
 		entry.Detail.Text, string(entry.Detail.Code), detailParams, detailFields,
 		entry.OrderID, entry.Verdict, entry.RejectCode,
+		entry.AccountIdentity.Uint64(), int64(entry.GroupIdentity),
 	); err != nil {
 		return fmt.Errorf("store: append audit: %w", err)
 	}
@@ -188,6 +191,14 @@ func (r *realmStore) ListAuditFiltered(
 ) (value []domain.AuditRow, resultErr error) {
 	if n <= 0 {
 		return make([]domain.AuditRow, 0), nil
+	}
+	if filter.Restriction.Selection != nil {
+		page, err := r.ListAuditRows(ctx, fwstore.AuditListFilter{
+			Account: fwstore.ExactTextMatcher(filter.Account.String()),
+			Source:  filter.Source, Actions: filter.Actions,
+			Restriction: filter.Restriction, Page: fwstore.PageSpec{Limit: n},
+		})
+		return page.Rows, err
 	}
 
 	dictionaries, err := r.dictionaries()
@@ -285,13 +296,37 @@ func (r *realmStore) ListAuditRows(
 		return fwstore.AuditListPage{}, err
 	}
 	countQuery := `SELECT COUNT(*) FROM audit au` + whereFromClauses(clauses)
+	var reader sqlQueryer = db
+	var readTx *sql.Tx
+	if filter.Restriction.Selection != nil {
+		readTx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return fwstore.AuditListPage{}, fmt.Errorf("store: begin audit read: %w", err)
+		}
+		defer rollbackTransaction(&resultErr, readTx)
+		reader = readTx
+		unrestricted := filter
+		unrestricted.Restriction = domain.AccountRestriction{}
+		candidateClauses, candidateArgs, err := auditListClauses(dictionaries, unrestricted)
+		if err != nil {
+			return fwstore.AuditListPage{}, err
+		}
+		candidateClauses = append(candidateClauses, "((au.account_code <> '' AND au.account_identity = 0) OR (au.account_code = '' AND au.group_code <> '' AND au.group_identity = 0))")
+		var missing bool
+		if err := reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM audit au"+whereFromClauses(candidateClauses)+")", candidateArgs...).Scan(&missing); err != nil {
+			return fwstore.AuditListPage{}, fmt.Errorf("store: validate audit identity: %w", err)
+		}
+		if missing {
+			return fwstore.AuditListPage{}, domain.ErrAuditIdentityUnavailable
+		}
+	}
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := reader.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AuditListPage{}, fmt.Errorf("store: count audit rows: %w", err)
 	}
 
 	query, queryArgs := buildAuditListQuery(clauses, args, filter.Page)
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := reader.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AuditListPage{}, fmt.Errorf("store: list audit rows: %w", err)
 	}
@@ -307,6 +342,14 @@ func (r *realmStore) ListAuditRows(
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.AuditListPage{}, fmt.Errorf("store: iterate audit rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fwstore.AuditListPage{}, err
+	}
+	if readTx != nil {
+		if err := readTx.Commit(); err != nil {
+			return fwstore.AuditListPage{}, fmt.Errorf("store: finish audit read: %w", err)
+		}
 	}
 	return fwstore.AuditListPage{
 		Rows:  result,
@@ -328,7 +371,8 @@ func buildAuditListQuery(
 SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
        au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
        au.source_id, au.detail, au.detail_code, au.detail_params,
-       au.detail_fields, au.order_id, au.verdict, au.reject_code
+       au.detail_fields, au.order_id, au.verdict, au.reject_code,
+       au.account_identity, au.group_identity
 FROM audit au` +
 		whereFromClauses(clauses) +
 		` ORDER BY au.at DESC, au.id DESC`
@@ -349,10 +393,14 @@ func auditListClauses(
 		clauses = append(clauses, "au.external_id = ?")
 		args = append(args, filter.ExternalID.Bytes())
 	}
-	appendAccountRestriction(
-		&clauses, &args, auditRestrictionColumn, auditUnownedPredicate,
-		filter.Restriction,
-	)
+	if filter.Restriction.Selection != nil {
+		appendAuditSelection(&clauses, &args, filter.Restriction)
+	} else {
+		appendAccountRestriction(
+			&clauses, &args, auditRestrictionColumn, auditUnownedPredicate,
+			filter.Restriction,
+		)
+	}
 	appendMatcher(&clauses, &args, "au.account_code", filter.Account)
 	appendMatcher(&clauses, &args, "au.asset_code", filter.Asset)
 	appendMatcher(&clauses, &args, "au.group_code", filter.Group)
@@ -424,11 +472,14 @@ func scanAuditListRow(
 		actionID, sourceID                                     int64
 		detail                                                 scannedAuditDetail
 		orderID, verdict, rejectCode                           string
+		accountIdentity                                        domain.EngineAccountID
+		groupIdentity                                          domain.EngineGroupID
 	)
 	if err := rows.Scan(
 		&extID, &account, &accountTitle, &asset, &group, &actor,
 		&actorTitle, &at, &actionID, &sourceID, &detail.text, &detail.code,
 		&detail.params, &detail.fields, &orderID, &verdict, &rejectCode,
+		&accountIdentity, &groupIdentity,
 	); err != nil {
 		return domain.AuditRow{}, fmt.Errorf("store: scan audit row: %w", err)
 	}
@@ -452,18 +503,25 @@ func scanAuditRow(dictionaries *enumDictionaries, rows *sql.Rows) (domain.AuditR
 		actionID, sourceID                                     int64
 		detail                                                 scannedAuditDetail
 		orderID, verdict, rejectCode                           string
+		accountIdentity                                        domain.EngineAccountID
+		groupIdentity                                          domain.EngineGroupID
 	)
 	if err := rows.Scan(
 		&extID, &account, &accountTitle, &asset, &group, &actor, &actorTitle,
 		&at, &actionID, &sourceID, &detail.text, &detail.code, &detail.params,
 		&detail.fields, &orderID, &verdict, &rejectCode,
+		&accountIdentity, &groupIdentity,
 	); err != nil {
 		return domain.AuditRow{}, fmt.Errorf("store: scan audit: %w", err)
 	}
-	return auditRowFromScanned(
+	row, err := auditRowFromScanned(
 		dictionaries, extID, account, accountTitle, asset, group, actor, actorTitle,
 		at, actionID, sourceID, detail, orderID, verdict, rejectCode,
 	)
+	if err != nil {
+		return domain.AuditRow{}, err
+	}
+	return row, nil
 }
 
 func auditRowFromScanned(

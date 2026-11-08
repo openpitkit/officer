@@ -35,6 +35,7 @@ type adjustmentChainState struct {
 	ctx                  context.Context
 	adapter              engine.AccountChainAdapter
 	account              domain.AccountID
+	accountIdentity      domain.EngineAccountID
 	reqs                 []domain.AdjustmentRequest
 	adjustments          []model.AccountAdjustment
 	result               engine.AdjustmentResult
@@ -184,6 +185,16 @@ func (n *localNode) ApplyAdjustment(
 			state.err = fmt.Errorf("engine: adjustment cancelled: %w", ctxErr)
 			return nil, state.err
 		}
+		target, ok, readErr := n.realm.GetAccount(state.ctx, account)
+		if readErr != nil {
+			state.err = fmt.Errorf("read adjustment target: %w", readErr)
+			return nil, state.err
+		}
+		if !ok {
+			state.err = domain.ErrAccountMissing
+			return nil, state.err
+		}
+		state.accountIdentity = target.EngineAccountID
 		// The account chain serializes every change of this account's balances,
 		// so the state read here is the state the adjustment applies to.
 		if caller.TightenOnly() {
@@ -303,9 +314,10 @@ func (n *localNode) ApplyAdjustment(
 		}
 
 		audit := n.auditEntry(caller, store.AuditEntry{
-			Action:  domain.AuditActionAdjustment,
-			Account: account,
-			Asset:   req.Asset,
+			AccountIdentity: state.accountIdentity,
+			Action:          domain.AuditActionAdjustment,
+			Account:         account,
+			Asset:           req.Asset,
 			Detail: adjustmentDetail(
 				account, req.Asset, req.Type, externalID,
 				state.result.Accepted != nil,

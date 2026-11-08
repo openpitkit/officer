@@ -314,7 +314,7 @@ func (n *localNode) applyExecutionReport(
 		state.persistenceCompleted = true
 
 		if err := n.mirrorEngineBlocksAudit(
-			ctx, state.in.Order, state.result.Blocks,
+			ctx, state.in.Order, state.result.Blocks, domain.EngineAccountID(source.Handle()),
 		); err != nil {
 			return n.fatalPostEnginePersistence(
 				"audit execution report engine blocks", account, err,
@@ -334,8 +334,9 @@ func (n *localNode) applyExecutionReport(
 			extra = append(extra, forcedExecutionField)
 		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action:  domain.AuditActionExecutionReport,
-			Account: state.in.Account,
+			AccountIdentity: domain.EngineAccountID(source.Handle()),
+			Action:          domain.AuditActionExecutionReport,
+			Account:         state.in.Account,
 			Detail: executionReportDetail(
 				state.in,
 				state.reservationRemainder,
@@ -567,8 +568,9 @@ func (n *localNode) recordWorkflowExecutionReport(
 			extra = append(extra, forcedExecutionField)
 		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action:  domain.AuditActionExecutionReport,
-			Account: state.in.Account,
+			AccountIdentity: domain.EngineAccountID(source.Handle()),
+			Action:          domain.AuditActionExecutionReport,
+			Account:         state.in.Account,
 			Detail: executionReportDetail(
 				state.in, "", state.in.OrderStatus, 0, extra...,
 			),

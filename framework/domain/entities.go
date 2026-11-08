@@ -490,8 +490,10 @@ type Balance struct {
 	// leaves both values without a unit; that is also what the engine reports
 	// as PnlHaltReasonMissingAccountCurrency, since it cannot calculate a P&L
 	// it has no currency to express. This read-only projection is derived on
-	// reads and is never persisted.
-	AccountCurrency string `json:"-"`
+	// reads and is never persisted. JSON carries it with the amounts so a
+	// remote reader retains their denomination, including an explicitly empty
+	// currency when no tier is set.
+	AccountCurrency string
 	// Asset is the code of the asset, e.g. "AAPL".
 	Asset string
 	// Account is the code of the account that owns this balance.

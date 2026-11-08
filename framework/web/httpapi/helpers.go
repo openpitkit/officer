@@ -504,6 +504,8 @@ func DescribeErr(err error) PublicError {
 			return PublicError{http.StatusConflict, "currency_change_blocked", err.Error()}
 		}
 		return PublicError{http.StatusConflict, "conflict", err.Error()}
+	case errors.Is(err, domain.ErrAuditIdentityUnavailable):
+		return PublicError{http.StatusConflict, "audit_identity_unavailable", "audit target identity unavailable"}
 	case errors.Is(err, domain.ErrConflict):
 		return PublicError{http.StatusConflict, "conflict", err.Error()}
 	case errors.Is(err, domain.ErrEngineRestarting):

@@ -160,17 +160,21 @@ func (r *realmStore) ListPolicyRows(
 func policyListWhere(filter fwstore.PolicyListFilter) (string, []any, error) {
 	clauses := make([]string, 0, 5)
 	args := make([]any, 0, 5)
-	appendAccountRestriction(
-		&clauses, &args, "account_code", "account_code IS NULL", filter.Restriction,
-	)
-	// An account-group barrier is kept only when the restricted account is a
-	// member of its group. The domain forbids a group on an account-axis
-	// barrier, so this narrows the unowned rows alone.
-	if filter.Restriction.Account != "" {
-		clauses = append(clauses, `(account_group_code IS NULL OR account_group_code IN (
+	if filter.Restriction.Selection != nil {
+		appendPolicySelection(&clauses, &args, filter.Restriction)
+	} else {
+		appendAccountRestriction(
+			&clauses, &args, "account_code", "account_code IS NULL", filter.Restriction,
+		)
+		// An account-group barrier is kept only when the restricted account is a
+		// member of its group. The domain forbids a group on an account-axis
+		// barrier, so this narrows the unowned rows alone.
+		if filter.Restriction.Account != "" {
+			clauses = append(clauses, `(account_group_code IS NULL OR account_group_code IN (
 			SELECT g.code FROM account m JOIN account_group g ON g.id = m.group_id
 			WHERE m.code = ?))`)
-		args = append(args, filter.Restriction.Account.String())
+			args = append(args, filter.Restriction.Account.String())
+		}
 	}
 	appendMatcher(&clauses, &args, "account_code", filter.Account)
 	appendMatcher(&clauses, &args, "account_group_code", filter.AccountGroup)

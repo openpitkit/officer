@@ -141,8 +141,9 @@ func (n *localNode) CreateGroup(
 		}
 	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
-		Action: domain.AuditActionCreateGroup,
-		Group:  created.Code,
+		Action:        domain.AuditActionCreateGroup,
+		GroupIdentity: created.EngineGroupID,
+		Group:         created.Code,
 		Detail: domain.NewAuditDetail(
 			domain.AuditDetailCreateGroup, domain.AuditDetailParams{"group": group.Code},
 		),
@@ -209,7 +210,7 @@ func (n *localNode) SetGroupNotes(
 	defer n.endLiveIdentityPublication()
 
 	resolver := n.currentEngine()
-	_, created, err := n.ensureGroupRegisteredLocked(ctx, code, resolver)
+	target, created, err := n.ensureGroupRegisteredLocked(ctx, code, resolver)
 	if err != nil {
 		return fmt.Errorf("ensure group for set notes: %w", err)
 	}
@@ -218,8 +219,9 @@ func (n *localNode) SetGroupNotes(
 		return fmt.Errorf("set group notes: %w", err)
 	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
-		Action: domain.AuditActionSetGroupNotes,
-		Group:  code,
+		Action:        domain.AuditActionSetGroupNotes,
+		GroupIdentity: target.EngineGroupID,
+		Group:         code,
 		Detail: domain.NewAuditDetail(
 			domain.AuditDetailSetGroupNotes, domain.AuditDetailParams{"group": code},
 		),
@@ -286,9 +288,10 @@ func (n *localNode) UpdateGroup(
 	entries := make([]store.AuditEntry, 0, len(codes))
 	for _, code := range codes {
 		entries = append(entries, store.AuditEntry{
-			Action: domain.AuditActionUpdateGroup,
-			Group:  code,
-			Detail: detail,
+			Action:        domain.AuditActionUpdateGroup,
+			GroupIdentity: prev.EngineGroupID,
+			Group:         code,
+			Detail:        detail,
 		})
 	}
 	if err := n.auditBatch(context.WithoutCancel(ctx), caller, entries); err != nil {
@@ -388,9 +391,10 @@ func (n *localNode) SetGroupBlocked(
 		}
 		state.failureOperation = "audit group block"
 		if err := n.audit(mutationCtx, caller, store.AuditEntry{
-			Action: action,
-			Group:  code,
-			Detail: detail,
+			Action:        action,
+			GroupIdentity: state.previous.EngineGroupID,
+			Group:         code,
+			Detail:        detail,
 		}); err != nil {
 			state.err = fmt.Errorf("audit group block: %w", err)
 			return state.err
@@ -570,8 +574,9 @@ func (n *localNode) DeleteGroup(
 			return err
 		}
 		return n.auditCurrencyChangeRefusal(ctx, caller, store.AuditEntry{
-			Action: domain.AuditActionDeleteGroup,
-			Group:  code,
+			Action:        domain.AuditActionDeleteGroup,
+			GroupIdentity: group.EngineGroupID,
+			Group:         code,
 		}, domain.AuditDetailDeleteGroupCurrencyRefused, domain.AuditDetailParams{
 			"group":    code,
 			"currency": currencyValue(group.Currency),
@@ -620,8 +625,9 @@ func (n *localNode) DeleteGroup(
 	// The group row carries counts rather than one unbounded identifier list;
 	// the per-account rows carry the identities in their structured field.
 	summary := store.AuditEntry{
-		Action: domain.AuditActionDeleteGroup,
-		Group:  code,
+		Action:        domain.AuditActionDeleteGroup,
+		GroupIdentity: group.EngineGroupID,
+		Group:         code,
 		Detail: domain.NewAuditDetail(domain.AuditDetailDeleteGroup, domain.AuditDetailParams{
 			"group":                       code,
 			"detachedAccounts":            strconv.Itoa(len(members)),
@@ -713,9 +719,11 @@ func (n *localNode) auditGroupDelete(
 	entries := make([]store.AuditEntry, 0, auditGroupDeleteChunk)
 	for _, member := range members {
 		entries = append(entries, store.AuditEntry{
-			Action:  domain.AuditActionDeleteGroup,
-			Account: member.Code,
-			Group:   code,
+			Action:          domain.AuditActionDeleteGroup,
+			Account:         member.Code,
+			AccountIdentity: member.EngineAccountID,
+			GroupIdentity:   summary.GroupIdentity,
+			Group:           code,
 			Detail: domain.NewAuditDetail(
 				domain.AuditDetailDeleteGroupDetachAccount,
 				domain.AuditDetailParams{"group": code, "account": member.Code.String()},

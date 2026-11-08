@@ -140,7 +140,17 @@ func (s *Service) listRestriction(
 	if err != nil {
 		return domain.AccountRestriction{}, err
 	}
-	return s.scope.List(caller, requested)
+	restriction, err := s.scope.List(caller, requested)
+	if err != nil {
+		return domain.AccountRestriction{}, err
+	}
+	if restriction.Selection != nil {
+		if err := restriction.Selection.Validate(); err != nil {
+			return domain.AccountRestriction{}, err
+		}
+		restriction.Selection = restriction.Selection.Clone()
+	}
+	return restriction, nil
 }
 
 // visibleGroups returns which account groups caller sees, by the account
@@ -156,8 +166,19 @@ func (s *Service) visibleGroups(
 	if err != nil {
 		return nil, err
 	}
-	if restriction.Account == "" {
+	if !restriction.Restricted() {
 		return func(string) bool { return true }, nil
+	}
+	if restriction.Selection != nil {
+		page, err := s.node.ListGroupRows(ctx, store.GroupListFilter{Restriction: restriction})
+		if err != nil {
+			return nil, err
+		}
+		visible := make(map[string]bool, len(page.Rows))
+		for _, row := range page.Rows {
+			visible[row.Group.Code] = true
+		}
+		return func(group string) bool { return visible[group] }, nil
 	}
 	page, err := s.node.ListAccountRows(ctx, store.AccountListFilter{
 		Restriction: restriction,

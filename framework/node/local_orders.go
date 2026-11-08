@@ -83,7 +83,8 @@ type orderSubmissionBridge struct {
 	// accountBlocked is the order account's block state when the chain began,
 	// read before the submission transaction opens; preTradeLatchedBlocks reads
 	// it. A drop-copy submission does not read it.
-	accountBlocked bool
+	accountBlocked  bool
+	accountIdentity domain.EngineAccountID
 }
 
 func beginOrderSubmission(
@@ -99,7 +100,7 @@ func beginOrderSubmission(
 		abort:      make(chan struct{}),
 		done:       make(chan orderSubmissionCompletion, 1),
 	}
-	if !draft.DropCopy {
+	{
 		// The store holds one connection, so the read cannot wait until the
 		// transaction below is open.
 		account, ok, err := realm.GetAccount(ctx, draft.Account)
@@ -115,6 +116,7 @@ func beginOrderSubmission(
 			)
 		}
 		bridge.accountBlocked = account.Blocked
+		bridge.accountIdentity = account.EngineAccountID
 	}
 	go func() {
 		order, err := recordOrderSubmissionWithAttestation(
@@ -357,6 +359,7 @@ func (n *localNode) submitOrder(
 		state.order = persisted
 		state.err = n.auditSubmittedOrder(
 			state.ctx, o.Account, state.order, state.result, caller,
+			state.bridge.accountIdentity,
 		)
 		return state.err
 	}
@@ -418,6 +421,7 @@ func (n *localNode) submitOrder(
 	) error {
 		state.err = n.auditSubmittedOrder(
 			state.ctx, o.Account, state.order, state.result, caller,
+			state.bridge.accountIdentity,
 		)
 		return state.err
 	}).Finally(func(
@@ -465,16 +469,17 @@ func (n *localNode) auditSubmittedOrder(
 	order domain.Order,
 	result engine.OrderResult,
 	caller domain.Caller,
+	identity domain.EngineAccountID,
 ) error {
 	if err := n.mirrorEngineBlocksAudit(
-		ctx, order.ExternalID, result.Blocks,
+		ctx, order.ExternalID, result.Blocks, identity,
 	); err != nil {
 		return n.fatalPostEnginePersistence(
 			"audit pre-trade engine blocks", account, err,
 		)
 	}
 	return n.auditOrderDecision(
-		ctx, account, order, result.Accepted, result.Rejects, caller,
+		ctx, account, order, result.Accepted, result.Rejects, caller, identity,
 	)
 }
 
@@ -485,6 +490,7 @@ func (n *localNode) auditOrderDecision(
 	accepted bool,
 	rejects []domain.OrderReject,
 	caller domain.Caller,
+	identity domain.EngineAccountID,
 ) error {
 	action := domain.AuditActionSubmitOrder
 	if order.DropCopy {
@@ -505,7 +511,8 @@ func (n *localNode) auditOrderDecision(
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: action, Account: account,
-		OrderID: order.ExternalID.String(), Verdict: verdict, RejectCode: rejectCode,
+		AccountIdentity: identity,
+		OrderID:         order.ExternalID.String(), Verdict: verdict, RejectCode: rejectCode,
 		Detail: submitOrderDetail(order, accepted),
 	}); err != nil {
 		return n.fatalPostEnginePersistence(
@@ -783,7 +790,7 @@ func (n *localNode) submitImmediate(
 		}
 		state.order = persisted
 		if err := n.mirrorEngineBlocksAudit(
-			state.ctx, state.order.ExternalID, state.result.Blocks,
+			state.ctx, state.order.ExternalID, state.result.Blocks, state.bridge.accountIdentity,
 		); err != nil {
 			state.err = n.fatalPostEnginePersistence(
 				"audit immediate engine blocks", o.Account, err,
@@ -793,6 +800,7 @@ func (n *localNode) submitImmediate(
 		state.err = n.auditOrderDecision(
 			state.ctx, o.Account, state.order, state.result.Accepted,
 			state.result.Rejects, caller,
+			state.bridge.accountIdentity,
 		)
 		return state.err
 	}
@@ -903,6 +911,7 @@ func (n *localNode) submitImmediate(
 	) error {
 		state.err = n.auditImmediateSubmission(
 			state.ctx, o.Account, state.order, state.result, caller,
+			state.bridge.accountIdentity,
 		)
 		return state.err
 	}).Finally(func(
@@ -937,9 +946,10 @@ func (n *localNode) auditImmediateSubmission(
 	order domain.Order,
 	result engine.ImmediateResult,
 	caller domain.Caller,
+	identity domain.EngineAccountID,
 ) error {
 	if err := n.mirrorEngineBlocksAudit(
-		ctx, order.ExternalID, result.Blocks,
+		ctx, order.ExternalID, result.Blocks, identity,
 	); err != nil {
 		return n.fatalPostEnginePersistence(
 			"audit immediate engine blocks", account, err,
@@ -956,8 +966,9 @@ func (n *localNode) auditImmediateSubmission(
 	// to the SDK.
 	reported := executionReportInputFromRequest(*result.ExecutionReport)
 	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionExecutionReport,
-		Account: account,
+		Action:          domain.AuditActionExecutionReport,
+		Account:         account,
+		AccountIdentity: identity,
 		Detail: executionReportDetail(
 			reported,
 			reported.LeavesQuantity,
@@ -972,7 +983,7 @@ func (n *localNode) auditImmediateSubmission(
 		)
 	}
 	return n.auditOrderDecision(
-		ctx, account, order, result.Accepted, result.Rejects, caller,
+		ctx, account, order, result.Accepted, result.Rejects, caller, identity,
 	)
 }
 
@@ -1334,7 +1345,7 @@ func (n *localNode) cancelOrder(
 		}
 		state.persistenceCompleted = true
 		if err := n.mirrorEngineBlocksAudit(
-			ctx, order, state.result.Blocks,
+			ctx, order, state.result.Blocks, domain.EngineAccountID(source.Handle()),
 		); err != nil {
 			return n.fatalPostEnginePersistence(
 				"audit cancellation execution report engine blocks",
@@ -1343,8 +1354,9 @@ func (n *localNode) cancelOrder(
 			)
 		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action:  domain.AuditActionExecutionReport,
-			Account: state.in.Account,
+			Action:          domain.AuditActionExecutionReport,
+			Account:         state.in.Account,
+			AccountIdentity: domain.EngineAccountID(source.Handle()),
 			Detail: executionReportDetail(
 				state.in,
 				state.reservationRemainder,

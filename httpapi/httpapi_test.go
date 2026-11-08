@@ -197,6 +197,8 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"DELETE /trading/connections/{id}/fee-account",
 		"GET /accounts/{code}/trading-destinations",
 	}
+	slices.Sort(got)
+	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("route surface mismatch\ngot:  %v\nwant: %v", got, want)
 	}

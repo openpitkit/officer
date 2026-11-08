@@ -178,6 +178,19 @@ func (s *Service) ListAdjustments(
 	if err != nil {
 		return nil, err
 	}
+	if restriction.Selection != nil {
+		if err := domain.ValidateAccountID(account); err != nil {
+			return nil, err
+		}
+		if n <= 0 {
+			return []domain.AccountAdjustmentRecord{}, nil
+		}
+		page, err := s.node.ListAdjustmentRows(ctx, store.AdjustmentListFilter{
+			Account: store.ExactTextMatcher(account.String()), Source: source,
+			Restriction: restriction, Page: store.PageSpec{Limit: n},
+		})
+		return page.Rows, err
+	}
 	scoped, ok := restrictedAccount(account, restriction)
 	if !ok {
 		return []domain.AccountAdjustmentRecord{}, nil
@@ -197,6 +210,20 @@ func (s *Service) ListAllAdjustments(
 	restriction, err := s.listRestriction(ctx, account)
 	if err != nil {
 		return nil, err
+	}
+	if restriction.Selection != nil {
+		if n <= 0 {
+			return []domain.AccountAdjustmentRecord{}, nil
+		}
+		filter := store.AdjustmentListFilter{Source: source, Restriction: restriction, Page: store.PageSpec{Limit: n}}
+		if account != "" {
+			if err := domain.ValidateAccountID(account); err != nil {
+				return nil, err
+			}
+			filter.Account = store.ExactTextMatcher(account.String())
+		}
+		page, err := s.node.ListAdjustmentRows(ctx, filter)
+		return page.Rows, err
 	}
 	scoped, ok := restrictedAccount(account, restriction)
 	if !ok {

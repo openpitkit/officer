@@ -56,6 +56,11 @@ import (
 // the timestamp. Account and Actor are optional dictionary references by code,
 // snapshot strings, preserved unchanged when dictionaries are later deleted.
 type AuditEntry struct {
+	// AccountIdentity and GroupIdentity snapshot the actual target at the
+	// authoritative operation. Zero marks an unavailable identity, not an
+	// unowned target. Readers must never infer these values from codes.
+	AccountIdentity domain.EngineAccountID
+	GroupIdentity   domain.EngineGroupID
 	// OrderID is the opaque public order handle for a trading decision.
 	// It is empty for actions that do not describe an order decision.
 	OrderID string

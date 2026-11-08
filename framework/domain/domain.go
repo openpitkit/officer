@@ -92,9 +92,12 @@ func registerSentinel(err error) error {
 
 // Sentinel errors returned by all layers; callers check with errors.Is.
 var (
-	ErrNotFound      = registerSentinel(errors.New("not found"))
-	ErrAlreadyExists = registerSentinel(errors.New("already exists"))
-	ErrInvalid       = registerSentinel(errors.New("invalid"))
+	// ErrAuditIdentityUnavailable refuses an identity-restricted audit read
+	// whose candidate records contain a target without a captured identity.
+	ErrAuditIdentityUnavailable = registerSentinel(errors.New("audit target identity unavailable"))
+	ErrNotFound                 = registerSentinel(errors.New("not found"))
+	ErrAlreadyExists            = registerSentinel(errors.New("already exists"))
+	ErrInvalid                  = registerSentinel(errors.New("invalid"))
 	// ErrForbidden marks a request whose caller is known but not authorized for
 	// the requested route or command.
 	ErrForbidden = registerSentinel(errors.New("forbidden"))
@@ -453,6 +456,10 @@ type AccountRestriction struct {
 	// IncludeUnowned also keeps the rows that belong to no account. It applies
 	// only with a non-empty Account.
 	IncludeUnowned bool
+	// Selection restricts by immutable identities. Nil preserves the legacy
+	// contract; a non-nil empty selection allows no accounts. Its slices are
+	// immutable for the lifetime of the restriction.
+	Selection *AccountSelection `json:",omitempty"`
 }
 
 // Account is the control-plane view of an engine account: a dictionary entity
