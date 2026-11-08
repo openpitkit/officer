@@ -381,8 +381,8 @@ release-dry:
     git push --force-with-lease origin HEAD:release-dry-run
     gh workflow run release-image.yml --ref release-dry-run -f dry_run=true
 
-# On main: run the gate, commit the notes as RELEASE_NOTES.md and tag the next major, minor or patch version; pushes nothing.
-release kind notes_file: check
+# On a clean release branch: run the gate, commit the notes as RELEASE_NOTES.md and tag the next major, minor or patch version; pushes nothing.
+release kind notes_file:
     {{ python }} {{ just_helper }} release {{ quote(kind) }} {{ quote(notes_file) }}
 
 # Print the version `just release <kind>` cuts from HEAD.

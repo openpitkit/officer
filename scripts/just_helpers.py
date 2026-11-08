@@ -838,7 +838,20 @@ def command_release_version(args: argparse.Namespace) -> None:
     print(next_release_version(args.kind))
 
 
+def check_release_checkout() -> None:
+    branch = run(["git", "branch", "--show-current"], capture=True).stdout.strip()
+    if branch != "release":
+        raise SystemExit(
+            f"a release is cut on release, not on {branch or 'a detached HEAD'}"
+        )
+    if run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], capture=True
+    ).stdout:
+        raise SystemExit("the working tree has local changes; commit them first")
+
+
 def command_release(args: argparse.Namespace) -> None:
+    check_release_checkout()
     version = next_release_version(args.kind)
     notes = Path(args.notes_file)
     # Notes kept inside the checkout would be untracked work in the tree the
@@ -848,23 +861,28 @@ def command_release(args: argparse.Namespace) -> None:
             f"release notes file {notes} must be an absolute path outside {ROOT}"
         )
     check_release_notes_content(version, notes)
-    branch = run(["git", "branch", "--show-current"], capture=True).stdout.strip()
-    if branch != "main":
-        raise SystemExit(
-            f"a release is cut on main, not on {branch or 'a detached HEAD'}"
-        )
-    if run(["git", "status", "--porcelain"], capture=True).stdout:
-        raise SystemExit("the working tree has local changes")
     tag = f"v{version}"
     if git_succeeds("rev-parse", "--quiet", "--verify", f"refs/tags/{tag}"):
         raise SystemExit(f"tag {tag} already exists")
 
+    run(["just", "check"])
+    check_release_checkout()
     shutil.copyfile(notes, ROOT / RELEASE_NOTES)
     run(["git", "add", "--", RELEASE_NOTES])
     run(["git", "commit", "--message", f"Release {version}"])
-    run(["git", "tag", "--annotate", tag, "--message", f"Release {version}"])
+    run(
+        [
+            "git",
+            "tag",
+            "--annotate",
+            tag,
+            "refs/heads/release",
+            "--message",
+            f"Release {version}",
+        ]
+    )
     check_committed_release_notes(version)
-    print(f"tagged {tag}; publish with: git push --atomic origin main {tag}")
+    print(f"tagged {tag}; publish with: git push --atomic origin release {tag}")
 
 
 def build_parser() -> argparse.ArgumentParser:
