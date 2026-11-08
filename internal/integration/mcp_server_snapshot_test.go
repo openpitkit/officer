@@ -458,6 +458,30 @@ func TestServerToolSnapshot(t *testing.T) {
 			if dest == nil || dest.Type != "object" || dest.Properties["route"] == nil || dest.Properties["route"].Type != "object" {
 				t.Fatalf("%s destination.route must advertise an object", tool)
 			}
+			for _, guidance := range []string{
+				"timeInForce is case-sensitive",
+				"only supported field",
+				"Alpaca requires day, gtc, opg, cls, ioc or fok",
+				"good till cancelled is gtc",
+				"Alpaca crypto allows only gtc or ioc",
+				"fractional equity requires day",
+				"IB requires day, gtc or ioc",
+				"Binance requires GTC, IOC or FOK for a limit order and {} for a market order",
+				`eToro uses {} for market or {"timeInForce":"ioc"} for an IOC limit buy`,
+			} {
+				if !strings.Contains(dest.Properties["route"].Description, guidance) {
+					t.Errorf("%s destination.route description must include %q", tool, guidance)
+				}
+			}
+			for field, guidance := range map[string]string{
+				"amountKind": "built-in Alpaca, Binance, IB and eToro require quantity",
+				"price":      "IB crypto buys require a limit price",
+			} {
+				property := input.Properties[field]
+				if property == nil || !strings.Contains(property.Description, guidance) {
+					t.Errorf("%s %s description must include %q", tool, field, guidance)
+				}
+			}
 			for field, property := range dest.Properties {
 				if property.Description == "" {
 					t.Errorf("%s destination.%s has no description", tool, field)
