@@ -24,12 +24,16 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/signing"
 )
 
 func TestSigningKeyUpsertGetList(t *testing.T) {
@@ -165,6 +169,189 @@ func TestSigningKeyActiveSwitchingAndDeactivateAll(t *testing.T) {
 	got2, _ := rs.GetSigningKey(ctx, "k2")
 	if !bytes.Equal(got2.PrivateKey, []byte{9, 9}) {
 		t.Fatalf("k2 private key after replace = %v, want [9 9]", got2.PrivateKey)
+	}
+}
+
+func TestSigningKeyRotationErasesRetiredPrivateMaterial(t *testing.T) {
+	for _, sealed := range []bool{false, true} {
+		name := "plaintext"
+		if sealed {
+			name = "sealed"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			var opts []Option
+			if sealed {
+				opts = append(opts, WithMasterKey(mustStoreMasterKey(t, 0x84)))
+			}
+			st, rs := newTestStore(t, opts...)
+			svc, err := signing.New(rs)
+			if err != nil {
+				t.Fatalf("signing.New: %v", err)
+			}
+			first, err := svc.GenerateKey(ctx)
+			if err != nil {
+				t.Fatalf("GenerateKey(first): %v", err)
+			}
+			payload := domain.ApprovalPayload{
+				Version: 1, Instrument: "AAPL/USD", Side: "buy",
+				Quantity: "10", AmountKind: "quantity", AccountID: "acct-1",
+				OrderExternalID: "AAAAAAAAAAAAAAAAAAAAAA",
+			}
+			expect := fwsigning.VerifyParams{
+				Instrument: payload.Instrument, Side: payload.Side,
+				Quantity: payload.Quantity, AmountKind: payload.AmountKind,
+				AccountID: payload.AccountID, OrderExternalID: payload.OrderExternalID,
+			}
+			var retired []domain.SigningKey
+			var envelopes []string
+			active := first
+			for _, rotate := range []string{"generate", "import"} {
+				envelope, err := svc.Sign(payload)
+				if err != nil {
+					t.Fatalf("Sign before %s: %v", rotate, err)
+				}
+				retired = append(retired, active)
+				envelopes = append(envelopes, envelope)
+				if rotate == "generate" {
+					active, err = svc.GenerateKey(ctx)
+				} else {
+					seed := bytes.Repeat([]byte{0x85}, ed25519.SeedSize)
+					active, err = svc.ImportKey(ctx,
+						base64.StdEncoding.EncodeToString(seed), signing.FormatRawBase64)
+				}
+				if err != nil {
+					t.Fatalf("rotate via %s: %v", rotate, err)
+				}
+				for i, old := range retired {
+					got, err := rs.GetSigningKey(ctx, old.KeyID)
+					if err != nil {
+						t.Fatalf("GetSigningKey(retired): %v", err)
+					}
+					if got.Active || len(got.PrivateKey) != 0 {
+						t.Fatalf("%s retired key: active=%v private bytes=%d, want false/0",
+							rotate, got.Active, len(got.PrivateKey))
+					}
+					if got.KeyID != old.KeyID || got.Alg != old.Alg ||
+						!got.CreatedAt.Equal(old.CreatedAt) || !bytes.Equal(got.PublicKey, old.PublicKey) {
+						t.Fatal("rotation changed retired public key or metadata")
+					}
+					var stored []byte
+					if err := st.(*sqliteStore).currentDB().QueryRowContext(ctx,
+						`SELECT private_key FROM signing_key WHERE key_id = ?`, old.KeyID,
+					).Scan(&stored); err != nil {
+						t.Fatalf("read retired storage: %v", err)
+					}
+					if sealed != (len(stored) > 0) {
+						t.Fatalf("retired storage bytes=%d, sealed=%v", len(stored), sealed)
+					}
+					result, err := svc.Verify(ctx, envelopes[i], expect)
+					if err != nil || !result.Signed || result.Payload.KeyID != old.KeyID {
+						t.Fatalf("Verify retired signature: signed=%v err=%v", result.Signed, err)
+					}
+				}
+				got, ok, err := rs.GetActiveSigningKey(ctx)
+				if err != nil || !ok || got.KeyID != active.KeyID {
+					t.Fatalf("GetActiveSigningKey after %s: ok=%v err=%v", rotate, ok, err)
+				}
+				if len(got.PrivateKey) != ed25519.SeedSize ||
+					!bytes.Equal(ed25519.NewKeyFromSeed(got.PrivateKey).Public().(ed25519.PublicKey), active.PublicKey) {
+					t.Fatal("new active private material does not match its public key")
+				}
+				svc, err = signing.New(rs)
+				if err != nil {
+					t.Fatalf("reload signing service: %v", err)
+				}
+				envelope, err = svc.Sign(payload)
+				if err != nil {
+					t.Fatalf("Sign after %s: %v", rotate, err)
+				}
+				result, err := svc.Verify(ctx, envelope, expect)
+				if err != nil || !result.Signed || result.Payload.KeyID != active.KeyID {
+					t.Fatalf("Verify new signature: signed=%v err=%v", result.Signed, err)
+				}
+			}
+			if err := rs.DeactivateAllSigningKeys(ctx); err != nil {
+				t.Fatalf("final DeactivateAllSigningKeys: %v", err)
+			}
+			verifyOnly, err := rs.GetSigningKey(ctx, active.KeyID)
+			if err != nil {
+				t.Fatalf("GetSigningKey(final): %v", err)
+			}
+			verifyOnly.Active = true
+			if err := rs.UpsertSigningKey(ctx, verifyOnly); err != nil {
+				t.Fatalf("activate verification-only key: %v", err)
+			}
+			if _, err := signing.New(rs); !errors.Is(err, signing.ErrNoPrivateMaterial) {
+				t.Fatalf("verification-only active startup: %v, want ErrNoPrivateMaterial", err)
+			}
+		})
+	}
+}
+
+func TestDeactivateAllSigningKeysRollsBack(t *testing.T) {
+	for _, sealed := range []bool{false, true} {
+		name := "plaintext"
+		if sealed {
+			name = "sealed"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			var opts []Option
+			if sealed {
+				opts = append(opts, WithMasterKey(mustStoreMasterKey(t, 0x86)))
+			}
+			st, rs := newTestStore(t, opts...)
+			keys := []domain.SigningKey{
+				{KeyID: "first", Alg: "ed25519", PrivateKey: []byte{1}, PublicKey: []byte{2}, Active: true, CreatedAt: time.Now().UTC()},
+				{KeyID: "second", Alg: "ed25519", PrivateKey: []byte{3}, PublicKey: []byte{4}, Active: true, CreatedAt: time.Now().UTC()},
+			}
+			for _, key := range keys {
+				if err := rs.UpsertSigningKey(ctx, key); err != nil {
+					t.Fatalf("UpsertSigningKey: %v", err)
+				}
+			}
+			db := st.(*sqliteStore).currentDB()
+			// Fail only after another row was retired, regardless of row order.
+			if _, err := db.ExecContext(ctx, `CREATE TRIGGER fail_retirement
+				BEFORE UPDATE ON signing_key
+				WHEN EXISTS (SELECT 1 FROM signing_key WHERE active = 0)
+				BEGIN SELECT RAISE(ABORT, 'forced retirement failure'); END`); err != nil {
+				t.Fatalf("create retirement failure trigger: %v", err)
+			}
+			if err := rs.DeactivateAllSigningKeys(ctx); err == nil ||
+				!strings.Contains(err.Error(), "forced retirement failure") {
+				t.Fatalf("DeactivateAllSigningKeys: %v, want forced retirement failure", err)
+			}
+			for _, key := range keys {
+				got, err := rs.GetSigningKey(ctx, key.KeyID)
+				if err != nil {
+					t.Fatalf("GetSigningKey after rollback: %v", err)
+				}
+				if !got.Active || !bytes.Equal(got.PrivateKey, key.PrivateKey) ||
+					!bytes.Equal(got.PublicKey, key.PublicKey) || got.Alg != key.Alg ||
+					!got.CreatedAt.Equal(key.CreatedAt) {
+					t.Fatalf("failed retirement changed key %q: active=%v private bytes=%d",
+						key.KeyID, got.Active, len(got.PrivateKey))
+				}
+			}
+			if _, err := db.ExecContext(ctx, `DROP TRIGGER fail_retirement`); err != nil {
+				t.Fatalf("drop retirement failure trigger: %v", err)
+			}
+			if err := rs.DeactivateAllSigningKeys(ctx); err != nil {
+				t.Fatalf("DeactivateAllSigningKeys after rollback: %v", err)
+			}
+			for _, key := range keys {
+				got, err := rs.GetSigningKey(ctx, key.KeyID)
+				if err != nil || got.Active || len(got.PrivateKey) != 0 {
+					t.Fatalf("retirement after rollback: active=%v private bytes=%d err=%v",
+						got.Active, len(got.PrivateKey), err)
+				}
+			}
+			if err := rs.DeactivateAllSigningKeys(ctx); err != nil {
+				t.Fatalf("DeactivateAllSigningKeys with no active keys: %v", err)
+			}
+		})
 	}
 }
 
