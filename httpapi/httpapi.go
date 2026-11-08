@@ -103,35 +103,9 @@ func RegisterRoutes(
 	register(registry, "business-csv.export.post", http.MethodPost, "/business-csv/export", handleExportBusinessCSV(svc))
 	register(registry, "database.reset.post", http.MethodPost, "/database/reset", handleResetDatabase(svc))
 
-	register(registry, "assets.create.post", http.MethodPost, "/assets", handleCreateAsset(svc))
-	register(registry, "assets.update.put", http.MethodPut, "/assets/{code}", handleUpdateAsset(svc))
-	register(registry, "assets.delete.delete", http.MethodDelete, "/assets/{code}", handleDeleteAsset(svc))
-
-	register(registry, "asset_classes.create.post", http.MethodPost, "/asset-classes", handleCreateAssetClass(svc))
-	register(registry, "asset_classes.update.put", http.MethodPut, "/asset-classes/{code}", handleUpdateAssetClass(svc))
-	register(registry, "asset_classes.delete.delete", http.MethodDelete, "/asset-classes/{code}", handleDeleteAssetClass(svc))
-
-	register(registry, "accounts.create.post", http.MethodPost, "/accounts", handleCreateAccount(svc))
-	register(registry, "accounts.get", http.MethodGet, "/accounts/{code}", handleGetAccount(svc))
-	register(registry, "accounts.update.put", http.MethodPut, "/accounts/{code}", handleUpdateAccount(svc))
-	register(registry, "accounts.block.post", http.MethodPost, "/accounts/{code}/block", handleBlockAccount(svc))
-	register(registry, "accounts.unblock.post", http.MethodPost, "/accounts/{code}/unblock", handleUnblockAccount(svc))
-	register(registry, "accounts.delete", http.MethodDelete, "/accounts/{code}", handleDeleteAccount(svc))
-	register(registry, "accounts.group.put", http.MethodPut, "/accounts/{code}/group", handleSetAccountGroup(svc))
-	register(registry, "accounts.currency.put", http.MethodPut, "/accounts/{code}/currency", handleSetAccountCurrency(svc))
-	register(registry, "accounts.notes.put", http.MethodPut, "/accounts/{code}/notes", handleSetAccountNotes(svc))
+	RegisterReferenceRoutes(registry, svc)
 	register(registry, "accounts.adjustments.apply.post", http.MethodPost, "/accounts/{code}/adjustments", handleApplyAdjustment(svc))
 	register(registry, "accounts.balances.realized_pnl.put", http.MethodPut, "/accounts/{code}/balances/realized-pnl", handleSetBalanceRealizedPnl(svc))
-
-	register(registry, "groups.create.post", http.MethodPost, "/groups", handleCreateGroup(svc))
-	register(registry, "groups.default.currency.put", http.MethodPut, "/groups/-/default/currency", handleSetDefaultGroupCurrency(svc))
-	register(registry, "groups.get", http.MethodGet, "/groups/{code}", handleGetGroup(svc))
-	register(registry, "groups.update.put", http.MethodPut, "/groups/{code}", handleUpdateGroup(svc))
-	register(registry, "groups.currency.put", http.MethodPut, "/groups/{code}/currency", handleSetGroupCurrency(svc))
-	register(registry, "groups.notes.put", http.MethodPut, "/groups/{code}/notes", handleSetGroupNotes(svc))
-	register(registry, "groups.block.post", http.MethodPost, "/groups/{code}/block", handleBlockGroup(svc))
-	register(registry, "groups.unblock.post", http.MethodPost, "/groups/{code}/unblock", handleUnblockGroup(svc))
-	register(registry, "groups.delete", http.MethodDelete, "/groups/{code}", handleDeleteGroup(svc))
 
 	register(registry, "orders.check.post", http.MethodPost, "/orders/check", handleCheckOrder(svc))
 	register(registry, "orders.get", http.MethodGet, "/orders/{id}", handleGetOrder(svc))
@@ -192,6 +166,40 @@ func RegisterRoutes(
 	register(registry, "trading.fee-account.put", http.MethodPut, "/trading/connections/{id}/fee-account", handleSetTradingFeeAccount(svc))
 	register(registry, "trading.fee-account.delete", http.MethodDelete, "/trading/connections/{id}/fee-account", handleDeleteTradingFeeAccount(svc))
 	register(registry, "accounts.trading-destinations.list.get", http.MethodGet, "/accounts/{code}/trading-destinations", handleListTradingDestinations(svc))
+}
+
+// RegisterReferenceRoutes registers account and reference-data reads and edits.
+// It adds no list routes, producers, credentials, order workflows or reset.
+// The host supplies authorization and decides whether account-set management
+// is available for the caller's entire visibility scope.
+func RegisterReferenceRoutes(registry *httpx.RouteRegistry, svc backend.ControlPlane) {
+	register(registry, "assets.create.post", http.MethodPost, "/assets", handleCreateAsset(svc))
+	register(registry, "assets.update.put", http.MethodPut, "/assets/{code}", handleUpdateAsset(svc))
+	register(registry, "assets.delete.delete", http.MethodDelete, "/assets/{code}", handleDeleteAsset(svc))
+
+	register(registry, "asset_classes.create.post", http.MethodPost, "/asset-classes", handleCreateAssetClass(svc))
+	register(registry, "asset_classes.update.put", http.MethodPut, "/asset-classes/{code}", handleUpdateAssetClass(svc))
+	register(registry, "asset_classes.delete.delete", http.MethodDelete, "/asset-classes/{code}", handleDeleteAssetClass(svc))
+
+	register(registry, "accounts.create.post", http.MethodPost, "/accounts", handleCreateAccount(svc))
+	register(registry, "accounts.get", http.MethodGet, "/accounts/{code}", handleGetAccount(svc))
+	register(registry, "accounts.update.put", http.MethodPut, "/accounts/{code}", handleUpdateAccount(svc))
+	register(registry, "accounts.block.post", http.MethodPost, "/accounts/{code}/block", handleBlockAccount(svc))
+	register(registry, "accounts.unblock.post", http.MethodPost, "/accounts/{code}/unblock", handleUnblockAccount(svc))
+	register(registry, "accounts.delete", http.MethodDelete, "/accounts/{code}", handleDeleteAccount(svc))
+	register(registry, "accounts.group.put", http.MethodPut, "/accounts/{code}/group", handleSetAccountGroup(svc))
+	register(registry, "accounts.currency.put", http.MethodPut, "/accounts/{code}/currency", handleSetAccountCurrency(svc))
+	register(registry, "accounts.notes.put", http.MethodPut, "/accounts/{code}/notes", handleSetAccountNotes(svc))
+
+	register(registry, "groups.create.post", http.MethodPost, "/groups", handleCreateGroup(svc))
+	register(registry, "groups.default.currency.put", http.MethodPut, "/groups/-/default/currency", handleSetDefaultGroupCurrency(svc))
+	register(registry, "groups.get", http.MethodGet, "/groups/{code}", handleGetGroup(svc))
+	register(registry, "groups.update.put", http.MethodPut, "/groups/{code}", handleUpdateGroup(svc))
+	register(registry, "groups.currency.put", http.MethodPut, "/groups/{code}/currency", handleSetGroupCurrency(svc))
+	register(registry, "groups.notes.put", http.MethodPut, "/groups/{code}/notes", handleSetGroupNotes(svc))
+	register(registry, "groups.block.post", http.MethodPost, "/groups/{code}/block", handleBlockGroup(svc))
+	register(registry, "groups.unblock.post", http.MethodPost, "/groups/{code}/unblock", handleUnblockGroup(svc))
+	register(registry, "groups.delete", http.MethodDelete, "/groups/{code}", handleDeleteGroup(svc))
 }
 
 // RegisterListRoutes registers the read-only dictionary and paginated domain

@@ -374,6 +374,21 @@ func (b *Builder) Build(
 // After the factory succeeds, a failure stops trading, stops market data, then
 // closes the node. On success the returned App owns that shutdown sequence.
 func (b *Builder) BuildOver(ctx context.Context, logger *slog.Logger, factory NodeRuntimeFactory) (*App, error) {
+	return b.buildOver(ctx, logger, factory, true)
+}
+
+// BuildOverNode composes a node-only surface without signing, market data or
+// trading runtimes. The service factory receives nil for those three parts;
+// the host must expose only operations that need the node. It transfers node
+// ownership on success and closes it on a subsequent composition failure.
+// Like BuildOver, it never opens a store or starts a producer.
+func (b *Builder) BuildOverNode(ctx context.Context, logger *slog.Logger, target node.Node) (*App, error) {
+	return b.buildOver(ctx, logger, func(context.Context, *marketdata.Registry, *trading.Registry) (NodeRuntime, error) {
+		return NodeRuntime{Node: target}, nil
+	}, false)
+}
+
+func (b *Builder) buildOver(ctx context.Context, logger *slog.Logger, factory NodeRuntimeFactory, full bool) (*App, error) {
 	switch {
 	case b == nil:
 		return nil, errors.New("app: nil builder")
@@ -407,11 +422,11 @@ func (b *Builder) BuildOver(ctx context.Context, logger *slog.Logger, factory No
 	switch {
 	case runtime.Node == nil:
 		missing = "node"
-	case runtime.Signing == nil:
+	case full && runtime.Signing == nil:
 		missing = "signing service"
-	case runtime.MarketData == nil:
+	case full && runtime.MarketData == nil:
 		missing = "market-data runtime"
-	case runtime.Trading == nil:
+	case full && runtime.Trading == nil:
 		missing = "trading runtime"
 	}
 	if missing != "" {

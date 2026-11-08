@@ -20,6 +20,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -429,4 +430,46 @@ func TestBuildOverServiceFactoryError(t *testing.T) {
 		t.Fatalf("service error = %v; want joined node close error", err)
 	}
 	requireCalls(t, calls, []string{"trading.Stop", "marketData.Stop", "node.Close"})
+}
+
+func TestBuildOverNodeDoesNotRequireOrStartProducers(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			var calls []string
+			target := &recordingNode{calls: &calls}
+			b := app.NewBuilder()
+			b.SetAuthorizer(httpx.AllowAll{})
+			b.SetCallerResolver(func(*http.Request) (domain.Caller, error) { return domain.Caller{}, nil })
+			b.SetRouteConfigBuilder(func(backend.ControlPlane, httpx.LogSource) app.RouteConfig {
+				return app.RouteConfig{Routes: &httpx.RouteRegistry{}}
+			})
+			failure := errors.New("service refused")
+			b.SetServiceFactory(func(_ context.Context, got node.Node, md backend.MarketDataRuntime,
+				tr backend.TradingRuntime, signer signing.Service, _ *marketdata.Registry,
+				_ *frameworkmcp.ToolRegistry) (backend.ControlPlane, error) {
+				if got != target || md != nil || tr != nil || signer != nil {
+					t.Fatal("unexpected runtime parts")
+				}
+				if fail {
+					return nil, failure
+				}
+				return testService{}, nil
+			})
+			a, err := b.BuildOverNode(t.Context(), quietLogger(), target)
+			if fail {
+				if a != nil || !errors.Is(err, failure) {
+					t.Fatalf("BuildOverNode = %v, %v", a, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				requireCalls(t, calls, nil)
+				if err := a.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			requireCalls(t, calls, []string{"node.Close"})
+		})
+	}
 }
