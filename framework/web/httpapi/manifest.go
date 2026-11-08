@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"go.openpit.dev/officer/framework/auth"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // Access is what credentials a route requires once access modes are enforced.
@@ -77,71 +78,83 @@ type runtimeRouteManifestEntry struct {
 	DuringSetup bool   `json:"duringSetup,omitempty"`
 }
 
-// mountedOperations lists, in manifest order, every operation NewRouter mounts:
-// routes on both prefixes, panelRoutes, the MCP handler on mcpPath (empty when
-// none is mounted), extraMounts and the SPA fallback. Like
-// RouteRegistry.Register on an empty id, it panics on a public routes entry and
-// on an extra mount without a valid access kind; it refuses two operations
-// chi routes as one (see routingKey), a route id in both registries, and an
-// extra mount or an MCP path under a v1 prefix (see v1PrefixOf).
+// mountedOperations lists each surface's routes and optional manifest in list
+// order, then MCP, extra mounts and, only when an SPA is configured, the SPA
+// fallback (GET /*). It validates surfaces and refuses duplicate route IDs
+// within a surface, operations chi routes as one
+// (see routingKey), and extra mounts or MCP paths at or under a surface prefix.
+// It refuses public routes outside SourcePanel and extra mounts without a
+// valid access kind.
 func mountedOperations(
-	routes, panelRoutes []Route,
+	surfaces []Surface,
 	mcpPath string,
 	extraMounts []ExtraMount,
+	hasSPA bool,
 ) ([]runtimeRouteManifestEntry, error) {
 	var operations []runtimeRouteManifestEntry
-	routeIDs := make(map[string]bool, len(routes))
-	for _, route := range routes {
-		if route.Public {
-			panic(fmt.Sprintf(
-				"httpapi: route %q is public: public routes belong to PanelRoutes",
-				route.ID,
-			))
+	manifestMounted := false
+	for i, surface := range surfaces {
+		if surface.Prefix == "" || !strings.HasPrefix(surface.Prefix, "/") ||
+			strings.HasSuffix(surface.Prefix, "/") || strings.ContainsAny(surface.Prefix, "{}*") {
+			return nil, fmt.Errorf("httpapi: invalid surface prefix %q", surface.Prefix)
 		}
-		routeIDs[route.ID] = true
-		operations = append(operations, runtimeRouteManifestEntry{
-			routeID: route.ID,
-			Method:  route.Method,
-			Path:    apiPrefix + route.Pattern,
-			Access:  AccessAPI,
-		})
-	}
-	operations = append(operations, runtimeRouteManifestEntry{
-		Method: http.MethodGet,
-		Path:   apiPrefix + runtimeRouteManifestPath,
-		Access: AccessAPI,
-	})
-	for _, route := range routes {
-		operations = append(operations, runtimeRouteManifestEntry{
-			routeID:     route.ID,
-			Method:      route.Method,
-			Path:        panelPrefix + route.Pattern,
-			Access:      AccessPanel,
-			DuringSetup: route.DuringSetup,
-		})
-	}
-	for _, route := range panelRoutes {
-		if routeIDs[route.ID] {
-			return nil, fmt.Errorf(
-				"httpapi: route id %q is in both Routes and PanelRoutes", route.ID,
-			)
+		for _, previous := range surfaces[:i] {
+			if atOrUnder(surface.Prefix, previous.Prefix) ||
+				atOrUnder(previous.Prefix, surface.Prefix) {
+				return nil, fmt.Errorf("httpapi: surface prefixes %q and %q overlap", previous.Prefix, surface.Prefix)
+			}
 		}
-		access, routeID := AccessPanel, route.ID
-		if route.Public {
-			// The router serves a public route without the Authorizer, so the
-			// entry is listed for every caller.
-			access, routeID = AccessPublic, ""
+		var access Access
+		switch surface.Source {
+		case domain.SourceAPI:
+			access = AccessAPI
+		case domain.SourcePanel:
+			access = AccessPanel
+		default:
+			return nil, fmt.Errorf("httpapi: surface %q has invalid source %q", surface.Prefix, surface.Source)
 		}
-		operations = append(operations, runtimeRouteManifestEntry{
-			routeID:     routeID,
-			Method:      route.Method,
-			Path:        panelPrefix + route.Pattern,
-			Access:      access,
-			DuringSetup: route.DuringSetup,
-		})
+		if surface.Manifest {
+			if manifestMounted {
+				return nil, fmt.Errorf("httpapi: more than one surface mounts the manifest")
+			}
+			manifestMounted = true
+		}
+		routeIDs := make(map[string]bool, len(surface.Routes))
+		for _, route := range surface.Routes {
+			if route.ID == "" {
+				return nil, fmt.Errorf("httpapi: route id is empty in surface %q", surface.Prefix)
+			}
+			if routeIDs[route.ID] {
+				return nil, fmt.Errorf("httpapi: route id %q appears twice in surface %q", route.ID, surface.Prefix)
+			}
+			routeIDs[route.ID] = true
+			entry := runtimeRouteManifestEntry{
+				routeID: route.ID,
+				Method:  route.Method,
+				Path:    surface.Prefix + route.Pattern,
+				Access:  access,
+			}
+			if surface.Source == domain.SourcePanel {
+				entry.DuringSetup = route.DuringSetup
+			}
+			if route.Public {
+				if surface.Source != domain.SourcePanel {
+					return nil, fmt.Errorf("httpapi: route %q is public on non-panel surface %q", route.ID, surface.Prefix)
+				}
+				entry.Access, entry.routeID = AccessPublic, ""
+			}
+			operations = append(operations, entry)
+		}
+		if surface.Manifest {
+			operations = append(operations, runtimeRouteManifestEntry{
+				Method: http.MethodGet,
+				Path:   surface.Prefix + runtimeRouteManifestPath,
+				Access: access,
+			})
+		}
 	}
 	if mcpPath != "" {
-		if prefix := v1PrefixOf(mcpPath); prefix != "" {
+		if prefix := surfacePrefixOf(mcpPath, surfaces); prefix != "" {
 			return nil, fmt.Errorf("httpapi: MCP path %s is under %s", mcpPath, prefix)
 		}
 		for _, method := range mcpMethods {
@@ -154,12 +167,12 @@ func mountedOperations(
 	}
 	for _, mount := range extraMounts {
 		if mount.Access != AccessPublic && mount.Access != AccessAgent {
-			panic(fmt.Sprintf(
+			return nil, fmt.Errorf(
 				"httpapi: extra mount %s %s has no valid access kind",
 				mount.Method, mount.Pattern,
-			))
+			)
 		}
-		if prefix := v1PrefixOf(mount.Pattern); prefix != "" {
+		if prefix := surfacePrefixOf(mount.Pattern, surfaces); prefix != "" {
 			return nil, fmt.Errorf(
 				"httpapi: extra mount %s %s is under %s",
 				mount.Method, mount.Pattern, prefix,
@@ -171,11 +184,13 @@ func mountedOperations(
 			Access: mount.Access,
 		})
 	}
-	operations = append(operations, runtimeRouteManifestEntry{
-		Method: http.MethodGet,
-		Path:   "/*",
-		Access: AccessPublic,
-	})
+	if hasSPA {
+		operations = append(operations, runtimeRouteManifestEntry{
+			Method: http.MethodGet,
+			Path:   "/*",
+			Access: AccessPublic,
+		})
+	}
 
 	mounted := make(map[string]bool, len(operations))
 	for _, operation := range operations {
@@ -238,16 +253,21 @@ func routingKey(method, path string) string {
 	}
 }
 
-// v1PrefixOf returns the v1 prefix path is or lies under, or "" when it is
-// under neither. A route on the parent tree there can win over the subrouter
-// mounted on the prefix and answer v1 paths outside the v1 chain.
-func v1PrefixOf(path string) string {
-	for _, prefix := range []string{apiPrefix, panelPrefix} {
-		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+// surfacePrefixOf returns the surface prefix path is or lies under, or "" when
+// none matches. A route on the parent tree there can win over the subrouter
+// mounted on the prefix and answer paths outside the surface's chain.
+func surfacePrefixOf(path string, surfaces []Surface) string {
+	for _, surface := range surfaces {
+		prefix := surface.Prefix
+		if atOrUnder(path, prefix) {
 			return prefix
 		}
 	}
 	return ""
+}
+
+func atOrUnder(path, prefix string) bool {
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
 // newRuntimeRouteManifestHandler serves the manifest of operations in the

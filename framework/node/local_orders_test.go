@@ -2970,8 +2970,8 @@ func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
 	if len(eng.submitCalls) != 1 {
 		t.Fatalf("submit calls = %+v, want one engine apply", eng.submitCalls)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire on post-engine order persistence failure")
+	if !errors.Is(fatalErr, storeErr) {
+		t.Fatalf("fatal order persistence error: got %v, want %v", fatalErr, storeErr)
 	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="record order submission"`) ||
@@ -3077,8 +3077,8 @@ func TestLocalNode_SubmitImmediatePostEngineStoreFailureFatals(t *testing.T) {
 	if len(eng.submitCalls) != 1 {
 		t.Fatalf("submit calls = %+v, want one engine apply", eng.submitCalls)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire on post-engine immediate persistence failure")
+	if !errors.Is(fatalErr, storeErr) {
+		t.Fatalf("fatal immediate persistence error: got %v, want %v", fatalErr, storeErr)
 	}
 	msg := fatalErr.Error()
 	if !strings.Contains(msg, `operation="record immediate submission"`) ||
@@ -3633,8 +3633,8 @@ func TestChainRootCausePreservesNonChainDiagnostics(t *testing.T) {
 		asyncengine.ErrChainRetryUnsafe,
 		rollback,
 	))
-	if cause == nil {
-		t.Fatal("chainRootCause returned nil")
+	if !errors.Is(cause, settlement) || !errors.Is(cause, rollback) {
+		t.Fatalf("chainRootCause: got %v, want %v and %v", cause, settlement, rollback)
 	}
 	diagnostic := cause.Error()
 	if !strings.Contains(diagnostic, "settle broker leg: EOF") {

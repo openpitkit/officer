@@ -133,7 +133,7 @@ func (r *realmStore) ListEnabledMarketDataInstances(
 // queryMDInstances runs q and scans the result into a slice of instances.
 func (r *realmStore) queryMDInstances(
 	ctx context.Context, q string, args ...any,
-) ([]domain.MarketDataInstance, error) {
+) (value []domain.MarketDataInstance, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -142,7 +142,7 @@ func (r *realmStore) queryMDInstances(
 	if err != nil {
 		return nil, fmt.Errorf("store: list market data instances: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.MarketDataInstance, 0)
 	for rows.Next() {
@@ -259,7 +259,7 @@ func scanMDInstance(scanner sqlScanner, store *sqliteStore) (domain.MarketDataIn
 	}
 	xid, err := domain.ExternalIDFromBytes(rawID)
 	if err != nil {
-		return domain.MarketDataInstance{}, fmt.Errorf("store: decode instance external id: %w", err)
+		return domain.MarketDataInstance{}, fmt.Errorf("store: decode instance external id: %v", err)
 	}
 	inst.ExternalID = xid
 	plaintext, err := store.openValue(
@@ -379,7 +379,7 @@ func (r *realmStore) ListEnabledMarketDataInstruments(
 // queryMDInstruments runs q with args and scans the result into a slice.
 func (r *realmStore) queryMDInstruments(
 	ctx context.Context, q string, args ...any,
-) ([]domain.MarketDataInstrument, error) {
+) (value []domain.MarketDataInstrument, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -388,7 +388,7 @@ func (r *realmStore) queryMDInstruments(
 	if err != nil {
 		return nil, fmt.Errorf("store: list market data instruments: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.MarketDataInstrument, 0)
 	for rows.Next() {
@@ -467,7 +467,7 @@ func scanMDInstrument(rows *sql.Rows) (domain.MarketDataInstrument, error) {
 	xid, err := domain.ExternalIDFromBytes(rawXID)
 	if err != nil {
 		return domain.MarketDataInstrument{},
-			fmt.Errorf("store: decode instrument instance external id: %w", err)
+			fmt.Errorf("store: decode instrument instance external id: %v", err)
 	}
 	instr.Instance = xid
 	return instr, nil

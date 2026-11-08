@@ -217,7 +217,7 @@ func TestPreMigrationUnwritableDirectory(t *testing.T) {
 		}
 	})
 	err = st.Migrate(context.Background())
-	if err == nil || !strings.Contains(err.Error(), path+".pre-migration-") ||
+	if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), path+".pre-migration-") ||
 		!strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("Migrate error = %v, want copy path and permission denial", err)
 	}
@@ -250,7 +250,7 @@ func TestPreMigrationExistingName(t *testing.T) {
 		}
 	}
 	err = st.Migrate(context.Background())
-	if err == nil || !strings.Contains(err.Error(), path+".pre-migration-") ||
+	if !errors.Is(err, os.ErrExist) || !strings.Contains(err.Error(), path+".pre-migration-") ||
 		!strings.Contains(err.Error(), "hard link") {
 		t.Fatalf("Migrate error = %v, want copy path and failed hard link", err)
 	}

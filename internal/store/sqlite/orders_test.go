@@ -605,8 +605,8 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 	}
 	badAlg := unsigned
 	badAlg.Alg = "bogus"
-	if err := rs.PutEventAttestation(ctx, badAlgEvent.ExternalID, badAlg); err == nil {
-		t.Fatal("PutEventAttestation(bad alg) = nil, want CHECK violation")
+	if err := rs.PutEventAttestation(ctx, badAlgEvent.ExternalID, badAlg); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("got %v, want domain.ErrInvalid for the unknown algorithm", err)
 	}
 
 	badKeyEvent, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{

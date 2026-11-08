@@ -62,10 +62,15 @@ func ValidateSource(s Source) error {
 type Caller struct {
 	// Source is the channel that initiated the action.
 	Source Source
-	// Principal is the identity string (e.g. "operator", "system").
+	// Principal is the code (Principal.Code) of the principal that initiated the
+	// action: immutable, unique per realm, unchanged when the principal's Title
+	// changes, and empty for a system-initiated action. The audit row records it
+	// as store.AuditEntry.Actor. Officer grants no rights by it - its own
+	// authorizer and account scope never read it - but binds an MCP HTTP session
+	// to the caller that opened it, so a resolver must stamp one principal per
+	// user. The default composition stamps PrincipalOperator; a composition with
+	// its own auth.CallerResolver stamps the code of the principal it resolved.
 	Principal string
-	// Role is reserved for future authorisation checks; leave empty now.
-	Role string
 }
 
 // TightenOnly reports whether the caller may only tighten risk state and

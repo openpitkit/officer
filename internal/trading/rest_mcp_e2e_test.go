@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/shopspring/decimal"
 
@@ -56,6 +57,7 @@ import (
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
+	"go.openpit.dev/officer/internal/logtest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 	"go.openpit.dev/officer/signing"
@@ -79,15 +81,19 @@ func (l *tradingE2ELog) String() string {
 }
 
 type tradingE2E struct {
-	t              *testing.T
-	ctx            context.Context
-	caller         domain.Caller
-	builder        *app.Builder
-	app            *app.App
-	router         http.Handler
-	realm          store.RealmStore
-	logs           tradingE2ELog
-	venueMu        sync.Mutex
+	t       *testing.T
+	ctx     context.Context
+	caller  domain.Caller
+	builder *app.Builder
+	app     *app.App
+	router  http.Handler
+	realm   store.RealmStore
+	logs    tradingE2ELog
+	venueMu sync.Mutex
+	// closing, guarded by venueMu, marks app shutdown, when the connector
+	// may abandon a dialed stream before sending its auth frame. Such an
+	// abandoned stream does not count as a missing auth frame.
+	closing        bool
 	fees           []map[string]string
 	accountError   bool
 	accountRefusal string
@@ -138,7 +144,17 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 				return
 			}
 			defer func() { _ = conn.CloseNow() }()
-			if !readAuth(t, ctx, conn) {
+			_, raw, err := conn.Read(ctx)
+			if err != nil {
+				f.venueMu.Lock()
+				closing := f.closing
+				f.venueMu.Unlock()
+				if !closing {
+					t.Error("auth frame missing")
+				}
+				return
+			}
+			if !checkAuthFrame(t, raw) {
 				return
 			}
 			f.venueMu.Lock()
@@ -149,7 +165,9 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 				case "unauthorized":
 					sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":"unauthorized","action":"authenticate"}}`)
 				case "close":
-					_ = conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker")
+					if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil {
+						t.Error(err)
+					}
 				default:
 					t.Errorf("unknown stream fault %q", fault)
 				}
@@ -305,9 +323,7 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 	})
 	f.builder.SetSPAFactory(func() (fs.FS, error) { return fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("test")}}, nil })
 	tradingE2EMust(t, f.builder.RegisterTradingProvider(provider))
-	oldLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&f.logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+	logtest.SetDefault(t, slog.NewTextHandler(&f.logs, nil))
 	f.start()
 	t.Cleanup(f.close)
 	for _, code := range []string{"desk", "other", "fees"} {
@@ -319,6 +335,9 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 
 func (f *tradingE2E) start() {
 	f.t.Helper()
+	f.venueMu.Lock()
+	f.closing = false
+	f.venueMu.Unlock()
 	var err error
 	f.app, err = f.builder.Build(auth.ContextWithCaller(f.ctx, f.caller), slog.Default(), func(err error) { f.t.Errorf("fatal app shutdown: %v", err) })
 	tradingE2EMust(f.t, err)
@@ -348,7 +367,12 @@ func (f *tradingE2E) waitStreams() {
 
 func (f *tradingE2E) close() {
 	f.t.Helper()
-	defer func() { tradingE2EMust(f.t, f.app.Close()) }()
+	defer func() {
+		f.venueMu.Lock()
+		f.closing = true
+		f.venueMu.Unlock()
+		tradingE2EMust(f.t, f.app.Close())
+	}()
 	f.waitStreams()
 }
 
@@ -1144,8 +1168,9 @@ func TestTradingSendPaperRefusalsEndToEnd(t *testing.T) {
 				input["destination"].(map[string]any)["route"] = route
 				if surface == "MCP" && route != nil {
 					_, err := f.callMCP("send_paper_order", input)
-					if err == nil || !strings.Contains(err.Error(), "unmarshaling") {
-						t.Fatal("MCP must refuse a non-object route at decode")
+					var rpcErr *jsonrpc.Error
+					if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams || !strings.Contains(err.Error(), "unmarshaling") {
+						t.Fatalf("non-object route: got %v, want JSON-RPC invalid params at decode", err)
 					}
 					tradingE2ENoSecrets(t, "MCP route decode", []byte(err.Error()))
 				} else {

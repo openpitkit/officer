@@ -284,8 +284,7 @@ func newTestRouter(
 		t.Fatalf("AllowedHosts: %v", err)
 	}
 	router, err := httpx.NewRouter(httpx.RouterConfig{
-		Routes:         routes,
-		PanelRoutes:    panelRoutes,
+		Surfaces:       httpx.V1Surfaces(routes, panelRoutes),
 		Authorizer:     httpx.AllowAll{},
 		CallerResolver: resolver,
 		SPA:            fstest.MapFS{"index.html": {Data: []byte("<html></html>")}},

@@ -212,8 +212,9 @@ func TestLocalNode_SeedAccountBlockWithoutAccountFailsClosed(t *testing.T) {
 		domain.DefaultRealm, st, seedBlockBuild(eng),
 		func(hookErr error) { fatal = hookErr },
 	)
-	if err == nil {
-		t.Fatal("NewLocalNode succeeded, want failure on an unattributable block")
+	var mutationErr internalPostCommitNodeMutationFailure
+	if !errors.As(err, &mutationErr) {
+		t.Fatalf("NewLocalNode: got %v, want internalPostCommitNodeMutationFailure", err)
 	}
 	if fatal == nil {
 		t.Fatal("fatal hook not invoked for an unattributable engine block")

@@ -142,8 +142,8 @@ func TestTableNameRejectsNUL(t *testing.T) {
 			if got != "" {
 				t.Errorf("tableName() = %q, want empty name", got)
 			}
-			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q", test.invalid)) {
-				t.Errorf("tableName() error = %v, want offending name", err)
+			if !errors.Is(err, errInvalidIdentifier) || !strings.Contains(err.Error(), fmt.Sprintf("%q", test.invalid)) {
+				t.Errorf("tableName() error = %v, want errInvalidIdentifier naming %q", err, test.invalid)
 			}
 			if err == nil || !strings.Contains(err.Error(), "NUL byte") {
 				t.Errorf("tableName() error = %v, want NUL byte reason", err)

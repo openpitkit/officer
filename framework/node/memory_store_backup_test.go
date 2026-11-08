@@ -599,8 +599,8 @@ func TestLocalNodeRestoreRollbackPreservesActiveSigningPrivateMaterial(t *testin
 	)
 	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
-	}, testCaller); err == nil {
-		t.Fatal("RestoreBackup succeeded, want injected post-commit audit failure")
+	}, testCaller); !errors.Is(err, errRestoreAuditFailed) {
+		t.Fatalf("RestoreBackup: got %v, want errRestoreAuditFailed", err)
 	}
 	active, ok, err := realm.GetActiveSigningKey(ctx)
 	if err != nil || !ok {
@@ -610,8 +610,8 @@ func TestLocalNodeRestoreRollbackPreservesActiveSigningPrivateMaterial(t *testin
 		!bytes.Equal(active.PrivateKey, privateKey) {
 		t.Fatalf("active key after rollback = %+v, want byte-exact target material", active)
 	}
-	if _, err := realm.GetSigningKey(ctx, "incoming"); err == nil {
-		t.Fatal("rollback retained signing key introduced by failed restore")
+	if _, err := realm.GetSigningKey(ctx, "incoming"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("incoming signing key: got %v, want domain.ErrNotFound after rollback", err)
 	}
 }
 
@@ -680,8 +680,8 @@ func TestLocalNodeRestoreRollbackRefusesAfterReplaceAllPrunesSigningKey(t *testi
 		t.Fatal("engine stopped for non-runtime failed restore")
 	}
 
-	if key, err := realm.GetSigningKey(ctx, "target-active"); err == nil {
-		t.Fatalf("target signing key was rewritten by unsafe rollback: %+v", key)
+	if key, err := realm.GetSigningKey(ctx, "target-active"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("target signing key = %+v, got %v, want domain.ErrNotFound", key, err)
 	}
 	incoming, err := realm.GetSigningKey(ctx, "incoming")
 	if err != nil {

@@ -23,6 +23,7 @@ import (
 	"errors"
 	"go/parser"
 	"go/token"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -70,8 +71,8 @@ func TestParseCredentials(t *testing.T) {
 		`{"apiKey":" test-key-marker ","apiSecret":" test-secret-marker "`,
 	} {
 		_, err := ParseCredentials(raw)
-		if err == nil {
-			t.Fatal("invalid credentials accepted")
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("got %v, want domain.ErrInvalid", err)
 		}
 		assertNoCredentials(t, err.Error())
 	}
@@ -262,8 +263,9 @@ func TestAssetsTransportError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	server.Close()
 	assets, err := NewClient(server.URL, testCredentials, server.Client()).Assets(context.Background())
-	if err == nil || assets != nil {
-		t.Fatal("transport failure was not returned")
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "dial" || assets != nil {
+		t.Fatalf("Assets: got %v, want a dial *net.OpError and no assets", err)
 	}
 	assertNoCredentials(t, err.Error())
 }

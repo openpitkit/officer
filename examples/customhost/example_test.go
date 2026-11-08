@@ -59,6 +59,19 @@ import (
 
 func buildCustomHost(t *testing.T, composition customHostComposition) (*app.App, http.Handler, access.Store) {
 	t.Helper()
+	composition.Builder.SetSPAFactory(func() (fs.FS, error) {
+		return fstest.MapFS{"index.html": {Data: []byte("<html>dashboard</html>")}}, nil
+	})
+	built, accessState := buildCustomHostApp(t, composition)
+	router, err := built.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatalf("BuildServeHandler: %v", err)
+	}
+	return built, router, accessState
+}
+
+func buildCustomHostApp(t *testing.T, composition customHostComposition) (*app.App, access.Store) {
+	t.Helper()
 	ctx := context.Background()
 	var accessState access.Store
 	composition.Builder.SetNodeBuilder(func(
@@ -79,10 +92,6 @@ func buildCustomHost(t *testing.T, composition customHostComposition) (*app.App,
 			fatalHook,
 		)
 	})
-	composition.Builder.SetSPAFactory(func() (fs.FS, error) {
-		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
-	})
-
 	built, err := composition.Builder.Build(ctx, slog.Default(), func(err error) {
 		t.Errorf("unexpected fatal shutdown: %v", err)
 	})
@@ -91,11 +100,7 @@ func buildCustomHost(t *testing.T, composition customHostComposition) (*app.App,
 	}
 	t.Cleanup(func() { _ = built.Close() })
 
-	router, err := built.BuildServeHandler(nil, "/mcp")
-	if err != nil {
-		t.Fatalf("BuildServeHandler: %v", err)
-	}
-	return built, router, accessState
+	return built, accessState
 }
 
 func TestCustomHostCompositionAddReplaceHideRemove(t *testing.T) {
@@ -151,6 +156,240 @@ func TestCustomHostAuthorizerKeepsSetupClosed(t *testing.T) {
 		"http://127.0.0.1/app/api/v1/assets", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("host-admitted operator after setup = %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+func TestCustomHostSurface(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		resolverErr      error
+		denyRoute        bool
+		wantStatus       int
+		wantError        string
+		wantHandlerCalls int
+	}{
+		{name: "authorized", wantStatus: http.StatusOK, wantHandlerCalls: 1},
+		{name: "resolver refused", resolverErr: domain.ErrUnauthorized,
+			wantStatus: http.StatusUnauthorized, wantError: "unauthorized"},
+		{name: "authorizer refused", denyRoute: true,
+			wantStatus: http.StatusForbidden, wantError: "forbidden"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			composition, err := newCustomHostComposition(
+				officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+			)
+			if err != nil {
+				t.Fatalf("newCustomHostComposition: %v", err)
+			}
+			var resolverCalls, handlerCalls int
+			var resolverErr error
+			composition.Builder.SetCallerResolver(func(*http.Request) (domain.Caller, error) {
+				resolverCalls++
+				return domain.Caller{Principal: domain.PrincipalOperator}, resolverErr
+			})
+			if tc.denyRoute {
+				composition.Builder.SetAuthorizer(newDenyOneAuthorizer(
+					hostSurfaceRouteID, hiddenToolID, composition.Authorizer,
+				))
+			}
+			installed := composition.Builder.RouteConfigBuilder()
+			composition.Builder.SetRouteConfigBuilder(func(
+				svc backend.ControlPlane, logs httpx.LogSource,
+			) app.RouteConfig {
+				cfg := installed(svc, logs)
+				for i := range cfg.Surfaces {
+					for j := range cfg.Surfaces[i].Routes {
+						route := &cfg.Surfaces[i].Routes[j]
+						if route.ID == hostSurfaceRouteID {
+							handler := route.Handler
+							route.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+								handlerCalls++
+								handler.ServeHTTP(w, r)
+							})
+						}
+					}
+				}
+				return cfg
+			})
+			_, router, _ := buildCustomHost(t, composition)
+			accesstest.CompleteOpen(t, router, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+			resolverCalls, handlerCalls = 0, 0
+			resolverErr = tc.resolverErr
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"http://127.0.0.1"+hostSurfacePrefix+"/host", nil))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("surface response = %d %s, want %d", rec.Code, rec.Body, tc.wantStatus)
+			}
+			if resolverCalls != 1 {
+				t.Fatalf("surface resolver calls = %d, want 1", resolverCalls)
+			}
+			if handlerCalls != tc.wantHandlerCalls {
+				t.Fatalf("surface handler calls = %d, want %d", handlerCalls, tc.wantHandlerCalls)
+			}
+			if tc.wantError != "" {
+				var answer struct {
+					Error struct{ Code string } `json:"error"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil || answer.Error.Code != tc.wantError {
+					t.Fatalf("surface refusal = %s, want JSON %s (decode: %v)", rec.Body, tc.wantError, err)
+				}
+			} else {
+				var answer map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil || answer["example"] != "ok" {
+					t.Fatalf("surface response = %s, want example ok (decode: %v)", rec.Body, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCustomHostNotFound(t *testing.T) {
+	composition, err := newCustomHostComposition(
+		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	)
+	if err != nil {
+		t.Fatalf("newCustomHostComposition: %v", err)
+	}
+	_, router, _ := buildCustomHost(t, composition)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1/missing", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "<html>dashboard</html>" {
+		t.Fatalf("unknown root path response = %d %q, want SPA index", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"http://127.0.0.1"+hostSurfacePrefix+"/missing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown surface path response = %d %s, want 404", rec.Code, rec.Body)
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("unknown surface path Content-Type = %q, want application/json", contentType)
+	}
+	var answer struct {
+		Error struct{ Code, Message string } `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
+		answer.Error.Code != "not_found" || answer.Error.Message != domain.ErrNotFound.Error() {
+		t.Fatalf("unknown surface path response = %s, want JSON not_found (decode: %v)", rec.Body, err)
+	}
+}
+
+func TestCustomHostWithoutSPANotFound(t *testing.T) {
+	composition, err := newCustomHostComposition(
+		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	)
+	if err != nil {
+		t.Fatalf("newCustomHostComposition: %v", err)
+	}
+	composition.Builder.SetSPAFactory(nil)
+	built, _ := buildCustomHostApp(t, composition)
+	router, err := built.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatalf("BuildServeHandler: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1/missing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown root path response = %d %s, want 404", rec.Code, rec.Body)
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("unknown root path Content-Type = %q, want application/json", contentType)
+	}
+	var answer struct {
+		Error struct{ Code, Message string } `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil ||
+		answer.Error.Code != "not_found" || answer.Error.Message != domain.ErrNotFound.Error() {
+		t.Fatalf("unknown root path response = %s, want JSON not_found (decode: %v)", rec.Body, err)
+	}
+}
+
+func TestCustomHostRequiresRouteRegistry(t *testing.T) {
+	composition, err := newCustomHostComposition(
+		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	)
+	if err != nil {
+		t.Fatalf("newCustomHostComposition: %v", err)
+	}
+	composition.Builder.SetSPAFactory(func() (fs.FS, error) {
+		return fstest.MapFS{"index.html": {Data: []byte("index")}}, nil
+	})
+	installed := composition.Builder.RouteConfigBuilder()
+	composition.Builder.SetRouteConfigBuilder(func(
+		svc backend.ControlPlane, logs httpx.LogSource,
+	) app.RouteConfig {
+		cfg := installed(svc, logs)
+		cfg.Routes = nil
+		return cfg
+	})
+	built, _ := buildCustomHostApp(t, composition)
+	if _, err := built.BuildServeHandler(nil, "/mcp"); err == nil || err.Error() != "app: nil route registry" {
+		t.Fatalf("BuildServeHandler error = %v, want app: nil route registry", err)
+	}
+}
+
+func TestCustomHostRejectsNilSPAFilesystem(t *testing.T) {
+	composition, err := newCustomHostComposition(
+		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	)
+	if err != nil {
+		t.Fatalf("newCustomHostComposition: %v", err)
+	}
+	composition.Builder.SetSPAFactory(func() (fs.FS, error) { return nil, nil })
+	built, _ := buildCustomHostApp(t, composition)
+	if _, err := built.BuildServeHandler(nil, "/mcp"); err == nil || err.Error() != "load embedded dashboard: nil filesystem" {
+		t.Fatalf("BuildServeHandler error = %v, want load embedded dashboard: nil filesystem", err)
+	}
+}
+
+func TestCustomHostRouterHooks(t *testing.T) {
+	composition, err := newCustomHostComposition(
+		officer.Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")},
+	)
+	if err != nil {
+		t.Fatalf("newCustomHostComposition: %v", err)
+	}
+	installed := composition.Builder.RouteConfigBuilder()
+	composition.Builder.SetRouteConfigBuilder(func(
+		svc backend.ControlPlane, logs httpx.LogSource,
+	) app.RouteConfig {
+		cfg := installed(svc, logs)
+		cfg.NotFound = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("host not found"))
+		})
+		cfg.MethodNotAllowed = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_, _ = w.Write([]byte("host method not allowed"))
+		})
+		return cfg
+	})
+	composition.Builder.SetSPAFactory(nil)
+	built, _ := buildCustomHostApp(t, composition)
+	router, err := built.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatalf("BuildServeHandler: %v", err)
+	}
+	for _, tc := range []struct {
+		method, path, wantBody, wantAllow string
+		wantStatus                        int
+	}{
+		{http.MethodGet, "/missing", "host not found", "", http.StatusNotFound},
+		{http.MethodGet, hostSurfacePrefix + "/missing", "host not found", "", http.StatusNotFound},
+		{http.MethodPost, hostSurfacePrefix + "/host", "host method not allowed", http.MethodGet, http.StatusMethodNotAllowed},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(tc.method, "http://127.0.0.1"+tc.path, nil))
+			if rec.Code != tc.wantStatus || rec.Body.String() != tc.wantBody {
+				t.Fatalf("router hook response = %d %q, want %d %q", rec.Code, rec.Body.String(), tc.wantStatus, tc.wantBody)
+			}
+			if allow := rec.Header().Get("Allow"); allow != tc.wantAllow {
+				t.Fatalf("router hook Allow = %q, want %q", allow, tc.wantAllow)
+			}
+		})
 	}
 }
 

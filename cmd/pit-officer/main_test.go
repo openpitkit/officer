@@ -178,8 +178,9 @@ func TestDatabaseForBuildRefusesErrors(t *testing.T) {
 				}
 			})
 		}
-		if err == nil || !strings.Contains(err.Error(), stale) {
-			t.Fatalf("serve error = %v, want stale removal failure naming %q", err, stale)
+		var pathErr *os.PathError
+		if !errors.As(err, &pathErr) || pathErr.Op != "remove" || pathErr.Path != stale || !strings.Contains(err.Error(), stale) {
+			t.Fatalf("serve error = %v, want a remove *os.PathError for %q", err, stale)
 		}
 	})
 	t.Run("release-is-directory", func(t *testing.T) {

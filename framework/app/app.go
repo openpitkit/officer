@@ -62,8 +62,25 @@ type NodeHook func(context.Context, store.Store, node.Node) error
 // SigningFactory builds the approval signing service.
 type SigningFactory func(store.RealmStore) (signing.Service, error)
 
+// NodeRuntime holds a running node and its services. All four parts are required
+// by BuildOver; the signer has no separate shutdown operation.
+type NodeRuntime struct {
+	Node       node.Node
+	Signing    signing.Service
+	MarketData backend.MarketDataRuntime
+	Trading    backend.TradingRuntime
+}
+
+// NodeRuntimeFactory supplies running parts using the builder's provider
+// registries. On error it must release everything it created. On success it
+// transfers ownership to BuildOver, including when a part is missing.
+// A missing part is a nil interface value. A typed nil pointer stored in a field
+// is a present part, and the factory must not return one.
+type NodeRuntimeFactory func(context.Context, *marketdata.Registry, *trading.Registry) (NodeRuntime, error)
+
 // ServiceFactory builds the framework control plane service over the node.
-// The context is Build's: the factory may read the node while it builds.
+// The context is Build's or BuildOver's: the factory may read the node while it
+// builds.
 type ServiceFactory func(
 	context.Context,
 	node.Node,
@@ -76,12 +93,24 @@ type ServiceFactory func(
 
 // RouteConfig carries an app's registered HTTP surface.
 type RouteConfig struct {
+	// Routes is required and supplies Officer's V1 route pair.
 	Routes *httpx.RouteRegistry
 	// PanelRoutes are routes served only on the panel mirror /app/api/v1; nil
 	// means none.
 	PanelRoutes *httpx.RouteRegistry
-	BodyLimit   func(*http.Request) int64
-	ExtraMounts []httpx.ExtraMount
+	// Surfaces adds prefixes after Officer's V1 pair; see [httpx.Surface]
+	// for the routing and caller-source contract.
+	// Leave Manifest false: Officer's /api/v1 surface carries the single route
+	// manifest, which also lists these routes.
+	Surfaces []httpx.Surface
+	// NotFound handles unmatched paths; see [httpx.RouterConfig]. The router
+	// refuses it when a SPA is configured.
+	NotFound http.Handler
+	// MethodNotAllowed handles 405 responses; see [httpx.RouterConfig] for
+	// the hook's status, body, and Allow header contract.
+	MethodNotAllowed http.Handler
+	BodyLimit        func(*http.Request) int64
+	ExtraMounts      []httpx.ExtraMount
 	// AccessMode reports the access state of the service. The router calls it
 	// on every route manifest request, concurrently from request goroutines,
 	// so it must be safe for concurrent use. A value that is not an
@@ -96,7 +125,9 @@ type RouteConfigBuilder func(backend.ControlPlane, httpx.LogSource) RouteConfig
 // ToolRegistrar registers an app's MCP tools and catalogue entries.
 type ToolRegistrar func(*frameworkmcp.ToolRegistry, frameworkmcp.Source)
 
-// SPAFactory loads the embedded dashboard filesystem.
+// SPAFactory loads the dashboard filesystem. It is optional: without one,
+// unmatched paths use the router's typed JSON 404 unless NotFound is set.
+// A configured factory must return a non-nil filesystem or an error.
 type SPAFactory func() (fs.FS, error)
 
 // Builder collects the concrete hooks that make one composition.
@@ -173,7 +204,8 @@ func (b *Builder) AddToolRegistrar(registrar ToolRegistrar) {
 	}
 }
 
-// SetSPAFactory sets the embedded dashboard filesystem hook.
+// SetSPAFactory sets the dashboard filesystem hook. Nil disables the SPA;
+// unmatched paths use the router's typed JSON 404 unless NotFound is set.
 func (b *Builder) SetSPAFactory(factory SPAFactory) {
 	b.spaFactory = factory
 }
@@ -232,44 +264,37 @@ func (b *Builder) Build(
 	if fatalHook == nil {
 		return nil, errors.New("app: nil fatal shutdown hook")
 	}
-	version, err := backend.Version()
+	version, err := resolveVersion(logger)
 	if err != nil {
-		return nil, fmt.Errorf("resolve officer version: %w", err)
+		return nil, err
 	}
-	logger.Info("mcp server version", "version", version,
-		"release_build", backend.ReleaseBuild())
 
 	st, err := b.storeFactory()
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
 	if err := st.Migrate(ctx); err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("migrate store: %w", err)
+		return nil, errors.Join(fmt.Errorf("migrate store: %w", err), st.Close())
 	}
 	logger.Info("store migrated", "path", st.Path())
 
 	localNode, eng, err := b.nodeBuilder(ctx, st, fatalHook)
 	if err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("build node: %w", err)
+		return nil, errors.Join(fmt.Errorf("build node: %w", err), st.Close())
 	}
 	if localNode == nil {
 		if eng != nil {
 			eng.Stop()
 			eng.CloseMarketDataService()
 		}
-		_ = st.Close()
-		return nil, errors.New("build node: node builder returned no node")
+		return nil, errors.Join(errors.New("build node: node builder returned no node"), st.Close())
 	}
 	if eng == nil {
-		_ = localNode.Close()
-		return nil, errors.New("build node: node builder returned no engine")
+		return nil, errors.Join(errors.New("build node: node builder returned no engine"), localNode.Close())
 	}
 	for _, hook := range b.nodeHooks {
 		if err := hook(ctx, st, localNode); err != nil {
-			_ = localNode.Close()
-			return nil, err
+			return nil, errors.Join(err, localNode.Close())
 		}
 	}
 	logger.Info(
@@ -280,14 +305,12 @@ func (b *Builder) Build(
 
 	realm, err := st.ForRealm(ctx, localNode.Realm())
 	if err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("bind realm: %w", err)
+		return nil, errors.Join(fmt.Errorf("bind realm: %w", err), localNode.Close())
 	}
 
 	signer, err := b.signingFactory(realm)
 	if err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build signing service: %w", err)
+		return nil, errors.Join(fmt.Errorf("build signing service: %w", err), localNode.Close())
 	}
 
 	manager, err := marketdata.NewManager(
@@ -297,8 +320,7 @@ func (b *Builder) Build(
 		logger,
 	)
 	if err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build market-data manager: %w", err)
+		return nil, errors.Join(fmt.Errorf("build market-data manager: %w", err), localNode.Close())
 	}
 	// Resolve the live engine sink on every push: the engine (and its sink) is
 	// rebuilt on account/group/asset changes, so a cached sink would go stale
@@ -306,8 +328,7 @@ func (b *Builder) Build(
 	manager.UseSinkProvider(localNode.CurrentMarketDataSink)
 	if err := manager.Start(ctx); err != nil {
 		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("start market-data manager: %w", err)
+		return nil, errors.Join(fmt.Errorf("start market-data manager: %w", err), localNode.Close())
 	}
 
 	mcpRegistry := frameworkmcp.NewToolRegistry()
@@ -329,23 +350,93 @@ func (b *Builder) Build(
 		}, logger)
 	if err != nil {
 		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build trading runtime: %w", err)
+		return nil, errors.Join(fmt.Errorf("build trading runtime: %w", err), localNode.Close())
 	}
 	service, err = b.serviceFactory(ctx, localNode, manager, runtime, signer, b.mdRegistry, mcpRegistry)
 	if err != nil {
 		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build service: %w", err)
+		return nil, errors.Join(fmt.Errorf("build service: %w", err), localNode.Close())
 	}
 	// Build's signal context can end before Close; Stop owns runtime
 	// cancellation.
 	if err := runtime.Start(context.WithoutCancel(ctx)); err != nil {
 		runtime.Stop()
 		manager.Stop()
-		_ = localNode.Close()
-		return nil, fmt.Errorf("start trading runtime: %w", err)
+		return nil, errors.Join(fmt.Errorf("start trading runtime: %w", err), localNode.Close())
 	}
+	return b.compose(NodeRuntime{
+		Node: localNode, Signing: signer, MarketData: manager, Trading: runtime,
+	}, service, mcpRegistry, version), nil
+}
+
+// BuildOver composes over a host's running node and runtimes, without opening a
+// store or starting any runtime. It refuses local-node factories and hooks.
+// After the factory succeeds, a failure stops trading, stops market data, then
+// closes the node. On success the returned App owns that shutdown sequence.
+func (b *Builder) BuildOver(ctx context.Context, logger *slog.Logger, factory NodeRuntimeFactory) (*App, error) {
+	switch {
+	case b == nil:
+		return nil, errors.New("app: nil builder")
+	case factory == nil:
+		return nil, errors.New("app: nil node runtime factory")
+	case b.storeFactory != nil:
+		return nil, errors.New("app: BuildOver refuses a store factory")
+	case b.nodeBuilder != nil:
+		return nil, errors.New("app: BuildOver refuses a node builder")
+	case len(b.nodeHooks) != 0:
+		return nil, errors.New("app: BuildOver refuses node hooks")
+	case b.signingFactory != nil:
+		return nil, errors.New("app: BuildOver refuses a signing factory")
+	}
+	if err := b.validateCommon(false); err != nil {
+		return nil, err
+	}
+	version, err := resolveVersion(logger)
+	if err != nil {
+		return nil, err
+	}
+
+	runtime, err := factory(ctx, b.mdRegistry, b.tradingRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("build node runtime: %w", err)
+	}
+	closeRuntime := func() error {
+		return (&App{node: runtime.Node, marketData: runtime.MarketData, trading: runtime.Trading}).Close()
+	}
+	var missing string
+	switch {
+	case runtime.Node == nil:
+		missing = "node"
+	case runtime.Signing == nil:
+		missing = "signing service"
+	case runtime.MarketData == nil:
+		missing = "market-data runtime"
+	case runtime.Trading == nil:
+		missing = "trading runtime"
+	}
+	if missing != "" {
+		return nil, errors.Join(fmt.Errorf("app: node runtime factory returned no %s", missing), closeRuntime())
+	}
+	mcpRegistry := frameworkmcp.NewToolRegistry()
+	service, err := b.serviceFactory(ctx, runtime.Node, runtime.MarketData, runtime.Trading,
+		runtime.Signing, b.mdRegistry, mcpRegistry)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("build service: %w", err), closeRuntime())
+	}
+	return b.compose(runtime, service, mcpRegistry, version), nil
+}
+
+func resolveVersion(logger *slog.Logger) (string, error) {
+	version, err := backend.Version()
+	if err != nil {
+		return "", fmt.Errorf("resolve officer version: %w", err)
+	}
+	logger.Info("mcp server version", "version", version,
+		"release_build", backend.ReleaseBuild())
+	return version, nil
+}
+
+func (b *Builder) compose(runtime NodeRuntime, service backend.ControlPlane, mcpRegistry *frameworkmcp.ToolRegistry, version string) *App {
 	src := frameworkmcp.SourceFor(service)
 	for _, registrar := range b.toolRegistrars {
 		registrar(mcpRegistry, src)
@@ -353,9 +444,9 @@ func (b *Builder) Build(
 
 	return &App{
 		service:        service,
-		node:           localNode,
-		marketData:     manager,
-		trading:        runtime,
+		node:           runtime.Node,
+		marketData:     runtime.MarketData,
+		trading:        runtime.Trading,
 		mcpRegistry:    mcpRegistry,
 		source:         src,
 		version:        officerVersion(version),
@@ -364,10 +455,14 @@ func (b *Builder) Build(
 		browserGuards:  b.browserGuards,
 		routeConfig:    b.routeConfig,
 		spaFactory:     b.spaFactory,
-	}, nil
+	}
 }
 
 func (b *Builder) validate() error {
+	return b.validateCommon(true)
+}
+
+func (b *Builder) validateCommon(local bool) error {
 	switch {
 	case b == nil:
 		return errors.New("app: nil builder")
@@ -375,18 +470,16 @@ func (b *Builder) validate() error {
 		return errors.New("app: nil authorizer")
 	case b.callerResolver == nil:
 		return errors.New("app: nil caller resolver")
-	case b.storeFactory == nil:
+	case local && b.storeFactory == nil:
 		return errors.New("app: nil store factory")
-	case b.nodeBuilder == nil:
+	case local && b.nodeBuilder == nil:
 		return errors.New("app: nil node builder")
-	case b.signingFactory == nil:
+	case local && b.signingFactory == nil:
 		return errors.New("app: nil signing factory")
 	case b.serviceFactory == nil:
 		return errors.New("app: nil service factory")
 	case b.routeConfig == nil:
 		return errors.New("app: nil route config builder")
-	case b.spaFactory == nil:
-		return errors.New("app: nil SPA factory")
 	}
 	if b.mdRegistry == nil {
 		b.mdRegistry = marketdata.NewRegistry()
@@ -401,8 +494,8 @@ func (b *Builder) validate() error {
 type App struct {
 	service        backend.ControlPlane
 	node           node.Node
-	marketData     *marketdata.Manager
-	trading        *trading.Runtime
+	marketData     backend.MarketDataRuntime
+	trading        backend.TradingRuntime
 	mcpRegistry    *frameworkmcp.ToolRegistry
 	source         frameworkmcp.Source
 	version        frameworkmcp.VersionSource
@@ -477,15 +570,23 @@ func (a *App) BuildServeHandler(
 	mcpPath string,
 	extraRoutes ...httpx.Route,
 ) (http.Handler, error) {
-	spa, err := a.spaFactory()
-	if err != nil {
-		return nil, fmt.Errorf("load embedded dashboard: %w", err)
+	var spa fs.FS
+	if a.spaFactory != nil {
+		var err error
+		spa, err = a.spaFactory()
+		if err != nil {
+			return nil, fmt.Errorf("load embedded dashboard: %w", err)
+		}
+		if spa == nil {
+			return nil, errors.New("load embedded dashboard: nil filesystem")
+		}
 	}
 	routes := a.routeConfig(a.service, logs)
-	if routes.Routes != nil {
-		for _, route := range extraRoutes {
-			routes.Routes.Register(route)
-		}
+	if routes.Routes == nil {
+		return nil, errors.New("app: nil route registry")
+	}
+	for _, route := range extraRoutes {
+		routes.Routes.Register(route)
 	}
 	mcpHandler, err := frameworkmcp.Handler(
 		a.mcpRegistry,
@@ -498,18 +599,19 @@ func (a *App) BuildServeHandler(
 		return nil, fmt.Errorf("build mcp handler: %w", err)
 	}
 	router, err := httpx.NewRouter(httpx.RouterConfig{
-		Routes:         routes.Routes,
-		PanelRoutes:    routes.PanelRoutes,
-		Authorizer:     a.authorizer,
-		CallerResolver: a.callerResolver,
-		SPA:            spa,
-		MCP:            http.StripPrefix(mcpPath, mcpHandler),
-		MCPPath:        mcpPath,
-		Logs:           logs,
-		BodyLimit:      routes.BodyLimit,
-		ExtraMounts:    routes.ExtraMounts,
-		Guards:         a.browserGuards,
-		AccessMode:     routes.AccessMode,
+		Surfaces:         append(httpx.V1Surfaces(routes.Routes, routes.PanelRoutes), routes.Surfaces...),
+		Authorizer:       a.authorizer,
+		CallerResolver:   a.callerResolver,
+		SPA:              spa,
+		NotFound:         routes.NotFound,
+		MethodNotAllowed: routes.MethodNotAllowed,
+		MCP:              http.StripPrefix(mcpPath, mcpHandler),
+		MCPPath:          mcpPath,
+		Logs:             logs,
+		BodyLimit:        routes.BodyLimit,
+		ExtraMounts:      routes.ExtraMounts,
+		Guards:           a.browserGuards,
+		AccessMode:       routes.AccessMode,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build router: %w", err)

@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -305,9 +306,7 @@ func (c *coinbaseConnector) stream(
 		return false, err
 	}
 	c.reportStatus(true, "")
-	defer func() {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-	}()
+	defer closeStream("coinbase", conn)
 
 	payload, err := coinbaseSubscribePayload(subs)
 	if err != nil {
@@ -404,7 +403,11 @@ func fetchCoinbaseSymbols(ctx context.Context) (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("coinbase products: close response body", "error", err)
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("coinbase products: unexpected status %d", resp.StatusCode)
 	}

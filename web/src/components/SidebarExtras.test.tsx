@@ -34,9 +34,10 @@ import {
 } from "@/components/SidebarExtras";
 import { getNav } from "@/framework";
 import { onCheckSession, setPanelSession } from "@/lib/panelSession";
-// Side-effect import: the application's own registration.
-import "@/register";
+import { registerOfficerDefaults } from "@/register";
 import { jsonResponse, renderWithApi } from "@/test/apiClient";
+
+registerOfficerDefaults();
 
 vi.mock("@/api/useMarketData", () => ({ useMarketData: vi.fn() }));
 vi.mock("@/api/useCredentialStorage", async (importOriginal) => ({

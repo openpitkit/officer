@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { mergeConfig, defineConfig } from "vitest/config";
+import { configDefaults, mergeConfig, defineConfig } from "vitest/config";
 
 import viteConfig from "./vite.config";
 
@@ -34,6 +34,7 @@ export default mergeConfig(
   viteConfig,
   defineConfig({
     test: {
+      exclude: [...configDefaults.exclude, "lib-test/**"],
       environment: "jsdom",
       globals: true,
       setupFiles: ["./src/test/setup.ts"],

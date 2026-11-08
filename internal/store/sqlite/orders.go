@@ -455,7 +455,7 @@ func (r *realmStore) ListAllOrders(
 // ListOrderRows returns orders matching filter, with total count before paging.
 func (r *realmStore) ListOrderRows(
 	ctx context.Context, filter fwstore.OrderListFilter,
-) (fwstore.OrderListPage, error) {
+) (value fwstore.OrderListPage, resultErr error) {
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return fwstore.OrderListPage{}, err
@@ -489,7 +489,7 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 	if err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: list order rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]fwstore.OrderListRow, 0)
 	orderIDs := make([]domain.ExternalID, 0)
@@ -754,7 +754,7 @@ func scanOrderListRow(
 	id, err := optionalExternalIDFromBytes(connectionID)
 	if err != nil {
 		return fwstore.OrderListRow{}, fmt.Errorf(
-			"store: decode order venue connection id: %w", err)
+			"store: decode order venue connection id: %v", err)
 	}
 	row.VenueConnection = id
 	return row, nil
@@ -794,7 +794,7 @@ func scanOrderInto(
 	}
 	xid, err := domain.ExternalIDFromBytes(extID)
 	if err != nil {
-		return fmt.Errorf("store: decode order external id: %w", err)
+		return fmt.Errorf("store: decode order external id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
@@ -911,7 +911,7 @@ func (r *realmStore) AppendOrderEvent(
 // oldest first by (at, id).
 func (r *realmStore) ListOrderEvents(
 	ctx context.Context, order domain.ExternalID,
-) ([]domain.OrderEvent, error) {
+) (value []domain.OrderEvent, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -931,7 +931,7 @@ func (r *realmStore) ListOrderEvents(
 	if err != nil {
 		return nil, fmt.Errorf("store: list order events: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.OrderEvent, 0)
 	for rows.Next() {
@@ -974,7 +974,7 @@ func scanOrderEvent(
 	}
 	xid, err := domain.ExternalIDFromBytes(extID)
 	if err != nil {
-		return domain.OrderEvent{}, fmt.Errorf("store: decode event external id: %w", err)
+		return domain.OrderEvent{}, fmt.Errorf("store: decode event external id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
@@ -1158,7 +1158,7 @@ func (r *realmStore) ListAllTrades(
 // paging.
 func (r *realmStore) ListTradeRows(
 	ctx context.Context, filter fwstore.TradeListFilter,
-) (fwstore.TradeListPage, error) {
+) (value fwstore.TradeListPage, resultErr error) {
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return fwstore.TradeListPage{}, err
@@ -1207,7 +1207,7 @@ LEFT JOIN trading_connection tc ON tc.id = vo.connection_id` +
 	if err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: list trade rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]fwstore.TradeListRow, 0)
 	for rows.Next() {
@@ -1357,7 +1357,7 @@ func tradeListOrderBy(sortColumn string, sort fwstore.SortSpec) string {
 // optional positive limit.
 func (r *realmStore) listTrades(
 	ctx context.Context, account domain.AccountID, source domain.Source, limit int,
-) ([]domain.Trade, error) {
+) (result []domain.Trade, resultErr error) {
 	q := tradeSelect + ` WHERE 1 = 1`
 	args := make([]any, 0, 3)
 	if account != "" {
@@ -1390,7 +1390,7 @@ func (r *realmStore) listTrades(
 	if err != nil {
 		return nil, fmt.Errorf("store: list trades: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return nil, err
@@ -1402,7 +1402,7 @@ func (r *realmStore) listTrades(
 // id), oldest first by (at, id). It backs GetOrder's trade list.
 func (r *realmStore) listTradesByOrder(
 	ctx context.Context, order domain.ExternalID,
-) ([]domain.Trade, error) {
+) (result []domain.Trade, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -1415,7 +1415,7 @@ func (r *realmStore) listTradesByOrder(
 	if err != nil {
 		return nil, fmt.Errorf("store: list trades by order: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return nil, err
@@ -1471,7 +1471,7 @@ func scanTradeListRow(
 	id, err := optionalExternalIDFromBytes(connectionID)
 	if err != nil {
 		return fwstore.TradeListRow{}, fmt.Errorf(
-			"store: decode trade venue connection id: %w", err)
+			"store: decode trade venue connection id: %v", err)
 	}
 	row.VenueConnection = id
 	return row, nil
@@ -1520,11 +1520,11 @@ func tradeFromScanned(
 ) (domain.Trade, error) {
 	tradeXID, err := domain.ExternalIDFromBytes(tradeExtID)
 	if err != nil {
-		return domain.Trade{}, fmt.Errorf("store: decode trade external id: %w", err)
+		return domain.Trade{}, fmt.Errorf("store: decode trade external id: %v", err)
 	}
 	orderXID, err := domain.ExternalIDFromBytes(orderExtID)
 	if err != nil {
-		return domain.Trade{}, fmt.Errorf("store: decode trade order external id: %w", err)
+		return domain.Trade{}, fmt.Errorf("store: decode trade order external id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
@@ -1774,25 +1774,25 @@ WHERE t.commission_amount <> ''
 		var orderBytes []byte
 		var amountText, currency string
 		if err := rows.Scan(&orderBytes, &amountText, &currency); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return fmt.Errorf("store: scan order commission subtotal: %w", err)
 		}
 		order, err := domain.ExternalIDFromBytes(orderBytes)
 		if err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return fmt.Errorf(
-				"store: decode order commission external id: %w", err)
+				"store: decode order commission external id: %v", err)
 		}
 		if err := rollup.add(
 			order,
 			&domain.Commission{Amount: amountText, Currency: currency},
 		); err != nil {
-			_ = rows.Close()
+			err = errors.Join(err, rows.Close())
 			return err
 		}
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		err = errors.Join(err, rows.Close())
 		return fmt.Errorf("store: iterate order commission subtotals: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -1815,23 +1815,23 @@ WHERE o.external_id IN (`+placeholders+`)`,
 		var eventTypeID int64
 		var payloadJSON string
 		if err := eventRows.Scan(&orderBytes, &eventTypeID, &payloadJSON); err != nil {
-			_ = eventRows.Close()
+			err = errors.Join(err, eventRows.Close())
 			return fmt.Errorf("store: scan order event commission subtotal: %w", err)
 		}
 		order, err := domain.ExternalIDFromBytes(orderBytes)
 		if err != nil {
-			_ = eventRows.Close()
+			err = errors.Join(err, eventRows.Close())
 			return fmt.Errorf(
-				"store: decode order event commission external id: %w", err)
+				"store: decode order event commission external id: %v", err)
 		}
 		var payload domain.OrderEventPayload
 		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
-			_ = eventRows.Close()
+			err = errors.Join(err, eventRows.Close())
 			return fmt.Errorf("store: decode order event commission payload: %w", err)
 		}
 		eventType, err := dictionaries.code(orderEventTypeTable, "order event type", eventTypeID)
 		if err != nil {
-			_ = eventRows.Close()
+			err = errors.Join(err, eventRows.Close())
 			return err
 		}
 		if err := rollup.addEvent(
@@ -1839,12 +1839,12 @@ WHERE o.external_id IN (`+placeholders+`)`,
 			domain.OrderEventType(eventType),
 			payload,
 		); err != nil {
-			_ = eventRows.Close()
+			err = errors.Join(err, eventRows.Close())
 			return err
 		}
 	}
 	if err := eventRows.Err(); err != nil {
-		_ = eventRows.Close()
+		err = errors.Join(err, eventRows.Close())
 		return fmt.Errorf("store: iterate order event commission subtotals: %w", err)
 	}
 	if err := eventRows.Close(); err != nil {

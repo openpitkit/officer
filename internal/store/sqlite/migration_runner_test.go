@@ -20,12 +20,15 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/migration"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestSQLiteDialectBindVar(t *testing.T) {
@@ -73,7 +76,8 @@ func TestMigrationRunner(t *testing.T) {
 			}},
 			migration.Config{}, sqliteDialect{},
 		)
-		if err == nil || !strings.Contains(
+		var sqliteErr *sqlitedriver.Error
+		if !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_ERROR || !strings.Contains(
 			err.Error(), "migration: apply migration 1 (rollback.sql)",
 		) {
 			t.Fatalf("Apply() error = %v, want migration context", err)
@@ -267,7 +271,8 @@ func TestPending(t *testing.T) {
 	t.Run("missing bookkeeping table", func(t *testing.T) {
 		db := openMigrationTestDB(t)
 		_, err := migration.Pending(ctx, db, source, migration.Config{})
-		if err == nil || !strings.Contains(
+		var sqliteErr *sqlitedriver.Error
+		if !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_ERROR || !strings.Contains(
 			err.Error(), `migration: read "schema_migration":`,
 		) {
 			t.Errorf("Pending() error = %v, want bookkeeping read error", err)

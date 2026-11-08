@@ -21,7 +21,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +40,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/logtest"
 )
 
 func acceptAlpaca(t *testing.T, w http.ResponseWriter, r *http.Request) *websocket.Conn {
@@ -57,6 +60,11 @@ func readAuth(t *testing.T, ctx context.Context, conn *websocket.Conn) bool {
 		t.Error("auth frame missing")
 		return false
 	}
+	return checkAuthFrame(t, raw)
+}
+
+func checkAuthFrame(t *testing.T, raw []byte) bool {
+	t.Helper()
 	var auth map[string]string
 	if json.Unmarshal(raw, &auth) != nil || len(auth) != 3 || auth["action"] != "auth" || auth["key"] != "test-key-marker" || auth["secret"] != "test-secret-marker" {
 		t.Error("incorrect auth frame")
@@ -353,8 +361,8 @@ func TestStreamHealthyConnection(t *testing.T) {
 			defer cancel()
 			events := make(chan fwtrading.Event, 2)
 			healthy, err := c.stream(ctx, events)
-			if err == nil || !healthy {
-				t.Fatal("healthy connection did not allow backoff reset")
+			if !errors.Is(err, io.EOF) || !healthy {
+				t.Fatalf("stream healthy=%v: got %v, want io.EOF after a healthy connection", healthy, err)
 			}
 			if nextEvent(t, events).Kind != fwtrading.EventConnected {
 				t.Fatal("Connected missing")
@@ -526,9 +534,7 @@ func TestStreamReportsUnparsableOncePerConnectionAndEveryOverfill(t *testing.T) 
 func captureStreamLogs(t *testing.T) *lockedLogBuffer {
 	t.Helper()
 	logs := &lockedLogBuffer{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	logtest.SetDefault(t, slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	return logs
 }
 
@@ -568,7 +574,9 @@ func TestStreamFailureReports(t *testing.T) {
 			return
 		}
 		if attempt == 2 {
-			_ = conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker")
+			if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil {
+				t.Error(err)
+			}
 			return
 		}
 		if attempt > 2 {

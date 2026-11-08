@@ -3,7 +3,7 @@
 This package has two surfaces:
 
 - `@openpit/officer-web` is the reusable React framework library exported from
-  `src/framework/index.ts`.
+  `src/index.ts`.
 - The Pit Officer single-page app is the reference consumer under `src/`.
 
 The app is built with Vite and embedded into the Go binary via
@@ -74,15 +74,14 @@ base URL is implemented there. New framework consumers should import from
 
 ## App composition
 
-The SPA is a thin framework consumer. `src/main.tsx` initializes i18n,
-runs `src/register.ts`, injects the same-origin API client with
+The SPA is a thin framework consumer. `src/main.tsx` explicitly initializes
+i18n with `initOfficerI18n()`, calls `registerOfficerDefaults`, injects the
+same-origin API client with
 `baseUrl: "/app/api/v1"`, mounts the allow-all `AuthProvider`, and renders the
 framework shell.
 
-`src/register.ts` is the single composition module. It registers routes,
-navigation entries, dashboard widgets, row actions, vocabulary, and locale
-catalogs under stable ids. A host application can replace an entry by
-registering the same id or remove it with the matching unregister API.
+`src/register.ts` defines `registerOfficerDefaults`, the single composition
+function, whose contract is described in [Consuming the web library](#consuming-the-web-library).
 
 `src/App.tsx` wraps the framework `Sidebar` and `AppRoutes` in the app's
 startup flow. `StartupGate` asks `GET /session` first. In the `setup` state,
@@ -110,10 +109,28 @@ connect command and configuration in `token` access mode.
 ## Consuming the web library
 
 The reusable package is `@openpit/officer-web`, exported from
-`src/framework/index.ts` and built with `npm run build:lib` into `web/lib`.
-The SPA is a thin consumer of the same library: `src/main.tsx` imports
-`src/register.ts`, injects `baseUrl: "/app/api/v1"`, mounts the allow-all
-`AuthProvider`, and renders the framework shell.
+`src/index.ts` and built with `npm run build:lib` into `web/lib`.
+The SPA is a thin consumer of the same library: `src/main.tsx` calls its
+`registerOfficerDefaults` export, injects `baseUrl: "/app/api/v1"`, mounts the
+allow-all `AuthProvider`, and renders the framework shell.
+
+Importing the package initializes and registers nothing. A host calls
+`initOfficerI18n()` once to use the panel's catalogs and language detector, or
+initializes the shared i18next itself. Either must happen before calling
+`registerOfficerDefaults` or `registerLocaleResources`.
+
+A host calls `registerOfficerDefaults` once before rendering to register the
+open panel's routes, page overrides, navigation, widgets, row actions,
+vocabulary, and locale resource map. After the call, it reads stable ids through
+`getRoutes()`, `getNav(section)`, `getPage(id)`, `getWidgets()`,
+`getRowActions(scope)`, `getScopes()`, and `getPolicies()`, then replaces an entry
+by re-registering its id or removes it with the matching unregister API.
+
+A host either mounts the exported `StartupGate`, as the open panel does, or
+provides the account scope and session with `setAccountScope(features)` and
+`setPanelSession(mode)` before rendering pages or evaluating navigation
+predicates. `StartupGate` loads both and shows login or recovery in `token`
+mode; wire `checkSession` to `ApiClientProvider`'s `onUnauthorized`.
 
 `react`, `react-dom`, `react-router-dom`, `i18next`,
 `i18next-browser-languagedetector` and `react-i18next` are peer dependencies:
@@ -128,6 +145,11 @@ import "@openpit/officer-web/styles.css";
 The stylesheet names JetBrains Mono but does not carry its font files: the host
 loads the 400, 500 and 700 weights itself, as `src/main.tsx` does with
 `@fontsource/jetbrains-mono`.
+
+The package also publishes the Pit Officer favicon as
+`@openpit/officer-web/favicon.svg`, the same file the panel serves at
+`/favicon.svg`. A host links it instead of copying it; for example, a Vite host
+imports it as an asset URL.
 
 Host applications provide transport through `createApiClient`,
 `createOfficerApi`, and `ApiClientProvider`. `ApiClientProvider` accepts the
@@ -188,6 +210,7 @@ fixed `127.0.0.1:8787`, so pin it explicitly while developing the SPA.
 ```bash
 npm run build    # type-checks then emits the embeddable bundle into dist/
 npm run build:lib # emits the framework package into lib/
+npm run test:lib  # checks the built package; run build:lib first
 ```
 
 The build writes generated assets into `dist/`. The generated bundle is ignored,

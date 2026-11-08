@@ -22,6 +22,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -121,7 +122,7 @@ func (r *realmStore) exportAccounts(ctx context.Context) ([]backup.Account, erro
 // projection and scan helper directly to avoid a per-account, limit-bounded read.
 func (r *realmStore) exportAdjustments(
 	ctx context.Context,
-) ([]domain.AccountAdjustmentRecord, error) {
+) (result []domain.AccountAdjustmentRecord, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -132,7 +133,7 @@ func (r *realmStore) exportAdjustments(
 	if err != nil {
 		return nil, fmt.Errorf("store: export adjustments: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return nil, err
@@ -188,7 +189,7 @@ func (r *realmStore) exportOrderEvents(ctx context.Context) ([]domain.OrderEvent
 
 func (r *realmStore) exportExecutionReports(
 	ctx context.Context,
-) ([]backup.ExecutionReportRecord, error) {
+) (result []backup.ExecutionReportRecord, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -201,7 +202,7 @@ func (r *realmStore) exportExecutionReports(
 	if err != nil {
 		return nil, fmt.Errorf("store: export execution reports: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.ExecutionReportRecord, 0)
 	for rows.Next() {
@@ -212,11 +213,11 @@ func (r *realmStore) exportExecutionReports(
 		}
 		reportID, err := domain.ExternalIDFromBytes(reportRaw)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan execution report id: %w", err)
+			return nil, fmt.Errorf("store: scan execution report id: %v", err)
 		}
 		orderID, err := domain.ExternalIDFromBytes(orderRaw)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan execution report order id: %w", err)
+			return nil, fmt.Errorf("store: scan execution report order id: %v", err)
 		}
 		at, err := time.Parse(time.RFC3339Nano, atRaw)
 		if err != nil {
@@ -236,7 +237,7 @@ func (r *realmStore) exportExecutionReports(
 
 func (r *realmStore) exportExecutionReportEvents(
 	ctx context.Context,
-) ([]backup.ExecutionReportEventLink, error) {
+) (result []backup.ExecutionReportEventLink, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -250,7 +251,7 @@ func (r *realmStore) exportExecutionReportEvents(
 	if err != nil {
 		return nil, fmt.Errorf("store: export execution report events: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.ExecutionReportEventLink, 0)
 	for rows.Next() {
@@ -260,11 +261,11 @@ func (r *realmStore) exportExecutionReportEvents(
 		}
 		reportID, err := domain.ExternalIDFromBytes(reportRaw)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan linked report id: %w", err)
+			return nil, fmt.Errorf("store: scan linked report id: %v", err)
 		}
 		eventID, err := domain.ExternalIDFromBytes(eventRaw)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan linked event id: %w", err)
+			return nil, fmt.Errorf("store: scan linked event id: %v", err)
 		}
 		out = append(out, backup.ExecutionReportEventLink{
 			Report: reportID,
@@ -280,7 +281,7 @@ func (r *realmStore) exportExecutionReportEvents(
 // exportAudit scans the whole audit trail, oldest first, so the archive restores
 // in the order rows were recorded. It uses the audit-group projection and scan
 // helper directly to avoid a limit-bounded, newest-first UI read.
-func (r *realmStore) exportAudit(ctx context.Context) ([]domain.AuditRow, error) {
+func (r *realmStore) exportAudit(ctx context.Context) (result []domain.AuditRow, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -291,7 +292,7 @@ func (r *realmStore) exportAudit(ctx context.Context) ([]domain.AuditRow, error)
 	if err != nil {
 		return nil, fmt.Errorf("store: export audit: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return nil, err
@@ -337,7 +338,7 @@ func (r *realmStore) exportCredentialForm(ctx context.Context) (string, error) {
 // This verbatim raw read is deliberate; do not replace it with sealing accessors.
 func (r *realmStore) exportMarketDataInstances(
 	ctx context.Context,
-) ([]backup.MarketDataInstance, error) {
+) (result []backup.MarketDataInstance, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -350,7 +351,7 @@ func (r *realmStore) exportMarketDataInstances(
 	if err != nil {
 		return nil, fmt.Errorf("store: export market-data instances: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.MarketDataInstance, 0)
 	for rows.Next() {
@@ -366,7 +367,7 @@ func (r *realmStore) exportMarketDataInstances(
 		}
 		externalID, err := domain.ExternalIDFromBytes(rawID)
 		if err != nil {
-			return nil, fmt.Errorf("store: decode market-data instance external id for export: %w", err)
+			return nil, fmt.Errorf("store: decode market-data instance external id for export: %v", err)
 		}
 		instance.ExternalID = externalID
 		out = append(out, instance)
@@ -408,7 +409,7 @@ func (r *realmStore) exportInstruments(
 
 func (r *realmStore) exportTradingConnections(
 	ctx context.Context,
-) ([]backup.TradingConnection, error) {
+) (result []backup.TradingConnection, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -424,7 +425,7 @@ func (r *realmStore) exportTradingConnections(
 	if err != nil {
 		return nil, fmt.Errorf("store: export trading connections: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.TradingConnection, 0)
 	for rows.Next() {
@@ -442,7 +443,7 @@ func (r *realmStore) exportTradingConnections(
 		connection.ExternalID, err = domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode trading connection external id for export: %w", err,
+				"store: decode trading connection external id for export: %v", err,
 			)
 		}
 		out = append(out, connection)
@@ -455,7 +456,7 @@ func (r *realmStore) exportTradingConnections(
 
 func (r *realmStore) exportTradingInstruments(
 	ctx context.Context,
-) ([]backup.TradingInstrument, error) {
+) (result []backup.TradingInstrument, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -472,7 +473,7 @@ func (r *realmStore) exportTradingInstruments(
 	if err != nil {
 		return nil, fmt.Errorf("store: export trading instruments: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.TradingInstrument, 0)
 	for rows.Next() {
@@ -489,7 +490,7 @@ func (r *realmStore) exportTradingInstruments(
 		instrument.Connection, err = domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode trading instrument connection for export: %w", err,
+				"store: decode trading instrument connection for export: %v", err,
 			)
 		}
 		out = append(out, instrument)
@@ -502,7 +503,7 @@ func (r *realmStore) exportTradingInstruments(
 
 func (r *realmStore) exportTradingAccess(
 	ctx context.Context,
-) ([]backup.TradingAccess, error) {
+) (result []backup.TradingAccess, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -521,7 +522,7 @@ func (r *realmStore) exportTradingAccess(
 	if err != nil {
 		return nil, fmt.Errorf("store: export trading access: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.TradingAccess, 0)
 	for rows.Next() {
@@ -537,7 +538,7 @@ func (r *realmStore) exportTradingAccess(
 		access.Connection, err = domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode trading access connection for export: %w", err,
+				"store: decode trading access connection for export: %v", err,
 			)
 		}
 		out = append(out, access)
@@ -550,7 +551,7 @@ func (r *realmStore) exportTradingAccess(
 
 func (r *realmStore) exportVenueOrders(
 	ctx context.Context,
-) ([]backup.VenueOrder, error) {
+) (result []backup.VenueOrder, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -568,7 +569,7 @@ func (r *realmStore) exportVenueOrders(
 	if err != nil {
 		return nil, fmt.Errorf("store: export venue orders: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.VenueOrder, 0)
 	for rows.Next() {
@@ -587,12 +588,12 @@ func (r *realmStore) exportVenueOrders(
 		}
 		venueOrder.Order, err = domain.ExternalIDFromBytes(rawOrder)
 		if err != nil {
-			return nil, fmt.Errorf("store: decode venue order id for export: %w", err)
+			return nil, fmt.Errorf("store: decode venue order id for export: %v", err)
 		}
 		venueOrder.Connection, err = domain.ExternalIDFromBytes(rawConnection)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode venue order connection for export: %w", err,
+				"store: decode venue order connection for export: %v", err,
 			)
 		}
 		venueOrder.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -609,7 +610,7 @@ func (r *realmStore) exportVenueOrders(
 
 // exportSigningKeys reads only public signing material. A signing private key is
 // installation identity and never enters an archive.
-func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey, error) {
+func (r *realmStore) exportSigningKeys(ctx context.Context) (result []backup.SigningKey, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -622,7 +623,7 @@ func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey
 	if err != nil {
 		return nil, fmt.Errorf("store: export signing keys: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.SigningKey, 0)
 	for rows.Next() {
@@ -653,7 +654,7 @@ func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey
 // exportSettings reads the whole setting table as portable entries.
 func (r *realmStore) exportSettings(
 	ctx context.Context,
-) ([]backup.SettingEntry, error) {
+) (result []backup.SettingEntry, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -664,7 +665,7 @@ func (r *realmStore) exportSettings(
 	if err != nil {
 		return nil, fmt.Errorf("store: export setting: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	out := make([]backup.SettingEntry, 0)
 	for rows.Next() {

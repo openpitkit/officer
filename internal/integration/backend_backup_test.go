@@ -311,8 +311,8 @@ func TestService_RestoreBackupMarketDataTopologyErrorRestartsReturnedSink(t *tes
 			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 			Mode:  backup.RestoreModeOverwrite,
 		})
-	if err == nil {
-		t.Fatal("RestoreBackup succeeded, want error")
+	if !errors.Is(err, fn.restoreErr) {
+		t.Fatalf("RestoreBackup: got %v, want %v", err, fn.restoreErr)
 	}
 	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
 		t.Fatalf("market-data recovery stops=%d restarts=%d sink=%#v",
@@ -330,8 +330,8 @@ func TestService_RestoreBackupMarketDataUseSinkErrorStillRestarts(t *testing.T) 
 			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 			Mode:  backup.RestoreModeOverwrite,
 		})
-	if err == nil {
-		t.Fatal("RestoreBackup succeeded, want UseSink error")
+	if !errors.Is(err, md.useSinkErr) {
+		t.Fatalf("RestoreBackup: got %v, want %v", err, md.useSinkErr)
 	}
 	if md.stops != 1 || md.restarts != 1 {
 		t.Fatalf("market-data recovery stops=%d restarts=%d",
@@ -355,8 +355,8 @@ func TestService_RestoreBackupMarketDataRestartErrorIsReturned(t *testing.T) {
 			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 			Mode:  backup.RestoreModeOverwrite,
 		})
-	if err == nil {
-		t.Fatal("RestoreBackup succeeded, want Restart error")
+	if !errors.Is(err, md.restartErr) {
+		t.Fatalf("RestoreBackup: got %v, want %v", err, md.restartErr)
 	}
 	if summary.Applied[backup.SectionMarketData] != 1 || !summary.RestartRequired {
 		t.Fatalf("RestoreBackup summary = %+v, want committed restore summary", summary)
@@ -408,8 +408,8 @@ func TestService_RestoreBackupManualReconciliationErrorReturnsSummary(t *testing
 		Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
 		Mode:  backup.RestoreModeOverwrite,
 	})
-	if err == nil {
-		t.Fatal("RestoreBackup succeeded, want manual reconciliation error")
+	if !errors.Is(err, md.pushErr) {
+		t.Fatalf("RestoreBackup: got %v, want %v", err, md.pushErr)
 	}
 	if summary.Applied[backup.SectionMarketData] != 1 {
 		t.Fatalf("RestoreBackup summary = %+v, want committed restore summary", summary)

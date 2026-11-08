@@ -21,8 +21,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"time"
+
+	"github.com/coder/websocket"
 )
+
+func closeStream(name string, conn interface {
+	Close(websocket.StatusCode, string) error
+}, redact ...func(error) error) {
+	err := conn.Close(websocket.StatusNormalClosure, "")
+	// coder/websocket returns net.ErrClosed on repeated Close, including after a peer close frame.
+	if err == nil || errors.Is(err, net.ErrClosed) {
+		return
+	}
+	for _, replace := range redact {
+		err = replace(err)
+	}
+	slog.Warn(name+": close WebSocket stream", "error", err)
+}
 
 func readStreamFrame(
 	ctx context.Context,

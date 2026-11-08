@@ -807,7 +807,8 @@ func (n *localNode) ResetDatabase(
 func (n *localNode) ensureOperatorPrincipal(
 	ctx context.Context, realm store.RealmStore,
 ) error {
-	// Public surfaces stamp this placeholder actor until authentication lands.
+	// The default composition attributes every operator action to this
+	// single principal.
 	err := realm.CreatePrincipal(ctx, domain.Principal{Code: domain.PrincipalOperator})
 	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
 		return fmt.Errorf("ensure operator principal: %w", err)

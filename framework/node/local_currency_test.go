@@ -181,8 +181,8 @@ func TestLocalNode_CreateAssetAuditFailureFatals(t *testing.T) {
 	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "GOLD"}, testCaller); !errors.Is(err, auditErr) {
 		t.Fatalf("CreateAsset = %v, want audit failure", err)
 	}
-	if fatalErr == nil {
-		t.Fatal("create asset audit failure did not invoke the fatal hook")
+	if !errors.Is(fatalErr, auditErr) {
+		t.Fatalf("fatal create asset audit error: got %v, want %v", fatalErr, auditErr)
 	}
 	if !strings.Contains(fatalErr.Error(), `operation="audit create asset"`) ||
 		!strings.Contains(fatalErr.Error(), "asset=GOLD") {

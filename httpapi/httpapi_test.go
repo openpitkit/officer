@@ -59,7 +59,7 @@ func newRouterOver(
 		return nil, err
 	}
 	return httpx.NewRouter(httpx.RouterConfig{
-		Routes:         NewRouteRegistry(svc, logs, sealReports),
+		Surfaces:       httpx.V1Surfaces(NewRouteRegistry(svc, logs, sealReports), nil),
 		Authorizer:     httpx.AllowAll{},
 		CallerResolver: testCallerResolver,
 		SPA:            fakeSPA(),
@@ -378,20 +378,36 @@ func TestNewRouter_MissingService(t *testing.T) {
 	}
 }
 
-func TestNewRouter_MissingSPA(t *testing.T) {
+func TestNewRouter_WithoutSPAAnswersTypedNotFound(t *testing.T) {
 	guards, err := testGuards()
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = httpx.NewRouter(httpx.RouterConfig{
-		Routes:         NewRouteRegistry(&fakeService{}, nil, noSealReport),
+	router, err := httpx.NewRouter(httpx.RouterConfig{
+		Surfaces:       httpx.V1Surfaces(NewRouteRegistry(&fakeService{}, nil, noSealReport), nil),
 		Authorizer:     httpx.AllowAll{},
 		CallerResolver: testCallerResolver,
 		BodyLimit:      BodyLimitPolicy(),
 		Guards:         guards,
+		AccessMode:     func() httpx.AccessMode { return httpx.AccessModeOpen },
 	})
-	if err == nil || err.Error() != "httpapi: nil SPA filesystem" {
-		t.Fatalf("NewRouter error = %v, want the nil SPA named", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/missing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown root path = %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("unknown root path content type = %q, want JSON", got)
+	}
+	var response struct{ Error struct{ Code string } }
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != "not_found" {
+		t.Errorf("unknown root path error code = %q, want not_found", response.Error.Code)
 	}
 }
 

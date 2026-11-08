@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	_ "embed"
+	"log/slog"
 	"net/http"
 )
 
@@ -71,7 +72,9 @@ func serveSwaggerUI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", policy)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(html))
+	if _, err := w.Write([]byte(html)); err != nil {
+		slog.Error("write swagger UI response", "error", err)
+	}
 }
 
 // serveEmbeddedFile serves an embedded file's bytes as contentType, with MIME
@@ -81,6 +84,8 @@ func serveEmbeddedFile(contentType string, body []byte) http.HandlerFunc {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		if _, err := w.Write(body); err != nil {
+			slog.Error("write embedded file response", "error", err)
+		}
 	}
 }

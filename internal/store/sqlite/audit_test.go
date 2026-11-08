@@ -331,8 +331,8 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 			Source: domain.SourcePanel,
 		},
 	})
-	if err == nil {
-		t.Fatal("AppendAuditBatch succeeded with an invalid second entry")
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("got %v, want domain.ErrInvalid", err)
 	}
 	rows, listErr := rs.ListAudit(ctx, 10)
 	if listErr != nil {

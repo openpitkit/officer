@@ -92,12 +92,12 @@ func TestProvidersAndEndpoints(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, _, err = c.client.Asset(ctx, "AAPL")
-		if err == nil || !strings.Contains(err.Error(), tc.rest+"/v2/assets/AAPL") {
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), tc.rest+"/v2/assets/AAPL") {
 			t.Fatal("wrong REST endpoint")
 		}
 	}
-	if c, err := NewAlpacaConnector(domain.TradingConnection{Mode: domain.TradingModePaper, Credentials: "{}"}); err == nil || c != nil {
-		t.Fatal("bad credentials must return an error and a nil connector")
+	if c, err := NewAlpacaConnector(domain.TradingConnection{Mode: domain.TradingModePaper, Credentials: "{}"}); !errors.Is(err, domain.ErrInvalid) || c != nil {
+		t.Fatalf("connector = %v, got %v, want domain.ErrInvalid", c, err)
 	}
 }
 
@@ -886,8 +886,9 @@ func TestVerifySymbol(t *testing.T) {
 			defer server.Close()
 			result, err := testAlpacaConnector(t, server).VerifySymbol(context.Background(), "AAPL")
 			if tc.code == 500 {
-				if err == nil {
-					t.Fatal("outage ignored")
+				var apiErr *alpaca.APIError
+				if !errors.As(err, &apiErr) || apiErr.Status != http.StatusInternalServerError {
+					t.Fatalf("VerifySymbol: got %v, want an HTTP 500 *alpaca.APIError", err)
 				}
 				return
 			}

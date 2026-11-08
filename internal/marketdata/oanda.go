@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -167,7 +168,9 @@ func streamOANDA(
 	if resp.StatusCode != http.StatusOK {
 		// Surface OANDA's JSON errorMessage (bad token/accountID/environment).
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, oandaErrorBodyLimit))
-		_ = resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("oanda pricing stream: close error response body", "error", err)
+		}
 		msg := strings.TrimSpace(string(raw))
 		if msg == "" {
 			return nil, fmt.Errorf("oanda pricing stream: unexpected status %d", resp.StatusCode)
@@ -261,7 +264,11 @@ func (c *oandaConnector) streamQuotes(
 		return delivered, err
 	}
 	c.reportStatus(true, "")
-	defer func() { _ = body.Close() }()
+	defer func() {
+		if err := body.Close(); err != nil {
+			slog.Warn("oanda: close pricing stream", "error", err)
+		}
+	}()
 
 	// Liveness watchdog: OANDA's ~5s heartbeats keep the stream alive, so a
 	// half-open TCP connection is detected when no line (quote OR heartbeat)
@@ -273,7 +280,9 @@ func (c *oandaConnector) streamQuotes(
 	if c.idleTimeout > 0 {
 		timer = time.AfterFunc(c.idleTimeout, func() {
 			idled.Store(true)
-			_ = body.Close()
+			if err := body.Close(); err != nil {
+				slog.Warn("oanda: close idle pricing stream", "error", err)
+			}
 		})
 		defer timer.Stop()
 	}

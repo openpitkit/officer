@@ -1303,7 +1303,7 @@ func TestManagerManualClearFailureRetriesStoredConfiguration(t *testing.T) {
 	sink.mu.Unlock()
 	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
 	err := manager.PushManual(context.Background(), instanceID.String(), cleared)
-	if err == nil || !strings.Contains(err.Error(), "pending reconciliation") {
+	if !errors.Is(err, sink.clearErr) || !strings.Contains(err.Error(), "pending reconciliation") {
 		t.Fatalf("PushManual(clear) error = %v, want pending reconciliation", err)
 	}
 	sink.mu.Lock()
@@ -1353,7 +1353,7 @@ func TestManagerManualClearTimeoutReleasesPublisherAndPreservesNewMark(t *testin
 	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
 	started := time.Now()
 	err := manager.PushManual(context.Background(), instanceID.String(), cleared)
-	if err == nil || !strings.Contains(err.Error(), "pending reconciliation") {
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "pending reconciliation") {
 		t.Fatalf("PushManual(clear) error = %v, want pending reconciliation", err)
 	}
 	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
@@ -1425,8 +1425,8 @@ func TestManagerPendingManualClearSurvivesRestart(t *testing.T) {
 	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
 	if err := manager.PushManual(
 		context.Background(), instanceID.String(), cleared,
-	); err == nil {
-		t.Fatal("PushManual(clear) succeeded, want pending reconciliation")
+	); !errors.Is(err, sink.clearErr) {
+		t.Fatalf("PushManual(clear): got %v, want %v", err, sink.clearErr)
 	}
 	sink.mu.Lock()
 	sink.clearErr = nil
@@ -1599,8 +1599,8 @@ func TestManagerRestartWaitsForOldManualClearBeforeStreamingTick(t *testing.T) {
 	cleared.ManualPrice = ""
 	if err := manager.PushManual(
 		context.Background(), instanceID.String(), cleared,
-	); err == nil {
-		t.Fatal("PushManual(clear) succeeded, want timeout")
+	); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want context.DeadlineExceeded", err)
 	}
 	select {
 	case <-entered:
@@ -1725,8 +1725,8 @@ func TestManagerSinkBarrierOrdersQueuedStreamingQuoteAfterInheritedClear(
 	}
 	select {
 	case err := <-clearResult:
-		if err == nil {
-			t.Fatal("PushManual(clear) succeeded, want timeout")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("got %v, want context.DeadlineExceeded", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("PushManual(clear) did not time out while sink was blocked")
@@ -1891,8 +1891,8 @@ func TestManagerStopTimeoutOrdersNewRunMarkAfterOldClear(t *testing.T) {
 	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
 	if err := manager.PushManual(
 		context.Background(), instanceID.String(), cleared,
-	); err == nil {
-		t.Fatal("PushManual(clear) succeeded, want timeout")
+	); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want context.DeadlineExceeded", err)
 	}
 	select {
 	case <-entered:
@@ -2365,8 +2365,8 @@ func TestRegistryVerifyAndSearchSymbols(t *testing.T) {
 		context.Background(),
 		domain.MarketDataInstance{Provider: "missing"},
 		"AAPL",
-	); err == nil {
-		t.Fatalf("VerifySymbol missing provider err = nil")
+	); !errors.Is(err, ErrUnsupportedProvider) {
+		t.Fatalf("got %v, want ErrUnsupportedProvider", err)
 	}
 	matches, supported, err = registry.SearchSymbols(
 		context.Background(),
@@ -2380,8 +2380,8 @@ func TestRegistryVerifyAndSearchSymbols(t *testing.T) {
 		context.Background(),
 		domain.MarketDataInstance{Provider: "missing"},
 		SymbolSearchQuery{Query: "AAP"},
-	); err == nil {
-		t.Fatalf("SearchSymbols missing provider err = nil")
+	); !errors.Is(err, ErrUnsupportedProvider) {
+		t.Fatalf("got %v, want ErrUnsupportedProvider", err)
 	}
 }
 

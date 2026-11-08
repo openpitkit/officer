@@ -26,8 +26,8 @@ type Route struct {
 	Method  string
 	Pattern string
 	Handler http.Handler
-	// Public marks a route that needs no credentials; only a
-	// RouterConfig.PanelRoutes route may carry it. NewRouter serves it with
+	// Public marks a route that needs no credentials; only a SourcePanel
+	// surface may contain it. NewRouter serves it with
 	// neither ResolveCaller nor AuthorizeMiddleware, so its handler runs with no
 	// caller in the request context, and the route manifest lists it as
 	// AccessPublic.

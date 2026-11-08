@@ -252,7 +252,7 @@ func ClientID(instanceID string) int64 {
 		return DefaultFallbackClientID
 	}
 	hash := fnv.New32a()
-	_, _ = hash.Write([]byte(trimmed))
+	hash.Write([]byte(trimmed))
 	return DefaultFallbackClientID + 1 + int64(hash.Sum32()%899999)
 }
 

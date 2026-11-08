@@ -322,7 +322,7 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		PID:       os.Getpid(),
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		_ = listener.Close()
+		err = errors.Join(err, listener.Close())
 		return fmt.Errorf("write runtime state: %w", err)
 	}
 	runtimeStateWritten := true
@@ -587,7 +587,9 @@ func (c *serviceLifecycleController) handler(action lifecycleAction) http.Handle
 		c.pending = true
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"accepted":true}` + "\n"))
+		if _, err := w.Write([]byte(`{"accepted":true}` + "\n")); err != nil {
+			slog.Error("write lifecycle acceptance response", "error", err)
+		}
 		c.requests <- action
 	})
 }
@@ -613,7 +615,7 @@ func lifecycleAudit(action lifecycleAction) (domain.AuditAction, domain.AuditDet
 // address from the published runtime state (so a free-port serve is reachable),
 // falling back to the configured address with wildcard hosts normalized to
 // loopback.
-func runHealthcheck(args []string) error {
+func runHealthcheck(args []string) (resultErr error) {
 	cfg, err := config.Load(append([]string{"-mode", string(config.RunModeServe)},
 		args...), os.LookupEnv)
 	if err != nil {
@@ -640,7 +642,7 @@ func runHealthcheck(args []string) error {
 	if err != nil {
 		return fmt.Errorf("healthcheck request to %s: %w", url, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, resp.Body.Close()) }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("healthcheck %s returned HTTP %d", url, resp.StatusCode)

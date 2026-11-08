@@ -27,6 +27,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -181,7 +182,7 @@ func TestNewRejectsDanglingDatabaseSymlink(t *testing.T) {
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
-	if _, err := New(path, domain.DefaultRealm); err == nil ||
+	if _, err := New(path, domain.DefaultRealm); !errors.Is(err, os.ErrNotExist) ||
 		!strings.Contains(err.Error(), "resolve database path") {
 		t.Fatalf("New(dangling symlink) error = %v, want a resolve error", err)
 	}

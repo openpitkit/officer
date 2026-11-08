@@ -26,6 +26,7 @@ import (
 	"go.openpit.dev/officer"
 	frameworkapp "go.openpit.dev/officer/framework/app"
 	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
@@ -73,6 +74,16 @@ func newCustomHostComposition(cfg officer.Config) (customHostComposition, error)
 	) frameworkapp.RouteConfig {
 		cfg := installed(svc, logs)
 		composeCustomHostRoutes(cfg.Routes)
+		cfg.Surfaces = append(cfg.Surfaces, httpx.Surface{
+			Prefix: hostSurfacePrefix,
+			Source: domain.SourceAPI,
+			Routes: []httpx.Route{{
+				ID:      hostSurfaceRouteID,
+				Method:  http.MethodGet,
+				Pattern: "/host",
+				Handler: http.HandlerFunc(hostRoute),
+			}},
+		})
 		return cfg
 	})
 

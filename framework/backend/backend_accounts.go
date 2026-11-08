@@ -205,6 +205,15 @@ func (s *Service) DeleteAccount(
 	if err := domain.ValidateAccountID(id); err != nil {
 		return err
 	}
+	if force {
+		if err := s.authorizeForce(ctx, caller, ForceDeleteAccount,
+			store.AuditEntry{Action: domain.AuditActionDeleteAccount, Account: id},
+			domain.AuditDetailDeleteAccountForceRefused,
+			domain.AuditDetailParams{"account": string(id)},
+		); err != nil {
+			return err
+		}
+	}
 	return s.node.DeleteAccount(ctx, id, force, caller)
 }
 

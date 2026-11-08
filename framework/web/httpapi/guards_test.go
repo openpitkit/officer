@@ -275,7 +275,7 @@ func TestJSONBodyRefusesUndeclaredBodies(t *testing.T) {
 // every other dependency a no-op.
 func guardedRouterConfig(registry *RouteRegistry, guards BrowserGuards) RouterConfig {
 	return RouterConfig{
-		Routes:         registry,
+		Surfaces:       V1Surfaces(registry, nil),
 		Authorizer:     AllowAll{},
 		CallerResolver: testCallerResolver,
 		SPA:            fstest.MapFS{"index.html": {Data: []byte("<html></html>")}},

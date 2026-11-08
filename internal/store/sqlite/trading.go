@@ -141,7 +141,7 @@ func (r *realmStore) GetTradingConnection(
 
 func (r *realmStore) ListTradingConnections(
 	ctx context.Context,
-) ([]domain.TradingConnection, error) {
+) (result []domain.TradingConnection, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -152,7 +152,7 @@ func (r *realmStore) ListTradingConnections(
 	if err != nil {
 		return nil, fmt.Errorf("store: list trading connections: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	connections := make([]domain.TradingConnection, 0)
 	for rows.Next() {
@@ -237,7 +237,7 @@ func scanTradingConnection(
 	xid, err := domain.ExternalIDFromBytes(rawID)
 	if err != nil {
 		return domain.TradingConnection{},
-			fmt.Errorf("store: decode trading connection external id: %w", err)
+			fmt.Errorf("store: decode trading connection external id: %v", err)
 	}
 	connection.ExternalID = xid
 	connection.FeeAccount = domain.AccountID(feeAccount.String)
@@ -462,7 +462,7 @@ func (r *realmStore) FindTradingInstrument(
 
 func (r *realmStore) queryTradingInstruments(
 	ctx context.Context, query string, args ...any,
-) ([]domain.TradingInstrument, error) {
+) (result []domain.TradingInstrument, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -471,7 +471,7 @@ func (r *realmStore) queryTradingInstruments(
 	if err != nil {
 		return nil, fmt.Errorf("store: list trading instruments: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	instruments := make([]domain.TradingInstrument, 0)
 	for rows.Next() {
@@ -504,7 +504,7 @@ func scanTradingInstrument(
 	connection, err := domain.ExternalIDFromBytes(rawID)
 	if err != nil {
 		return domain.TradingInstrument{}, fmt.Errorf(
-			"store: decode trading instrument connection external id: %w", err,
+			"store: decode trading instrument connection external id: %v", err,
 		)
 	}
 	instrument.Connection = connection
@@ -557,7 +557,7 @@ func (r *realmStore) PutTradingAccess(
 
 func (r *realmStore) ListTradingAccess(
 	ctx context.Context, account domain.AccountID,
-) ([]domain.TradingAccess, error) {
+) (result []domain.TradingAccess, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -587,7 +587,7 @@ func (r *realmStore) ListTradingAccess(
 	if err != nil {
 		return nil, fmt.Errorf("store: list trading access: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	accesses := make([]domain.TradingAccess, 0)
 	for rows.Next() {
@@ -601,7 +601,7 @@ func (r *realmStore) ListTradingAccess(
 		connection, err := domain.ExternalIDFromBytes(rawID)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"store: decode trading access connection external id: %w", err,
+				"store: decode trading access connection external id: %v", err,
 			)
 		}
 		access.Connection = connection
@@ -615,7 +615,7 @@ func (r *realmStore) ListTradingAccess(
 
 func (r *realmStore) GetTradingFeeAccounts(
 	ctx context.Context, connection domain.ExternalID,
-) (domain.AccountID, []domain.AccountID, error) {
+) (fee domain.AccountID, senders []domain.AccountID, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return "", nil, err
@@ -635,7 +635,7 @@ func (r *realmStore) GetTradingFeeAccounts(
 	if err != nil {
 		return "", nil, fmt.Errorf("store: get trading fee accounts: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	var feeAccount domain.AccountID
 	accounts := make([]domain.AccountID, 0)
 	found := false
@@ -672,7 +672,7 @@ func (r *realmStore) ListTradingAccessForConnection(
 // restore reads them inside its transaction.
 func listTradingAccessForConnection(
 	ctx context.Context, q sqlQueryer, connection domain.ExternalID,
-) ([]fwstore.TradingAccessListRow, error) {
+) (result []fwstore.TradingAccessListRow, resultErr error) {
 	rows, err := q.QueryContext(ctx,
 		`SELECT COALESCE(a.code, ''), COALESCE(g.code, ''),
 		        COALESCE(member_of.code, ''), ta.venue_account
@@ -688,7 +688,7 @@ func listTradingAccessForConnection(
 	if err != nil {
 		return nil, fmt.Errorf("store: list trading access for connection: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	grants := make([]fwstore.TradingAccessListRow, 0)
 	for rows.Next() {
 		grant := fwstore.TradingAccessListRow{
@@ -937,7 +937,7 @@ func (r *realmStore) FindVenueOrderByClientID(
 
 func (r *realmStore) ListOpenVenueOrders(
 	ctx context.Context, connection domain.ExternalID,
-) ([]domain.VenueOrder, error) {
+) (result []domain.VenueOrder, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -961,7 +961,7 @@ func (r *realmStore) ListOpenVenueOrders(
 	if err != nil {
 		return nil, fmt.Errorf("store: list open venue orders: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	orders := make([]domain.VenueOrder, 0)
 	for rows.Next() {
@@ -1013,12 +1013,12 @@ func scanVenueOrder(scanner sqlScanner) (domain.VenueOrder, error) {
 	orderID, err := domain.ExternalIDFromBytes(rawOrder)
 	if err != nil {
 		return domain.VenueOrder{},
-			fmt.Errorf("store: decode venue order Officer id: %w", err)
+			fmt.Errorf("store: decode venue order Officer id: %v", err)
 	}
 	connectionID, err := domain.ExternalIDFromBytes(rawConnection)
 	if err != nil {
 		return domain.VenueOrder{},
-			fmt.Errorf("store: decode venue order connection id: %w", err)
+			fmt.Errorf("store: decode venue order connection id: %v", err)
 	}
 	parsedAt, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {

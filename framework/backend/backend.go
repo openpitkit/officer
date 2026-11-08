@@ -84,6 +84,7 @@ type Service struct {
 	commands        catalog.Provider
 	lockSettlement  LockSettlementPrice
 	scope           AccountScope
+	forceAuthorizer ForceAuthorizer
 	marketDataMu    sync.Mutex
 	tradingMu       sync.Mutex
 	nonReleaseBuild bool
@@ -150,6 +151,13 @@ func WithAccountScope(scope AccountScope) Option {
 	return func(s *Service) { s.scope = scope }
 }
 
+// WithForceAuthorizer installs the authorization check for forced operations.
+// Without it New allows every forced operation; a nil authorizer makes New
+// fail.
+func WithForceAuthorizer(a ForceAuthorizer) Option {
+	return func(s *Service) { s.forceAuthorizer = a }
+}
+
 // New constructs a Service over n, the node of the realm the service serves.
 // md is the live connector-manager view used to surface per-instance
 // subscription state and to re-apply configuration; signer is the framework
@@ -158,7 +166,7 @@ func WithAccountScope(scope AccountScope) Option {
 // (market-data state resolves to empty and RestartMarketData is a no-op);
 // signer may be nil (the signing and approval methods then report the
 // feature unconfigured). New returns an error when n or lockSettlement is nil,
-// or when WithAccountScope passes a nil scope.
+// or when WithAccountScope or WithForceAuthorizer passes a nil component.
 func New(
 	n node.Node,
 	md MarketDataRuntime,
@@ -179,19 +187,23 @@ func New(
 		}
 	}
 	s := &Service{
-		node:           n,
-		md:             md,
-		registry:       registry,
-		signer:         fwsigning.ServiceOrUnavailable(signer),
-		commands:       staticCatalogProvider{catalog: catalog.New(nil)},
-		lockSettlement: lockSettlement,
-		scope:          EveryAccount{},
+		node:            n,
+		md:              md,
+		registry:        registry,
+		signer:          fwsigning.ServiceOrUnavailable(signer),
+		commands:        staticCatalogProvider{catalog: catalog.New(nil)},
+		lockSettlement:  lockSettlement,
+		scope:           EveryAccount{},
+		forceAuthorizer: allowForce{},
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	if s.scope == nil {
 		return nil, errors.New("backend: nil account scope")
+	}
+	if s.forceAuthorizer == nil {
+		return nil, errors.New("backend: nil force authorizer")
 	}
 	return s, nil
 }

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 )
@@ -71,7 +72,11 @@ func FetchExchangeInfo(
 	if err != nil {
 		return ExchangeInfo{}, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("binance exchangeInfo: close response body", "error", err)
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return ExchangeInfo{}, fmt.Errorf(
 			"binance exchangeInfo: unexpected status %d", resp.StatusCode,
@@ -95,7 +100,11 @@ func FetchSymbol(ctx context.Context, client *http.Client,
 	if err != nil {
 		return Symbol{}, false, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("binance exchangeInfo: close response body", "error", err)
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusBadRequest {
 			var failure struct {

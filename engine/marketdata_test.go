@@ -39,6 +39,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/logtest"
 )
 
 // newTestSink builds a real market-data service (through the engine builder, as
@@ -256,9 +257,7 @@ func TestMarketDataSink_SourceAgeExpiresOldQuoteImmediately(t *testing.T) {
 // Not parallel: it swaps the process-wide slog default to capture the warning.
 func TestMarketDataSink_WarnsOnlyBeyondFutureSkew(t *testing.T) {
 	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(previous)
+	logtest.SetDefault(t, slog.NewTextHandler(&logs, nil))
 
 	tests := []struct {
 		name     string
@@ -577,8 +576,8 @@ func TestOpenPitBuildFunc_FailedRebuildKeepsSharedServiceLive(t *testing.T) {
 	invalid.RateLimits = []domain.LimitRate{
 		rateLimit(domain.ScopeAccount, "missing", "", 1, time.Second),
 	}
-	if _, err := build(invalid); err == nil {
-		t.Fatal("failed rebuild succeeded")
+	if _, err := build(invalid); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("failed rebuild: got %v, want domain.ErrInvalid", err)
 	}
 
 	instrument, err := instrumentFrom(
@@ -606,8 +605,8 @@ func TestMarketDataSink_InvalidAssetErrors(t *testing.T) {
 	t.Parallel()
 	sink, _ := newTestSink(t)
 
-	if err := sink.Push(marketdata.QuoteUpdate{Base: 0, Quote: testMarketDataAssetID("USD"), Mark: "1"}); err == nil {
-		t.Fatal("Push with empty base asset: want error")
+	if err := sink.Push(marketdata.QuoteUpdate{Base: 0, Quote: testMarketDataAssetID("USD"), Mark: "1"}); !errors.Is(err, marketdata.ErrUnknownAsset) {
+		t.Fatalf("Push with empty base asset: got %v, want marketdata.ErrUnknownAsset", err)
 	}
 }
 
@@ -617,8 +616,8 @@ func TestMarketDataSink_InvalidPriceErrors(t *testing.T) {
 	t.Parallel()
 	sink, _ := newTestSink(t)
 
-	if err := sink.Push(marketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "not-a-number"}); err == nil {
-		t.Fatal("Push with malformed mark price: want error")
+	if err := sink.Push(marketdata.QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "not-a-number"}); !errors.Is(err, param.ErrInvalidFormat) {
+		t.Fatalf("Push with malformed mark price: got %v, want param.ErrInvalidFormat", err)
 	}
 }
 

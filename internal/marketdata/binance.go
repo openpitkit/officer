@@ -389,7 +389,7 @@ func (c *binanceConnector) stream(
 	}
 	select {
 	case <-ctx.Done():
-		_ = conn.Close(websocket.StatusNormalClosure, "")
+		closeStream("binance", conn)
 		return false, ctx.Err()
 	default:
 	}
@@ -397,7 +397,7 @@ func (c *binanceConnector) stream(
 	// Connected (or recovered after a prior failure): clear any error state.
 	c.reportStatus(true, "")
 	defer func() {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
+		closeStream("binance", conn)
 		c.clearActiveConn()
 	}()
 
@@ -464,7 +464,7 @@ func (c *binanceConnector) Close() {
 		cancel()
 	}
 	if active != nil {
-		_ = active.Close(websocket.StatusNormalClosure, "")
+		closeStream("binance", active)
 	}
 	c.wg.Wait()
 }
@@ -477,7 +477,7 @@ func (c *binanceConnector) setActiveConn(conn binanceConn) {
 	}
 	c.mu.Unlock()
 	if closing {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
+		closeStream("binance", conn)
 	}
 }
 

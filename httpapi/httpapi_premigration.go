@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
@@ -101,7 +102,11 @@ func handleDownloadPreMigrationBackup(source PreMigrationBackupSource) http.Hand
 			httpx.WriteErr(w, err)
 			return
 		}
-		defer func() { _ = file.Close() }()
+		defer func() {
+			if err := file.Close(); err != nil {
+				slog.Error("close pre-migration backup download", "name", name, "error", err)
+			}
+		}()
 		if err := source.Audit(context.WithoutCancel(r.Context()),
 			domain.AuditActionDownloadPreMigrationBackup,
 			domain.NewAuditDetail(domain.AuditDetailDownloadPreMigrationBackup,
@@ -114,7 +119,9 @@ func handleDownloadPreMigrationBackup(source PreMigrationBackupSource) http.Hand
 			mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-		_, _ = io.Copy(w, file)
+		if _, err := io.Copy(w, file); err != nil {
+			slog.Error("copy pre-migration backup response", "name", name, "error", err)
+		}
 	}
 }
 

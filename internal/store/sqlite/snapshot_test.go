@@ -26,6 +26,8 @@ import (
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestSnapshotSourceURI(t *testing.T) {
@@ -136,7 +138,8 @@ func TestSnapshotRejectsNonSQLiteSource(t *testing.T) {
 	if err := os.WriteFile(source, []byte("not an SQLite database"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Snapshot(context.Background(), source, filepath.Join(t.TempDir(), "copy.db")); err == nil {
-		t.Fatal("snapshot accepted non-SQLite source")
+	var sqliteErr *sqlitedriver.Error
+	if err := Snapshot(context.Background(), source, filepath.Join(t.TempDir(), "copy.db")); !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_NOTADB {
+		t.Fatalf("got %v, want SQLITE_NOTADB", err)
 	}
 }

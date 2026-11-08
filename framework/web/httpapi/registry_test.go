@@ -93,7 +93,7 @@ func TestRouteRegistryReplaceAndUnregister(t *testing.T) {
 	}
 
 	router, err := NewRouter(RouterConfig{
-		Routes:         &registry,
+		Surfaces:       V1Surfaces(&registry, nil),
 		Authorizer:     AllowAll{},
 		CallerResolver: testCallerResolver,
 		SPA: fstest.MapFS{
@@ -202,7 +202,7 @@ func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
 		DuringSetup: true,
 	})
 	cfg := guardedRouterConfig(&registry, testGuards(t))
-	cfg.PanelRoutes = &panel
+	cfg.Surfaces = V1Surfaces(&registry, &panel)
 	cfg.MCP = http.NotFoundHandler()
 	cfg.ExtraMounts = []ExtraMount{
 		{
@@ -287,8 +287,8 @@ func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
 }
 
 // TestRuntimeRouteManifestOmitsUnauthorizedRoutes checks that a registry route
-// is listed, on either prefix and from PanelRoutes, only when the Authorizer
-// allows the caller its id, while a public panel route, whose id it refuses,
+// is listed on a surface only when the Authorizer allows the caller its id,
+// while a public panel route, whose id it refuses,
 // and the manifest, MCP, extra mount and SPA entries are listed whatever the
 // Authorizer answers.
 func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
@@ -314,7 +314,7 @@ func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
 		Handler: http.NotFoundHandler(), Public: true,
 	})
 	cfg := guardedRouterConfig(&registry, testGuards(t))
-	cfg.PanelRoutes = &panel
+	cfg.Surfaces = V1Surfaces(&registry, &panel)
 	// Every other identifier is refused, the empty one included, so an entry
 	// the manifest wrongly put to the Authorizer would drop out.
 	cfg.Authorizer = allowIdentifiers{"allowed", "panel.allowed"}
@@ -351,9 +351,10 @@ func TestRuntimeRouteManifestOmitsUnauthorizedRoutes(t *testing.T) {
 	}
 }
 
-// TestPanelRoutesServeOnlyThePanelMirror checks that a PanelRoutes route
-// answers on /app/api/v1 through the mirror's chain - the caller resolved for
-// the panel and the route authorized by its id - and is not mounted on /api/v1.
+// TestPanelRoutesServeOnlyThePanelMirror checks that a panel-only route
+// answers through the SourcePanel surface's chain - the caller resolved for
+// the panel and the route authorized by its id - and is not mounted on the
+// SourceAPI surface.
 func TestPanelRoutesServeOnlyThePanelMirror(t *testing.T) {
 	served := 0
 	var panel RouteRegistry
@@ -366,7 +367,7 @@ func TestPanelRoutesServeOnlyThePanelMirror(t *testing.T) {
 	})
 	authorizer := &recordingAuthorizer{}
 	cfg := guardedRouterConfig(&RouteRegistry{}, testGuards(t))
-	cfg.PanelRoutes = &panel
+	cfg.Surfaces = V1Surfaces(&RouteRegistry{}, &panel)
 	cfg.Authorizer = authorizer
 	router, err := NewRouter(cfg)
 	if err != nil {
@@ -454,71 +455,12 @@ func TestRuntimeRouteManifestReadsAccessModeOnEveryRequest(t *testing.T) {
 	}
 }
 
-// TestNewRouterPanicsOnUndeclaredAccess checks that NewRouter refuses to
-// register a public route outside PanelRoutes and an extra mount that does not
-// declare public or agent access.
-func TestNewRouterPanicsOnUndeclaredAccess(t *testing.T) {
-	t.Parallel()
-
-	extraMount := func(access Access) func(*RouterConfig) {
-		return func(cfg *RouterConfig) {
-			cfg.ExtraMounts = []ExtraMount{{
-				Method: http.MethodGet, Pattern: "/extra",
-				Handler: http.NotFoundHandler(), Access: access,
-			}}
-		}
-	}
-	for _, tc := range []struct {
-		name  string
-		setup func(*RouterConfig)
-		want  string
-	}{
-		{
-			name: "public route in Routes",
-			setup: func(cfg *RouterConfig) {
-				cfg.Routes.Register(Route{
-					ID: "session.get", Method: http.MethodGet, Pattern: "/session",
-					Handler: http.NotFoundHandler(), Public: true,
-				})
-			},
-			want: `httpapi: route "session.get" is public: public routes belong to PanelRoutes`,
-		},
-		{
-			name:  "extra mount without access",
-			setup: extraMount(""),
-			want:  "httpapi: extra mount GET /extra has no valid access kind",
-		},
-		{
-			name:  "extra mount with API access",
-			setup: extraMount(AccessAPI),
-			want:  "httpapi: extra mount GET /extra has no valid access kind",
-		},
-		{
-			name:  "extra mount with panel access",
-			setup: extraMount(AccessPanel),
-			want:  "httpapi: extra mount GET /extra has no valid access kind",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := guardedRouterConfig(&RouteRegistry{}, testGuards(t))
-			tc.setup(&cfg)
-			defer func() {
-				if got := recover(); got != tc.want {
-					t.Fatalf("NewRouter panic = %v, want %q", got, tc.want)
-				}
-			}()
-			_, _ = NewRouter(cfg)
-		})
-	}
-}
-
 // TestNewRouterRefusesDuplicateOperations checks that an operation mounted
 // twice - whichever mounts collide, and however the parameter names, the
-// regexp anchors or the method case differ - a route id in both registries,
-// and an extra mount or MCP path under a v1 prefix fail NewRouter instead of
-// one mount shadowing the other, while two regexps on one segment are two
-// operations and mounts beside the v1 prefixes are accepted.
+// regexp anchors or the method case differ - a route id twice in one surface,
+// and an extra mount or MCP path at or under a surface prefix fail NewRouter
+// instead of one mount shadowing the other, while two regexps on one segment
+// are two operations and mounts beside surface prefixes are accepted.
 func TestNewRouterRefusesDuplicateOperations(t *testing.T) {
 	t.Parallel()
 
@@ -565,7 +507,7 @@ func TestNewRouterRefusesDuplicateOperations(t *testing.T) {
 			name:        "route id in both registries",
 			routes:      []Route{route("accounts.list", http.MethodGet, "/accounts")},
 			panelRoutes: []Route{route("accounts.list", http.MethodGet, "/panel-accounts")},
-			want:        `httpapi: route id "accounts.list" is in both Routes and PanelRoutes`,
+			want:        `httpapi: route id "accounts.list" appears twice in surface "/app/api/v1"`,
 		},
 		{
 			name:        "panel route on a mirrored path under another parameter name",
@@ -657,7 +599,7 @@ func TestNewRouterRefusesDuplicateOperations(t *testing.T) {
 				panel.Register(route)
 			}
 			cfg := guardedRouterConfig(&registry, testGuards(t))
-			cfg.PanelRoutes = &panel
+			cfg.Surfaces = V1Surfaces(&registry, &panel)
 			cfg.MCP = http.NotFoundHandler()
 			cfg.MCPPath = tc.mcpPath
 			cfg.ExtraMounts = tc.extraMounts
@@ -694,7 +636,7 @@ func TestNewRouterCustomAuthorizer(t *testing.T) {
 		}),
 	})
 	router, err := NewRouter(RouterConfig{
-		Routes:         &registry,
+		Surfaces:       V1Surfaces(&registry, nil),
 		Authorizer:     allowIdentifiers{"open"},
 		CallerResolver: testCallerResolver,
 		SPA: fstest.MapFS{
@@ -733,10 +675,10 @@ func TestRouteAuthorizerReceivesRouteID(t *testing.T) {
 	})
 	authorizer := &recordingAuthorizer{}
 	router, err := NewRouter(RouterConfig{
-		Routes:     &registry,
+		Surfaces:   V1Surfaces(&registry, nil),
 		Authorizer: authorizer,
 		CallerResolver: func(*http.Request) (domain.Caller, error) {
-			return domain.Caller{Principal: "alice", Role: "admin"}, nil
+			return domain.Caller{Principal: "alice"}, nil
 		},
 		SPA: fstest.MapFS{
 			"index.html": {Data: []byte("<html></html>")},
@@ -759,7 +701,7 @@ func TestRouteAuthorizerReceivesRouteID(t *testing.T) {
 	}
 	call := authorizer.calls[0]
 	if call.identifier != "route.stable-id" || call.source != domain.SourceAPI ||
-		call.principal != "alice" || call.role != "admin" {
+		call.principal != "alice" {
 		t.Fatalf("authorization call = %+v, want API route ID", call)
 	}
 }
@@ -774,7 +716,7 @@ func TestResolverErrorRejectsRequestBeforeHandler(t *testing.T) {
 		}),
 	})
 	router, err := NewRouter(RouterConfig{
-		Routes: &registry, Authorizer: AllowAll{},
+		Surfaces: V1Surfaces(&registry, nil), Authorizer: AllowAll{},
 		CallerResolver: func(*http.Request) (domain.Caller, error) {
 			return domain.Caller{}, domain.ErrForbidden
 		},
@@ -856,7 +798,7 @@ func TestRouterStampsDuringSetup(t *testing.T) {
 	})
 	authorizer := &recordingAuthorizer{}
 	cfg := guardedRouterConfig(&registry, testGuards(t))
-	cfg.PanelRoutes = &panel
+	cfg.Surfaces = V1Surfaces(&registry, &panel)
 	cfg.Authorizer = authorizer
 	var resolvedFlags []bool
 	cfg.CallerResolver = func(r *http.Request) (domain.Caller, error) {
@@ -939,7 +881,7 @@ func TestRouterStampsRequestSurface(t *testing.T) {
 		Handler: handler, Public: true,
 	})
 	cfg := guardedRouterConfig(&registry, testGuards(t))
-	cfg.PanelRoutes = &panel
+	cfg.Surfaces = V1Surfaces(&registry, &panel)
 	cfg.CallerResolver = resolver
 	cfg.MCP = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, err := resolver(r); err != nil {
@@ -1006,7 +948,7 @@ func TestPublicPanelRouteRunsWithoutCaller(t *testing.T) {
 		Handler: mark("public"), Public: true,
 	})
 	cfg := guardedRouterConfig(&registry, testGuards(t))
-	cfg.PanelRoutes = &panel
+	cfg.Surfaces = V1Surfaces(&registry, &panel)
 	cfg.CallerResolver = func(*http.Request) (domain.Caller, error) {
 		return domain.Caller{}, domain.ErrUnauthorized
 	}
@@ -1028,8 +970,8 @@ func TestPublicPanelRouteRunsWithoutCaller(t *testing.T) {
 		t.Fatalf("public route = %d %s, served %q; want 204 from its handler",
 			rec.Code, rec.Body, served)
 	}
-	if callerErr == nil {
-		t.Fatal("the public route's handler found a caller in the request context")
+	if !errors.Is(callerErr, domain.ErrInvalid) {
+		t.Fatalf("public route caller: got %v, want domain.ErrInvalid", callerErr)
 	}
 
 	for _, path := range []string{
@@ -1052,7 +994,7 @@ func TestNewRouterCustomMCPPath(t *testing.T) {
 	var registry RouteRegistry
 	served := 0
 	router, err := NewRouter(RouterConfig{
-		Routes:         &registry,
+		Surfaces:       V1Surfaces(&registry, nil),
 		Authorizer:     AllowAll{},
 		CallerResolver: testCallerResolver,
 		SPA: fstest.MapFS{
@@ -1111,7 +1053,7 @@ func newMCPBodyLimitRouter(
 	t.Helper()
 	var registry RouteRegistry
 	router, err := NewRouter(RouterConfig{
-		Routes:         &registry,
+		Surfaces:       V1Surfaces(&registry, nil),
 		Authorizer:     AllowAll{},
 		CallerResolver: testCallerResolver,
 		SPA: fstest.MapFS{
@@ -1222,7 +1164,6 @@ var _ Authorizer = allowIdentifiers(nil)
 type authorizationCall struct {
 	source      domain.Source
 	principal   string
-	role        string
 	identifier  string
 	duringSetup bool
 }
@@ -1239,7 +1180,6 @@ func (a *recordingAuthorizer) Authorize(
 	a.calls = append(a.calls, authorizationCall{
 		source:      caller.Source,
 		principal:   caller.Principal,
-		role:        caller.Role,
 		identifier:  identifier,
 		duringSetup: DuringSetupFromContext(ctx),
 	})

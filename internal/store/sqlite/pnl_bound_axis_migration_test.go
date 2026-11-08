@@ -20,11 +20,14 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/internal/store/sqlite"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // pnlBoundV1Fixture builds a database whose shared schema stops at 0001, so
@@ -172,14 +175,15 @@ func TestPnlBoundAxisMigrationKeepsV1BoundsRealized(t *testing.T) {
 		VALUES ('unrealized', 'global', (SELECT id FROM asset WHERE code = 'USD'), '-50')`); err != nil {
 		t.Fatalf("unrealized bound beside realized: %v", err)
 	}
+	var sqliteErr *sqlitedriver.Error
 	if _, err := db.Exec(`INSERT INTO limit_spot_funds_pnl_bound
 		(axis, scope, currency_asset_id, lower_bound)
-		VALUES ('realized', 'global', (SELECT id FROM asset WHERE code = 'USD'), '-50')`); err == nil {
-		t.Fatal("second realized global bound was accepted")
+		VALUES ('realized', 'global', (SELECT id FROM asset WHERE code = 'USD'), '-50')`); !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_UNIQUE {
+		t.Fatalf("got %v, want SQLITE_CONSTRAINT_UNIQUE", err)
 	}
 	if _, err := db.Exec(`INSERT INTO limit_spot_funds_pnl_bound
 		(axis, scope, currency_asset_id, lower_bound)
-		VALUES ('position', 'global', (SELECT id FROM asset WHERE code = 'USD'), '-50')`); err == nil {
-		t.Fatal("unknown axis was accepted")
+		VALUES ('position', 'global', (SELECT id FROM asset WHERE code = 'USD'), '-50')`); !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_CHECK {
+		t.Fatalf("got %v, want SQLITE_CONSTRAINT_CHECK", err)
 	}
 }

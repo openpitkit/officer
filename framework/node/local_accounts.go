@@ -652,10 +652,7 @@ func (n *localNode) auditBatch(
 	return n.realm.AppendAuditBatch(ctx, entries)
 }
 
-// AppendAudit persists one audit row stamped with the caller. It is the seam
-// the backend uses for control-plane actions that have no node-mutating
-// counterpart (signing-key management, signing config, approval issue/confirm/
-// cancel).
+// AppendAudit implements Node.AppendAudit.
 func (n *localNode) AppendAudit(
 	ctx context.Context, entry store.AuditEntry, caller domain.Caller,
 ) error {

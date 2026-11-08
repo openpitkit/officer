@@ -32,6 +32,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -108,7 +109,7 @@ WHERE s.key = '` + domain.SettingKeySpotFundsLimitMode + `'`
 // reconstructs each row's typed value from the projected columns.
 func (r *realmStore) ListPolicyRows(
 	ctx context.Context, filter fwstore.PolicyListFilter,
-) (fwstore.PolicyListPage, error) {
+) (value fwstore.PolicyListPage, resultErr error) {
 	where, args, err := policyListWhere(filter)
 	if err != nil {
 		return fwstore.PolicyListPage{}, err
@@ -140,7 +141,7 @@ func (r *realmStore) ListPolicyRows(
 	if err != nil {
 		return fwstore.PolicyListPage{}, fmt.Errorf("store: list policy rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]fwstore.PolicyListRow, 0)
 	for rows.Next() {
@@ -334,7 +335,7 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 // account code then asset code.
 func (r *realmStore) ListRateLimits(
 	ctx context.Context, account domain.AccountID,
-) ([]domain.LimitRate, error) {
+) (value []domain.LimitRate, resultErr error) {
 	q := `
 SELECT lr.scope, a.code, ast.code, lr.max_orders, lr.window
 FROM limit_rate lr
@@ -355,7 +356,7 @@ LEFT JOIN asset   ast ON ast.id = lr.asset_id`
 	if err != nil {
 		return nil, fmt.Errorf("store: list rate limits: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.LimitRate, 0)
 	for rows.Next() {
@@ -465,7 +466,7 @@ func scanRateLimit(rows *sql.Rows) (domain.LimitRate, error) {
 // non-empty only barriers whose account_id matches are returned.
 func (r *realmStore) ListOrderSizeLimits(
 	ctx context.Context, account domain.AccountID,
-) ([]domain.LimitOrderSize, error) {
+) (value []domain.LimitOrderSize, resultErr error) {
 	q := `
 SELECT los.scope, a.code, ast.code, los.max_quantity, los.max_notional
 FROM limit_order_size los
@@ -486,7 +487,7 @@ LEFT JOIN asset   ast ON ast.id = los.asset_id`
 	if err != nil {
 		return nil, fmt.Errorf("store: list order size limits: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.LimitOrderSize, 0)
 	for rows.Next() {
@@ -586,7 +587,7 @@ func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 // account-scoped barriers whose account_id matches are returned.
 func (r *realmStore) ListSpotFundsPnlBoundsLimits(
 	ctx context.Context, account domain.AccountID,
-) ([]domain.LimitSpotFundsPnlBounds, error) {
+) (value []domain.LimitSpotFundsPnlBounds, resultErr error) {
 	q := `
 	SELECT lsfpb.axis, lsfpb.scope, a.code, g.code, c.code,
 	       lsfpb.lower_bound, lsfpb.upper_bound
@@ -609,7 +610,7 @@ JOIN asset               c  ON c.id  = lsfpb.currency_asset_id`
 	if err != nil {
 		return nil, fmt.Errorf("store: list spot funds pnl bounds limits: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	result := make([]domain.LimitSpotFundsPnlBounds, 0)
 	for rows.Next() {

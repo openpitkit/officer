@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -562,9 +563,9 @@ func (c *finnhubConnector) stream(
 		return false, redactFinnhubStreamError(err, c.token)
 	}
 	c.reportStatus(true, "")
-	defer func() {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-	}()
+	defer closeStream("finnhub", conn, func(err error) error {
+		return redactFinnhubStreamError(err, c.token)
+	})
 
 	if err := writeFinnhubSubscribe(ctx, conn, subs); err != nil {
 		return false, err
@@ -788,7 +789,11 @@ func fetchFinnhubCryptoSymbols(
 	if err != nil {
 		return nil, redactFinnhubStreamError(err, token)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("finnhub crypto symbols: close response body", "error", redactFinnhubStreamError(err, token))
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf(
 			"finnhub crypto symbols: unexpected status %d",
@@ -828,7 +833,11 @@ func fetchFinnhubQuote(
 	if err != nil {
 		return finnhubQuote{}, redactFinnhubStreamError(err, token)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("finnhub quote: close response body", "error", redactFinnhubStreamError(err, token))
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return finnhubQuote{}, fmt.Errorf(
 			"finnhub quote: unexpected status %d",
@@ -861,7 +870,11 @@ func fetchFinnhubSearchResults(
 	if err != nil {
 		return nil, redactFinnhubStreamError(err, token)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("finnhub symbol search: close response body", "error", redactFinnhubStreamError(err, token))
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf(
 			"finnhub symbol search: unexpected status %d",

@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -330,8 +331,8 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	if rejected.Status != domain.OrderStatusRejected {
 		t.Fatalf("pre-trade did not reject: %+v", rejected)
 	}
-	if _, err := runtime.Send(ctx, rejected.ExternalID, dest); err == nil {
-		t.Fatal("Send accepted a pre-trade-rejected order")
+	if _, err := runtime.Send(ctx, rejected.ExternalID, dest); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("Send pre-trade-rejected order: got %v, want domain.ErrConflict", err)
 	}
 	venueMu.Lock()
 	postCount = len(posts)

@@ -481,8 +481,8 @@ func TestAutoCreateResolverRollbackFailureReconcilesAndFailsStop(t *testing.T) {
 	if !errors.Is(err, resolverErr) || !errors.Is(err, deleteErr) {
 		t.Fatalf("auto-create error = %v, want resolver and delete failures", err)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal hook did not fire after auto-create rollback failure")
+	if !errors.Is(fatalErr, deleteErr) || !errors.Is(fatalErr, resolverErr) {
+		t.Fatalf("fatal auto-create rollback error: got %v, want %v and %v", fatalErr, deleteErr, resolverErr)
 	}
 	if builds != 2 {
 		t.Fatalf("engine builds = %d, want initial plus reconciliation", builds)

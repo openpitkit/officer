@@ -16,20 +16,21 @@
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
 # golangci-lint's errcheck runs with its default config here (officer has no
-# .golangci.yml), which means check-blank is false: `_ = someCall()` is the
-# conventional way to tell errcheck "ignored on purpose", and errcheck accepts
-# it silently. It only flags a return value that is not captured at all. That
-# leaves the explicit-blank-discard shape uncovered - this rule fills exactly
-# that gap; it does not duplicate errcheck, it complements it.
+# .golangci.yml), which means check-blank is false: explicit all-blank
+# assignments (any number of blanks, with one or more calls on the right,
+# including untyped `var` declarations)
+# tell errcheck "ignored on purpose", and it accepts them silently. This rule
+# fills that gap; bare calls with unchecked errors remain errcheck's job,
+# including its default exclusions for calls such as (hash.Hash).Write.
 #
 # A discarded error is a fallback: execution continues on an assumption that
 # was never checked. Scope is the whole Go tree - narrowing it by package only
 # moves the problem somewhere less watched.
+# Fixtures are excluded because they contain intentional violations.
 #
-# The only exemption is `_ = $X.Close(...)` (with or without arguments, so it
-# also covers websocket-style `conn.Close(status, reason)`): best-effort
-# teardown on a cleanup/defer path, where there is nothing useful left to do
-# with the error. Every other discard is a real finding - including
+# Exemptions: `_ = $X.Close(...)` (owned by discarded-close-error), typed
+# `var _ $TYPE = $CALL(...)`, and receive/index/type-assertion/slice right sides.
+# Every other discard is a finding, including
 # `_ = tx.Rollback()`/`_ = rows.Err()`-shaped calls in internal/store/sqlite,
 # which this exemption deliberately does not cover.
 
@@ -42,9 +43,25 @@ rules:
     severity: ERROR
     languages: [go]
     patterns:
-      - pattern: _ = $CALL(...)
+      - pattern: $LEFT = $RIGHT
+      - metavariable-regex:
+          metavariable: $LEFT
+          regex: ^_\s*(,\s*_\s*)*$
+      - metavariable-pattern:
+          metavariable: $RIGHT
+          pattern: $CALL(...)
       - pattern-not: _ = $X.Close(...)
       - pattern-not: var _ $TYPE = $CALL(...)
+      - pattern-not: $LEFT = <-$CH
+      - pattern-not: $LEFT = $M[$K]
+      - pattern-not: $LEFT = $X.($T)
+      - pattern-not: $LEFT = $S[$A:$B]
+      - pattern-not: $LEFT = $S[$A:]
+      - pattern-not: $LEFT = $S[:$B]
+      - pattern-not: $LEFT = $S[:]
+      - pattern-not: $LEFT = $S[$A:$B:$C]
+      - pattern-not: $LEFT = $S[:$B:$C]
     paths:
       exclude:
         - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

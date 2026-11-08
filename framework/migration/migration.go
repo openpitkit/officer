@@ -233,14 +233,14 @@ func schemaMigrationsDDL(table string) string {
 
 func appliedVersions(
 	ctx context.Context, db *sql.DB, table string,
-) (map[int]bool, error) {
+) (applied map[int]bool, err error) {
 	rows, err := db.QueryContext(ctx, `SELECT version FROM `+table)
 	if err != nil {
 		return nil, fmt.Errorf("migration: read %s: %w", table, err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { err = errors.Join(err, rows.Close()) }()
 
-	applied := make(map[int]bool)
+	applied = make(map[int]bool)
 	for rows.Next() {
 		var v int
 		if err := rows.Scan(&v); err != nil {

@@ -17,6 +17,7 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -b",
     "test": "vitest run",
+    "test:lib": "vitest run --config vitest.lib.config.ts",
     "preview": "vite preview",
     "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json"
   },
@@ -80,7 +81,8 @@
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
     },
-    "./styles.css": "./lib/styles.css"
+    "./styles.css": "./lib/styles.css",
+    "./favicon.svg": "./lib/favicon.svg"
   },
   "peerDependencies": {
     "i18next": "26.3.1",

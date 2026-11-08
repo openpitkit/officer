@@ -24,8 +24,10 @@ import (
 )
 
 const (
-	hostRouteID      = "customhost.host.get"
-	hostRoutePattern = "/example/host"
+	hostRouteID        = "customhost.host.get"
+	hostRoutePattern   = "/example/host"
+	hostSurfacePrefix  = "/example/api/v1"
+	hostSurfaceRouteID = "customhost.surface.host.get"
 
 	replacedBaseRouteID = "health.get"
 	hiddenBaseRouteID   = "status.get"

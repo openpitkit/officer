@@ -98,6 +98,12 @@ func TestIBProbeCleanup(t *testing.T) {
 			if kind == "success" && err != nil || kind != "success" && err == nil {
 				t.Fatalf("probe err=%v", err)
 			}
+			if kind == "error" && !errors.Is(err, v.connectError) {
+				t.Fatalf("probe: got %v, want %v", err, v.connectError)
+			}
+			if kind == "cancel" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("probe: got %v, want context.Canceled", err)
+			}
 			v.mu.Lock()
 			connects, disconnects := v.connects, v.disconnects
 			v.mu.Unlock()

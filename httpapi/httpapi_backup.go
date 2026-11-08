@@ -23,8 +23,10 @@ import (
 	"compress/flate"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -61,7 +63,9 @@ func handleExportBackup(svc backend.ControlPlane) http.HandlerFunc {
 			w.Header().Set("Content-Disposition",
 				`attachment; filename="`+zipFilename+`"`)
 			w.Header().Set("Content-Type", "application/zip")
-			_, _ = w.Write(payload)
+			if _, err := w.Write(payload); err != nil {
+				slog.Error("write backup zip response", "error", err)
+			}
 			return
 		}
 		w.Header().Set("Content-Disposition",
@@ -106,7 +110,9 @@ func handleExportBusinessCSV(svc backend.ControlPlane) http.HandlerFunc {
 		w.Header().Set("Content-Disposition",
 			`attachment; filename="`+file.Name+`"`)
 		w.Header().Set("Content-Type", file.ContentType)
-		_, _ = w.Write(file.Body)
+		if _, err := w.Write(file.Body); err != nil {
+			slog.Error("write business CSV response", "error", err)
+		}
 	}
 }
 
@@ -238,11 +244,11 @@ func zipBackupArchive(
 		Method: zip.Deflate,
 	})
 	if err != nil {
-		_ = zw.Close()
+		err = errors.Join(err, zw.Close())
 		return nil, "", fmt.Errorf("backup export zip entry: %w", err)
 	}
 	if _, err := fw.Write(body); err != nil {
-		_ = zw.Close()
+		err = errors.Join(err, zw.Close())
 		return nil, "", fmt.Errorf("backup export zip write: %w", err)
 	}
 	if err := zw.Close(); err != nil {
@@ -352,7 +358,11 @@ func readBackupJSONFromZip(raw []byte) ([]byte, error) {
 			fmt.Sprintf("open backup JSON from zip: %v", err),
 		)
 	}
-	defer func() { _ = rc.Close() }()
+	defer func() {
+		if err := rc.Close(); err != nil {
+			slog.Warn("backup: close JSON zip entry", "error", err)
+		}
+	}()
 	body, err := io.ReadAll(io.LimitReader(rc, maxBackupRestoreBody+1))
 	if err != nil {
 		return nil, domain.NewValidationError(

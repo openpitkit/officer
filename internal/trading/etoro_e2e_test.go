@@ -276,7 +276,9 @@ func (h *etoroRuntimeTest) serve(w http.ResponseWriter, r *http.Request) {
 				h.t.Error("could not drop accepted POST response")
 				return
 			}
-			_ = conn.Close()
+			if err := conn.Close(); err != nil {
+				h.t.Error(err)
+			}
 			return
 		}
 		if action == "close" {
@@ -468,11 +470,11 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		h.mu.Unlock()
 		order := h.submit(domain.OrderSideBuy, "")
 		link, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest)
-		if err == nil || !strings.Contains(err.Error(), "outcome unknown") || link.VenueOrderID != "" {
+		if !errors.Is(err, domain.ErrUpstream) || !strings.Contains(err.Error(), "outcome unknown") || link.VenueOrderID != "" {
 			t.Fatalf("lost POST response must leave outcome unknown without venue id: link=%+v err=%v", link, err)
 		}
-		if _, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest); err == nil {
-			t.Fatal("runtime accepted a resend of an unknown outcome")
+		if _, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("resend unknown outcome: got %v, want domain.ErrConflict", err)
 		}
 		h.state(3, 2)
 		h.mu.Lock()
@@ -494,8 +496,8 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		h.mu.Unlock()
 		order := h.submit(domain.OrderSideBuy, "")
 		_, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest)
-		if err == nil {
-			t.Fatal("lost acknowledgement was accepted")
+		if !errors.Is(err, domain.ErrUpstream) {
+			t.Fatalf("lost acknowledgement: got %v, want domain.ErrUpstream", err)
 		}
 		h.runtime.Stop()
 		persisted, found, err := h.realm.GetVenueOrder(h.ctx, order.ExternalID)
@@ -630,8 +632,8 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 			t.Fatalf("pre-trade did not reject: %+v", order)
 		}
 		h.assertBalances("1000", "10", "100")
-		if _, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest); err == nil {
-			t.Fatal("runtime accepted a pre-trade rejected order")
+		if _, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("Send pre-trade rejected order: got %v, want domain.ErrConflict", err)
 		}
 		h.mu.Lock()
 		defer h.mu.Unlock()

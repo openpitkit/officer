@@ -39,13 +39,16 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 
 `testdata/` holds rule fixtures: deliberate violations and non-violations
 annotated for `semgrep --test`, one file per rule that has one, named after
-it: `default-domain-status.go`, `locale-latin-words.txt`,
+it: `default-domain-status.go`, `discarded-close-error.go`, `discarded-error.go`,
+`locale-latin-words.txt`,
 `locale-english-words.txt`, `locale-pnl-spelling.txt`,
 `file-header-site-link.txt`, `panel-access-reuse.tsx`,
 `panel-download-reuse.tsx`, `panel-code-label.tsx`,
 `no-legacy-database-probe.go`, `venue-connector-reuse.go`,
 `no-local-secret-redaction.go`,
-`tailwind-v4-utilities.tsx` and `panel-site-link-reuse.tsx`. A fixture runs only
+`tailwind-v4-utilities.tsx`, `panel-site-link-reuse.tsx`,
+`integration-test-wall-clock-deadline.go` and
+`test-slog-default-restore.go`. A fixture runs only
 through its own `--test` line in `check-semgrep`, after the tree scan, so a new
 fixture adds its own line there. A rule with a fixture keeps its fixture out of
 its `paths`, so the tree scan does not report the fixture. The directory is
@@ -86,6 +89,50 @@ which review still catches:
   exercise the parser").
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
+
+### `test-slog-default-restore`
+
+`checks/semgrep/test-slog-default-restore.yml` forbids direct `slog.SetDefault`
+calls in Go test files. Use `internal/logtest.SetDefault(t, handler)` to restore
+the previous slog logger, standard log writer and flags at cleanup. Restoring
+only slog leaves the standard logger redirected to the finished test's buffer
+without its original flags. Tests using the helper must not run in parallel
+with other tests that log or capture logs. Its fixture runs through
+`check-semgrep`.
+
+This rule has no approval marker or baseline.
+
+### `discarded-error`
+
+`checks/semgrep/discarded-error.yml` forbids all-blank call assignments in
+production Go, with any number of blanks and a call on the right, including
+untyped `var` declarations. The default
+errcheck configuration has `check-blank` disabled, so it accepts these explicit
+discards. Return the error, join it into the returned error, or report it
+through the existing reporting path. `_ = X.Close(...)` belongs to
+`discarded-close-error`; `var _ T = f()` interface assertions and Go test files
+are excluded. Receive, index, type assertion and slice right sides are also
+excluded, even when they contain calls. Bare calls remain errcheck's
+responsibility, including its default exclusions such as `(hash.Hash).Write`,
+which never returns an error.
+Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
+### `discarded-close-error`
+
+`checks/semgrep/discarded-close-error.yml` forbids `_ = X.Close(...)` in
+every production Go package, public and internal, including inside deferred
+functions. A discarded Close error is a silent fallback: written files,
+SQLite handles, and rows iterators can report real failures on Close. Return
+the Close error, join it into the returned error, or report it through the
+existing reporting path. Tests and rule fixtures are excluded. Pure test
+teardown may discard Close errors; a test that relies on the closed resource
+(for example, by reopening it or asserting persistence) must check them.
+Bare Close calls with an error result are checked by golangci-lint's errcheck.
+Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker.
 
 ### `default-domain-status`
 

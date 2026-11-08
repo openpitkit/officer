@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -189,7 +190,11 @@ func (c *Client) RequestOrder(ctx context.Context, method, path, requestID strin
 	if err != nil {
 		return 0, c.wrap("request", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("etoro: close response body", "error", c.wrap("close response", err))
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		payload, err := io.ReadAll(resp.Body)
 		if err != nil {

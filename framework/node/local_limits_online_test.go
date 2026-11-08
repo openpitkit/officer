@@ -294,8 +294,8 @@ func TestLocalNode_RateLimitAuditFailureFatalsAfterConfigure(t *testing.T) {
 	if sink != nil {
 		t.Fatalf("PutRateLimit sink = %T, want nil without rebuild", sink)
 	}
-	if fatalErr == nil {
-		t.Fatal("fatal error = nil after committed policy update lost its audit")
+	if !errors.Is(fatalErr, auditErr) {
+		t.Fatalf("fatal policy audit error: got %v, want %v", fatalErr, auditErr)
 	}
 	stored, listErr := n.realm.ListRateLimits(ctx, "")
 	if listErr != nil {

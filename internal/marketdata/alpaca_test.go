@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -59,8 +60,8 @@ func TestParseAlpacaCredentialsRejectsMissingSecret(t *testing.T) {
 
 	if _, err := NewAlpacaConnector(domain.MarketDataInstance{
 		Credentials: `{"apiKey":"key"}`,
-	}); err == nil {
-		t.Fatal("NewAlpacaConnector err = nil, want error")
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("got %v, want domain.ErrInvalid", err)
 	}
 }
 
@@ -599,6 +600,10 @@ func TestAlpacaVerifySymbolLookupFailure(t *testing.T) {
 
 		got, err := connector.VerifySymbol(context.Background(), "AAPL")
 		assertAlpacaLookupFailed(t, got, err)
+		var opErr *net.OpError
+		if !errors.As(err, &opErr) || opErr.Op != "dial" {
+			t.Fatalf("VerifySymbol: got %v, want a dial *net.OpError", err)
+		}
 	})
 }
 

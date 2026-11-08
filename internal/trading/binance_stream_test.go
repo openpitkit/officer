@@ -20,6 +20,7 @@ package trading
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -412,7 +413,9 @@ func TestBinanceStreamVenueReconnect(t *testing.T) {
 					binanceConfirm(t, conn, id)
 					if attempt == 1 {
 						if reason == "close frame" {
-							_ = conn.Close(websocket.StatusGoingAway, "restart")
+							if err := conn.Close(websocket.StatusGoingAway, "restart"); err != nil {
+								t.Error(err)
+							}
 							return
 						}
 						binanceWriteFrame(t, conn, map[string]any{
@@ -784,8 +787,8 @@ func TestBinanceRedaction(t *testing.T) {
 	defer c.Close()
 	reports := binanceRecordReports(c)
 	_, sendErr := c.Send(context.Background(), binanceTestOrder())
-	if sendErr == nil {
-		t.Fatal("expected venue rejection")
+	if !errors.Is(sendErr, fwtrading.ErrRejected) {
+		t.Fatalf("Send: got %v, want fwtrading.ErrRejected", sendErr)
 	}
 	_, err = c.Subscribe(context.Background())
 	if err != nil {

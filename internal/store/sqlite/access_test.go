@@ -42,6 +42,8 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/internal/access"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // The access secrets the tests store. They are fixtures, but no failure
@@ -168,8 +170,9 @@ func TestAccessEnableTokenModeCommitsAllOrNothing(t *testing.T) {
 	}
 
 	unblock := blockAccessModeChange(t, store)
-	if err := store.EnableTokenMode(ctx, testCredentials(), session); err == nil {
-		t.Fatal("EnableTokenMode with the mode change blocked returned nil")
+	var sqliteErr *sqlitedriver.Error
+	if err := store.EnableTokenMode(ctx, testCredentials(), session); !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_TRIGGER {
+		t.Fatalf("got %s, want SQLITE_CONSTRAINT_TRIGGER", redactAccess(t, err))
 	}
 	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeOpen})
 	assertStoredMode(t, store, access.ModeOpen)
@@ -207,8 +210,9 @@ func TestAccessDisableTokenModeClearsCredentialsAndSessions(t *testing.T) {
 	createSessionForTest(t, store, testSession("second-session", accessTestStart))
 
 	unblock := blockAccessModeChange(t, store)
-	if err := store.DisableTokenMode(ctx); err == nil {
-		t.Fatal("DisableTokenMode with the mode change blocked returned nil")
+	var sqliteErr *sqlitedriver.Error
+	if err := store.DisableTokenMode(ctx); !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_TRIGGER {
+		t.Fatalf("got %s, want SQLITE_CONSTRAINT_TRIGGER", redactAccess(t, err))
 	}
 	assertSnapshot(t, store.Snapshot(), fixtureTokenSnapshot())
 	assertStoredMode(t, store, access.ModeToken)
@@ -999,8 +1003,9 @@ func TestAccessCompleteSetupTokenCommitsAllOrNothing(t *testing.T) {
 	unblock := blockAccessModeChange(t, store)
 	err := store.CompleteSetupToken(ctx, testCredentials(), session, completedAt)
 	assertNoAccessSecret(t, err)
-	if err == nil {
-		t.Fatal("CompleteSetupToken with the mode change blocked returned nil")
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_TRIGGER {
+		t.Fatalf("got %s, want SQLITE_CONSTRAINT_TRIGGER", redactAccess(t, err))
 	}
 	assertSnapshot(t, store.Snapshot(), access.Snapshot{Mode: access.ModeSetup})
 	assertStoredMode(t, store, access.ModeSetup)

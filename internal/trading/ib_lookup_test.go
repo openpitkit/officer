@@ -288,8 +288,8 @@ func TestIBLookupNotFoundRule(t *testing.T) {
 		t.Fatalf("unacknowledged unknown: found=%v err=%v", found, err)
 	}
 	_, found, err = c.Lookup(context.Background(), fwtrading.OrderRef{ClientOrderID: "unknown", VenueOrderID: "99"})
-	if err == nil || !found {
-		t.Fatalf("acknowledged unknown returned found=%v without error", found)
+	if !errors.Is(err, errIBHistoryLimit) || !found {
+		t.Fatalf("acknowledged unknown: found=%v, got %v, want errIBHistoryLimit", found, err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -343,7 +343,7 @@ func TestIBLookupHistory(t *testing.T) {
 			subscribeIB(t, c)
 			snapshot, found, err := c.Lookup(context.Background(), fwtrading.OrderRef{ClientOrderID: "officer-order", VenueOrderID: "4242"})
 			if kind == "partial" {
-				if err == nil || !strings.Contains(err.Error(), "since local midnight") {
+				if !errors.Is(err, errIBHistoryLimit) || !strings.Contains(err.Error(), "since local midnight") {
 					t.Fatalf("partial history: found=%v err=%v", found, err)
 				}
 				select {

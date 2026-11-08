@@ -624,7 +624,7 @@ func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterConfigure(t *testing.T) 
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit error = %v, want audit failure", err)
 	}
-	if fatalErr == nil || !strings.Contains(fatalErr.Error(), "audit spot funds pnl-bounds limit") {
+	if !errors.Is(fatalErr, auditErr) || !strings.Contains(fatalErr.Error(), "audit spot funds pnl-bounds limit") {
 		t.Fatalf("fatal error = %v, want post-engine limit audit failure", fatalErr)
 	}
 }
@@ -737,7 +737,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
 	if !errors.Is(err, configureErr) || !errors.Is(err, rebuildErr) {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit error = %v, want configure and rebuild failures", err)
 	}
-	if fatalErr == nil ||
+	if !errors.Is(fatalErr, rebuildErr) ||
 		!strings.Contains(fatalErr.Error(), "rebuild after failed spot funds pnl-bounds configuration") {
 		t.Fatalf("fatal error = %v, want failed reconciliation fail-stop", fatalErr)
 	}

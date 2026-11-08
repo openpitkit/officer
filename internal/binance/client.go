@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -113,7 +114,7 @@ func refuseRedirect(*http.Request, []*http.Request) error {
 
 func sign(payload, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(payload))
+	mac.Write([]byte(payload))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -183,7 +184,11 @@ func (c *Client) Signed(ctx context.Context, method, path string,
 	if err != nil {
 		return 0, c.wrap("request", err, signedRedactor)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("binance: close response body", "error", c.wrap("close response", err, signedRedactor))
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		payload, err := io.ReadAll(resp.Body)
 		if err != nil {

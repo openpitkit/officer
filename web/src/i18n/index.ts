@@ -51,28 +51,36 @@ for (const [path, mod] of Object.entries(modules)) {
   (appLocaleResources[locale] ??= {})[namespace] = mod.default;
 }
 
-void i18n
-  .use(LanguageDetector)
-  .use(initReactI18next)
-  .init({
-    resources: appLocaleResources,
-    fallbackLng: DEFAULT_LOCALE,
-    supportedLngs: getSupportedLocaleCodes(),
-    // A detected language outside the supported set falls back to en rather
-    // than narrowing a region tag (e.g. en-GB) to a missing base.
-    nonExplicitSupportedLngs: false,
-    defaultNS: "common",
-    detection: {
-      order: ["localStorage", "cookie", "navigator"],
-      caches: ["localStorage", "cookie"],
-      lookupLocalStorage: STORAGE_KEY,
-      lookupCookie: STORAGE_KEY,
-    },
-    interpolation: {
-      // React already escapes interpolated values against XSS.
-      escapeValue: false,
-    },
-  });
+/**
+ * Initialize the host-shared i18next with the panel's catalogs and language
+ * detector (key `pit-officer-lang`). Call once, before registering locale
+ * resources or rendering. A host that initializes i18next itself does not
+ * call this function.
+ */
+export function initOfficerI18n() {
+  return i18n
+    .use(LanguageDetector)
+    .use(initReactI18next)
+    .init({
+      resources: appLocaleResources,
+      fallbackLng: DEFAULT_LOCALE,
+      supportedLngs: getSupportedLocaleCodes(),
+      // A detected language outside the supported set falls back to en rather
+      // than narrowing a region tag (e.g. en-GB) to a missing base.
+      nonExplicitSupportedLngs: false,
+      defaultNS: "common",
+      detection: {
+        order: ["localStorage", "cookie", "navigator"],
+        caches: ["localStorage", "cookie"],
+        lookupLocalStorage: STORAGE_KEY,
+        lookupCookie: STORAGE_KEY,
+      },
+      interpolation: {
+        // React already escapes interpolated values against XSS.
+        escapeValue: false,
+      },
+    });
+}
 
 /** Register or replace a locale namespace resource bundle. */
 export function registerLocaleResources(
@@ -80,6 +88,11 @@ export function registerLocaleResources(
   namespace: string,
   catalog: ResourceLanguage,
 ): void {
+  if (!i18n.isInitialized && !i18n.isInitializing) {
+    throw new Error(
+      "i18next is not initialized; call initOfficerI18n() or the host's own i18next init() first",
+    );
+  }
   i18n.addResourceBundle(locale, namespace, catalog, true, true);
 }
 

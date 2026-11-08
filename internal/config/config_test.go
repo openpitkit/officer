@@ -19,6 +19,7 @@ package config
 
 import (
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -49,6 +50,7 @@ func TestLoadMasterKey(t *testing.T) {
 		wantKey                string
 		wantLoadErrorSource    string
 		wantResolveErrorSource string
+		wantResolveErr         error
 		secrets                []string
 	}{
 		{name: "none configured"},
@@ -98,6 +100,7 @@ func TestLoadMasterKey(t *testing.T) {
 			name:                   "missing file",
 			flagFile:               &fileFixture{name: "missing-master-key", missing: true},
 			wantResolveErrorSource: "master key file",
+			wantResolveErr:         os.ErrNotExist,
 		},
 		{
 			name:                   "empty file",
@@ -109,6 +112,7 @@ func TestLoadMasterKey(t *testing.T) {
 			env:                    map[string]string{EnvMasterKey: key},
 			environmentFile:        &fileFixture{name: "missing-master-key", missing: true},
 			wantResolveErrorSource: "master key file",
+			wantResolveErr:         os.ErrNotExist,
 			secrets:                []string{key},
 		},
 		{
@@ -190,6 +194,9 @@ func TestLoadMasterKey(t *testing.T) {
 			if tt.wantResolveErrorSource != "" {
 				if err == nil {
 					t.Fatal("ResolveMasterKey() error = nil")
+				}
+				if tt.wantResolveErr != nil && !errors.Is(err, tt.wantResolveErr) {
+					t.Fatalf("ResolveMasterKey(): got %v, want %v", err, tt.wantResolveErr)
 				}
 				if !strings.Contains(err.Error(), tt.wantResolveErrorSource) {
 					t.Fatalf("ResolveMasterKey() error = %v, want source %q", err, tt.wantResolveErrorSource)

@@ -122,6 +122,15 @@ func (s *Service) ApplyExecutionReport(
 	if err := s.scope.Visible(caller, stored.Order.Account); err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
 	}
+	if in.Force {
+		if err := s.authorizeForce(ctx, caller, ForceExecutionReport,
+			store.AuditEntry{Action: domain.AuditActionExecutionReport, Account: stored.Order.Account},
+			domain.AuditDetailExecutionReportForceRefused,
+			domain.AuditDetailParams{"order": string(in.Order), "account": string(stored.Order.Account)},
+		); err != nil {
+			return engine.ExecutionReportResult{}, Attestation{}, err
+		}
+	}
 	if isDropCopyOrder(stored.Order) {
 		// Drop-copy never enforced a pre-trade verdict, so signing its lifecycle
 		// would falsely represent risk approval.

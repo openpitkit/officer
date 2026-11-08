@@ -110,7 +110,7 @@ func (r *realmStore) ListAssets(ctx context.Context) ([]domain.Asset, error) {
 // ListAssetRows returns assets in the requested list sort order with count.
 func (r *realmStore) ListAssetRows(
 	ctx context.Context, filter fwstore.AssetListFilter,
-) (fwstore.AssetListPage, error) {
+) (result fwstore.AssetListPage, resultErr error) {
 	clauses, args := assetListWhere(filter)
 	query := assetSelect
 	if len(clauses) > 0 {
@@ -141,7 +141,7 @@ LEFT JOIN asset_class c ON c.id = a.class_id`
 	if err != nil {
 		return fwstore.AssetListPage{}, fmt.Errorf("store: list assets: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	assets := make([]domain.Asset, 0)
 	for rows.Next() {
@@ -377,7 +377,7 @@ func (r *realmStore) ListAssetClasses(
 // with the count of assets whose asset_class equals each class code.
 func (r *realmStore) ListAssetClassRows(
 	ctx context.Context, filter fwstore.AssetClassListFilter,
-) (fwstore.AssetClassListPage, error) {
+) (result fwstore.AssetClassListPage, resultErr error) {
 	where, args := assetClassListWhere(filter)
 	from := `
 FROM asset_class c
@@ -408,7 +408,7 @@ SELECT c.code, c.title, c.notes, COUNT(a.id) AS asset_count` +
 	if err != nil {
 		return fwstore.AssetClassListPage{}, fmt.Errorf("store: list asset class rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	classes := make([]fwstore.AssetClassListRow, 0)
 	for rows.Next() {
 		class, err := scanAssetClassListRow(rows)
@@ -603,7 +603,7 @@ func (r *realmStore) GetPrincipal(
 }
 
 // ListPrincipals returns every principal, ordered by code.
-func (r *realmStore) ListPrincipals(ctx context.Context) ([]domain.Principal, error) {
+func (r *realmStore) ListPrincipals(ctx context.Context) (result []domain.Principal, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -614,7 +614,7 @@ func (r *realmStore) ListPrincipals(ctx context.Context) ([]domain.Principal, er
 	if err != nil {
 		return nil, fmt.Errorf("store: list principals: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	principals := make([]domain.Principal, 0)
 	for rows.Next() {
@@ -771,7 +771,7 @@ func (r *realmStore) ListGroups(ctx context.Context) ([]domain.AccountGroup, err
 // holding the accounts with no group, it is no membership group.
 func (r *realmStore) ListGroupRows(
 	ctx context.Context, filter fwstore.GroupListFilter,
-) (fwstore.GroupListPage, error) {
+) (value fwstore.GroupListPage, resultErr error) {
 	where, args, err := groupListWhere(filter, "g")
 	if err != nil {
 		return fwstore.GroupListPage{}, err
@@ -828,7 +828,7 @@ SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked, g.block_reason,
 	if err != nil {
 		return fwstore.GroupListPage{}, fmt.Errorf("store: list group rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	for rows.Next() {
 		group, err := scanGroupListRow(rows)
 		if err != nil {
@@ -847,7 +847,7 @@ SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked, g.block_reason,
 // groups. The bool is false when the filter excludes it.
 func (r *realmStore) defaultGroupRow(
 	ctx context.Context, filter fwstore.GroupListFilter,
-) (fwstore.GroupListRow, bool, error) {
+) (result fwstore.GroupListRow, found bool, resultErr error) {
 	where, args, err := groupListWhere(filter, "dg")
 	if err != nil {
 		return fwstore.GroupListRow{}, false, err
@@ -881,7 +881,7 @@ GROUP BY dg.code` + having
 	if err != nil {
 		return fwstore.GroupListRow{}, false, fmt.Errorf("store: default group row: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
 			return fwstore.GroupListRow{}, false, fmt.Errorf("store: default group row: %w", err)
@@ -1050,7 +1050,7 @@ func (r *realmStore) DeleteGroup(
 // ListGroupAccounts returns every account whose group is code.
 func (r *realmStore) ListGroupAccounts(
 	ctx context.Context, code string,
-) ([]domain.Account, error) {
+) (result []domain.Account, resultErr error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -1061,7 +1061,7 @@ func (r *realmStore) ListGroupAccounts(
 	if err != nil {
 		return nil, fmt.Errorf("store: list group accounts: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	return scanAccounts(rows)
 }
 
@@ -1255,7 +1255,7 @@ func (r *realmStore) ListAccounts(ctx context.Context) ([]domain.Account, error)
 // ListAccountRows returns accounts matching filter, ordered by code.
 func (r *realmStore) ListAccountRows(
 	ctx context.Context, filter fwstore.AccountListFilter,
-) (fwstore.AccountListPage, error) {
+) (value fwstore.AccountListPage, resultErr error) {
 	if err := filter.Validate(); err != nil {
 		return fwstore.AccountListPage{}, err
 	}
@@ -1302,7 +1302,7 @@ SELECT a.id, a.code, a.title, a.pnl, a.pnl_halt_reason, ac.code, g.code, gc.code
 	if err != nil {
 		return fwstore.AccountListPage{}, fmt.Errorf("store: list account rows: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	result, err := scanAccountListRows(rows)
 	if err != nil {
 		return fwstore.AccountListPage{}, err
@@ -1847,14 +1847,16 @@ func realGroupWhere(where string) string {
 	return where + " AND g.code <> ''"
 }
 
+const likeClause = " LIKE ? ESCAPE '" + string(fwstore.LikeEscape) + "'"
+
 func appendMatcher(
 	clauses *[]string, args *[]any, column string, matcher fwstore.TextMatcher,
 ) {
-	pattern, ok := likePattern(matcher)
+	pattern, ok := matcher.LikePattern()
 	if !ok {
 		return
 	}
-	*clauses = append(*clauses, column+" LIKE ? ESCAPE '\\'")
+	*clauses = append(*clauses, column+likeClause)
 	*args = append(*args, pattern)
 }
 
@@ -1863,13 +1865,13 @@ func appendMatcher(
 func appendMatcherAny(
 	clauses *[]string, args *[]any, columns []string, matcher fwstore.TextMatcher,
 ) {
-	pattern, ok := likePattern(matcher)
+	pattern, ok := matcher.LikePattern()
 	if !ok {
 		return
 	}
 	ors := make([]string, 0, len(columns))
 	for _, column := range columns {
-		ors = append(ors, column+" LIKE ? ESCAPE '\\'")
+		ors = append(ors, column+likeClause)
 		*args = append(*args, pattern)
 	}
 	*clauses = append(*clauses, "("+strings.Join(ors, " OR ")+")")
@@ -1935,44 +1937,6 @@ func appendCountRangeFilter(
 		}
 		*args = append(*args, *filter.Max)
 	}
-}
-
-func likePattern(matcher fwstore.TextMatcher) (string, bool) {
-	fragments := make([]string, 0, len(matcher.Fragments))
-	for _, fragment := range matcher.Fragments {
-		if fragment != "" {
-			fragments = append(fragments, escapeLike(fragment))
-		}
-	}
-	if len(fragments) == 0 {
-		return "", false
-	}
-	var b strings.Builder
-	if !matcher.AnchorStart {
-		b.WriteByte('%')
-	}
-	for i, fragment := range fragments {
-		if i > 0 {
-			b.WriteByte('%')
-		}
-		b.WriteString(fragment)
-	}
-	if !matcher.AnchorEnd {
-		b.WriteByte('%')
-	}
-	return b.String(), true
-}
-
-func escapeLike(value string) string {
-	var b strings.Builder
-	for _, r := range value {
-		switch r {
-		case '\\', '%', '_':
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
 
 func scanAccountRow(row *sql.Row) (domain.Account, error) {

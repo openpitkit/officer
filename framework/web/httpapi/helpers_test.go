@@ -860,8 +860,9 @@ func TestWriteErrValidationMetadata(t *testing.T) {
 	_, err := domain.ExecutionReportRequiresEngine(domain.ExecutionReportInput{
 		OrderStatus: domain.OrderStatusFilled,
 	})
-	if err == nil {
-		t.Fatal("expected execution-report validation error")
+	if domain.ValidationPointer(err) != "/quantity" ||
+		domain.ValidationConstraint(err) != "required_for_status" {
+		t.Fatalf("got %v, want /quantity required_for_status validation error", err)
 	}
 	WriteErr(rec, err)
 	want := httptest.NewRecorder()
