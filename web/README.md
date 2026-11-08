@@ -132,6 +132,23 @@ provides the account scope and session with `setAccountScope(features)` and
 predicates. `StartupGate` loads both and shows login or recovery in `token`
 mode; wire `checkSession` to `ApiClientProvider`'s `onUnauthorized`.
 
+Mount the exported `DisplayPreferencesProvider` above the panel's pages, as
+the native app does inside `ThemeProvider`. It supplies the density and trade
+style context required by the pages and applies their document attributes:
+
+```tsx
+import { DisplayPreferencesProvider } from "@openpit/officer-web";
+
+<DisplayPreferencesProvider>
+  <App />
+</DisplayPreferencesProvider>;
+```
+
+Its defaults are `compact` density and `tape` trade style, persisted under
+`pit-officer-density` and `pit-officer-trade-style`. Hosts can pass
+`defaultDensity`, `defaultTradeStyle`, `densityStorageKey`, and
+`tradeStyleStorageKey`. Keep the host's API, auth, and startup providers too.
+
 `react`, `react-dom`, `react-router-dom`, `i18next`,
 `i18next-browser-languagedetector` and `react-i18next` are peer dependencies:
 the host installs them and the framework shares the host's instance, so

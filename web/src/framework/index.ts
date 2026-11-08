@@ -75,6 +75,7 @@ export { TextField } from "../components/TextField";
 export { Button } from "../components/ui/button";
 export { useRetryCountdown } from "../lib/useRetryCountdown";
 export { ThemeProvider } from "../theme/ThemeProvider";
+export { DisplayPreferencesProvider } from "../theme/DisplayPreferencesProvider";
 export {
   ActionButton,
   BlockButton,
