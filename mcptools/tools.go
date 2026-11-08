@@ -1929,16 +1929,16 @@ type sendVenueOrderInput struct {
 	BaseAsset   string               `json:"baseAsset" jsonschema:"Asset being bought or sold"`
 	QuoteAsset  string               `json:"quoteAsset" jsonschema:"Asset used for pricing"`
 	Side        string               `json:"side" jsonschema:"buy or sell"`
-	AmountKind  string               `json:"amountKind" jsonschema:"quantity or volume"`
+	AmountKind  string               `json:"amountKind" jsonschema:"quantity or volume; built-in Alpaca, Binance, IB and eToro require quantity"`
 	AmountValue string               `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
-	Price       string               `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
+	Price       string               `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market; IB crypto buys require a limit price"`
 	Destination sendDestinationInput `json:"destination" jsonschema:"Venue destination of the tool's mode (paper or live) with an explicit route"`
 }
 
 type sendDestinationInput struct {
 	Connection   string         `json:"connection,omitempty" jsonschema:"Connection id; omit only when one enabled destination of the tool's mode exists"`
 	VenueAccount string         `json:"venueAccount,omitempty" jsonschema:"Venue account; omitted uses the binding, supplied must match it"`
-	Route        map[string]any `json:"route" jsonschema:"Required venue route JSON object; Alpaca and IB require timeInForce (IB: day, gtc or ioc); Binance requires timeInForce GTC, IOC or FOK for a limit order and an empty object for a market order; eToro uses {} for market or {\"timeInForce\":\"ioc\"} for an IOC limit buy"`
+	Route        map[string]any `json:"route" jsonschema:"Required venue route JSON object; timeInForce is case-sensitive and is the only supported field for built-in Alpaca, Binance, IB and eToro; Alpaca requires day, gtc, opg, cls, ioc or fok (good till cancelled is gtc); Alpaca crypto allows only gtc or ioc and fractional equity requires day; IB requires day, gtc or ioc; Binance requires GTC, IOC or FOK for a limit order and {} for a market order; eToro uses {} for market or {\"timeInForce\":\"ioc\"} for an IOC limit buy"`
 }
 
 type sendVenueOrderOutput struct {

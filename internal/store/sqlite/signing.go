@@ -21,8 +21,8 @@
 // surrogate id never crosses the interface boundary here either. The private key
 // is sealed when the store has a sealer, while the public key is always stored
 // verbatim. Active-key semantics are caller-driven: the signing service
-// deactivates every key, then upserts one with Active set, so these methods only
-// persist and surface the flag faithfully.
+// retires every active key, then upserts one with Active set. Retirement clears
+// private material while keeping the public key for historical verification.
 
 package sqlite
 
@@ -162,17 +162,56 @@ func (r *realmStore) ListSigningKeys(ctx context.Context) (result []domain.Signi
 	return keys, nil
 }
 
-// DeactivateAllSigningKeys clears the active flag on every signing key. It is a
-// no-op when there are no active keys (or no keys at all).
-func (r *realmStore) DeactivateAllSigningKeys(ctx context.Context) error {
+// DeactivateAllSigningKeys atomically clears the private material and active
+// flag of every active signing key, preserving public material and metadata.
+// It is a no-op when there are no active keys (or no keys at all).
+func (r *realmStore) DeactivateAllSigningKeys(ctx context.Context) (err error) {
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(
-		ctx, `UPDATE signing_key SET active = 0 WHERE active = 1`,
-	); err != nil {
-		return fmt.Errorf("store: deactivate signing keys: %w", err)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin deactivate signing keys: %w", err)
+	}
+	defer rollbackTransaction(&err, tx)
+
+	rows, err := tx.QueryContext(ctx, `SELECT key_id FROM signing_key WHERE active = 1`)
+	if err != nil {
+		return fmt.Errorf("store: read active signing keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var keyIDs []string
+	for rows.Next() {
+		var keyID string
+		if err := rows.Scan(&keyID); err != nil {
+			return fmt.Errorf("store: scan active signing key: %w", err)
+		}
+		keyIDs = append(keyIDs, keyID)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: iterate active signing keys: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store: close active signing keys: %w", err)
+	}
+
+	for _, keyID := range keyIDs {
+		privateKey, err := r.store.sealValue(
+			signingKeyTable, signingPrivateKeyColumn, keyID, []byte{},
+		)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE signing_key SET active = 0, private_key = ? WHERE key_id = ?`,
+			privateKey, keyID,
+		); err != nil {
+			return fmt.Errorf("store: deactivate signing keys: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit deactivate signing keys: %w", err)
 	}
 	return nil
 }

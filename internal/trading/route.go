@@ -20,6 +20,7 @@ package trading
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	fwtrading "go.openpit.dev/officer/framework/trading"
 )
@@ -44,5 +45,6 @@ func parseTimeInForceRoute(raw, venue string, allowed ...string) (string, error)
 			return tif, nil
 		}
 	}
-	return "", fmt.Errorf("%w: unsupported timeInForce", fwtrading.ErrRejected)
+	return "", fmt.Errorf("%w: %s timeInForce must be one of %s (case-sensitive)",
+		fwtrading.ErrRejected, venue, strings.Join(allowed, ", "))
 }

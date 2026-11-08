@@ -1138,6 +1138,57 @@ func TestTradingSendLiveEndToEnd(t *testing.T) {
 	}
 }
 
+func TestTradingSendPaperAlpacaGoodTillCancelledMCP(t *testing.T) {
+	f := newTradingE2E(t, true)
+	id := f.setupSend("MCP")
+	f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject",
+		map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+			"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
+	balances := f.rest(http.MethodGet, "/balances?account=desk", nil, http.StatusOK)
+	input := tradingE2ESendInput(id)
+	input["id"] = "uppercase-gtc"
+	input["destination"].(map[string]any)["route"] = map[string]any{"timeInForce": "GTC"}
+	result := f.mcp("send_paper_order", input, true)
+	text, ok := result.Content[0].(*sdkmcp.TextContent)
+	if !ok || !strings.Contains(text.Text, "Alpaca timeInForce must be one of day, gtc, opg, cls, ioc, fok (case-sensitive)") {
+		t.Fatalf("Alpaca refusal must name the venue and exact allowed spellings: %+v", result.Content)
+	}
+	if _, err := f.realm.GetOrder(f.ctx, "uppercase-gtc"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("refused route created an order: %v", err)
+	}
+	if after := f.rest(http.MethodGet, "/balances?account=desk", nil, http.StatusOK); !bytes.Equal(after, balances) {
+		t.Fatalf("refused route changed balances or reservations: %s", after)
+	}
+	f.venueMu.Lock()
+	posts := len(f.posts)
+	f.venueMu.Unlock()
+	if posts != 0 {
+		t.Fatal("uppercase Alpaca timeInForce reached venue")
+	}
+	input["id"] = "lowercase-gtc"
+	input["destination"].(map[string]any)["route"] = map[string]any{"timeInForce": "gtc"}
+	raw := f.sendPaper("MCP", input, http.StatusCreated, "")
+	sent := tradingE2EDecode[struct {
+		ID, Verdict string
+		VenueSend   struct {
+			Status     string
+			VenueOrder struct {
+				VenueOrderID  string
+				SendAttempted bool
+			}
+		}
+	}](t, raw)
+	if sent.ID != "lowercase-gtc" || sent.Verdict != "accept" || sent.VenueSend.Status != "acknowledged" ||
+		sent.VenueSend.VenueOrder.VenueOrderID != "venue-1" || !sent.VenueSend.VenueOrder.SendAttempted {
+		t.Fatalf("lowercase Alpaca gtc acknowledgement = %s", raw)
+	}
+	f.venueMu.Lock()
+	defer f.venueMu.Unlock()
+	if len(f.posts) != 1 || f.posts[0]["time_in_force"] != "gtc" {
+		t.Fatalf("Alpaca gtc venue requests = %+v", f.posts)
+	}
+}
+
 func TestTradingSendPaperRefusalsEndToEnd(t *testing.T) {
 	for _, surface := range []string{"REST", "MCP"} {
 		t.Run(surface, func(t *testing.T) {

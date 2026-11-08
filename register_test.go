@@ -347,8 +347,8 @@ func TestRegisterSigningKeyStorage(t *testing.T) {
 		t.Fatalf("Close without a master key: %v", err)
 	}
 	clear := storedSigningPrivateKeys(t, clearPath)
-	if len(clear) != 2 {
-		t.Fatalf("signing private keys stored without a master key = %d, want 2", len(clear))
+	if len(clear) != 1 {
+		t.Fatalf("signing private keys stored without a master key = %d, want 1", len(clear))
 	}
 	if !slices.ContainsFunc(clear, func(privateKey []byte) bool {
 		return bytes.Equal(privateKey, seed)

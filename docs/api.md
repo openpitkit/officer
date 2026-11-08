@@ -512,6 +512,24 @@ is skipped with a `venue_fee_skipped` audit. A group grant, or a grant to a
 second account, needs the fee account there and is refused with
 `fee_account_required` without one.
 
+Paper and live sends require `destination.route`, a JSON object. The built-in
+Alpaca, Binance, IB and eToro providers require `amountKind: "quantity"` and
+support only the `timeInForce` route field. Values are case-sensitive and are
+never normalized:
+
+- Alpaca requires `day`, `gtc`, `opg`, `cls`, `ioc` or `fok`. Good till cancelled
+  is `{"timeInForce":"gtc"}`; uppercase `GTC` is refused locally with the
+  allowed spellings, before an order or reservation is created or an order is
+  sent to the venue. Crypto allows only `gtc` or `ioc`; a fractional equity
+  quantity requires a fractionable asset and `day`.
+- Binance requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
+  `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
+- IB requires `{"timeInForce":"day"}`, `{"timeInForce":"gtc"}` or
+  `{"timeInForce":"ioc"}`. Crypto buys require a limit price; crypto market
+  buys are unsupported.
+- eToro uses `{}` for market orders or `{"timeInForce":"ioc"}` for an IOC
+  limit buy. Limit sells are unsupported.
+
 The `ib` provider trades through a running TWS or IB Gateway session over the
 TWS API. Its credentials are `{host, port, clientId?}`: host and port are
 required, and Officer derives a client ID from the connection when none is
