@@ -61,8 +61,16 @@ func TestReleaseDatabaseExists(t *testing.T) {
 	if got, err := ReleaseDatabaseExists(dir); got || err == nil {
 		t.Fatalf("directory = %v, %v", got, err)
 	}
-	if _, err := ReleaseDatabaseExists(filepath.Join(dir, "invalid\x00.db")); err == nil {
-		t.Fatal("stat failure was treated as an absent database")
+	invalidPath := filepath.Join(dir, "invalid\x00.db")
+	_, statErr := os.Stat(invalidPath)
+	var wantPathErr *os.PathError
+	if !errors.As(statErr, &wantPathErr) {
+		t.Fatalf("os.Stat: got %v, want *os.PathError", statErr)
+	}
+	got, err := ReleaseDatabaseExists(invalidPath)
+	var pathErr *os.PathError
+	if got || !errors.As(err, &pathErr) || pathErr.Op != wantPathErr.Op || pathErr.Path != wantPathErr.Path || !errors.Is(err, wantPathErr.Err) {
+		t.Fatalf("ReleaseDatabaseExists: got %v, %v, want false and a wrapped %v", got, err, statErr)
 	}
 }
 
