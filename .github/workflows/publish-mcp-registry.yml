@@ -50,6 +50,15 @@ jobs:
       MCP_PUBLISHER_SHA256: 1fbe93fc0783c2394d8012c8d6e50a59e98cb2cc2d216264cc69f405d0e21340
 
     steps:
+      - name: Require release branch for publication
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/release ]]; then
+            echo "::error::MCP Registry publication requires branch release"
+            exit 1
+          fi
+
       - name: Check out Officer
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

@@ -113,10 +113,10 @@ jobs:
               ;;
           esac
 
-      # Guards against accidentally releasing an off-main commit.
-      - name: Require the tagged commit on main
+      # Guards against accidentally releasing a commit outside the release branch.
+      - name: Require the tagged commit on release
         if: steps.mode.outputs.release_mode == 'production'
-        run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
+        run: git merge-base --is-ancestor HEAD refs/remotes/origin/release
 
       - name: Rank stable version
         if: steps.mode.outputs.release_mode == 'production'
@@ -125,7 +125,7 @@ jobs:
         run: |
           stable_pattern='^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'
           latest_tag="$(
-            git tag --merged refs/remotes/origin/main |
+            git tag --merged refs/remotes/origin/release |
               awk -v pattern="$stable_pattern" '$0 ~ pattern' |
               sort -V |
               tail -n 1
@@ -135,7 +135,7 @@ jobs:
           minor=false
           if [[ "$GITHUB_REF_NAME" =~ $stable_pattern ]]; then
             minor_tag="$(
-              git tag --merged refs/remotes/origin/main --list "${GITHUB_REF_NAME%.*}.*" |
+              git tag --merged refs/remotes/origin/release --list "${GITHUB_REF_NAME%.*}.*" |
                 awk -v pattern="$stable_pattern" '$0 ~ pattern' |
                 sort -V |
                 tail -n 1
@@ -304,7 +304,7 @@ jobs:
           ref: ${{ github.sha }}
 
       # The description is RELEASE_NOTES.md without its version marker line.
-      # `latest` follows the image: only the highest stable version on main.
+      # `latest` follows the image: only the highest stable version on release.
       - name: Create the release
         if: needs.publish.outputs.release_mode == 'production'
         shell: bash
