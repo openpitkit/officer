@@ -1,7 +1,9 @@
-# Regression cases of the locale-latin-words rule, in the shape of a
-# prettier-formatted catalog. A `ruleid` line marks the next line as a finding,
-# an `ok` line marks it clean. The annotations make this file text, not JSON.
+# Prettier-formatted catalog cases: `ruleid` marks a finding, `ok` a clean line.
+# First, middle and last value controls surround real long catalog lines so a
+# rule that drops a whole file fails here. Annotations make this text, not JSON.
 {
+  # ruleid: locale-latin-words
+  "firstValue": "Проверьте Foobar.",
   "nested": {
     # ruleid: locale-latin-words
     "planted": "Разрешает ордера, сначала применяя policy барьеры.",
@@ -15,6 +17,14 @@
     "afterPath": "Или создайте ChatGPT Action по адресу /docs.",
     # ruleid: locale-latin-words
     "afterPathWord": "Опишите /docs через Action.",
+    # ok: locale-latin-words
+    "escapedPhrase": "Первая строка.\nAPI Keys",
+    # ruleid: locale-latin-words
+    "escapedNearWord": "Первая строка.\nAPI Keysets",
+    # ok: locale-latin-words
+    "pathPhrase": "Откройте GET /API Keys",
+    # ruleid: locale-latin-words
+    "pathNearWord": "Откройте GET /API Keysets",
     # ruleid: locale-latin-words
     "keptPrefix": "Это Pitfall, а не Pit.",
     # ruleid: locale-latin-words
@@ -47,5 +57,21 @@
     "quoted": "Кавычка \"MCP\" и P&L.",
     # ok: locale-latin-words
     "identifiers": "spot_funds_pnl_bounds_kill_switch требует lower_bound или upper_bound"
-  }
+  },
+  "longValues": {
+    # ok: locale-latin-words
+    "enableApiRu": "В {{settingsPath}} разрешите подключения через сокет (TWS: \"{{socketClients}}\"), снимите флажок \"{{readOnlyApi}}\", чтобы принимать ордера, и запомните порт сокета (учебный IB Gateway: 4002; учебный TWS: 7497). Разрешите 127.0.0.1 в {{trustedIPs}} или подтвердите запрос на подключение.",
+    # ruleid: locale-latin-words
+    "middleValueRu": "Проверьте Foobar.",
+    # ok: locale-latin-words
+    "enableApiZh": "在 {{settingsPath}} 中启用套接字客户端（TWS：\"{{socketClients}}\"），取消勾选 \"{{readOnlyApi}}\" 以接受订单，并记下套接字端口（IB Gateway 模拟交易：4002；TWS 模拟交易：7497）。在 {{trustedIPs}} 中允许 127.0.0.1，或接受连接提示。",
+    # ruleid: locale-latin-words
+    "middleValueZh": "请检查 Foobar。",
+    # ok: locale-latin-words
+    "generateKeysRu": "Создайте ключи API для учебного счёта: выбрав Paper Trading, найдите панель API Keys на панели управления и нажмите Generate New Key. Скопируйте API key и API secret - Alpaca показывает API secret только один раз. Ключи учебного счёта работают только с учебным счётом.",
+    # ok: locale-latin-words
+    "generateKeysZh": "生成模拟交易 API 密钥：选择 Paper Trading 后，在控制面板中找到 API Keys 面板，然后点击 Generate New Key。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。模拟交易密钥仅适用于模拟交易账户。"
+  },
+  # ruleid: locale-latin-words
+  "lastValue": "请检查 Foobar。"
 }
