@@ -230,7 +230,7 @@ const MOCK_PROVIDER = "mock";
 
 const IB_SITE_URL = "https://www.interactivebrokers.com";
 const IB_DOCS_URL =
-  "https://interactivebrokers.github.io/tws-api/md_request.html";
+  "https://www.interactivebrokers.com/docs/tws-api/doc/md/streaming-data";
 const BINANCE_DOCS_URL =
   "https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams";
 const BINANCE_SYMBOLS_URL =

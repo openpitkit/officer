@@ -278,7 +278,7 @@ func (c *ibConnector) Diagnose(context.Context) ([]health.Diagnostic, error) {
 // References returns operator documentation links for the IB provider.
 func (c *ibConnector) References() (fwmarketdata.ProviderReferences, bool) {
 	return fwmarketdata.ProviderReferences{
-		DocsURL: "https://interactivebrokers.github.io/tws-api/md_request.html",
+		DocsURL: "https://www.interactivebrokers.com/docs/tws-api/doc/md/streaming-data",
 	}, true
 }
 
