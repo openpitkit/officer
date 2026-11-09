@@ -66,7 +66,7 @@
       "openPaperAccount": "Abra sua conta de negociação simulada: no painel da Alpaca, mude o seletor de conta no topo para Paper Trading. A Alpaca oferece a cada conta uma conta simulada com fundos fictícios.",
       "openDashboard": "Abrir o painel da Alpaca",
       "aboutPaperTrading": "Sobre a negociação simulada",
-      "generateKeys": "Gere chaves de API simuladas: com Paper Trading selecionado, localize o quadro API Keys no painel da Alpaca e clique em Generate New Key. Copie a API key e o API secret - a Alpaca mostra o API secret somente uma vez. As chaves simuladas funcionam somente com a conta simulada.",
+      "generateKeys": "Gere chaves de API simuladas: com Paper Trading selecionado, localize o quadro API Keys no painel da Alpaca e gere uma chave; se já existir uma chave ali, o botão é Regenerate. Copie a API key e o API secret - a Alpaca mostra o API secret somente uma vez. As chaves simuladas funcionam somente com a conta simulada.",
       "keepDashboardOpen": "Mantenha o painel da Alpaca aberto - os campos abaixo pedem os dois valores.",
       "live": {
         "openAccount": "Abra uma conta de corretagem real: solicite-a no painel da Alpaca com um documento de identidade oficial e, após a aprovação da solicitação, deposite fundos na conta. As ordens reais exigem uma conta aprovada e com fundos.",

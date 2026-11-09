@@ -4347,7 +4347,7 @@ describe("Add trading connection dialog", () => {
     for (const text of [
       "Create an Alpaca account.",
       "Open your paper trading account: in the Alpaca dashboard, switch the account selector at the top to Paper Trading. Alpaca gives every account a paper account with simulated funds.",
-      "Generate paper API keys: with Paper Trading selected, find the API Keys panel on the dashboard and click Generate New Key. Copy the API key and the secret - Alpaca shows the secret only once. Paper keys work only for the paper account.",
+      "Generate paper API keys: with Paper Trading selected, find the API Keys panel on the dashboard and generate a key; if a key already exists there, the button is Regenerate. Copy the API key and the secret - Alpaca shows the secret only once. Paper keys work only for the paper account.",
       "Keep the dashboard open - the fields below ask for both values.",
     ])
       expect(dialog.getByText(text, { exact: true })).toBeInTheDocument();

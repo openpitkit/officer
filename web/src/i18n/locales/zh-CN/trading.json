@@ -66,7 +66,7 @@
       "openPaperAccount": "打开模拟交易账户：在 Alpaca 控制面板中，将顶部的账户选择器切换为 Paper Trading。每个 Alpaca 账户都配有包含模拟资金的模拟交易账户。",
       "openDashboard": "打开 Alpaca 控制面板",
       "aboutPaperTrading": "关于模拟交易",
-      "generateKeys": "生成模拟交易 API 密钥：选择 Paper Trading 后，在控制面板中找到 API Keys 面板，然后点击 Generate New Key。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。模拟交易密钥仅适用于模拟交易账户。",
+      "generateKeys": "生成模拟交易 API 密钥：选择 Paper Trading 后，在控制面板中找到 API Keys 面板，然后生成密钥；如果该面板中已有密钥，按钮名称为 Regenerate。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。模拟交易密钥仅适用于模拟交易账户。",
       "keepDashboardOpen": "请保持控制面板打开 - 下方字段需要填写这两个值。",
       "live": {
         "openAccount": "开设实盘经纪账户：在 Alpaca 控制面板中使用政府签发的身份证件提交开户申请，申请获批后为账户注资。实盘订单需要已获批且已注资的账户。",

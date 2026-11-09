@@ -66,7 +66,7 @@
       "openPaperAccount": "Open your paper trading account: in the Alpaca dashboard, switch the account selector at the top to Paper Trading. Alpaca gives every account a paper account with simulated funds.",
       "openDashboard": "Open the Alpaca dashboard",
       "aboutPaperTrading": "About paper trading",
-      "generateKeys": "Generate paper API keys: with Paper Trading selected, find the API Keys panel on the dashboard and click Generate New Key. Copy the API key and the secret - Alpaca shows the secret only once. Paper keys work only for the paper account.",
+      "generateKeys": "Generate paper API keys: with Paper Trading selected, find the API Keys panel on the dashboard and generate a key; if a key already exists there, the button is Regenerate. Copy the API key and the secret - Alpaca shows the secret only once. Paper keys work only for the paper account.",
       "keepDashboardOpen": "Keep the dashboard open - the fields below ask for both values.",
       "live": {
         "openAccount": "Open a live brokerage account: apply in the Alpaca dashboard with a government-issued ID and, once Alpaca approves the application, fund the account. Live orders need an approved, funded account.",

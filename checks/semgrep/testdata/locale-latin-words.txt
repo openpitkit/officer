@@ -68,9 +68,9 @@
     # ruleid: locale-latin-words
     "middleValueZh": "请检查 Foobar。",
     # ok: locale-latin-words
-    "generateKeysRu": "Создайте ключи API для учебного счёта: выбрав Paper Trading, найдите панель API Keys на панели управления и нажмите Generate New Key. Скопируйте API key и API secret - Alpaca показывает API secret только один раз. Ключи учебного счёта работают только с учебным счётом.",
+    "generateKeysRu": "Создайте ключи API для учебного счёта: выбрав Paper Trading, найдите панель API Keys на панели управления и создайте ключ; если там уже есть ключ, кнопка называется Regenerate. Скопируйте API key и API secret - Alpaca показывает API secret только один раз. Ключи учебного счёта работают только с учебным счётом.",
     # ok: locale-latin-words
-    "generateKeysZh": "生成模拟交易 API 密钥：选择 Paper Trading 后，在控制面板中找到 API Keys 面板，然后点击 Generate New Key。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。模拟交易密钥仅适用于模拟交易账户。"
+    "generateKeysZh": "生成模拟交易 API 密钥：选择 Paper Trading 后，在控制面板中找到 API Keys 面板，然后生成密钥；如果该面板中已有密钥，按钮名称为 Regenerate。复制 API key 和 API secret - Alpaca 仅显示一次 API secret。模拟交易密钥仅适用于模拟交易账户。"
   },
   # ruleid: locale-latin-words
   "lastValue": "请检查 Foobar。"

@@ -71,7 +71,7 @@ rules:
           Public\ API\ key | User\ key | API\ Key\ Management
         | Create\ New\ Key | Generated\ Keys | Generate\ Key
         | API\ Keys | API\ key | API\ secret | Paper\ Trading | Live\ Trading
-        | Generate\ New\ Key
+        | Regenerate
         | Client\ ID | Con\ ID | Account\ ID | Host | Port | Token
         # Product, venue, provider, company and Pit dialect names.
         | Pit\ Officer | OpenPit | Officer | The\ Pit\ Project\ Owners | Pit
