@@ -191,7 +191,10 @@ func (s *Service) ListAdjustments(
 		})
 		return page.Rows, err
 	}
-	scoped, ok := restrictedAccount(account, restriction)
+	scoped, ok, err := restrictedAccount(account, restriction)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return []domain.AccountAdjustmentRecord{}, nil
 	}
@@ -225,7 +228,10 @@ func (s *Service) ListAllAdjustments(
 		page, err := s.node.ListAdjustmentRows(ctx, filter)
 		return page.Rows, err
 	}
-	scoped, ok := restrictedAccount(account, restriction)
+	scoped, ok, err := restrictedAccount(account, restriction)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return []domain.AccountAdjustmentRecord{}, nil
 	}

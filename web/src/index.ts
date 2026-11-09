@@ -16,7 +16,7 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 export * from "./framework";
-export { registerOfficerDefaults } from "./register";
+export { registerOfficerDefaults, type OfficerDefaultPageId } from "./register";
 export { initOfficerI18n } from "./i18n";
 export { StartupGate } from "./components/StartupGate";
 export { setAccountScope } from "./lib/accountScope";

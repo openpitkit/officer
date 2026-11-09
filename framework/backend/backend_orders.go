@@ -361,7 +361,13 @@ func (s *Service) ListTrades(
 	if err != nil {
 		return nil, err
 	}
-	scoped, ok := restrictedAccount(account, restriction)
+	if restriction.Selection != nil {
+		return s.listSelectedTrades(ctx, account, source, restriction, &n)
+	}
+	scoped, ok, err := restrictedAccount(account, restriction)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return []domain.Trade{}, nil
 	}
@@ -415,4 +421,58 @@ func (s *Service) ListTradeRows(
 		return store.TradeListPage{}, err
 	}
 	return s.node.ListTradeRows(ctx, filter)
+}
+
+func (s *Service) listSelectedOrders(
+	ctx context.Context, account domain.AccountID, source domain.Source,
+	restriction domain.AccountRestriction,
+) ([]domain.Order, error) {
+	if account != "" {
+		if err := domain.ValidateAccountID(account); err != nil {
+			return nil, err
+		}
+	}
+	page, err := s.node.ListOrderRows(ctx, store.OrderListFilter{
+		Account: account, Source: source, Restriction: restriction,
+	})
+	if err != nil {
+		return nil, err
+	}
+	orders := make([]domain.Order, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		orders = append(orders, row.Order)
+	}
+	sortOrdersNewestFirst(orders)
+	return orders, nil
+}
+
+func (s *Service) listSelectedTrades(
+	ctx context.Context, account domain.AccountID, source domain.Source,
+	restriction domain.AccountRestriction, limit *int,
+) ([]domain.Trade, error) {
+	if account != "" {
+		if err := domain.ValidateAccountID(account); err != nil {
+			return nil, err
+		}
+	}
+	filter := store.TradeListFilter{
+		Account: store.ExactTextMatcher(account.String()), Source: source,
+		Restriction: restriction,
+	}
+	if limit != nil {
+		if *limit <= 0 {
+			return []domain.Trade{}, nil
+		}
+		filter.Page = store.PageSpec{Limit: *limit}
+	}
+	page, err := s.node.ListTradeRows(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	trades := make([]domain.Trade, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		trades = append(trades, row.Trade)
+	}
+	sortTradesNewestFirst(trades)
+	return trades, nil
 }

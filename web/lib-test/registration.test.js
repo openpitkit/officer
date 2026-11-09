@@ -156,6 +156,31 @@ describe("published officer defaults", () => {
     expect(logout.when()).toBe(false);
   });
 
+  it("registers a chosen subset through the built package", () => {
+    officer.resetRegistries();
+    officer.registerOfficerDefaults(["assets", "orders", "positions"]);
+    expect(officer.getRoutes().map(({ id }) => id)).toEqual([
+      "assets",
+      "positions",
+      "orders",
+      "trading-redirect",
+    ]);
+    expect(officer.getNav("primary").map(({ id }) => id)).toEqual([
+      "positions",
+      "orders",
+      "assets",
+    ]);
+    expect(officer.getNav("footer")).toEqual([]);
+    expect(officer.getPage("accounts")).toBeUndefined();
+    expect(officer.getWidgets()).toEqual([]);
+    for (const kind of rowActionScopes) {
+      expect(officer.getRowActions(kind)).toEqual([]);
+    }
+    expect(officer.getScopes()).toContain("account");
+    expect(officer.getPolicies()).toContain("rate_limit");
+    officer.registerOfficerDefaults();
+  });
+
   it("loads the account scope and session through the exported StartupGate", async () => {
     expect(officer.StartupGate).toBeTypeOf("function");
     officer.setAccountScope({ accounts: true, account: "" });

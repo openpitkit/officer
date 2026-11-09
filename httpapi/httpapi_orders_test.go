@@ -188,14 +188,14 @@ func TestListOrders_BadQueryParams(t *testing.T) {
 }
 
 func TestListOrders_LimitCapping(t *testing.T) {
-	// A limit beyond listCapREST is silently capped, not an error.
+	// A limit beyond MaxListLimit is silently capped, not an error.
 	r, err := newRouter(&fakeService{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/v1/orders?limit=%d", listCapREST+999), nil))
+		fmt.Sprintf("/api/v1/orders?limit=%d", httpx.MaxListLimit+999), nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}

@@ -15,22 +15,26 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
+/** Fetch through the zero-based page plus one row to detect a next page. */
 export function pageFetchLimit(page: number, pageSize: number): number {
   return (page + 1) * pageSize + 1;
 }
 
-export function slicePage<T>(rows: T[], page: number, pageSize: number): T[] {
+/** Select a zero-based page from rows fetched from the start of a list. */
+export function slicePage<Row>(rows: Row[], page: number, pageSize: number): Row[] {
   return rows.slice(page * pageSize, (page + 1) * pageSize);
 }
 
-export function hasNextPage<T>(
-  rows: T[],
+/** Whether the fetched rows extend beyond the zero-based current page. */
+export function hasNextPage<Row>(
+  rows: Row[],
   page: number,
   pageSize: number,
 ): boolean {
   return rows.length > (page + 1) * pageSize;
 }
 
+/** Count pages in a complete list, with one page for an empty list. */
 export function knownPageCount(rowCount: number, pageSize: number): number {
   return Math.max(1, Math.ceil(rowCount / pageSize));
 }

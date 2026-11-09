@@ -634,7 +634,7 @@ func (r *realmStore) countOrders(
 		return 0, err
 	}
 	from := "\nFROM order_record o"
-	if restriction.Account != "" {
+	if restriction.Restricted() {
 		from += "\nJOIN account a ON a.id = o.account_id"
 		appendAccountRestriction(&clauses, &args, "a.code", "", restriction)
 	}

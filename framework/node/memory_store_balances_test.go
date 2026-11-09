@@ -353,6 +353,9 @@ func TestMemoryRealmListBalanceRowsValidatesAndDerivesCurrency(t *testing.T) {
 func (r *memoryRealm) ListBalanceRows(
 	ctx context.Context, filter store.BalanceListFilter,
 ) (store.BalanceListPage, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return store.BalanceListPage{}, err
+	}
 	if err := filter.Validate(); err != nil {
 		return store.BalanceListPage{}, err
 	}
@@ -510,6 +513,9 @@ func (r *memoryRealm) ListAdjustments(
 func (r *memoryRealm) ListAdjustmentRows(
 	ctx context.Context, filter store.AdjustmentListFilter,
 ) (store.AdjustmentListPage, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return store.AdjustmentListPage{}, err
+	}
 	if filter.Type != "" {
 		if err := domain.ValidateAdjustmentType(filter.Type); err != nil {
 			return store.AdjustmentListPage{}, err

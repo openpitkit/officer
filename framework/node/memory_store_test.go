@@ -401,6 +401,13 @@ func textMatchesAny(matcher store.TextMatcher, values ...string) bool {
 func restrictionMatches(
 	restriction domain.AccountRestriction, account domain.AccountID,
 ) bool {
-	return restriction.Account == "" || account == restriction.Account ||
+	return !restriction.Restricted() || account == restriction.Account ||
 		(restriction.IncludeUnowned && account == "")
+}
+
+func memoryRestrictionSupported(restriction domain.AccountRestriction) error {
+	if restriction.Selection != nil {
+		return fmt.Errorf("memory store: account selection is unsupported: %w", domain.ErrForbidden)
+	}
+	return nil
 }

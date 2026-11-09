@@ -217,6 +217,9 @@ func (r *memoryRealm) ListAudit(_ context.Context, n int) ([]domain.AuditRow, er
 func (r *memoryRealm) ListAuditFiltered(
 	_ context.Context, filter domain.AuditFilter, n int,
 ) ([]domain.AuditRow, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if n <= 0 {
@@ -245,6 +248,9 @@ func (r *memoryRealm) ListAuditFiltered(
 func (r *memoryRealm) ListAuditRows(
 	ctx context.Context, filter store.AuditListFilter,
 ) (store.AuditListPage, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return store.AuditListPage{}, err
+	}
 	rows, err := r.ListAudit(ctx, len(r.audit))
 	if err != nil {
 		return store.AuditListPage{}, err

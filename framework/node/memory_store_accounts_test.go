@@ -127,6 +127,9 @@ func (r *memoryRealm) venueAccess(account domain.AccountID, group string) bool {
 func (r *memoryRealm) ListAccountRows(
 	ctx context.Context, filter store.AccountListFilter,
 ) (store.AccountListPage, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return store.AccountListPage{}, err
+	}
 	if filter.Venue != (store.VenueFilter{}) {
 		return store.AccountListPage{}, fmt.Errorf(
 			"memory store: venue filter is not supported: %w", domain.ErrNotImplemented)

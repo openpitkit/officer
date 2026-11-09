@@ -21,6 +21,7 @@ import type { SpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
 import type { Account, Group, Limit } from "@/api/types";
 import { registerPolicy, registerRowAction, registerScope } from "@/framework";
 import { siteLink } from "@/lib/siteLinks";
+import type { OfficerDefaultPageId } from "@/register";
 import {
   AccountAuditAction,
   AccountDeleteAction,
@@ -113,58 +114,64 @@ export function registerAppVocabulary(): void {
 }
 
 /** Register the built-in row actions used by the default pages. */
-export function registerAppRowActions(): void {
-  registerRowAction<Account, AccountRowActionContext>({
-    id: "account-positions",
-    kind: "account",
-    order: 10,
-    render: (account, ctx) =>
-      createElement(AccountPositionsAction, { account, ctx }),
-  });
-  registerRowAction<Account, AccountRowActionContext>({
-    id: "account-trading",
-    kind: "account",
-    order: 20,
-    render: (account, ctx) =>
-      createElement(AccountTradingAction, { account, ctx }),
-  });
-  registerRowAction<Account, AccountRowActionContext>({
-    id: "account-policies",
-    kind: "account",
-    order: 30,
-    render: (account, ctx) =>
-      createElement(AccountPoliciesAction, { account, ctx }),
-  });
-  registerRowAction<Account, AccountRowActionContext>({
-    id: "account-audit",
-    kind: "account",
-    order: 40,
-    render: (account, ctx) =>
-      createElement(AccountAuditAction, { account, ctx }),
-  });
-  registerRowAction<Account, AccountRowActionContext>({
-    id: "account-delete",
-    kind: "account",
-    order: 70,
-    render: (account, ctx) =>
-      createElement(AccountDeleteAction, { account, ctx }),
-  });
-  registerRowAction<Group, GroupRowActionContext>({
-    id: "group-delete",
-    kind: "group",
-    order: 30,
-    render: (group, ctx) => createElement(GroupDeleteAction, { group, ctx }),
-  });
-  registerRowAction<Limit, LimitRowActionContext>({
-    id: "limit-edit",
-    kind: "limit",
-    order: 10,
-    render: (limit, ctx) => createElement(LimitEditAction, { limit, ctx }),
-  });
-  registerRowAction<Limit, LimitRowActionContext>({
-    id: "limit-delete",
-    kind: "limit",
-    order: 20,
-    render: (limit, ctx) => createElement(LimitDeleteAction, { limit, ctx }),
-  });
+export function registerAppRowActions(
+  pages: readonly OfficerDefaultPageId[],
+): void {
+  if (pages.includes("accounts")) {
+    registerRowAction<Account, AccountRowActionContext>({
+      id: "account-positions",
+      kind: "account",
+      order: 10,
+      render: (account, ctx) =>
+        createElement(AccountPositionsAction, { account, ctx }),
+    });
+    registerRowAction<Account, AccountRowActionContext>({
+      id: "account-trading",
+      kind: "account",
+      order: 20,
+      render: (account, ctx) =>
+        createElement(AccountTradingAction, { account, ctx }),
+    });
+    registerRowAction<Account, AccountRowActionContext>({
+      id: "account-policies",
+      kind: "account",
+      order: 30,
+      render: (account, ctx) =>
+        createElement(AccountPoliciesAction, { account, ctx }),
+    });
+    registerRowAction<Account, AccountRowActionContext>({
+      id: "account-audit",
+      kind: "account",
+      order: 40,
+      render: (account, ctx) =>
+        createElement(AccountAuditAction, { account, ctx }),
+    });
+    registerRowAction<Account, AccountRowActionContext>({
+      id: "account-delete",
+      kind: "account",
+      order: 70,
+      render: (account, ctx) =>
+        createElement(AccountDeleteAction, { account, ctx }),
+    });
+    registerRowAction<Group, GroupRowActionContext>({
+      id: "group-delete",
+      kind: "group",
+      order: 30,
+      render: (group, ctx) => createElement(GroupDeleteAction, { group, ctx }),
+    });
+  }
+  if (pages.includes("policies")) {
+    registerRowAction<Limit, LimitRowActionContext>({
+      id: "limit-edit",
+      kind: "limit",
+      order: 10,
+      render: (limit, ctx) => createElement(LimitEditAction, { limit, ctx }),
+    });
+    registerRowAction<Limit, LimitRowActionContext>({
+      id: "limit-delete",
+      kind: "limit",
+      order: 20,
+      render: (limit, ctx) => createElement(LimitDeleteAction, { limit, ctx }),
+    });
+  }
 }

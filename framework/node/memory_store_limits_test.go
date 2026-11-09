@@ -31,6 +31,9 @@ import (
 func (r *memoryRealm) ListPolicyRows(
 	_ context.Context, filter store.PolicyListFilter,
 ) (store.PolicyListPage, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return store.PolicyListPage{}, err
+	}
 	wantKind := func(kind store.PolicyKind) bool {
 		return filter.Kind == nil || *filter.Kind == kind
 	}
@@ -124,7 +127,7 @@ func (r *memoryRealm) ListPolicyRows(
 func (r *memoryRealm) restrictionReachesGroup(
 	restriction domain.AccountRestriction, account domain.AccountID, group string,
 ) bool {
-	return restriction.Account == "" || account != "" || group == "" ||
+	return !restriction.Restricted() || account != "" || group == "" ||
 		r.accounts[restriction.Account].GroupCode == group
 }
 

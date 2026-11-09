@@ -169,7 +169,7 @@ func policyListWhere(filter fwstore.PolicyListFilter) (string, []any, error) {
 		// An account-group barrier is kept only when the restricted account is a
 		// member of its group. The domain forbids a group on an account-axis
 		// barrier, so this narrows the unowned rows alone.
-		if filter.Restriction.Account != "" {
+		if filter.Restriction.Restricted() {
 			clauses = append(clauses, `(account_group_code IS NULL OR account_group_code IN (
 			SELECT g.code FROM account m JOIN account_group g ON g.id = m.group_id
 			WHERE m.code = ?))`)

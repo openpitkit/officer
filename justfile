@@ -192,6 +192,7 @@ install-python-tools:
 # Run the Semgrep invariant rule set over the whole tree.
 check-semgrep: install-python-tools
     {{ semgrep }} --config checks/semgrep/ --error --metrics=off --disable-version-check .
+    {{ semgrep }} --test --config checks/semgrep/account-restriction.yml --metrics=off --disable-version-check checks/semgrep/testdata/account-restriction.go
     {{ semgrep }} --test --config checks/semgrep/discarded-close-error.yml --metrics=off --disable-version-check checks/semgrep/testdata/discarded-close-error.go
     {{ semgrep }} --test --config checks/semgrep/discarded-error.yml --metrics=off --disable-version-check checks/semgrep/testdata/discarded-error.go
     {{ semgrep }} --test --config checks/semgrep/default-domain-status.yml --metrics=off --disable-version-check checks/semgrep/testdata/default-domain-status.go

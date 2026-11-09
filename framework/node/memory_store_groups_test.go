@@ -64,6 +64,9 @@ func (r *memoryRealm) ListGroups(context.Context) ([]domain.AccountGroup, error)
 func (r *memoryRealm) ListGroupRows(
 	ctx context.Context, filter store.GroupListFilter,
 ) (store.GroupListPage, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return store.GroupListPage{}, err
+	}
 	if filter.Venue != (store.VenueFilter{}) {
 		return store.GroupListPage{}, fmt.Errorf(
 			"memory store: venue filter is not supported: %w", domain.ErrNotImplemented)
@@ -72,7 +75,7 @@ func (r *memoryRealm) ListGroupRows(
 	if err != nil {
 		return store.GroupListPage{}, err
 	}
-	restricted := filter.Restriction.Account != ""
+	restricted := filter.Restriction.Restricted()
 	out := make([]store.GroupListRow, 0, len(groups)+1)
 	if !restricted {
 		defaultRow := store.GroupListRow{

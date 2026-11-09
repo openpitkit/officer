@@ -135,11 +135,41 @@ func (s *Service) GetGroup(
 		return domain.AccountGroup{}, nil, err
 	}
 	n := s.node
+	if restriction.Selection != nil {
+		visible, err := n.ListGroupRows(ctx, store.GroupListFilter{
+			Code: store.ExactTextMatcher(code), Restriction: restriction,
+		})
+		if err != nil {
+			return domain.AccountGroup{}, nil, fmt.Errorf("backend: get group visibility: %w", err)
+		}
+		var group domain.AccountGroup
+		found := false
+		for _, row := range visible.Rows {
+			if row.Group.Code == code {
+				group, found = row.Group, true
+				break
+			}
+		}
+		if !found {
+			return domain.AccountGroup{}, nil, fmt.Errorf("group %q: %w", code, domain.ErrNotFound)
+		}
+		members, err := n.ListAccountRows(ctx, store.AccountListFilter{
+			GroupCode: &code, Restriction: restriction,
+		})
+		if err != nil {
+			return domain.AccountGroup{}, nil, fmt.Errorf("backend: get group members: %w", err)
+		}
+		accounts := make([]domain.Account, 0, len(members.Rows))
+		for _, row := range members.Rows {
+			accounts = append(accounts, row.Account)
+		}
+		return group, accounts, nil
+	}
 	group, accounts, ok, err := n.GetGroup(ctx, code)
 	if err != nil {
 		return domain.AccountGroup{}, nil, fmt.Errorf("backend: get group: %w", err)
 	}
-	if ok && restriction.Account != "" {
+	if ok && restriction.Restricted() {
 		accounts = slices.DeleteFunc(slices.Clone(accounts), func(member domain.Account) bool {
 			return member.Code != restriction.Account
 		})

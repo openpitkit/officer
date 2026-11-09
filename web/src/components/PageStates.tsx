@@ -25,14 +25,14 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-/** A skeleton table body shown while the first page load is in flight. */
-export function TableSkeleton({
-  rows = 5,
-  cols = 4,
-}: {
+/** Dimensions of the table loading placeholder. */
+export interface TableSkeletonProps {
   rows?: number;
   cols?: number;
-}) {
+}
+
+/** A skeleton table body shown while the first page load is in flight. */
+export function TableSkeleton({ rows = 5, cols = 4 }: TableSkeletonProps) {
   const { t } = useTranslation();
   return (
     <Card
@@ -138,16 +138,15 @@ export function FullScreenError({
   );
 }
 
-/** Full-card empty state with a hint and an optional primary action. */
-export function EmptyState({
-  title,
-  hint,
-  action,
-}: {
+/** Explanation and optional action for an empty list. */
+export interface EmptyStateProps {
   title: string;
   hint: ReactNode;
   action?: ReactNode;
-}) {
+}
+
+/** Full-card empty state with a hint and an optional primary action. */
+export function EmptyState({ title, hint, action }: EmptyStateProps) {
   return (
     <Card className="animate-fade-in">
       <CardContent className="flex flex-col items-center gap-4 py-12 text-center">

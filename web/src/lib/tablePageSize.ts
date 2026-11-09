@@ -28,6 +28,7 @@ export function useTablePageSizes(): readonly number[] {
   return TABLE_PAGE_SIZES;
 }
 
+/** Persist a standard page size under the host-supplied storage key. */
 export function usePersistentPageSize(
   storageKey: string,
   fallback = 50,

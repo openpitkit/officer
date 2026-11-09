@@ -18,4 +18,4 @@
 import { registerAppRowActions, registerAppVocabulary } from "@/appDefaults";
 
 registerAppVocabulary();
-registerAppRowActions();
+registerAppRowActions(["accounts", "policies"]);

@@ -126,6 +126,32 @@ vocabulary, and locale resource map. After the call, it reads stable ids through
 `getRowActions(scope)`, `getScopes()`, and `getPolicies()`, then replaces an entry
 by re-registering its id or removes it with the matching unregister API.
 
+Pass a readonly array of `OfficerDefaultPageId` values to
+`registerOfficerDefaults` to register only selected pages. The stable page ids
+are `dashboard`, `accounts`, `policies`, `assets`, `positions`, `orders`,
+`market-data`, `trading-connections`, `audit`, `mcp-access`, `signing-keys`, and
+`service`. Omitting the argument registers all defaults in their original
+order; an empty array registers nothing. Unknown ids throw before registering
+anything. Selection order does not change the built-in order, and existing
+host entries are not cleared.
+
+Each selection includes its routes and navigation. `policies` includes the
+`/limits` redirect and limit row actions; `orders` includes the `/trading`
+redirect; `accounts` includes the Account page override, both account navigation
+entries, and account/group row actions. `dashboard` includes all dashboard
+widgets. `market-data` includes the restart-required navigation entry;
+`service` includes sensitive-data, non-release, logout, and about entries.
+Every nonempty selection also registers the shared locale resource map and
+vocabulary. No entries belonging to other pages are registered. Page content
+and links are unchanged; the host decides which destinations it supports.
+
+For host lists, the library exports `TablePagination`, `PageSizeSelect`,
+`TableSkeleton`, and `EmptyState`, with their corresponding `*Props` types.
+Use `usePersistentPageSize` with a host-owned storage key, `pageFetchLimit` to
+request rows through the current zero-based page plus one lookahead row,
+`slicePage` to select that page, and `hasNextPage` to detect another page.
+`knownPageCount` computes the total when the complete row count is known.
+
 A host either mounts the exported `StartupGate`, as the open panel does, or
 provides the account scope and session with `setAccountScope(features)` and
 `setPanelSession(mode)` before rendering pages or evaluating navigation

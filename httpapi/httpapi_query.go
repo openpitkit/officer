@@ -30,6 +30,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 // missingAccountQuery reads the ?missingAccount= request parameter for a
@@ -46,30 +47,6 @@ func missingAccountQuery(
 		return "", nil
 	}
 	return domain.ParseMissingAccountPolicy(r.URL.Query().Get("missingAccount"))
-}
-
-func textMatcherFromQuery(q url.Values, valueKey, modeKey string) (
-	store.TextMatcher, error,
-) {
-	value := q.Get(valueKey)
-	if value == "" {
-		return store.TextMatcher{}, nil
-	}
-	mode := q.Get(modeKey)
-	matcher := store.TextMatcher{Fragments: strings.Split(value, "*")}
-	switch mode {
-	case "", "contains":
-	case "starts_with":
-		matcher.AnchorStart = true
-	case "ends_with":
-		matcher.AnchorEnd = true
-	case "exact":
-		matcher.AnchorStart = true
-		matcher.AnchorEnd = true
-	default:
-		return store.TextMatcher{}, fmt.Errorf("invalid %s", modeKey)
-	}
-	return matcher, nil
 }
 
 func externalIDFromQuery(q url.Values) (domain.ExternalID, error) {
@@ -204,39 +181,6 @@ func nonNegativeIntFromQuery(q url.Values, key string) (int, error) {
 		return 0, fmt.Errorf("invalid %s", key)
 	}
 	return value, nil
-}
-
-func pageSpecFromQuery(q url.Values) (store.PageSpec, error) {
-	limit := listDefaultLimit
-	if raw := q.Get("limit"); raw != "" {
-		value, err := strconv.Atoi(raw)
-		if err != nil || value <= 0 {
-			return store.PageSpec{}, fmt.Errorf("invalid limit")
-		}
-		if value > listCapREST {
-			value = listCapREST
-		}
-		limit = value
-	}
-	offset := 0
-	if raw := q.Get("offset"); raw != "" {
-		value, err := strconv.Atoi(raw)
-		if err != nil || value < 0 {
-			return store.PageSpec{}, fmt.Errorf("invalid offset")
-		}
-		offset = value
-	} else if raw := q.Get("page"); raw != "" {
-		value, err := strconv.Atoi(raw)
-		if err != nil {
-			return store.PageSpec{}, fmt.Errorf("invalid page")
-		}
-		page, err := store.PageAt(limit, value)
-		if err != nil {
-			return store.PageSpec{}, fmt.Errorf("invalid page")
-		}
-		offset = page.Offset
-	}
-	return store.PageSpec{Limit: limit, Offset: offset}, nil
 }
 
 func sortSpecFromQuery(q url.Values, allowed map[string]struct{}) (store.SortSpec, error) {
@@ -486,11 +430,11 @@ var adjustmentSortKeys = map[string]struct{}{
 }
 
 func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
-	code, err := textMatcherFromQuery(q, "code", "codeMatch")
+	code, err := httpx.TextMatcherFromQuery(q, "code", "codeMatch")
 	if err != nil {
 		return store.AccountListFilter{}, err
 	}
-	blockReason, err := textMatcherFromQuery(q, "blockReason", "blockReasonMatch")
+	blockReason, err := httpx.TextMatcherFromQuery(q, "blockReason", "blockReasonMatch")
 	if err != nil {
 		return store.AccountListFilter{}, err
 	}
@@ -506,7 +450,7 @@ func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
 	if err != nil {
 		return store.AccountListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.AccountListFilter{}, err
 	}
@@ -582,7 +526,7 @@ func orderListFilterFromQuery(q url.Values) (store.OrderListFilter, error) {
 	if err != nil {
 		return store.OrderListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.OrderListFilter{}, err
 	}
@@ -643,7 +587,7 @@ func balanceListFilterFromQuery(q url.Values) (store.BalanceListFilter, error) {
 	if err != nil {
 		return store.BalanceListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.BalanceListFilter{}, err
 	}
@@ -791,15 +735,15 @@ func validOrderStatus(status domain.OrderStatus) bool {
 }
 
 func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
-	code, err := textMatcherFromQuery(q, "code", "codeMatch")
+	code, err := httpx.TextMatcherFromQuery(q, "code", "codeMatch")
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
-	notes, err := textMatcherFromQuery(q, "notes", "notesMatch")
+	notes, err := httpx.TextMatcherFromQuery(q, "notes", "notesMatch")
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
-	blockReason, err := textMatcherFromQuery(q, "blockReason", "blockReasonMatch")
+	blockReason, err := httpx.TextMatcherFromQuery(q, "blockReason", "blockReasonMatch")
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
@@ -819,7 +763,7 @@ func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.GroupListFilter{}, err
 	}
@@ -845,11 +789,11 @@ func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
 }
 
 func assetClassListFilterFromQuery(q url.Values) (store.AssetClassListFilter, error) {
-	code, err := textMatcherFromQuery(q, "code", "codeMatch")
+	code, err := httpx.TextMatcherFromQuery(q, "code", "codeMatch")
 	if err != nil {
 		return store.AssetClassListFilter{}, err
 	}
-	notes, err := textMatcherFromQuery(q, "notes", "notesMatch")
+	notes, err := httpx.TextMatcherFromQuery(q, "notes", "notesMatch")
 	if err != nil {
 		return store.AssetClassListFilter{}, err
 	}
@@ -857,7 +801,7 @@ func assetClassListFilterFromQuery(q url.Values) (store.AssetClassListFilter, er
 	if err != nil {
 		return store.AssetClassListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.AssetClassListFilter{}, err
 	}
@@ -870,11 +814,11 @@ func assetClassListFilterFromQuery(q url.Values) (store.AssetClassListFilter, er
 }
 
 func assetListFilterFromQuery(q url.Values) (store.AssetListFilter, error) {
-	code, err := textMatcherFromQuery(q, "code", "codeMatch")
+	code, err := httpx.TextMatcherFromQuery(q, "code", "codeMatch")
 	if err != nil {
 		return store.AssetListFilter{}, err
 	}
-	class, err := textMatcherFromQuery(q, "class", "classMatch")
+	class, err := httpx.TextMatcherFromQuery(q, "class", "classMatch")
 	if err != nil {
 		return store.AssetListFilter{}, err
 	}
@@ -882,7 +826,7 @@ func assetListFilterFromQuery(q url.Values) (store.AssetListFilter, error) {
 	if err != nil {
 		return store.AssetListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.AssetListFilter{}, err
 	}
@@ -954,7 +898,7 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 	if err != nil {
 		return store.PolicyListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.PolicyListFilter{}, err
 	}
@@ -996,7 +940,7 @@ func adjustmentListFilterFromQuery(q url.Values) (store.AdjustmentListFilter, er
 	if err != nil {
 		return store.AdjustmentListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.AdjustmentListFilter{}, err
 	}
@@ -1053,7 +997,7 @@ func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
 	if err != nil {
 		return store.TradeListFilter{}, err
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.TradeListFilter{}, err
 	}
@@ -1086,7 +1030,7 @@ func auditListFilterFromQuery(q url.Values) (store.AuditListFilter, error) {
 	if err != nil {
 		return store.AuditListFilter{}, err
 	}
-	actor, err := textMatcherFromQuery(q, "actor", "actorMatch")
+	actor, err := httpx.TextMatcherFromQuery(q, "actor", "actorMatch")
 	if err != nil {
 		return store.AuditListFilter{}, err
 	}
@@ -1109,7 +1053,7 @@ func auditListFilterFromQuery(q url.Values) (store.AuditListFilter, error) {
 	if q.Get("sort") != "" || q.Get("order") != "" {
 		return store.AuditListFilter{}, fmt.Errorf("audit sorting is not supported")
 	}
-	page, err := pageSpecFromQuery(q)
+	page, err := httpx.PageSpecFromQuery(q)
 	if err != nil {
 		return store.AuditListFilter{}, err
 	}

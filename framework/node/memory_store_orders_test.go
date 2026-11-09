@@ -168,6 +168,9 @@ func (r *memoryRealm) ListOrders(
 func (r *memoryRealm) ListOrderRows(
 	ctx context.Context, filter store.OrderListFilter,
 ) (store.OrderListPage, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return store.OrderListPage{}, err
+	}
 	if filter.Venue != (store.VenueFilter{}) {
 		return store.OrderListPage{}, fmt.Errorf(
 			"memory store: venue filter is not supported: %w", domain.ErrNotImplemented)
@@ -222,6 +225,9 @@ func (r *memoryRealm) ListAllOrders(
 func (r *memoryRealm) CountOrders(
 	_ context.Context, restriction domain.AccountRestriction,
 ) (int, error) {
+	if err := memoryRestrictionSupported(restriction); err != nil {
+		return 0, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	n := 0
@@ -236,6 +242,9 @@ func (r *memoryRealm) CountOrders(
 func (r *memoryRealm) CountActiveOrders(
 	_ context.Context, restriction domain.AccountRestriction,
 ) (int, error) {
+	if err := memoryRestrictionSupported(restriction); err != nil {
+		return 0, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	n := 0
@@ -257,6 +266,9 @@ func (r *memoryRealm) CountActiveOrders(
 func (r *memoryRealm) CountOrdersSince(
 	_ context.Context, since time.Time, restriction domain.AccountRestriction,
 ) (int, error) {
+	if err := memoryRestrictionSupported(restriction); err != nil {
+		return 0, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var n int
@@ -639,6 +651,9 @@ func (r *memoryRealm) ListAllTrades(
 func (r *memoryRealm) ListTradeRows(
 	ctx context.Context, filter store.TradeListFilter,
 ) (store.TradeListPage, error) {
+	if err := memoryRestrictionSupported(filter.Restriction); err != nil {
+		return store.TradeListPage{}, err
+	}
 	if filter.Venue != (store.VenueFilter{}) {
 		return store.TradeListPage{}, fmt.Errorf(
 			"memory store: venue filter is not supported: %w", domain.ErrNotImplemented)

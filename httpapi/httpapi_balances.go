@@ -138,7 +138,7 @@ func handleListAccountAdjustments(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
-		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
+		n, err := httpx.LimitParam(r, httpx.DefaultListLimit, httpx.MaxListLimit)
 		if err != nil {
 			httpx.WriteValidationErr(w, err)
 			return

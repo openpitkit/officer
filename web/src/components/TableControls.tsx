@@ -46,6 +46,18 @@ import {
 } from "@/components/ui/select";
 import { useTablePageSizes } from "@/lib/tablePageSize";
 
+/** Controls for a zero-based page, with an optional known total. */
+export interface TablePaginationProps {
+  canNext: boolean;
+  canPrevious: boolean;
+  knownTotalPages?: number;
+  onNext: () => void;
+  onPage?: (page: number) => void;
+  onPrevious: () => void;
+  page: number;
+}
+
+/** Render navigation for a paged list. */
 export function TablePagination({
   canNext,
   canPrevious,
@@ -54,15 +66,7 @@ export function TablePagination({
   onPage,
   onPrevious,
   page,
-}: {
-  canNext: boolean;
-  canPrevious: boolean;
-  knownTotalPages?: number;
-  onNext: () => void;
-  onPage?: (page: number) => void;
-  onPrevious: () => void;
-  page: number;
-}) {
+}: TablePaginationProps) {
   const { t } = useTranslation("common");
   if (!canPrevious && !canNext) {
     return null;
@@ -212,17 +216,21 @@ export function TablePagination({
   );
 }
 
+/** Accessible labels and selection for the standard page sizes. */
+export interface PageSizeSelectProps {
+  ariaLabel: string;
+  onChange: (value: number) => void;
+  rowCountLabel: (count: number) => string;
+  value: number;
+}
+
+/** Select the number of rows displayed per page. */
 export function PageSizeSelect({
   ariaLabel,
   onChange,
   rowCountLabel,
   value,
-}: {
-  ariaLabel: string;
-  onChange: (value: number) => void;
-  rowCountLabel: (count: number) => string;
-  value: number;
-}) {
+}: PageSizeSelectProps) {
   const pageSizes = useTablePageSizes();
   return (
     <Select value={String(value)} onValueChange={(v) => onChange(Number(v))}>

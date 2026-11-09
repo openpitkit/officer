@@ -47,13 +47,6 @@ const maxRequestBody = 1 << 20
 // archive. Keeping this separate avoids widening every v1 endpoint's body cap.
 const maxBackupRestoreBody = 64 << 20
 
-// listDefaultLimit is the default page size for the orders, trades, and
-// adjustments list endpoints; listCapREST bounds an explicit ?limit=.
-const (
-	listDefaultLimit = 100
-	listCapREST      = 1000
-)
-
 // RouteConfig returns the Officer HTTP surface over svc: the v1 route registry
 // (with the service log routes when logs is non-nil), the per-path body limits,
 // and the non-v1 mounts. sealReports answers when the credential store was

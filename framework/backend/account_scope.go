@@ -19,6 +19,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -200,13 +201,16 @@ func (s *Service) visibleGroups(
 // Every such row has an account, so IncludeUnowned adds none.
 func restrictedAccount(
 	account domain.AccountID, restriction domain.AccountRestriction,
-) (scoped domain.AccountID, ok bool) {
+) (scoped domain.AccountID, ok bool, err error) {
+	if restriction.Selection != nil {
+		return "", false, fmt.Errorf("backend: account selection requires a row query: %w", domain.ErrForbidden)
+	}
 	switch {
-	case restriction.Account == "", account == restriction.Account:
-		return account, true
+	case !restriction.Restricted(), account == restriction.Account:
+		return account, true, nil
 	case account == "":
-		return restriction.Account, true
+		return restriction.Account, true, nil
 	default:
-		return "", false
+		return "", false, nil
 	}
 }

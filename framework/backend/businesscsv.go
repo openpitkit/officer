@@ -238,7 +238,13 @@ func (s *Service) ListAllOrders(
 	if err != nil {
 		return nil, err
 	}
-	scoped, ok := restrictedAccount(account, restriction)
+	if restriction.Selection != nil {
+		return s.listSelectedOrders(ctx, account, source, restriction)
+	}
+	scoped, ok, err := restrictedAccount(account, restriction)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return []domain.Order{}, nil
 	}
@@ -264,7 +270,13 @@ func (s *Service) ListAllTrades(
 	if err != nil {
 		return nil, err
 	}
-	scoped, ok := restrictedAccount(account, restriction)
+	if restriction.Selection != nil {
+		return s.listSelectedTrades(ctx, account, source, restriction, nil)
+	}
+	scoped, ok, err := restrictedAccount(account, restriction)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return []domain.Trade{}, nil
 	}
