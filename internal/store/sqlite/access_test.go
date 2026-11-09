@@ -648,13 +648,14 @@ func TestAccessFailedResetKeepsSnapshotAndData(t *testing.T) {
 }
 
 // Each round races the writers that change the access snapshot against one
-// Reset, and sees a write that does not hold accessMu in one of two ways. A
-// write that took its connection before Reset renamed the fresh database over
-// the old one, and writes after, is refused by SQLite (the file it opened has
-// moved), so the round fails on that write error. Once all of them have
-// returned, the published snapshot must be the access state the live database
-// holds: a write that committed to the replaced database and published after
-// the swap leaves a snapshot the database does not hold.
+// Reset, which restores a freshly migrated database over the live one in
+// place through SQLite's online backup and publishes the access snapshot when
+// that step commits. A write that does not hold accessMu shows in one of two
+// ways. It fails with an error other than its refused mode precondition, which
+// the check inside the writers turns into a failed round. Or it commits around
+// the in-place restore and publishes a snapshot the restored database does not
+// hold, which the final comparison of the published snapshot with the stored
+// one catches.
 func TestAccessSnapshotMatchesDatabaseAfterConcurrentWritesAndReset(t *testing.T) {
 	ctx := context.Background()
 	const rounds = 20
@@ -717,8 +718,7 @@ func TestAccessSnapshotMatchesDatabaseAfterConcurrentWritesAndReset(t *testing.T
 							}
 							// A write whose mode precondition no longer holds is refused
 							// and changes nothing. Any other error fails the round: it is
-							// how a write that ran outside accessMu against the replaced
-							// database shows.
+							// how a write that does not hold accessMu shows.
 							if err != nil && !errors.Is(err, wantErr) {
 								writeErrs <- err
 								return

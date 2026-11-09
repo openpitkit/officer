@@ -48,10 +48,19 @@ func Refusal(rec *httptest.ResponseRecorder) (code, pointer string) {
 }
 
 // ExpectStatus checks the response status for call without printing its body.
-// Call names the request by method and path.
+// Call names the request by method and path. A body that is not JSON is
+// reported by its size alone.
 func ExpectStatus(t testing.TB, call string, rec *httptest.ResponseRecorder, want int) {
 	t.Helper()
-	if rec.Code != want {
+	if rec.Code == want {
+		return
+	}
+	if !json.Valid(rec.Body.Bytes()) {
+		t.Fatalf(
+			"%s = %d with a body that is not JSON (%d bytes), want %d",
+			call, rec.Code, rec.Body.Len(), want,
+		)
+	} else {
 		code, pointer := Refusal(rec)
 		t.Fatalf("%s = %d %s %q, want %d", call, rec.Code, code, pointer, want)
 	}

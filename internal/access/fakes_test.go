@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -122,7 +123,8 @@ func (a *fakeAuditor) Fail(err error) {
 // every method is atomic under one lock, the snapshot changes together with
 // the state it describes, and a write that requires a mode changes nothing
 // in another one. It returns domain.ErrSetupComplete for a setup requirement
-// and domain.ErrConflict otherwise.
+// and domain.ErrConflict otherwise, and, like the SQLite store, it returns
+// domain.ErrInvalid for an empty credential and then changes nothing.
 type fakeStore struct {
 	mu         sync.Mutex
 	snapshot   Snapshot
@@ -231,8 +233,7 @@ func (f *fakeStore) CompleteSetupToken(
 	if err := f.requireMode(ModeSetup); err != nil {
 		return err
 	}
-	f.storeTokenMode(credentials, session)
-	return nil
+	return f.storeTokenMode(credentials, session)
 }
 
 func (f *fakeStore) PanelPassword(context.Context) (Password, error) {
@@ -256,12 +257,33 @@ func (f *fakeStore) EnableTokenMode(
 	if err := f.requireMode(ModeOpen); err != nil {
 		return err
 	}
-	f.storeTokenMode(credentials, session)
+	return f.storeTokenMode(credentials, session)
+}
+
+// requireCredential refuses an empty credential of the named kind with
+// domain.ErrInvalid, as the SQLite store does. It never echoes a value.
+func requireCredential(kind, value string) error {
+	if value == "" {
+		return fmt.Errorf(
+			"fake store: access credential %s is empty: %w", kind, domain.ErrInvalid,
+		)
+	}
 	return nil
 }
 
-// storeTokenMode shares the credential write; the caller holds the lock.
-func (f *fakeStore) storeTokenMode(credentials Credentials, session Session) {
+// storeTokenMode shares the credential write and checks every credential
+// before it changes anything, in the order the SQLite store writes them; the
+// caller holds the lock.
+func (f *fakeStore) storeTokenMode(credentials Credentials, session Session) error {
+	if err := requireCredential("password hash", credentials.Password.Hash); err != nil {
+		return err
+	}
+	if err := requireCredential("api token", credentials.APIToken); err != nil {
+		return err
+	}
+	if err := requireCredential("agent token", credentials.AgentToken); err != nil {
+		return err
+	}
 	password := credentials.Password
 	f.password = &password
 	f.sessions[session.IDHash] = session
@@ -270,6 +292,7 @@ func (f *fakeStore) storeTokenMode(credentials Credentials, session Session) {
 		APIToken:   credentials.APIToken,
 		AgentToken: credentials.AgentToken,
 	}
+	return nil
 }
 
 func (f *fakeStore) DisableTokenMode(context.Context) error {
@@ -294,8 +317,14 @@ func (f *fakeStore) ReplaceToken(
 	}
 	switch kind {
 	case TokenAPI:
+		if err := requireCredential("api token", value); err != nil {
+			return err
+		}
 		f.snapshot.APIToken = value
 	case TokenAgent:
+		if err := requireCredential("agent token", value); err != nil {
+			return err
+		}
 		f.snapshot.AgentToken = value
 	default:
 		return errUnknownTokenKind
@@ -309,6 +338,9 @@ func (f *fakeStore) ReplacePassword(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.requireMode(ModeToken); err != nil {
+		return err
+	}
+	if err := requireCredential("password hash", password.Hash); err != nil {
 		return err
 	}
 	f.password = &password
@@ -326,6 +358,9 @@ func (f *fakeStore) ResetPassword(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.requireMode(ModeToken); err != nil {
+		return err
+	}
+	if err := requireCredential("password hash", password.Hash); err != nil {
 		return err
 	}
 	f.password = &password
@@ -644,6 +679,142 @@ func TestRedactErrorDiagnostics(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFakeStoreRefusesEmptyCredentials holds the fake to the SQLite store: an
+// empty credential is refused with domain.ErrInvalid after the mode
+// precondition, and a refused write changes nothing.
+func TestFakeStoreRefusesEmptyCredentials(t *testing.T) {
+	ctx := context.Background()
+	full := Credentials{
+		Password:   Password{Hash: "fixture-hash", SetAt: start},
+		APIToken:   "fixture-api",
+		AgentToken: "fixture-agent",
+	}
+	session := Session{
+		IDHash:    sha256.Sum256([]byte("fixture-session")),
+		CreatedAt: start, LastSeenAt: start, ExpiresAt: start.Add(time.Hour),
+	}
+	withEmpty := func(field string) Credentials {
+		credentials := full
+		switch field {
+		case "password":
+			credentials.Password.Hash = ""
+		case "api":
+			credentials.APIToken = ""
+		case "agent":
+			credentials.AgentToken = ""
+		}
+		return credentials
+	}
+	other := Session{
+		IDHash:    sha256.Sum256([]byte("fixture-other-session")),
+		CreatedAt: start, LastSeenAt: start, ExpiresAt: start.Add(time.Hour),
+	}
+	setup := func(*testing.T) *fakeStore {
+		f := newFakeStore()
+		f.seedSetup()
+		return f
+	}
+	open := func(*testing.T) *fakeStore { return newFakeStore() }
+	// The token store holds two sessions, so a write that wipes the sessions
+	// it should keep shows in the state comparison.
+	token := func(t *testing.T) *fakeStore {
+		f := newFakeStore()
+		f.seedTokenMode("seeded-hash")
+		for _, s := range []Session{session, other} {
+			if err := f.CreateSession(ctx, s); err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+		}
+		return f
+	}
+	for _, tc := range []struct {
+		name  string
+		store func(*testing.T) *fakeStore
+		write func(*fakeStore) error
+		want  error
+	}{
+		{"complete_setup_password", setup, func(f *fakeStore) error {
+			return f.CompleteSetupToken(ctx, withEmpty("password"), session, start)
+		}, domain.ErrInvalid},
+		{"complete_setup_api", setup, func(f *fakeStore) error {
+			return f.CompleteSetupToken(ctx, withEmpty("api"), session, start)
+		}, domain.ErrInvalid},
+		{"complete_setup_agent", setup, func(f *fakeStore) error {
+			return f.CompleteSetupToken(ctx, withEmpty("agent"), session, start)
+		}, domain.ErrInvalid},
+		{"enable_password", open, func(f *fakeStore) error {
+			return f.EnableTokenMode(ctx, withEmpty("password"), session)
+		}, domain.ErrInvalid},
+		{"enable_api", open, func(f *fakeStore) error {
+			return f.EnableTokenMode(ctx, withEmpty("api"), session)
+		}, domain.ErrInvalid},
+		{"enable_agent", open, func(f *fakeStore) error {
+			return f.EnableTokenMode(ctx, withEmpty("agent"), session)
+		}, domain.ErrInvalid},
+		{"replace_api_token", token, func(f *fakeStore) error {
+			return f.ReplaceToken(ctx, TokenAPI, "")
+		}, domain.ErrInvalid},
+		{"replace_agent_token", token, func(f *fakeStore) error {
+			return f.ReplaceToken(ctx, TokenAgent, "")
+		}, domain.ErrInvalid},
+		{"replace_password", token, func(f *fakeStore) error {
+			return f.ReplacePassword(ctx, Password{SetAt: start}, session.IDHash)
+		}, domain.ErrInvalid},
+		{"reset_password", token, func(f *fakeStore) error {
+			return f.ResetPassword(ctx, Password{SetAt: start}, session)
+		}, domain.ErrInvalid},
+		// The mode precondition is checked before the credential.
+		{"enable_in_setup_mode", setup, func(f *fakeStore) error {
+			return f.EnableTokenMode(ctx, withEmpty("api"), session)
+		}, domain.ErrConflict},
+		{"replace_token_in_open_mode", open, func(f *fakeStore) error {
+			return f.ReplaceToken(ctx, TokenAPI, "")
+		}, domain.ErrConflict},
+		{"replace_password_in_open_mode", open, func(f *fakeStore) error {
+			return f.ReplacePassword(ctx, Password{SetAt: start}, session.IDHash)
+		}, domain.ErrConflict},
+		{"reset_password_in_open_mode", open, func(f *fakeStore) error {
+			return f.ResetPassword(ctx, Password{SetAt: start}, session)
+		}, domain.ErrConflict},
+		{"complete_setup_in_open_mode", open, func(f *fakeStore) error {
+			return f.CompleteSetupToken(ctx, withEmpty("api"), session, start)
+		}, domain.ErrSetupComplete},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.store(t)
+			before := f.state()
+			if err := tc.write(f); !errors.Is(err, tc.want) {
+				t.Fatalf("write returned %v, want an error wrapping %v", err, tc.want)
+			}
+			if after := f.state(); !reflect.DeepEqual(before, after) {
+				t.Fatal("the refused write changed the store")
+			}
+		})
+	}
+}
+
+// fakeState is a copy of everything a credential write can change.
+type fakeState struct {
+	snapshot Snapshot
+	password *Password
+	sessions map[[sha256.Size]byte]Session
+}
+
+// state returns a copy of the snapshot, the stored password and the sessions.
+func (f *fakeStore) state() fakeState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	state := fakeState{snapshot: f.snapshot, sessions: map[[sha256.Size]byte]Session{}}
+	if f.password != nil {
+		password := *f.password
+		state.password = &password
+	}
+	for idHash, session := range f.sessions {
+		state.sessions[idHash] = session
+	}
+	return state
 }
 
 // assertNoSecret fails when any audit row, or any of the errors, carries one
