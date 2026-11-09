@@ -86,6 +86,7 @@ type fakeService struct {
 	realizedPnlAsset      string
 	realizedPnlValue      string
 	adjustments           []domain.AccountAdjustmentRecord
+	adjustmentsLimit      int
 	adjustmentPage        *store.AdjustmentListPage
 	adjustmentFilter      store.AdjustmentListFilter
 	orders                []domain.Order
@@ -855,8 +856,9 @@ func (f *fakeService) ListBalanceRows(
 	return store.BalanceListPage{Rows: rows, Total: len(rows)}, nil
 }
 func (f *fakeService) ListAdjustments(
-	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
+	_ context.Context, _ domain.AccountID, _ domain.Source, limit int,
 ) ([]domain.AccountAdjustmentRecord, error) {
+	f.adjustmentsLimit = limit
 	return f.adjustments, f.stateErr
 }
 func (f *fakeService) ListAllAdjustments(

@@ -144,7 +144,7 @@ func editOperation(t *testing.T, spec, header, old, replacement string) string {
 // apart from the walker, so an operation it misses is reported.
 func browserGuardProblems(spec string) (safe, unsafe int, problems []string) {
 	lines := strings.Split(spec, "\n")
-	components, found := openAPIResponseComponents(lines)
+	components, found := openAPIComponents(lines, "responses")
 	if !found {
 		problems = append(problems, "no components/responses section")
 	}
@@ -203,7 +203,7 @@ func operationGuardProblems(name string, safe bool, operation []string, componen
 	}
 	var problems []string
 	unauthorized, hasUnauthorized := responses["401"]
-	unauthorized, missing := resolveResponse(unauthorized, components)
+	unauthorized, missing := resolveComponentRef(unauthorized, components, "responses")
 	switch {
 	case !hasUnauthorized:
 		problems = append(problems, name+": no 401 response")
@@ -213,7 +213,7 @@ func operationGuardProblems(name string, safe bool, operation []string, componen
 		problems = append(problems, name+": 401 does not name unauthorized")
 	}
 	setupRequired, hasSetupRequired := responses["503"]
-	setupRequired, missing = resolveResponse(setupRequired, components)
+	setupRequired, missing = resolveComponentRef(setupRequired, components, "responses")
 	switch {
 	case !hasSetupRequired:
 		problems = append(problems, name+": no 503 response")
@@ -223,7 +223,7 @@ func operationGuardProblems(name string, safe bool, operation []string, componen
 		problems = append(problems, name+": 503 does not name setup_required")
 	}
 	forbidden, hasForbidden := responses["403"]
-	forbidden, missing = resolveResponse(forbidden, components)
+	forbidden, missing = resolveComponentRef(forbidden, components, "responses")
 	if !hasForbidden {
 		problems = append(problems, name+": no 403 response")
 	} else if missing != "" {
@@ -253,12 +253,13 @@ func operationGuardProblems(name string, safe bool, operation []string, componen
 	return problems
 }
 
-// resolveResponse returns the text of the components/responses entry the block
-// references, or the block itself when it is an inline response. When the
+// resolveComponentRef returns the text of the entry in the component section the
+// block references, or the block itself when it is inline. When the
 // referenced entry does not exist it returns its name as missing.
-func resolveResponse(block string, components map[string]string) (text, missing string) {
+func resolveComponentRef(block string, components map[string]string, section string) (text, missing string) {
 	for _, line := range strings.Split(block, "\n") {
-		if ref, ok := strings.CutPrefix(strings.TrimSpace(line), `$ref: "#/components/responses/`); ok {
+		line = strings.TrimPrefix(strings.TrimSpace(line), "- ")
+		if ref, ok := strings.CutPrefix(line, `$ref: "#/components/`+section+`/`); ok {
 			name := strings.TrimSuffix(ref, `"`)
 			text, found := components[name]
 			if !found {
@@ -270,15 +271,15 @@ func resolveResponse(block string, components map[string]string) (text, missing 
 	return block, ""
 }
 
-// openAPIResponseComponents maps each components/responses name to its text,
+// openAPIComponents maps each name in a component section to its text,
 // and reports whether the section was found.
-func openAPIResponseComponents(lines []string) (map[string]string, bool) {
+func openAPIComponents(lines []string, section string) (map[string]string, bool) {
 	inComponents := false
 	for i, line := range lines {
 		switch {
 		case line == "components:":
 			inComponents = true
-		case inComponents && line == "  responses:":
+		case inComponents && line == "  "+section+":":
 			return childBlocks(nestedLines(lines, i), 4), true
 		}
 	}

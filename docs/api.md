@@ -646,7 +646,11 @@ While the mode runs:
 - Another account is refused with 422 with constraint `single_account_mode` at
   pointer `/account`, any account group with 422 with constraint
   `single_account_mode` at pointer `/accountGroup`, and an order of another
-  account is not found.
+  account is not found. The `account` query parameter of the balance, adjustment,
+  trade and audit lists and of `GET /limits` is a text filter, not an account
+  input: it narrows the rows the mode shows, so another account's code answers
+  200 with no rows. The `account` match of the MCP `list_trades` tool is also a
+  text filter and returns no rows for another account's code.
 - Creating or deleting an account, `PUT /accounts/{code}` even on the default
   account, setting an account's group, any group change, and the default-group
   currency are refused with 409 `accounts_not_managed`. The default account's

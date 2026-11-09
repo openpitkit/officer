@@ -901,7 +901,7 @@ paths:
       summary: List all accounts
       tags: [accounts]
       parameters:
-        - $ref: "#/components/parameters/CodeFilter"
+        - $ref: "#/components/parameters/BoundedCodeFilter"
         - $ref: "#/components/parameters/CodeMatch"
         - $ref: "#/components/parameters/StatusFilter"
         - $ref: "#/components/parameters/PositionCountMode"
@@ -952,6 +952,10 @@ paths:
           description: >-
             Search the effective block reason - the account's own reason, or its
             group's when the block comes from the group.
+            The value holds at most 16 `*`-separated fragments and at most 4096
+            Unicode code points across them, the `*` separators not counted;
+            a longer value, or one containing NUL, is refused with 422
+            `validation`.
         - $ref: "#/components/parameters/BlockReasonMatch"
         - name: group
           in: query
@@ -1538,19 +1542,12 @@ paths:
         group is not listed.
       tags: [groups]
       parameters:
-        - $ref: "#/components/parameters/CodeFilter"
+        - $ref: "#/components/parameters/BoundedCodeFilter"
         - $ref: "#/components/parameters/CodeMatch"
         - $ref: "#/components/parameters/StatusFilter"
         - $ref: "#/components/parameters/PositionCountMode"
         - $ref: "#/components/parameters/PositionCountMin"
         - $ref: "#/components/parameters/PositionCountMax"
-        - name: accountCount
-          in: query
-          schema:
-            type: string
-            enum: [all, has, none]
-            default: all
-          description: Filter by whether the group has member accounts.
         - $ref: "#/components/parameters/AccountCountMode"
         - $ref: "#/components/parameters/AccountCountMin"
         - $ref: "#/components/parameters/AccountCountMax"
@@ -1558,13 +1555,23 @@ paths:
           in: query
           schema:
             type: string
-          description: Search group notes.
+          description: >-
+            Search group notes.
+            The value holds at most 16 `*`-separated fragments and at most 4096
+            Unicode code points across them, the `*` separators not counted;
+            a longer value, or one containing NUL, is refused with 422
+            `validation`.
         - $ref: "#/components/parameters/NotesMatch"
         - name: blockReason
           in: query
           schema:
             type: string
-          description: Search group block reason.
+          description: >-
+            Search group block reason.
+            The value holds at most 16 `*`-separated fragments and at most 4096
+            Unicode code points across them, the `*` separators not counted;
+            a longer value, or one containing NUL, is refused with 422
+            `validation`.
         - $ref: "#/components/parameters/BlockReasonMatch"
         - name: venue
           in: query
@@ -2444,8 +2451,9 @@ paths:
         - name: account
           in: query
           description: >-
-            Filter by account code. In single-account mode no other account's
-            rows are returned.
+            Select the orders of this account. In single-account mode naming
+            any other account is refused with 422 (constraint
+            `single_account_mode`).
           schema:
             type: string
         - $ref: "#/components/parameters/SourceFilter"
@@ -2468,12 +2476,18 @@ paths:
           in: query
           schema:
             type: string
-          description: Exact base asset symbol.
+          description: >-
+            Exact base asset symbol.
+            The value holds at most 4096 Unicode code points; a longer value,
+            or one containing NUL, is refused with 422 `validation`.
         - name: quoteAsset
           in: query
           schema:
             type: string
-          description: Exact quote asset symbol.
+          description: >-
+            Exact quote asset symbol.
+            The value holds at most 4096 Unicode code points; a longer value,
+            or one containing NUL, is refused with 422 `validation`.
         - name: amountMode
           in: query
           schema:
@@ -2951,16 +2965,24 @@ paths:
           description: >-
             Exact account code. In single-account mode no other account's rows
             are returned.
+            The value holds at most 4096 Unicode code points; a longer value,
+            or one containing NUL, is refused with 422 `validation`.
           schema:
             type: string
         - name: baseAsset
           in: query
-          description: Exact base asset symbol.
+          description: >-
+            Exact base asset symbol.
+            The value holds at most 4096 Unicode code points; a longer value,
+            or one containing NUL, is refused with 422 `validation`.
           schema:
             type: string
         - name: quoteAsset
           in: query
-          description: Exact quote asset symbol.
+          description: >-
+            Exact quote asset symbol.
+            The value holds at most 4096 Unicode code points; a longer value,
+            or one containing NUL, is refused with 422 `validation`.
           schema:
             type: string
         - name: side
@@ -5768,6 +5790,19 @@ components:
       schema:
         type: string
 
+    BoundedCodeFilter:
+      name: code
+      in: query
+      description: >-
+        Code search text. A plain value is matched as a substring. `*` is a
+        friendly wildcard whose fragments must appear in order.
+        The value holds at most 16 `*`-separated fragments and at most 4096
+        Unicode code points across them, the `*` separators not counted;
+        a longer value, or one containing NUL, is refused with 422
+        `validation`.
+      schema:
+        type: string
+
     CodeMatch:
       name: codeMatch
       in: query
@@ -5810,7 +5845,10 @@ components:
     PositionCountMode:
       name: positionCountMode
       in: query
-      description: Position count comparison mode.
+      description: >-
+        Position count comparison mode.
+        `between` with the lower bound above the upper bound is refused with
+        422 `validation`.
       schema:
         type: string
         enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
@@ -5819,7 +5857,11 @@ components:
     PositionCountMin:
       name: positionCountMin
       in: query
-      description: Lower position-count bound. Required for greater_than and between.
+      description: >-
+        Lower position-count bound and the compared value of the equality modes.
+        Required for `eq`, `equal`, `equals`, `exact`, `neq`, `not_equal`,
+        `not_equals`, `gt`, `greater_than`, `gte` and `between`; a missing or
+        invalid required bound is refused with 422 `validation`.
       schema:
         type: integer
         minimum: 0
@@ -5827,7 +5869,10 @@ components:
     PositionCountMax:
       name: positionCountMax
       in: query
-      description: Upper position-count bound. Required for less_than and between.
+      description: >-
+        Upper position-count bound.
+        Required for `lt`, `less_than`, `lte` and `between`; a missing or
+        invalid required bound is refused with 422 `validation`.
       schema:
         type: integer
         minimum: 0
@@ -5835,7 +5880,10 @@ components:
     AccountCountMode:
       name: accountCountMode
       in: query
-      description: Account count comparison mode.
+      description: >-
+        Account count comparison mode.
+        `between` with the lower bound above the upper bound is refused with
+        422 `validation`.
       schema:
         type: string
         enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
@@ -5844,7 +5892,11 @@ components:
     AccountCountMin:
       name: accountCountMin
       in: query
-      description: Lower account-count bound. Required for gt/gte/eq/neq and between.
+      description: >-
+        Lower account-count bound and the compared value of the equality modes.
+        Required for `eq`, `equal`, `equals`, `exact`, `neq`, `not_equal`,
+        `not_equals`, `gt`, `greater_than`, `gte` and `between`; a missing or
+        invalid required bound is refused with 422 `validation`.
       schema:
         type: integer
         minimum: 0
@@ -5852,7 +5904,10 @@ components:
     AccountCountMax:
       name: accountCountMax
       in: query
-      description: Upper account-count bound. Required for lt/lte and between.
+      description: >-
+        Upper account-count bound.
+        Required for `lt`, `less_than`, `lte` and `between`; a missing or
+        invalid required bound is refused with 422 `validation`.
       schema:
         type: integer
         minimum: 0
@@ -5982,11 +6037,16 @@ components:
     LimitParam:
       name: limit
       in: query
-      description: Maximum rows to return (default 100, capped at 1000).
+      description: >-
+        Maximum rows to return (default 100). A larger value within the 64-bit
+        integer range is accepted and capped at 1000; zero, a negative value,
+        a non-integer or a value beyond the 64-bit integer range is refused
+        with 422 `validation`.
       schema:
         type: integer
+        format: int64
         default: 100
-        maximum: 1000
+        minimum: 1
 
     OffsetParam:
       name: offset

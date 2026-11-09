@@ -22,14 +22,315 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+// Source: openapi.yaml - GET list text-filter parameter descriptions.
+func TestOpenAPIListTextBoundsContract(t *testing.T) {
+	t.Parallel()
+	sentences := map[string]string{
+		"search": fmt.Sprintf("The value holds at most %d `*`-separated fragments and at most %d Unicode code points across them, the `*` separators not counted; a longer value, or one containing NUL, is refused with 422 `validation`.",
+			store.TextMatcherMaxFragments, store.TextMatcherMaxRunes),
+		"exact": fmt.Sprintf("The value holds at most %d Unicode code points; a longer value, or one containing NUL, is refused with 422 `validation`.",
+			store.TextMatcherMaxRunes),
+	}
+	for _, tc := range []struct {
+		list      boundsList
+		parameter string
+		kind      string
+		bounded   bool
+	}{
+		{boundsAccounts, "code", "search", true},
+		{boundsAccounts, "blockReason", "search", true},
+		{boundsGroups, "code", "search", true},
+		{boundsGroups, "notes", "search", true},
+		{boundsGroups, "blockReason", "search", true},
+		{boundsOrders, "baseAsset", "exact", true},
+		{boundsOrders, "quoteAsset", "exact", true},
+		{boundsTrades, "account", "exact", true},
+		{boundsTrades, "baseAsset", "exact", true},
+		{boundsTrades, "quoteAsset", "exact", true},
+		// These lists do not bound their text filters today; bounding one
+		// must also document it on that list's parameter.
+		{boundsList{path: "/api/v1/assets"}, "code", "search", false},
+		{boundsList{path: "/api/v1/assets"}, "class", "search", false},
+		{boundsList{path: "/api/v1/asset-classes"}, "code", "search", false},
+		{boundsList{path: "/api/v1/asset-classes"}, "notes", "search", false},
+		{boundsList{path: "/api/v1/audit"}, "actor", "search", false},
+	} {
+		t.Run(tc.list.path+"/"+tc.parameter, func(t *testing.T) {
+			t.Parallel()
+			parameter := openAPIListParameter(t, strings.TrimPrefix(tc.list.path, "/api/v1"), tc.parameter)
+			description := openAPIParameterField(t, parameter, "description")
+			for kind, sentence := range sentences {
+				want := tc.bounded && tc.kind == kind
+				if got := strings.Contains(description, sentence); got != want {
+					t.Errorf("%s bounds sentence present = %t, want %t", kind, got, want)
+				}
+			}
+			status := http.StatusOK
+			if tc.bounded {
+				status = http.StatusUnprocessableEntity
+			}
+			type textProbe struct {
+				value string
+				want  int
+			}
+			values := map[string]textProbe{"runes": {tooManyRunes, status}}
+			if tc.bounded {
+				values["NUL"] = textProbe{"a\x00b", status}
+				if tc.kind == "search" {
+					values["fragments"] = textProbe{fragments17, status}
+					values["separators_not_counted"] = textProbe{
+						strings.Repeat("界", store.TextMatcherMaxRunes/2) + "*" +
+							strings.Repeat("界", store.TextMatcherMaxRunes-store.TextMatcherMaxRunes/2), http.StatusOK}
+				}
+			}
+			for name, probe := range values {
+				t.Run(name, func(t *testing.T) {
+					rec, _ := serveWithin(t, tc.list, url.Values{tc.parameter: {probe.value}}.Encode())
+					if rec.Code != probe.want {
+						t.Fatalf("status = %d, want %d: %s", rec.Code, probe.want, rec.Body.String())
+					}
+					if probe.want == http.StatusUnprocessableEntity {
+						validationProblem(t, rec.Body.Bytes())
+					}
+				})
+			}
+		})
+	}
+}
+
+// Source: openapi.yaml - PositionCount* and AccountCount* parameters.
+func TestOpenAPIListCountBoundsContract(t *testing.T) {
+	t.Parallel()
+	identifiers := func(value string) []string {
+		return strings.FieldsFunc(value, func(r rune) bool {
+			return r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		})
+	}
+	const betweenSentence = "`between` with the lower bound above the upper bound is refused with 422 `validation`."
+	for _, tc := range []struct {
+		list   boundsList
+		prefix string
+	}{
+		{boundsAccounts, "positionCount"},
+		{boundsGroups, "positionCount"},
+		{boundsGroups, "accountCount"},
+	} {
+		t.Run(tc.list.path+"/"+tc.prefix, func(t *testing.T) {
+			t.Parallel()
+			path := strings.TrimPrefix(tc.list.path, "/api/v1")
+			modeKey := tc.prefix + "Mode"
+			mode := openAPIListParameter(t, path, modeKey)
+			modes := identifiers(openAPIParameterField(t, mode, "enum"))
+			if len(modes) == 0 {
+				t.Fatal("mode enum is empty")
+			}
+			for _, bound := range []struct{ missing, present string }{{"Min", "Max"}, {"Max", "Min"}} {
+				key := tc.prefix + bound.missing
+				parameter := openAPIListParameter(t, path, key)
+				description := openAPIParameterField(t, parameter, "description")
+				_, required, found := strings.Cut(description, "Required for ")
+				if !found {
+					t.Fatalf("%s description has no Required for list", key)
+				}
+				required, _, found = strings.Cut(required, ";")
+				if !found {
+					t.Fatalf("%s Required for list has no terminating semicolon", key)
+				}
+				for _, mode := range modes {
+					if mode == "all" {
+						continue
+					}
+					t.Run(bound.missing+"/"+mode, func(t *testing.T) {
+						needsBound := slices.Contains(identifiers(required), mode)
+						for _, probe := range []struct{ name, value string }{
+							{"missing", ""}, {"invalid", "x"},
+						} {
+							t.Run(probe.name, func(t *testing.T) {
+								query := url.Values{modeKey: {mode}, tc.prefix + bound.present: {"1"}, key: {probe.value}}
+								rec, _ := serveWithin(t, tc.list, query.Encode())
+								want := http.StatusOK
+								if needsBound {
+									want = http.StatusUnprocessableEntity
+								}
+								if rec.Code != want {
+									t.Fatalf("status = %d, want %d: %s", rec.Code, want, rec.Body.String())
+								}
+								if needsBound {
+									problem := validationProblem(t, rec.Body.Bytes())
+									detail := probe.name + " " + key
+									if problem.Detail != detail {
+										t.Fatalf("problem = %+v, want validation with detail %q", problem, detail)
+									}
+								}
+							})
+						}
+					})
+				}
+			}
+			if !strings.Contains(openAPIParameterField(t, mode, "description"), betweenSentence) {
+				t.Errorf("%s description is missing the between ordering sentence", modeKey)
+			}
+			query := url.Values{modeKey: {"between"}, tc.prefix + "Min": {"2"}, tc.prefix + "Max": {"1"}}
+			rec, _ := serveWithin(t, tc.list, query.Encode())
+			problem := validationProblem(t, rec.Body.Bytes())
+			if rec.Code != http.StatusUnprocessableEntity || problem.Detail != "invalid "+modeKey+" range" {
+				t.Fatalf("status = %d, problem = %+v, want validation with detail %q",
+					rec.Code, problem, "invalid "+modeKey+" range")
+			}
+		})
+	}
+}
+
+// Source: openapi.yaml - GET /groups account-count parameters.
+func TestOpenAPIGroupAccountCountContract(t *testing.T) {
+	t.Parallel()
+	openAPIListParameter(t, "/groups", "accountCountMode")
+	if _, found := findOpenAPIListParameter(t, "/groups", "accountCount"); found {
+		t.Fatal("GET /groups declares the ignored accountCount parameter")
+	}
+	baseline, baselineSvc := serveWithin(t, boundsGroups, "")
+	if baseline.Code != http.StatusOK || !boundsGroups.read(baselineSvc) {
+		t.Fatalf("baseline status = %d, filter = %+v, want 200 and a service read",
+			baseline.Code, baselineSvc.groupFilter)
+	}
+	// By owner decision accountCount is ignored, not rejected.
+	for _, value := range []string{"has", "none"} {
+		t.Run(value, func(t *testing.T) {
+			rec, svc := serveWithin(t, boundsGroups, "accountCount="+value)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			if !reflect.DeepEqual(svc.groupFilter, baselineSvc.groupFilter) {
+				t.Fatalf("group filter = %+v, want unchanged %+v", svc.groupFilter, baselineSvc.groupFilter)
+			}
+		})
+	}
+}
+
+// Source: openapi.yaml - LimitParam. Runtime coverage extends the existing
+// TestListOrders_BadLimit, TestListOrders_LimitCapping and
+// TestListAccountAdjustments_BadLimit tests.
+func TestOpenAPIListLimitContract(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/orders", "/accounts/{code}/adjustments"} {
+		t.Run(path, func(t *testing.T) {
+			parameter := openAPIListParameter(t, path, "limit")
+			if got := openAPIParameterField(t, parameter, "default"); got != fmt.Sprint(httpx.DefaultListLimit) {
+				t.Errorf("LimitParam default = %s, want %d", got, httpx.DefaultListLimit)
+			}
+			if got := openAPIParameterField(t, parameter, "minimum"); got != "1" {
+				t.Errorf("LimitParam minimum = %s, want 1", got)
+			}
+			if got := openAPIParameterField(t, parameter, "format"); got != "int64" {
+				t.Errorf("LimitParam format = %s, want int64", got)
+			}
+			for _, line := range strings.Split(parameter, "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "maximum:") {
+					t.Error("LimitParam must not declare maximum: larger values are accepted and capped")
+				}
+			}
+			description := openAPIParameterField(t, parameter, "description")
+			for _, clause := range []string{
+				fmt.Sprintf("default %d", httpx.DefaultListLimit),
+				fmt.Sprintf("A larger value within the 64-bit integer range is accepted and capped at %d", httpx.MaxListLimit),
+				"zero, a negative value, a non-integer or a value beyond the 64-bit integer range is refused with 422 `validation`",
+			} {
+				if !strings.Contains(description, clause) {
+					t.Errorf("LimitParam description is missing %q", clause)
+				}
+			}
+		})
+	}
+}
+
+func validationProblem(t *testing.T, body []byte) httpx.ProblemDetails {
+	t.Helper()
+	var problem httpx.ProblemDetails
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if len(problem.Errors) != 1 || problem.Errors[0].Code != "validation" {
+		t.Fatalf("problem = %+v, want validation", problem)
+	}
+	return problem
+}
+
+// openAPIListParameter resolves a named parameter declared by a GET operation.
+func openAPIListParameter(t *testing.T, path, name string) string {
+	t.Helper()
+	block, found := findOpenAPIListParameter(t, path, name)
+	if !found {
+		t.Fatalf("GET %s has no parameter %s", path, name)
+	}
+	return block
+}
+
+func findOpenAPIListParameter(t *testing.T, path, name string) (string, bool) {
+	t.Helper()
+	components, found := openAPIComponents(strings.Split(string(openapiSpec), "\n"), "parameters")
+	if !found {
+		t.Fatal("no components/parameters section")
+	}
+	for _, operation := range openAPIOperations(string(openapiSpec)) {
+		if operation.Method != http.MethodGet || operation.Path != path {
+			continue
+		}
+		for i, line := range operation.Lines {
+			if line != "      parameters:" {
+				continue
+			}
+			for _, block := range childBlocks(nestedLines(operation.Lines, i), 8) {
+				first, _, _ := strings.Cut(block, "\n")
+				first = strings.TrimSpace(first)
+				if first == "- name: "+name {
+					return block, true
+				}
+				if !strings.HasPrefix(first, "- $ref: ") {
+					continue
+				}
+				parameter, missing := resolveComponentRef(block, components, "parameters")
+				if missing != "" {
+					t.Fatalf("GET %s references missing components/parameters/%s", path, missing)
+				}
+				if openAPIParameterField(t, parameter, "name") == name {
+					return parameter, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// openAPIParameterField reads an inline or folded field from a parameter block.
+func openAPIParameterField(t *testing.T, block, field string) string {
+	t.Helper()
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		line = strings.TrimPrefix(strings.TrimSpace(line), "- ")
+		value, found := strings.CutPrefix(line, field+": ")
+		if !found {
+			continue
+		}
+		if value == ">" || value == ">-" {
+			value = strings.Join(nestedLines(lines, i), "\n")
+		}
+		return strings.Join(strings.Fields(value), " ")
+	}
+	t.Fatalf("parameter has no %s field", field)
+	return ""
+}
 
 // The order, trade, account and group lists hold their filters to the core
 // list-filter bounds through the filter's Validate: a value outside them
@@ -228,12 +529,8 @@ func TestListBoundsRejectBeforeRead(t *testing.T) {
 			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want 422: %s", rec.Code, rec.Body.String())
 			}
-			var problem httpx.ProblemDetails
-			if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
-				t.Fatalf("decode problem: %v", err)
-			}
-			if problem.Detail != tc.detail || len(problem.Errors) != 1 ||
-				problem.Errors[0].Code != "validation" || problem.Errors[0].Pointer != tc.pointer {
+			problem := validationProblem(t, rec.Body.Bytes())
+			if problem.Detail != tc.detail || problem.Errors[0].Pointer != tc.pointer {
 				t.Fatalf("problem = %+v, want validation at %q with detail %q",
 					problem, tc.pointer, tc.detail)
 			}
@@ -292,12 +589,8 @@ func TestListBoundsBetweenOrder(t *testing.T) {
 				}
 				return
 			}
-			var problem httpx.ProblemDetails
-			if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
-				t.Fatalf("decode problem: %v", err)
-			}
+			problem := validationProblem(t, rec.Body.Bytes())
 			if rec.Code != http.StatusUnprocessableEntity || problem.Detail != "invalid priceMode range" ||
-				len(problem.Errors) != 1 || problem.Errors[0].Code != "validation" ||
 				problem.Errors[0].Pointer != "/priceMode" {
 				t.Fatalf("status = %d, problem = %+v, want the priceMode range error", rec.Code, problem)
 			}

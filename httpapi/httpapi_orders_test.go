@@ -123,7 +123,7 @@ func TestListOrders_QueryFilters(t *testing.T) {
 }
 
 func TestListOrders_BadLimit(t *testing.T) {
-	// A non-integer or non-positive ?limit= is a 400 validation error.
+	// An invalid or overflowing ?limit= is a 422 validation error.
 	tests := []struct {
 		name  string
 		limit string
@@ -131,6 +131,7 @@ func TestListOrders_BadLimit(t *testing.T) {
 		{"non_numeric", "abc"},
 		{"zero", "0"},
 		{"negative", "-5"},
+		{"overflow", "9223372036854775808"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,13 +143,9 @@ func TestListOrders_BadLimit(t *testing.T) {
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/orders?limit="+tc.limit, nil))
 			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("want 400, got %d", rec.Code)
+				t.Fatalf("want 422, got %d", rec.Code)
 			}
-			m := bodyMap(t, rec.Result())
-			errObj, _ := m["error"].(map[string]any)
-			if errObj["code"] != "validation" {
-				t.Fatalf("want code=validation, got %v", errObj["code"])
-			}
+			validationProblem(t, rec.Body.Bytes())
 		})
 	}
 }
@@ -188,16 +185,24 @@ func TestListOrders_BadQueryParams(t *testing.T) {
 }
 
 func TestListOrders_LimitCapping(t *testing.T) {
-	// A limit beyond MaxListLimit is silently capped, not an error.
-	r, err := newRouter(&fakeService{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/v1/orders?limit=%d", httpx.MaxListLimit+999), nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
+	// A limit beyond httpx.MaxListLimit is silently capped, not an error.
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  int
+	}{
+		{"default", "", httpx.DefaultListLimit},
+		{"capped", fmt.Sprintf("limit=%d", httpx.MaxListLimit+1), httpx.MaxListLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, svc := serveWithin(t, boundsOrders, tc.query)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if svc.orderFilter.Page.Limit != tc.want {
+				t.Fatalf("service limit = %d, want %d", svc.orderFilter.Page.Limit, tc.want)
+			}
+		})
 	}
 }
 
@@ -1016,24 +1021,32 @@ func TestListAccountAdjustments_QueryFilters(t *testing.T) {
 func TestListAccountAdjustments_BadLimit(t *testing.T) {
 	tests := []struct {
 		name  string
-		limit string
+		query string
+		want  int
 	}{
-		{"non_numeric", "abc"},
-		{"zero", "0"},
-		{"negative", "-5"},
+		{"non_numeric", "limit=x", 0},
+		{"zero", "limit=0", 0},
+		{"negative", "limit=-1", 0},
+		{"overflow", "limit=9223372036854775808", 0},
+		{"default", "", httpx.DefaultListLimit},
+		{"capped", fmt.Sprintf("limit=%d", httpx.MaxListLimit+1), httpx.MaxListLimit},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := newRouter(&fakeService{})
-			if err != nil {
-				t.Fatal(err)
+			rec, svc := serveWithin(t, boundsList{path: "/api/v1/accounts/acc-1/adjustments"}, tc.query)
+			if tc.want > 0 {
+				if rec.Code != http.StatusOK {
+					t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+				}
+				if svc.adjustmentsLimit != tc.want {
+					t.Fatalf("service limit = %d, want %d", svc.adjustmentsLimit, tc.want)
+				}
+				return
 			}
-			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-				"/api/v1/accounts/acc-1/adjustments?limit="+tc.limit, nil))
 			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("want 400, got %d", rec.Code)
+				t.Fatalf("want 422, got %d", rec.Code)
 			}
+			validationProblem(t, rec.Body.Bytes())
 		})
 	}
 }
