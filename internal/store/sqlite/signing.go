@@ -180,7 +180,7 @@ func (r *realmStore) DeactivateAllSigningKeys(ctx context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("store: read active signing keys: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { err = errors.Join(err, rows.Close()) }()
 	var keyIDs []string
 	for rows.Next() {
 		var keyID string
