@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 // StreamWriter is the write surface for a WebSocket API subscription.
@@ -36,7 +38,7 @@ type StreamWriter interface {
 // and the same redirect refusal as REST. The caller reads the responses.
 func DialStream(ctx context.Context, url string) (*websocket.Conn, error) {
 	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
-		HTTPClient: &http.Client{CheckRedirect: refuseRedirect},
+		HTTPClient: &http.Client{CheckRedirect: vendorhttp.RefuseRedirect},
 	})
 	return conn, err
 }

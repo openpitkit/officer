@@ -255,17 +255,36 @@ This rule has no approval marker.
 ### Venue connector reuse
 
 `checks/semgrep/venue-connector-reuse.yml` keeps trading stream reconnects in
-`streamLifecycle` in `internal/trading/stream_lifecycle.go` and vendor credential
-parsing in `internal/apikey`. Rule 1 matches the identifier `backoff`, not the
-package import, elsewhere under `internal/trading/`. Rule 2 matches map reads,
-comparisons and switch arms on `"apiKey"`/`"apiSecret"` outside
-`internal/apikey/`, and JSON decoding inside a function named `ParseCredentials`
-outside that package, in Go files under `internal/`, excluding Go tests.
-Deliberate limit: decoding credentials into a struct tagged `json:"apiKey"` /
-`json:"apiSecret"` outside a `ParseCredentials` passes; review catches it.
+`streamLifecycle` in `internal/trading/stream_lifecycle.go`. The stream-lifecycle
+rule matches the identifier `backoff`, not the package import, elsewhere under
+`internal/trading/`.
+
+The HTTP rules keep redirect refusal, client copying and message-and-cause
+errors in `internal/vendorhttp`. Elsewhere under `internal/`, excluding Go
+tests, the redirect rule rejects `http.ErrUseLastResponse`, every
+`CheckRedirect` assignment regardless of its value, and composite-literal
+`CheckRedirect` fields other than `vendorhttp.RefuseRedirect`. Use
+`vendorhttp.CopyClient` to copy a caller's client without mutating it; stream
+dials may set `CheckRedirect: vendorhttp.RefuseRedirect` in a composite literal.
+The wrap rule rejects a redacted `err.Error()` message paired with its raw
+cause in a composite literal or a `vendorhttp.NewRequestError` call. The error
+rule rejects a private two-field string/error struct whose `Error` and `Unwrap`
+return those fields. Binance keeps its signed-query redaction and passes its
+prepared message and cause to `vendorhttp.NewRequestError`. Redacting text alone
+and error types with other fields or behavior are allowed. The framework
+backend boundary is outside the rules' paths.
+
+The credential rule keeps vendor credential parsing in `internal/apikey`. It
+matches map reads, comparisons and switch arms on `"apiKey"`, `"apiSecret"`,
+`"passphrase"`, `"keyName"` and `"privateKey"` outside `internal/apikey/`, and JSON
+decoding inside a function named `ParseCredentials` outside that package, in Go
+files under `internal/`, excluding Go tests.
+Deliberate limits: decoding credentials into a struct tagged with any of the
+listed names outside a `ParseCredentials`, and switch arms on named constants
+holding those names, pass; review catches both.
 Its fixture runs through `check-semgrep`.
 
-This rule has no approval marker.
+These rules have no approval marker.
 
 ### Approval marker
 

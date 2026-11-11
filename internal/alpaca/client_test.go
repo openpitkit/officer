@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"reflect"
 	"strconv"
@@ -35,6 +36,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/secret"
 )
 
 var testCredentials = Credentials{APIKey: "test-key-marker", APISecret: "test-secret-marker"}
@@ -118,7 +120,7 @@ func TestAsset(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			client := NewClient(server.URL, testCredentials, server.Client())
+			client := NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials))
 			asset, found, err := client.Asset(context.Background(), "BTC/USD")
 			switch status {
 			case 200:
@@ -165,7 +167,7 @@ func TestAccount(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer server.Close()
-			account, err := NewClient(server.URL, testCredentials, server.Client()).Account(context.Background())
+			account, err := NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials)).Account(context.Background())
 			if tc.errorText != "" || tc.status != 200 {
 				if err == nil {
 					t.Fatal("invalid account response accepted")
@@ -234,7 +236,7 @@ func TestAssets(t *testing.T) {
 				_, _ = w.Write([]byte(body))
 			}))
 			defer server.Close()
-			assets, err := NewClient(server.URL, testCredentials, server.Client()).Assets(context.Background())
+			assets, err := NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials)).Assets(context.Background())
 			if tc.errorText != "" || tc.status != 200 {
 				if err == nil {
 					t.Fatal("invalid assets response accepted")
@@ -262,7 +264,7 @@ func TestAssets(t *testing.T) {
 func TestAssetsTransportError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	server.Close()
-	assets, err := NewClient(server.URL, testCredentials, server.Client()).Assets(context.Background())
+	assets, err := NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials)).Assets(context.Background())
 	var opErr *net.OpError
 	if !errors.As(err, &opErr) || opErr.Op != "dial" || assets != nil {
 		t.Fatalf("Assets: got %v, want a dial *net.OpError and no assets", err)
@@ -304,7 +306,7 @@ func TestLatestTradeSymbols(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer server.Close()
-			got, err := NewClient(server.URL, testCredentials, server.Client()).LatestTradeSymbols(context.Background(), tc.symbol, "iex")
+			got, err := NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials)).LatestTradeSymbols(context.Background(), tc.symbol, "iex")
 			if n := requests.Load(); n != 1 {
 				t.Fatalf("requests = %d, want 1", n)
 			}
@@ -351,7 +353,7 @@ func TestRequestErrors(t *testing.T) {
 		{`{"code":40410000,"message":"not found"}`, 40410000, "not found", true, "alpaca: HTTP 503 (code 40410000): not found"},
 	} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503); _, _ = w.Write([]byte(tc.body)) }))
-		status, err := NewClient(server.URL, testCredentials, server.Client()).Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
+		status, err := NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials)).Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
 		server.Close()
 		var apiErr *APIError
 		if status != 503 || !errors.As(err, &apiErr) || apiErr.Status != 503 || apiErr.Code != tc.code ||
@@ -360,7 +362,7 @@ func TestRequestErrors(t *testing.T) {
 		}
 	}
 	cause := errors.New("network failed")
-	client := NewClient("http://example.invalid", testCredentials, &http.Client{Transport: errorTransport{cause}})
+	client := NewClient("http://example.invalid", testCredentials, &http.Client{Transport: errorTransport{cause}}, testCredentialRedactor(t, testCredentials))
 	_, err := client.Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
 	var apiErr *APIError
 	if err == nil || !errors.Is(err, cause) || errors.As(err, &apiErr) {
@@ -370,7 +372,7 @@ func TestRequestErrors(t *testing.T) {
 	defer cancel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 	defer server.Close()
-	_, err = NewClient(server.URL, testCredentials, server.Client()).Request(ctx, "GET", "/v2/assets/AAPL", nil, nil)
+	_, err = NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials)).Request(ctx, "GET", "/v2/assets/AAPL", nil, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &apiErr) {
 		t.Fatal("timeout must remain a transport error")
 	}
@@ -383,7 +385,7 @@ func TestInvariantCredentialsNeverLeak(t *testing.T) {
 			w.WriteHeader(403)
 			_ = json.NewEncoder(w).Encode(body)
 		}))
-		_, _, err := NewClient(server.URL, testCredentials, server.Client()).Asset(context.Background(), "AAPL")
+		_, _, err := NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials)).Asset(context.Background(), "AAPL")
 		server.Close()
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) || apiErr.Message != "[redacted] [redacted]" {
@@ -392,7 +394,7 @@ func TestInvariantCredentialsNeverLeak(t *testing.T) {
 		assertNoCredentials(t, err.Error())
 	}
 	cause := errors.New(leaked)
-	client := NewClient("http://example.invalid", testCredentials, &http.Client{Transport: errorTransport{cause}})
+	client := NewClient("http://example.invalid", testCredentials, &http.Client{Transport: errorTransport{cause}}, testCredentialRedactor(t, testCredentials))
 	_, err := client.Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
 	if !errors.Is(err, cause) {
 		t.Fatal("wrapped cause lost")
@@ -417,7 +419,7 @@ func TestOverlappingCredentialsRedacted(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(map[string]any{"code": 1, "message": message})
 				}))
 				defer server.Close()
-				client := NewClient(server.URL, tc.credentials, server.Client())
+				client := NewClient(server.URL, tc.credentials, server.Client(), testCredentialRedactor(t, tc.credentials))
 				_, err := client.Request(context.Background(), http.MethodGet, "/v2/assets/AAPL", nil, nil)
 				var apiErr *APIError
 				if !errors.As(err, &apiErr) || apiErr.Message != expected {
@@ -426,11 +428,79 @@ func TestOverlappingCredentialsRedacted(t *testing.T) {
 			})
 			t.Run("transport error", func(t *testing.T) {
 				cause := errors.New(message)
-				client := NewClient("http://example.invalid", tc.credentials, &http.Client{Transport: errorTransport{cause}})
+				client := NewClient("http://example.invalid", tc.credentials, &http.Client{Transport: errorTransport{cause}}, testCredentialRedactor(t, tc.credentials))
 				_, err := client.Request(context.Background(), http.MethodGet, "/v2/assets/AAPL", nil, nil)
 				if !errors.Is(err, cause) || !strings.Contains(err.Error(), expected) ||
 					strings.Contains(err.Error(), "shared") || strings.Contains(err.Error(), "-long") {
 					t.Fatalf("overlapping credentials in transport error: %v", err)
+				}
+			})
+		})
+	}
+}
+
+func TestRequestRequiresCredentialRedactor(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, testCredentials, server.Client(), nil)
+	status, err := client.Request(context.Background(), http.MethodGet, "/v2/account", nil, nil)
+	if err == nil || err.Error() != "alpaca: credential redactor is required" || status != 0 {
+		t.Fatal("missing redactor was not explicitly refused")
+	}
+	if requests.Load() != 0 {
+		t.Fatal("request sent without a credential redactor")
+	}
+}
+
+func TestRequestInjectedCredentialRedactor(t *testing.T) {
+	credentials := Credentials{APIKey: "test-key-marker", APISecret: `test-"secret<&/+`}
+	redactor := testCredentialRedactor(t, credentials)
+	quoted, err := json.Marshal(credentials.APISecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, spelling string }{
+		{"JSON", string(quoted[1 : len(quoted)-1])},
+		{"URL", url.QueryEscape(credentials.APISecret)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("transport", func(t *testing.T) {
+				cause := errors.New("failure " + tc.spelling)
+				client := NewClient("http://example.invalid", credentials, &http.Client{Transport: errorTransport{cause}}, redactor)
+				_, err := client.Request(context.Background(), http.MethodGet, "/v2/account", nil, nil)
+				if err == nil {
+					t.Fatal("transport failure was lost")
+				}
+				if !errors.Is(err, cause) {
+					t.Fatal("raw transport cause was not retained")
+				}
+				urlErr := (&url.Error{Op: "Get", URL: "http://example.invalid/v2/account", Err: errors.New("failure [redacted]")}).Error()
+				if err.Error() != "alpaca: request: "+urlErr {
+					t.Fatal("escaped credential leaked through transport error")
+				}
+			})
+			t.Run("API message", func(t *testing.T) {
+				payload, err := json.Marshal(map[string]any{"code": 123, "message": "failure " + tc.spelling})
+				if err != nil {
+					t.Fatal(err)
+				}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write(payload)
+				}))
+				defer server.Close()
+				client := NewClient(server.URL, credentials, server.Client(), redactor)
+				status, err := client.Request(context.Background(), http.MethodGet, "/v2/account", nil, nil)
+				var apiErr *APIError
+				if status != http.StatusForbidden || !errors.As(err, &apiErr) {
+					t.Fatal("non-2xx API error was lost")
+				}
+				if apiErr.Message != "failure [redacted]" || err.Error() != "alpaca: HTTP 403 (code 123): failure [redacted]" {
+					t.Fatal("escaped credential leaked through API error message")
 				}
 			})
 		})
@@ -446,7 +516,7 @@ func TestTimeoutReadingErrorResponse(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer server.Close()
-	client := NewClient(server.URL, testCredentials, &http.Client{Timeout: 20 * time.Millisecond})
+	client := NewClient(server.URL, testCredentials, &http.Client{Timeout: 20 * time.Millisecond}, testCredentialRedactor(t, testCredentials))
 	_, err := client.Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
 	var apiErr *APIError
 	if err == nil || errors.As(err, &apiErr) || !errors.Is(err, context.DeadlineExceeded) {
@@ -460,7 +530,7 @@ func TestRequestRefusesRedirect(t *testing.T) {
 	defer destination.Close()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, http.StatusFound) }))
 	defer server.Close()
-	_, err := NewClient(server.URL, testCredentials, server.Client()).Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
+	_, err := NewClient(server.URL, testCredentials, server.Client(), testCredentialRedactor(t, testCredentials)).Request(context.Background(), "GET", "/v2/assets/AAPL", nil, nil)
 	var apiErr *APIError
 	if reached || !errors.As(err, &apiErr) || apiErr.Status != 302 {
 		t.Fatal("REST credentials followed a redirect")
@@ -490,4 +560,19 @@ func TestInvariantSharedClientHasNoTradingDependency(t *testing.T) {
 			}
 		}
 	}
+}
+
+func testCredentialRedactor(t *testing.T, credentials Credentials) *strings.Replacer {
+	t.Helper()
+	raw, err := json.Marshal(map[string]string{
+		"apiKey": credentials.APIKey, "apiSecret": credentials.APISecret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, redactor, err := secret.CredentialRedactor(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return redactor
 }

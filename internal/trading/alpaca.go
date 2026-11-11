@@ -101,7 +101,7 @@ func newAlpacaConnector(connection domain.TradingConnection, restURL, streamURL 
 		return nil, fmt.Errorf("alpaca: %w", err)
 	}
 	return &alpacaConnector{
-		client:      alpaca.NewClient(restURL, credentials, &http.Client{Timeout: alpacaHTTPTimeout}),
+		client:      alpaca.NewClient(restURL, credentials, &http.Client{Timeout: alpacaHTTPTimeout}, redact),
 		credentials: credentials, streamURL: streamURL,
 		externalID: connection.ExternalID, redact: redact,
 	}, nil

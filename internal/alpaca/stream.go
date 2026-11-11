@@ -23,6 +23,8 @@ import (
 	"net/http"
 
 	"github.com/coder/websocket"
+
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 // StreamWriter is the write half of a stream connection: the Write method of
@@ -35,7 +37,7 @@ type StreamWriter interface {
 // REST, so the auth frame cannot reach a host chosen by a redirect response.
 // It has no timeout of its own: ctx bounds the dial.
 func DialStream(ctx context.Context, url string) (*websocket.Conn, error) {
-	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: &http.Client{CheckRedirect: refuseRedirect}})
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: &http.Client{CheckRedirect: vendorhttp.RefuseRedirect}})
 	return conn, err
 }
 

@@ -625,7 +625,7 @@ func newTestAlpacaConnector(t *testing.T) *alpacaConnector {
 func newTestAlpacaDataConnector(t *testing.T, server *httptest.Server) *alpacaConnector {
 	t.Helper()
 	connector := newTestAlpacaConnector(t)
-	connector.dataClient = alpaca.NewClient(server.URL, connector.credentials, server.Client())
+	connector.dataClient = alpaca.NewClient(server.URL, connector.credentials, server.Client(), connector.redact)
 	return connector
 }
 

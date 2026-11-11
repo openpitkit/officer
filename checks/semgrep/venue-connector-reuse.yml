@@ -29,17 +29,112 @@ rules:
         - "**/*_test.go"
         - "/checks/semgrep/testdata/**"
 
+  - id: shared-vendor-http-redirect
+    message: Use internal/vendorhttp redirect refusal for vendor HTTP clients and streams.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - pattern: http.ErrUseLastResponse
+      - pattern: $CLIENT.CheckRedirect = $POLICY
+      - patterns:
+          - pattern: "$TYPE{..., CheckRedirect: $POLICY, ...}"
+          - pattern-not: "$TYPE{..., CheckRedirect: vendorhttp.RefuseRedirect, ...}"
+    paths:
+      include:
+        - "/internal/**"
+      exclude:
+        - "/internal/vendorhttp/**"
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+
+  - id: shared-vendor-http-wrap
+    message: Use vendorhttp.Wrap for a redacted request message with its raw cause.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - pattern: "$TYPE{$R.Replace($PREFIX + $ERR.Error()), $ERR}"
+      - pattern: "$TYPE{..., $MESSAGE: $R.Replace($PREFIX + $ERR.Error()), $CAUSE: $ERR, ...}"
+      - pattern: vendorhttp.NewRequestError($R.Replace($PREFIX + $ERR.Error()), $ERR)
+    paths:
+      include:
+        - "/internal/**"
+      exclude:
+        - "/internal/vendorhttp/**"
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+
+  - id: shared-vendor-http-error
+    message: Use vendorhttp.NewRequestError instead of a private message-and-cause error.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              type $TYPE struct {
+                $MESSAGE string
+                $CAUSE error
+              }
+          - pattern: |
+              type $TYPE struct {
+                $CAUSE error
+                $MESSAGE string
+              }
+      - metavariable-regex:
+          metavariable: $TYPE
+          regex: '^[a-z]'
+      - pattern-not: |
+          type $TYPE struct {
+            $F1 $T1
+            $F2 $T2
+            $F3 $T3
+            ...
+          }
+      - pattern-either:
+          - pattern-inside: |
+              ...
+              func ($E *$TYPE) Error() string { return $E.$MESSAGE }
+              ...
+          - pattern-inside: |
+              ...
+              func ($E $TYPE) Error() string { return $E.$MESSAGE }
+              ...
+      - pattern-either:
+          - pattern-inside: |
+              ...
+              func ($U *$TYPE) Unwrap() error { return $U.$CAUSE }
+              ...
+          - pattern-inside: |
+              ...
+              func ($U $TYPE) Unwrap() error { return $U.$CAUSE }
+              ...
+    paths:
+      include:
+        - "/internal/**"
+      exclude:
+        - "/internal/vendorhttp/**"
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+
   - id: shared-vendor-credentials
     message: Delegate credential parsing to internal/apikey.
     severity: ERROR
     languages: [go]
     pattern-either:
       - pattern: '$M["apiKey"]'
-      - pattern: '$M["apiSecret"]'
       - pattern: '$X == "apiKey"'
       - pattern: '$X != "apiKey"'
+      - pattern: '$M["apiSecret"]'
       - pattern: '$X == "apiSecret"'
       - pattern: '$X != "apiSecret"'
+      - pattern: '$M["passphrase"]'
+      - pattern: '$X == "passphrase"'
+      - pattern: '$X != "passphrase"'
+      - pattern: '$M["keyName"]'
+      - pattern: '$X == "keyName"'
+      - pattern: '$X != "keyName"'
+      - pattern: '$M["privateKey"]'
+      - pattern: '$X == "privateKey"'
+      - pattern: '$X != "privateKey"'
       - patterns:
           - pattern: |
               switch $X {
@@ -48,7 +143,7 @@ rules:
               }
           - metavariable-regex:
               metavariable: $KEY
-              regex: '^"(apiKey|apiSecret)"$'
+              regex: '^"(apiKey|apiSecret|passphrase|keyName|privateKey)"$'
           - focus-metavariable: $KEY
       - patterns:
           - pattern-inside: |

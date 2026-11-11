@@ -33,6 +33,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/internal/apikey"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 // RESTURL serves both demo and real accounts; trading paths select the account.
@@ -113,30 +114,12 @@ type Client struct {
 // NewClient binds REST requests to one host. Redirects are refused so auth
 // headers cannot be forwarded to a host chosen by a response.
 func NewClient(baseURL string, credentials Credentials, httpClient *http.Client, redactor *strings.Replacer) *Client {
-	if httpClient != nil {
-		copy := *httpClient
-		copy.CheckRedirect = refuseRedirect
-		httpClient = &copy
-	}
+	httpClient = vendorhttp.CopyClient(httpClient)
 	return &Client{strings.TrimRight(baseURL, "/"), credentials, httpClient, redactor}
 }
 
-// refuseRedirect is the package's one redirect policy, for REST and streams:
-// a redirect response is returned as it is and never followed.
-func refuseRedirect(*http.Request, []*http.Request) error {
-	return http.ErrUseLastResponse
-}
-
-type requestError struct {
-	message string
-	cause   error
-}
-
-func (e *requestError) Error() string { return e.message }
-func (e *requestError) Unwrap() error { return e.cause }
-
 func (c *Client) wrap(operation string, err error) error {
-	return &requestError{c.redactor.Replace("etoro: " + operation + ": " + err.Error()), err}
+	return vendorhttp.Wrap(c.redactor, "etoro", operation, err)
 }
 
 // Request exchanges JSON for calls that do not create orders, generating a fresh

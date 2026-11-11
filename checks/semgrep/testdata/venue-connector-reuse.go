@@ -20,12 +20,18 @@ package fixture
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/internal/apikey"
 	"go.openpit.dev/officer/internal/backoff"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 func reconnect() {
@@ -124,6 +130,65 @@ func inspectCredentialField(field string) {
 	}
 }
 
+func inspectConstantCredentialFields(fields map[string]string, field string) {
+	const apiSecretField = "apiSecret"
+	const passphraseField = "passphrase"
+
+	// ruleid: shared-vendor-credentials
+	_ = fields[apiSecretField]
+	// ruleid: shared-vendor-credentials
+	_ = field != apiSecretField
+	// ruleid: shared-vendor-credentials
+	_ = fields[passphraseField]
+	// ruleid: shared-vendor-credentials
+	_ = field == passphraseField
+}
+
+func inspectCredentialParameters(fields map[string]string, apiSecret, passphrase string) {
+	// ok: shared-vendor-credentials
+	_ = fields[apiSecret]
+	// ok: shared-vendor-credentials
+	_ = fields[passphrase]
+	// ok: shared-vendor-credentials
+	_ = apiSecret != passphrase
+}
+
+func inspectNewCredentialFields(fields map[string]string, field string) {
+	// ruleid: shared-vendor-credentials
+	_ = fields["passphrase"]
+	// ruleid: shared-vendor-credentials
+	_ = fields["keyName"]
+	// ruleid: shared-vendor-credentials
+	_ = fields["privateKey"]
+	// ruleid: shared-vendor-credentials
+	_ = field == "passphrase"
+	// ruleid: shared-vendor-credentials
+	_ = field != "passphrase"
+	// ruleid: shared-vendor-credentials
+	_ = field == "keyName"
+	// ruleid: shared-vendor-credentials
+	_ = field != "keyName"
+	// ruleid: shared-vendor-credentials
+	_ = field == "privateKey"
+	// ruleid: shared-vendor-credentials
+	_ = field != "privateKey"
+	switch field {
+	// ruleid: shared-vendor-credentials
+	case "passphrase":
+		return
+	// ruleid: shared-vendor-credentials
+	case "keyName":
+		return
+	// ruleid: shared-vendor-credentials
+	case "privateKey":
+		return
+	}
+	// ok: shared-vendor-credentials
+	_ = fields["address"]
+	// ok: shared-vendor-credentials
+	_ = field == "address"
+}
+
 func outboundCredentials(values url.Values, key string) {
 	// ok: shared-vendor-credentials
 	_ = map[string]string{"apiKey": key}
@@ -137,3 +202,147 @@ type vendorConfig struct {
 	// ok: shared-vendor-credentials
 	APISecret string `json:"apiSecret"`
 }
+
+func localRedirectPolicy(*http.Request, []*http.Request) error {
+	// ruleid: shared-vendor-http-redirect
+	return http.ErrUseLastResponse
+}
+
+func privateHTTPPolicies(client *http.Client) {
+	// ruleid: shared-vendor-http-redirect
+	client.CheckRedirect = localRedirectPolicy
+	// ruleid: shared-vendor-http-redirect
+	client.CheckRedirect = nil
+	// ruleid: shared-vendor-http-redirect
+	_ = &http.Client{CheckRedirect: localRedirectPolicy}
+	// ruleid: shared-vendor-http-redirect
+	_ = http.Client{CheckRedirect: nil}
+	// ruleid: shared-vendor-http-redirect
+	_ = http.Client{Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return nil }}
+	// ok: shared-vendor-http-redirect
+	_ = &http.Client{CheckRedirect: vendorhttp.RefuseRedirect}
+	// ruleid: shared-vendor-http-redirect
+	client.CheckRedirect = vendorhttp.RefuseRedirect
+	// ok: shared-vendor-http-redirect
+	_ = vendorhttp.CopyClient(client)
+}
+
+func localCopyClient(client *http.Client) *http.Client {
+	c := *client
+	// ruleid: shared-vendor-http-redirect
+	c.CheckRedirect = vendorhttp.RefuseRedirect
+	return &c
+}
+
+func privateRequestWrap(redact *strings.Replacer, err error, operation string) error {
+	// ruleid: shared-vendor-http-wrap
+	return &privateRequestError{redact.Replace("vendor: " + operation + ": " + err.Error()), err}
+}
+
+func keyedPrivateRequestWrap(redact *strings.Replacer, err error) error {
+	// ruleid: shared-vendor-http-wrap
+	return &privateRequestError{message: redact.Replace("vendor: request: " + err.Error()), cause: err}
+}
+
+func constructorRequestWrap(redact *strings.Replacer, err error, operation string) error {
+	// ruleid: shared-vendor-http-wrap
+	return vendorhttp.NewRequestError(redact.Replace("kraken: "+operation+": "+err.Error()), err)
+}
+
+// ruleid: shared-vendor-http-error
+type privateRequestError struct {
+	message string
+	cause   error
+}
+
+func (e *privateRequestError) Error() string { return e.message }
+func (e *privateRequestError) Unwrap() error { return e.cause }
+
+// ruleid: shared-vendor-http-error
+type reversedRequestError struct {
+	err  error
+	text string
+}
+
+func (e reversedRequestError) Unwrap() error { return e.err }
+func (e reversedRequestError) Error() string { return e.text }
+
+func binanceWrap(redact, signedRedactor *strings.Replacer, operation string, err error) error {
+	inner := err
+	var urlErr *url.Error
+	for errors.As(inner, &urlErr) {
+		inner = urlErr.Err
+	}
+	raw := inner.Error()
+	message := signedRedactor.Replace(raw)
+	causeText := redact.Replace(message)
+	if causeText != raw {
+		inner = errors.New(causeText)
+	}
+	// ok: shared-vendor-http-wrap
+	return vendorhttp.NewRequestError(redact.Replace("binance: "+operation+": "+message), inner)
+}
+
+func redactedText(redact *strings.Replacer, err error) (string, error) {
+	// ok: shared-vendor-http-wrap
+	message := redact.Replace(err.Error())
+	// ok: shared-vendor-http-wrap
+	return message, errors.New(redact.Replace(err.Error()))
+}
+
+func etoroStreamErrors(redact *strings.Replacer, err error) {
+	// ok: shared-vendor-http-wrap
+	err = errors.New(redact.Replace(err.Error()))
+	// ok: shared-vendor-http-wrap
+	slog.Debug("etoro: close stream connection", "error", redact.Replace(err.Error()))
+}
+
+func binanceSymbolLookupError(redact *strings.Replacer, err error) (string, bool, error) {
+	// ok: shared-vendor-http-wrap
+	return "", false, fmt.Errorf("binance: symbol lookup: %s: %w",
+		redact.Replace(err.Error()), domain.ErrUpstream)
+}
+
+func binanceCatalogueError(redact *strings.Replacer, err error) ([]string, error) {
+	// ok: shared-vendor-http-wrap
+	return nil, fmt.Errorf("binance: catalogue: %s: %w",
+		redact.Replace(err.Error()), domain.ErrUpstream)
+}
+
+// ok: shared-vendor-http-error
+type RetryAfterError struct {
+	Err   error
+	After time.Duration
+}
+
+func (e RetryAfterError) Error() string {
+	return fmt.Sprintf("%v; retry after %v", e.Err, e.After)
+}
+func (e RetryAfterError) Unwrap() error { return e.Err }
+
+// ok: shared-vendor-http-error
+type setupRequiredError struct{ host string }
+
+func (e setupRequiredError) Error() string {
+	return fmt.Sprintf("Pit Officer is not set up yet. Open http://%s "+
+		"in a browser on this computer and finish the first-run setup.", e.host)
+}
+
+// ok: shared-vendor-http-error
+type additionalFieldError struct {
+	message string
+	cause   error
+	status  int
+}
+
+func (e *additionalFieldError) Error() string { return e.message }
+func (e *additionalFieldError) Unwrap() error { return e.cause }
+
+// ok: shared-vendor-http-error
+type formattedError struct {
+	message string
+	cause   error
+}
+
+func (e *formattedError) Error() string { return fmt.Sprintf("wrapped: %s", e.message) }
+func (e *formattedError) Unwrap() error { return e.cause }

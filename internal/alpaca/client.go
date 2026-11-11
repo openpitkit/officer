@@ -32,6 +32,7 @@ import (
 	"strings"
 
 	"go.openpit.dev/officer/internal/apikey"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 // PaperRESTURL and LiveRESTURL are the trading hosts of the two separate
@@ -80,49 +81,18 @@ type Client struct {
 	baseURL     string
 	credentials Credentials
 	httpClient  *http.Client
+	redactor    *strings.Replacer
 }
 
 // NewClient binds REST requests to one host. Redirects are refused so auth
 // headers cannot be forwarded to a host chosen by a response.
-func NewClient(baseURL string, credentials Credentials, httpClient *http.Client) *Client {
-	if httpClient != nil {
-		copy := *httpClient
-		copy.CheckRedirect = refuseRedirect
-		httpClient = &copy
-	}
-	return &Client{strings.TrimRight(baseURL, "/"), credentials, httpClient}
-}
-
-// refuseRedirect is the package's one redirect policy, for REST and streams:
-// a redirect response is returned as it is and never followed.
-func refuseRedirect(*http.Request, []*http.Request) error {
-	return http.ErrUseLastResponse
-}
-
-type requestError struct {
-	message string
-	cause   error
-}
-
-func (e *requestError) Error() string { return e.message }
-func (e *requestError) Unwrap() error { return e.cause }
-
-func (c *Client) redact(message string) string {
-	values := []string{c.credentials.APIKey, c.credentials.APISecret}
-	if len(values[0]) < len(values[1]) {
-		values[0], values[1] = values[1], values[0]
-	}
-	replacements := make([]string, 0, 4)
-	for _, value := range values {
-		if value != "" {
-			replacements = append(replacements, value, "[redacted]")
-		}
-	}
-	return strings.NewReplacer(replacements...).Replace(message)
+func NewClient(baseURL string, credentials Credentials, httpClient *http.Client, redactor *strings.Replacer) *Client {
+	httpClient = vendorhttp.CopyClient(httpClient)
+	return &Client{strings.TrimRight(baseURL, "/"), credentials, httpClient, redactor}
 }
 
 func (c *Client) wrap(operation string, err error) error {
-	return &requestError{c.redact("alpaca: " + operation + ": " + err.Error()), err}
+	return vendorhttp.Wrap(c.redactor, "alpaca", operation, err)
 }
 
 // Request exchanges JSON at a host-relative path (including its query).
@@ -131,6 +101,9 @@ func (c *Client) wrap(operation string, err error) error {
 func (c *Client) Request(ctx context.Context, method, path string, body, result any) (int, error) {
 	if c.httpClient == nil {
 		return 0, errors.New("alpaca: HTTP client is required")
+	}
+	if c.redactor == nil {
+		return 0, errors.New("alpaca: credential redactor is required")
 	}
 	var encoded []byte
 	var err error
@@ -169,7 +142,7 @@ func (c *Client) Request(ctx context.Context, method, path string, body, result 
 			Message *string `json:"message"`
 		}
 		if json.Unmarshal(payload, &fields) == nil && fields.Message != nil {
-			apiErr.Message = c.redact(*fields.Message)
+			apiErr.Message = c.redactor.Replace(*fields.Message)
 			if fields.Code != nil {
 				apiErr.Code, apiErr.BodyDecoded = *fields.Code, true
 			}

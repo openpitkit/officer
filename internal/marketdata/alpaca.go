@@ -127,7 +127,7 @@ func NewAlpacaConnector(
 		readTimeout:  defaultAlpacaReadTimeout,
 		credentials:  credentials,
 		redact:       redact,
-		dataClient:   alpaca.NewClient(alpaca.DataURL, credentials, &http.Client{Timeout: alpacaHTTPTimeout}),
+		dataClient:   alpaca.NewClient(alpaca.DataURL, credentials, &http.Client{Timeout: alpacaHTTPTimeout}, redact),
 	}, nil
 }
 

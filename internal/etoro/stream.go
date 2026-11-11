@@ -26,6 +26,8 @@ import (
 	"strings"
 
 	"github.com/coder/websocket"
+
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 // StreamURL serves demo and real accounts; subscriptions select private topics.
@@ -41,7 +43,7 @@ type StreamWriter interface {
 // The URL must contain no credentials; authentication uses a later stream frame.
 // ctx bounds the dial, and errors wrap the handshake or transport cause.
 func DialStream(ctx context.Context, url string) (*websocket.Conn, error) {
-	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: &http.Client{CheckRedirect: refuseRedirect}})
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: &http.Client{CheckRedirect: vendorhttp.RefuseRedirect}})
 	if err != nil {
 		return nil, fmt.Errorf("etoro: dial stream: %w", err)
 	}

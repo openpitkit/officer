@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/internal/apikey"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 const (
@@ -94,11 +95,7 @@ type Client struct {
 func NewClient(baseURL string, credentials Credentials,
 	redact *strings.Replacer, httpClient *http.Client,
 ) *Client {
-	if httpClient != nil {
-		copy := *httpClient
-		copy.CheckRedirect = refuseRedirect
-		httpClient = &copy
-	}
+	httpClient = vendorhttp.CopyClient(httpClient)
 	return &Client{
 		baseURL:     strings.TrimRight(baseURL, "/"),
 		credentials: credentials,
@@ -108,23 +105,11 @@ func NewClient(baseURL string, credentials Credentials,
 	}
 }
 
-func refuseRedirect(*http.Request, []*http.Request) error {
-	return http.ErrUseLastResponse
-}
-
 func sign(payload, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(payload))
 	return hex.EncodeToString(mac.Sum(nil))
 }
-
-type requestError struct {
-	message string
-	cause   error
-}
-
-func (e *requestError) Error() string { return e.message }
-func (e *requestError) Unwrap() error { return e.cause }
 
 func (c *Client) wrap(operation string, err error,
 	signedRedactor *strings.Replacer,
@@ -140,10 +125,9 @@ func (c *Client) wrap(operation string, err error,
 	if causeText != raw {
 		inner = errors.New(causeText)
 	}
-	return &requestError{
-		message: c.redact.Replace("binance: " + operation + ": " + message),
-		cause:   inner,
-	}
+	return vendorhttp.NewRequestError(
+		c.redact.Replace("binance: "+operation+": "+message), inner,
+	)
 }
 
 // Signed sends all parameters as an HMAC-SHA256 signed query, with an empty
