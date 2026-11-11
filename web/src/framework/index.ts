@@ -71,6 +71,7 @@ export { Notice, type NoticeProps } from "../components/Notice";
 export { PageFrame, type PageFrameProps } from "../components/PageFrame";
 export { ErrorBanner } from "../components/PageStates";
 export { AuthScreen } from "../components/AuthScreen";
+export { StandaloneTopBar } from "../components/StandaloneTopBar";
 export { TextField } from "../components/TextField";
 export { Button } from "../components/ui/button";
 export { useRetryCountdown } from "../lib/useRetryCountdown";
