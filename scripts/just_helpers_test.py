@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 import io
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -78,7 +79,7 @@ class ReleaseTests(unittest.TestCase):
                     if command[1] == "tag" and "--list" in command:
                         stdout = "v0.2.1\nv0.3.0\n"
                     elif command[1] == "branch":
-                        stdout = "main\n"
+                        stdout = "release\n"
                     elif command[1] == "commit":
                         helpers.check_release_version("0.3.1")
                         self.assertEqual(
@@ -120,10 +121,48 @@ class ReleaseTests(unittest.TestCase):
                         "tag",
                         "--annotate",
                         "v0.3.1",
+                        "refs/heads/release",
                         "--message",
                         "Release 0.3.1",
                     ],
                 )
+
+    def test_release_rejects_other_branches_before_writing(self) -> None:
+        notes = self.root.parent / "notes.md"
+        notes.write_text(
+            "<!-- release-version: 0.3.1 -->\nRelease tooling fixes.\n",
+            encoding="utf-8",
+        )
+        original_server = self.server_path.read_bytes()
+        for branch, shown in (("main\n", "main"), ("", "a detached HEAD")):
+            with self.subTest(branch=branch):
+
+                def git_run(command: list[str], branch: str = branch, **_: object):
+                    stdout = ""
+                    if command[1] == "tag" and "--list" in command:
+                        stdout = "v0.2.1\nv0.3.0\n"
+                    elif command[1] == "branch":
+                        stdout = branch
+                    return subprocess.CompletedProcess(command, 0, stdout, "")
+
+                with (
+                    patch.object(helpers, "run", side_effect=git_run) as run,
+                    patch.object(
+                        helpers,
+                        "git_succeeds",
+                        side_effect=lambda *args: args[0] != "rev-parse",
+                    ),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                    self.assertRaisesRegex(
+                        SystemExit,
+                        f"a release is cut on release, not on {re.escape(shown)}$",
+                    ),
+                ):
+                    self.command("release", "patch", str(notes))
+
+                self.assertEqual(self.server_path.read_bytes(), original_server)
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(commands, [["git", "branch", "--show-current"]])
 
     def test_version_check_accepts_the_repository_manifest(self) -> None:
         self.command("check-release-version", self.original["version"])
