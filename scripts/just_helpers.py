@@ -459,6 +459,46 @@ def command_install_python_tools(_: argparse.Namespace) -> None:
     )
 
 
+def command_semgrep_scan(args: argparse.Namespace) -> None:
+    with tempfile.TemporaryDirectory(prefix="officer-semgrep-") as temporary_dir:
+        report_path = Path(temporary_dir) / "scan.json"
+        run([args.semgrep, *args.semgrep_args, f"--json-output={report_path}"])
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            errors = report["errors"]
+            if not isinstance(errors, list):
+                raise ValueError("errors must be a list")
+            failed = False
+            for error in errors:
+                error_type = error["type"]
+                if isinstance(error_type, list):
+                    error_type = error_type[0]
+                if not isinstance(error_type, str):
+                    raise ValueError("error type must be a string or a named list")
+                notice = error_type == "PartialParsing"
+                level = "notice" if notice else "error"
+                print(
+                    f"semgrep-scan: {level}: {error_type} "
+                    f"rule={error.get('rule_id')} path={error.get('path')}",
+                    file=sys.stderr,
+                )
+                if not notice:
+                    failed = True
+        except (
+            OSError,
+            UnicodeError,
+            ValueError,
+            KeyError,
+            TypeError,
+            IndexError,
+        ) as exc:
+            raise SystemExit(
+                f"semgrep-scan: missing, unreadable or malformed JSON report: {exc}"
+            ) from None
+        if failed:
+            raise SystemExit(1)
+
+
 def command_check_gofmt(args: argparse.Namespace) -> None:
     result = run(["gofmt", "-l", *args.paths], capture=True)
     unformatted = result.stdout.strip()
@@ -929,6 +969,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("install-python-tools").set_defaults(
         func=command_install_python_tools
     )
+
+    subparser = subparsers.add_parser("semgrep-scan")
+    subparser.add_argument("semgrep")
+    subparser.add_argument("semgrep_args", nargs=argparse.REMAINDER)
+    subparser.set_defaults(func=command_semgrep_scan)
 
     subparser = subparsers.add_parser("check-gofmt")
     subparser.add_argument("paths", nargs="+")

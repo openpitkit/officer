@@ -89,24 +89,50 @@ rules:
             $F3 $T3
             ...
           }
-      - pattern-either:
-          - pattern-inside: |
-              ...
-              func ($E *$TYPE) Error() string { return $E.$MESSAGE }
-              ...
-          - pattern-inside: |
-              ...
-              func ($E $TYPE) Error() string { return $E.$MESSAGE }
-              ...
-      - pattern-either:
-          - pattern-inside: |
-              ...
-              func ($U *$TYPE) Unwrap() error { return $U.$CAUSE }
-              ...
-          - pattern-inside: |
-              ...
-              func ($U $TYPE) Unwrap() error { return $U.$CAUSE }
-              ...
+      - pattern-not-inside: |
+          func $F(...) { ... }
+      - pattern-not-inside: |
+          func(...) { ... }
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  type $TYPE struct {...}
+                  ...
+                  func ($E *$ERROR_TYPE) Error() string { return $E.$ERROR_MESSAGE }
+              - pattern-inside: |
+                  func ($E *$ERROR_TYPE) Error() string { return $E.$ERROR_MESSAGE }
+                  ...
+                  type $TYPE struct {...}
+              - pattern-inside: |
+                  type $TYPE struct {...}
+                  ...
+                  func ($E $ERROR_TYPE) Error() string { return $E.$ERROR_MESSAGE }
+              - pattern-inside: |
+                  func ($E $ERROR_TYPE) Error() string { return $E.$ERROR_MESSAGE }
+                  ...
+                  type $TYPE struct {...}
+          - metavariable-comparison:
+              comparison: str($TYPE) == str($ERROR_TYPE)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  type $TYPE struct {...}
+                  ...
+                  func ($U *$UNWRAP_TYPE) Unwrap() error { return $U.$UNWRAP_CAUSE }
+              - pattern-inside: |
+                  func ($U *$UNWRAP_TYPE) Unwrap() error { return $U.$UNWRAP_CAUSE }
+                  ...
+                  type $TYPE struct {...}
+              - pattern-inside: |
+                  type $TYPE struct {...}
+                  ...
+                  func ($U $UNWRAP_TYPE) Unwrap() error { return $U.$UNWRAP_CAUSE }
+              - pattern-inside: |
+                  func ($U $UNWRAP_TYPE) Unwrap() error { return $U.$UNWRAP_CAUSE }
+                  ...
+                  type $TYPE struct {...}
+          - metavariable-comparison:
+              comparison: str($TYPE) == str($UNWRAP_TYPE)
     paths:
       include:
         - "/internal/**"

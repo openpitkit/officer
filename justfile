@@ -189,9 +189,10 @@ vendor-swagger-ui:
 install-python-tools:
     {{ python }} {{ just_helper }} install-python-tools
 
-# Run the Semgrep invariant rule set over the whole tree.
+# Run the Semgrep invariant rule set over the whole tree. The 30 s per-rule
+# timeout absorbs machine-load stalls; semgrep-scan still fails on any timeout.
 check-semgrep: install-python-tools
-    {{ semgrep }} --config checks/semgrep/ --error --metrics=off --disable-version-check .
+    {{ python }} {{ just_helper }} semgrep-scan {{ semgrep }} --config checks/semgrep/ --error --timeout 30 --metrics=off --disable-version-check .
     {{ semgrep }} --test --config checks/semgrep/account-restriction.yml --metrics=off --disable-version-check checks/semgrep/testdata/account-restriction.go
     {{ semgrep }} --test --config checks/semgrep/discarded-close-error.yml --metrics=off --disable-version-check checks/semgrep/testdata/discarded-close-error.go
     {{ semgrep }} --test --config checks/semgrep/discarded-error.yml --metrics=off --disable-version-check checks/semgrep/testdata/discarded-error.go

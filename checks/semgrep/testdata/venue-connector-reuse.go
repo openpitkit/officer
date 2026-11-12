@@ -267,6 +267,52 @@ type reversedRequestError struct {
 func (e reversedRequestError) Unwrap() error { return e.err }
 func (e reversedRequestError) Error() string { return e.text }
 
+func (e *trailingRequestError) Error() string { return e.message }
+func (e trailingRequestError) Unwrap() error  { return e.cause }
+
+// ruleid: shared-vendor-http-error
+type trailingRequestError struct {
+	message string
+	cause   error
+}
+
+func (e betweenRequestError) Error() string { return e.message }
+
+// ruleid: shared-vendor-http-error
+type betweenRequestError struct {
+	cause   error
+	message string
+}
+
+func (e *betweenRequestError) Unwrap() error { return e.cause }
+
+func (e *betweenReversedError) Unwrap() error { return e.cause }
+
+// ruleid: shared-vendor-http-error
+type betweenReversedError struct {
+	message string
+	cause   error
+}
+
+func (e *betweenReversedError) Error() string { return e.message }
+
+// ok: shared-vendor-http-error
+type ExportedRequestError struct {
+	message string
+	cause   error
+}
+
+func (e *ExportedRequestError) Error() string { return e.message }
+func (e *ExportedRequestError) Unwrap() error { return e.cause }
+
+// ok: shared-vendor-http-error
+type noUnwrapError struct {
+	message string
+	cause   error
+}
+
+func (e *noUnwrapError) Error() string { return e.message }
+
 func binanceWrap(redact, signedRedactor *strings.Replacer, operation string, err error) error {
 	inner := err
 	var urlErr *url.Error
@@ -346,3 +392,50 @@ type formattedError struct {
 
 func (e *formattedError) Error() string { return fmt.Sprintf("wrapped: %s", e.message) }
 func (e *formattedError) Unwrap() error { return e.cause }
+
+func localRequestErrorShadows() {
+	{
+		// ok: shared-vendor-http-error
+		type privateRequestError struct {
+			text string
+			err  error
+		}
+		_ = privateRequestError{}
+	}
+	{
+		// ok: shared-vendor-http-error
+		type privateRequestError struct {
+			message string
+			cause   error
+		}
+		_ = privateRequestError{}
+	}
+}
+
+func (e *privateRequestError) localShadows() {
+	{
+		// ok: shared-vendor-http-error
+		type privateRequestError struct {
+			text string
+			err  error
+		}
+		_ = privateRequestError{}
+	}
+	{
+		// ok: shared-vendor-http-error
+		type privateRequestError struct {
+			message string
+			cause   error
+		}
+		_ = privateRequestError{}
+	}
+}
+
+var localRequestErrorLiteral = func() {
+	// ok: shared-vendor-http-error
+	type privateRequestError struct {
+		message string
+		cause   error
+	}
+	_ = privateRequestError{}
+}
