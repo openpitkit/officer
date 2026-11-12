@@ -20,9 +20,32 @@
 package vendorhttp
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/coder/websocket"
 )
+
+// StreamWriter is the write half of a stream connection, satisfied by
+// *websocket.Conn.
+type StreamWriter interface {
+	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
+}
+
+// DialStream opens url, which carries no credential. ctx bounds the dial.
+// Redirects are refused as for REST so an authentication frame cannot reach
+// a host a redirect chose.
+func DialStream(ctx context.Context, vendor, url string) (*websocket.Conn, error) {
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
+		HTTPClient: &http.Client{CheckRedirect: RefuseRedirect},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: dial stream: %w", vendor, err)
+	}
+	return conn, nil
+}
 
 // RefuseRedirect returns the redirect response without following its Location.
 func RefuseRedirect(*http.Request, []*http.Request) error {

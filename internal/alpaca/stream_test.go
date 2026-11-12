@@ -20,17 +20,13 @@ package alpaca
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 )
 
-// recordingWriter is a StreamWriter that keeps the last message written.
+// recordingWriter keeps the last message written.
 type recordingWriter struct {
 	writes  int
 	typ     websocket.MessageType
@@ -41,33 +37,6 @@ func (w *recordingWriter) Write(_ context.Context, typ websocket.MessageType, p 
 	w.writes++
 	w.typ, w.payload = typ, p
 	return nil
-}
-
-func TestDialStreamRefusesRedirect(t *testing.T) {
-	var reached atomic.Bool
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reached.Store(true)
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		_ = conn.CloseNow()
-	}))
-	defer target.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	conn, err := DialStream(ctx, server.URL)
-	if err == nil {
-		_ = conn.CloseNow()
-		t.Error("stream dial followed a redirect")
-	}
-	if reached.Load() {
-		t.Error("redirect target received the stream dial")
-	}
 }
 
 func TestWriteStreamAuth(t *testing.T) {

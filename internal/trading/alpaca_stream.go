@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/alpaca"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 const (
@@ -113,7 +114,7 @@ func (c *alpacaConnector) stream(ctx context.Context, out chan<- fwtrading.Event
 	report := venueStreamReporter(c.reportDiag)
 	handshakeCtx, cancel := context.WithTimeout(ctx, alpacaHandshakeTimeout)
 	defer cancel()
-	conn, err := alpaca.DialStream(handshakeCtx, c.streamURL)
+	conn, err := vendorhttp.DialStream(handshakeCtx, "alpaca", c.streamURL)
 	if err != nil {
 		return false, err
 	}

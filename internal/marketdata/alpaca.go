@@ -35,6 +35,7 @@ import (
 	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/internal/alpaca"
 	"go.openpit.dev/officer/internal/backoff"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 const (
@@ -68,7 +69,7 @@ type alpacaConnector struct {
 // alpacaConn is the stream connection seam: its write half is the shared
 // stream writer, so the auth and subscribe frames go through internal/alpaca.
 type alpacaConn interface {
-	alpaca.StreamWriter
+	vendorhttp.StreamWriter
 	Read(context.Context) ([]byte, error)
 	Close(websocket.StatusCode, string) error
 }
@@ -132,7 +133,7 @@ func NewAlpacaConnector(
 }
 
 func dialAlpaca(ctx context.Context, streamURL string) (alpacaConn, error) {
-	conn, err := alpaca.DialStream(ctx, streamURL)
+	conn, err := vendorhttp.DialStream(ctx, "alpaca", streamURL)
 	if err != nil {
 		return nil, err
 	}

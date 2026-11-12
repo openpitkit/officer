@@ -15,7 +15,40 @@
 #
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
+# Five excluded market-data files are public feeds without credentials;
+# finnhub.go carries its token in the URL and is excluded as existing debt.
+# A new feed must use vendorhttp.DialStream or be added to these exclusions.
 rules:
+  - id: shared-vendor-stream-dial
+    message: Use vendorhttp.DialStream and vendorhttp.StreamWriter for vendor streams.
+    severity: ERROR
+    languages: [go]
+    options:
+      implicit_ellipsis: false
+    pattern-either:
+      - pattern: websocket.Dial(...)
+      - pattern: |
+          type $TYPE interface {
+            Write(context.Context, websocket.MessageType, []byte) error
+          }
+      - pattern: |
+          type $TYPE interface {
+            Write($CTX context.Context, $TYP websocket.MessageType, $PAYLOAD []byte) error
+          }
+    paths:
+      include:
+        - "/internal/**"
+      exclude:
+        - "/internal/vendorhttp/**"
+        - "/internal/marketdata/binance.go"
+        - "/internal/marketdata/bybit.go"
+        - "/internal/marketdata/okx.go"
+        - "/internal/marketdata/kraken.go"
+        - "/internal/marketdata/coinbase.go"
+        - "/internal/marketdata/finnhub.go"
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+
   - id: shared-venue-stream-lifecycle
     message: Run the stream through streamLifecycle in stream_lifecycle.go for reconnects.
     severity: ERROR

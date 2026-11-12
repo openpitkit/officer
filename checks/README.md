@@ -264,8 +264,14 @@ errors in `internal/vendorhttp`. Elsewhere under `internal/`, excluding Go
 tests, the redirect rule rejects `http.ErrUseLastResponse`, every
 `CheckRedirect` assignment regardless of its value, and composite-literal
 `CheckRedirect` fields other than `vendorhttp.RefuseRedirect`. Use
-`vendorhttp.CopyClient` to copy a caller's client without mutating it; stream
-dials may set `CheckRedirect: vendorhttp.RefuseRedirect` in a composite literal.
+`vendorhttp.CopyClient` to copy a caller's client without mutating it.
+The stream-dial rule rejects every `websocket.Dial` call and copied write-only
+stream interface under `internal/`, excluding Go tests and `internal/vendorhttp`.
+Use `vendorhttp.DialStream` and `vendorhttp.StreamWriter`. The public,
+credential-free feeds in `internal/marketdata/{binance,bybit,okx,kraken,
+coinbase}.go` are excluded, and so is `internal/marketdata/finnhub.go`, which
+carries its token in the URL and stays outside the rule as existing debt. A new
+feed uses `vendorhttp.DialStream` or joins that explicit list in the rule.
 The wrap rule rejects a redacted `err.Error()` message paired with its raw
 cause in a composite literal or a `vendorhttp.NewRequestError` call. The error
 rule rejects a private two-field string/error struct whose `Error` and `Unwrap`

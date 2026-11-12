@@ -20,14 +20,12 @@ package etoro
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
+
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 type memoryStreamWriter struct {
@@ -50,19 +48,21 @@ func TestStreamFrames(t *testing.T) {
 	defer cancel()
 	for _, tc := range []struct {
 		name, want string
-		write      func(StreamWriter) error
+		write      func(vendorhttp.StreamWriter) error
 	}{
-		{"frame", `{"arbitrary":"frame"}`, func(w StreamWriter) error {
+		{"frame", `{"arbitrary":"frame"}`, func(w vendorhttp.StreamWriter) error {
 			return WriteStreamFrame(ctx, w, struct {
 				Value string `json:"arbitrary"`
 			}{"frame"})
 		}},
-		{"authenticate", `{"id":"` + id + `","operation":"Authenticate","data":{"userKey":"user","apiKey":"api"}}`, func(w StreamWriter) error {
+		{"authenticate", `{"id":"` + id + `","operation":"Authenticate","data":{"userKey":"user","apiKey":"api"}}`, func(w vendorhttp.StreamWriter) error {
 			return WriteAuthenticate(ctx, w, id, Credentials{APIKey: "api", UserKey: "user"})
 		}},
-		{"subscribe-demo", `{"id":"` + id + `","operation":"Subscribe","data":{"topics":["private:demo"]}}`, func(w StreamWriter) error { return WriteSubscribe(ctx, w, id, []string{"private:demo"}) }},
-		{"subscribe-real", `{"id":"` + id + `","operation":"Subscribe","data":{"topics":["private"]}}`, func(w StreamWriter) error { return WriteSubscribe(ctx, w, id, []string{"private"}) }},
-		{"subscribe-multiple", `{"id":"` + id + `","operation":"Subscribe","data":{"topics":["private","private:demo"]}}`, func(w StreamWriter) error { return WriteSubscribe(ctx, w, id, []string{"private", "private:demo"}) }},
+		{"subscribe-demo", `{"id":"` + id + `","operation":"Subscribe","data":{"topics":["private:demo"]}}`, func(w vendorhttp.StreamWriter) error { return WriteSubscribe(ctx, w, id, []string{"private:demo"}) }},
+		{"subscribe-real", `{"id":"` + id + `","operation":"Subscribe","data":{"topics":["private"]}}`, func(w vendorhttp.StreamWriter) error { return WriteSubscribe(ctx, w, id, []string{"private"}) }},
+		{"subscribe-multiple", `{"id":"` + id + `","operation":"Subscribe","data":{"topics":["private","private:demo"]}}`, func(w vendorhttp.StreamWriter) error {
+			return WriteSubscribe(ctx, w, id, []string{"private", "private:demo"})
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writer := &memoryStreamWriter{}
@@ -80,18 +80,18 @@ func TestStreamRequiredInputs(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name, want string
-		write      func(StreamWriter) error
+		write      func(vendorhttp.StreamWriter) error
 	}{
-		{"writer", "stream writer is required", func(StreamWriter) error { return WriteStreamFrame(ctx, nil, struct{}{}) }},
-		{"api-key", "apiKey is required", func(w StreamWriter) error {
+		{"writer", "stream writer is required", func(vendorhttp.StreamWriter) error { return WriteStreamFrame(ctx, nil, struct{}{}) }},
+		{"api-key", "apiKey is required", func(w vendorhttp.StreamWriter) error {
 			return WriteAuthenticate(ctx, w, "id", Credentials{APIKey: " \t", UserKey: testCredentials.UserKey})
 		}},
-		{"user-key", "userKey is required", func(w StreamWriter) error {
+		{"user-key", "userKey is required", func(w vendorhttp.StreamWriter) error {
 			return WriteAuthenticate(ctx, w, "id", Credentials{APIKey: testCredentials.APIKey, UserKey: " \n"})
 		}},
-		{"auth-id", "stream request id is required", func(w StreamWriter) error { return WriteAuthenticate(ctx, w, " \t", testCredentials) }},
-		{"subscribe-id", "stream request id is required", func(w StreamWriter) error { return WriteSubscribe(ctx, w, " \t", []string{"private:demo"}) }},
-		{"topics", "stream topics are required", func(w StreamWriter) error { return WriteSubscribe(ctx, w, "id", nil) }},
+		{"auth-id", "stream request id is required", func(w vendorhttp.StreamWriter) error { return WriteAuthenticate(ctx, w, " \t", testCredentials) }},
+		{"subscribe-id", "stream request id is required", func(w vendorhttp.StreamWriter) error { return WriteSubscribe(ctx, w, " \t", []string{"private:demo"}) }},
+		{"topics", "stream topics are required", func(w vendorhttp.StreamWriter) error { return WriteSubscribe(ctx, w, "id", nil) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writer := &memoryStreamWriter{}
@@ -124,11 +124,11 @@ func TestStreamWriteErrorsPreserveCause(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name  string
-		write func(StreamWriter) error
+		write func(vendorhttp.StreamWriter) error
 	}{
-		{"frame", func(w StreamWriter) error { return WriteStreamFrame(ctx, w, testCredentials) }},
-		{"authenticate", func(w StreamWriter) error { return WriteAuthenticate(ctx, w, "id", testCredentials) }},
-		{"subscribe", func(w StreamWriter) error { return WriteSubscribe(ctx, w, "id", []string{"private:demo"}) }},
+		{"frame", func(w vendorhttp.StreamWriter) error { return WriteStreamFrame(ctx, w, testCredentials) }},
+		{"authenticate", func(w vendorhttp.StreamWriter) error { return WriteAuthenticate(ctx, w, "id", testCredentials) }},
+		{"subscribe", func(w vendorhttp.StreamWriter) error { return WriteSubscribe(ctx, w, "id", []string{"private:demo"}) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writer := &memoryStreamWriter{err: context.DeadlineExceeded}
@@ -141,80 +141,5 @@ func TestStreamWriteErrorsPreserveCause(t *testing.T) {
 				t.Fatal("stream write error lost its operation or cause text")
 			}
 		})
-	}
-}
-
-func TestDialStream(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			t.Error("accept stream failed")
-			return
-		}
-		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-		typ, payload, err := conn.Read(ctx)
-		if err != nil || typ != websocket.MessageText || string(payload) != `{"probe":true}` {
-			t.Error("dialled stream did not deliver text frame")
-		}
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	conn, err := DialStream(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
-	if err != nil || conn == nil {
-		t.Fatal("valid stream dial failed")
-	}
-	defer func() { _ = conn.CloseNow() }()
-	if err := WriteStreamFrame(ctx, conn, struct {
-		Probe bool `json:"probe"`
-	}{true}); err != nil {
-		t.Fatal("stream write failed")
-	}
-}
-
-func TestDialStreamRefusesRedirect(t *testing.T) {
-	var hits atomic.Int32
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		conn, err := websocket.Accept(w, r, nil)
-		if err == nil {
-			_ = conn.CloseNow()
-		}
-	}))
-	defer target.Close()
-	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
-	}))
-	defer source.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	conn, err := DialStream(ctx, "ws"+strings.TrimPrefix(source.URL, "http"))
-	if conn != nil {
-		_ = conn.CloseNow()
-	}
-	if err == nil || conn != nil || hits.Load() != 0 {
-		t.Fatal("stream redirect reached another host")
-	}
-	assertNoCredentials(t, err.Error())
-}
-
-func TestDialStreamErrorPreservesCause(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	conn, err := DialStream(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
-	if conn != nil || err == nil {
-		t.Fatal("timed out stream dial returned a connection or no error")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal("stream dial must preserve context.DeadlineExceeded")
-	}
-	if !strings.HasPrefix(err.Error(), "etoro: dial stream: ") || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
-		t.Fatal("stream dial error lost its operation or cause text")
 	}
 }

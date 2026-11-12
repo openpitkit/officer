@@ -20,29 +20,14 @@ package alpaca
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 
 	"github.com/coder/websocket"
 
 	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
-// StreamWriter is the write half of a stream connection: the Write method of
-// *websocket.Conn, which satisfies it.
-type StreamWriter interface {
-	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
-}
-
-// DialStream opens a stream connection to url. Redirects are refused, as for
-// REST, so the auth frame cannot reach a host chosen by a redirect response.
-// It has no timeout of its own: ctx bounds the dial.
-func DialStream(ctx context.Context, url string) (*websocket.Conn, error) {
-	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: &http.Client{CheckRedirect: vendorhttp.RefuseRedirect}})
-	return conn, err
-}
-
 // WriteStreamFrame writes frame as one JSON text message.
-func WriteStreamFrame(ctx context.Context, conn StreamWriter, frame any) error {
+func WriteStreamFrame(ctx context.Context, conn vendorhttp.StreamWriter, frame any) error {
 	payload, err := json.Marshal(frame)
 	if err != nil {
 		return err
@@ -53,7 +38,7 @@ func WriteStreamFrame(ctx context.Context, conn StreamWriter, frame any) error {
 // WriteStreamAuth writes the auth frame that both the trading and the market
 // data streams expect. The key and secret members are Alpaca's wire protocol,
 // not credential aliases.
-func WriteStreamAuth(ctx context.Context, conn StreamWriter, credentials Credentials) error {
+func WriteStreamAuth(ctx context.Context, conn vendorhttp.StreamWriter, credentials Credentials) error {
 	return WriteStreamFrame(ctx, conn, struct {
 		Action string `json:"action"`
 		Key    string `json:"key"`

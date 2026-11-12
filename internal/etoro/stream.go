@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/coder/websocket"
@@ -33,27 +32,10 @@ import (
 // StreamURL serves demo and real accounts; subscriptions select private topics.
 const StreamURL = "wss://ws.etoro.com/ws"
 
-// StreamWriter is the write half of a stream connection, satisfied by
-// *websocket.Conn.
-type StreamWriter interface {
-	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
-}
-
-// DialStream opens url, refusing redirects with the REST redirect policy.
-// The URL must contain no credentials; authentication uses a later stream frame.
-// ctx bounds the dial, and errors wrap the handshake or transport cause.
-func DialStream(ctx context.Context, url string) (*websocket.Conn, error) {
-	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: &http.Client{CheckRedirect: vendorhttp.RefuseRedirect}})
-	if err != nil {
-		return nil, fmt.Errorf("etoro: dial stream: %w", err)
-	}
-	return conn, nil
-}
-
 // WriteStreamFrame writes one JSON text message. Write errors wrap the cause;
 // the writer must not include frame contents in its errors. Encoding errors
 // omit details that may contain frame credentials.
-func WriteStreamFrame(ctx context.Context, conn StreamWriter, frame any) error {
+func WriteStreamFrame(ctx context.Context, conn vendorhttp.StreamWriter, frame any) error {
 	if conn == nil {
 		return errors.New("etoro: stream writer is required")
 	}
@@ -68,7 +50,7 @@ func WriteStreamFrame(ctx context.Context, conn StreamWriter, frame any) error {
 }
 
 // WriteAuthenticate writes the caller's id so its acknowledgement can be matched.
-func WriteAuthenticate(ctx context.Context, conn StreamWriter, id string, credentials Credentials) error {
+func WriteAuthenticate(ctx context.Context, conn vendorhttp.StreamWriter, id string, credentials Credentials) error {
 	if err := credentials.validate(); err != nil {
 		return err
 	}
@@ -89,7 +71,7 @@ func WriteAuthenticate(ctx context.Context, conn StreamWriter, id string, creden
 }
 
 // WriteSubscribe writes the caller's id and topics, without requesting a snapshot.
-func WriteSubscribe(ctx context.Context, conn StreamWriter, id string, topics []string) error {
+func WriteSubscribe(ctx context.Context, conn vendorhttp.StreamWriter, id string, topics []string) error {
 	if strings.TrimSpace(id) == "" {
 		return errors.New("etoro: stream request id is required")
 	}

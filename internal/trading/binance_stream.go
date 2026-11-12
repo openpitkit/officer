@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/binance"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 const (
@@ -99,7 +100,7 @@ func (c *binanceConnector) stream(ctx context.Context,
 	report := venueStreamReporter(c.reportDiag)
 	handshakeCtx, cancel := context.WithTimeout(ctx, binanceHandshakeTimeout)
 	defer cancel()
-	conn, err := binance.DialStream(handshakeCtx, c.streamURL)
+	conn, err := vendorhttp.DialStream(handshakeCtx, "binance", c.streamURL)
 	if err != nil {
 		return false, err
 	}

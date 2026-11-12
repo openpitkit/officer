@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/internal/apikey"
 	"go.openpit.dev/officer/internal/backoff"
@@ -209,6 +211,32 @@ func localRedirectPolicy(*http.Request, []*http.Request) error {
 }
 
 func privateHTTPPolicies(client *http.Client) {
+	ctx := context.Background()
+	// ruleid: shared-vendor-stream-dial
+	websocket.Dial(ctx, "wss://vendor.example", &websocket.DialOptions{HTTPClient: &http.Client{CheckRedirect: vendorhttp.RefuseRedirect}})
+	// ruleid: shared-vendor-stream-dial
+	websocket.Dial(ctx, "wss://vendor.example", &websocket.DialOptions{})
+	// ruleid: shared-vendor-stream-dial
+	websocket.Dial(ctx, "wss://vendor.example", nil)
+	// ok: shared-vendor-stream-dial
+	vendorhttp.DialStream(ctx, "vendor", "wss://vendor.example")
+	// ruleid: shared-vendor-stream-dial
+	type copiedStreamWriter interface {
+		Write(context.Context, websocket.MessageType, []byte) error
+	}
+	// ruleid: shared-vendor-stream-dial
+	type namedStreamWriter interface {
+		Write(ctx context.Context, typ websocket.MessageType, payload []byte) error
+	}
+	// ok: shared-vendor-stream-dial
+	type streamReaderWriter interface {
+		Write(context.Context, websocket.MessageType, []byte) error
+		Read(context.Context) (websocket.MessageType, []byte, error)
+	}
+	// ok: shared-vendor-stream-dial
+	type sharedStreamWriter interface {
+		vendorhttp.StreamWriter
+	}
 	// ruleid: shared-vendor-http-redirect
 	client.CheckRedirect = localRedirectPolicy
 	// ruleid: shared-vendor-http-redirect

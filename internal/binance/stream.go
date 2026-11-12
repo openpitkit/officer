@@ -20,7 +20,6 @@ package binance
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"strconv"
 	"time"
 
@@ -29,24 +28,10 @@ import (
 	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
-// StreamWriter is the write surface for a WebSocket API subscription.
-type StreamWriter interface {
-	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
-}
-
-// DialStream opens a WebSocket API connection with a context-bounded dial
-// and the same redirect refusal as REST. The caller reads the responses.
-func DialStream(ctx context.Context, url string) (*websocket.Conn, error) {
-	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
-		HTTPClient: &http.Client{CheckRedirect: vendorhttp.RefuseRedirect},
-	})
-	return conn, err
-}
-
 // WriteSubscribe sends one signed user data subscription as a text frame.
 // The caller owns response and event parsing. HMAC parameters are sorted
 // by name and joined without URL escaping, as the WebSocket API requires.
-func WriteSubscribe(ctx context.Context, conn StreamWriter,
+func WriteSubscribe(ctx context.Context, conn vendorhttp.StreamWriter,
 	credentials Credentials, id string, now time.Time,
 ) error {
 	timestamp := now.UnixMilli()

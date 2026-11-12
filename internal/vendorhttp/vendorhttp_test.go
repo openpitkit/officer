@@ -24,13 +24,111 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/internal/vendorhttp"
 )
+
+func TestDialStreamRefusesRedirect(t *testing.T) {
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := vendorhttp.DialStream(ctx, "vendor", source.URL)
+	if conn != nil {
+		_ = conn.CloseNow()
+	}
+	if conn != nil || err == nil || !strings.Contains(err.Error(), "307") || hits.Load() != 0 {
+		t.Fatal("stream redirect was not refused before reaching the second host")
+	}
+}
+
+func TestDialStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Error("accept stream failed")
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		typ, payload, err := conn.Read(ctx)
+		if err != nil {
+			t.Error("read stream frame failed")
+			return
+		}
+		if err := conn.Write(ctx, typ, payload); err != nil {
+			t.Error("echo stream frame failed")
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := vendorhttp.DialStream(ctx, "vendor", server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	var writer vendorhttp.StreamWriter = conn
+	if err := writer.Write(ctx, websocket.MessageText, []byte(`{"probe":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	typ, payload, err := conn.Read(ctx)
+	if err != nil || typ != websocket.MessageText || string(payload) != `{"probe":true}` {
+		t.Fatal("stream did not exchange the text frame")
+	}
+}
+
+func TestDialStreamErrorPreservesCause(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	conn, err := vendorhttp.DialStream(ctx, "venue", server.URL)
+	if conn != nil {
+		_ = conn.CloseNow()
+		t.Fatal("timed out dial returned a connection")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) ||
+		!strings.HasPrefix(err.Error(), "venue: dial stream: ") {
+		t.Fatal("stream dial lost the vendor, operation or deadline cause")
+	}
+}
+
+func TestDialStreamTLSVerification(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := vendorhttp.DialStream(ctx, "vendor", server.URL)
+	if conn != nil {
+		_ = conn.CloseNow()
+	}
+	if conn != nil || err == nil || hits.Load() != 0 {
+		t.Fatal("untrusted stream TLS certificate accepted")
+	}
+}
 
 func TestCopyClient(t *testing.T) {
 	for _, name := range []string{"nil", "default policy", "caller policy"} {

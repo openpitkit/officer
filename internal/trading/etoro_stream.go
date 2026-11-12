@@ -31,6 +31,7 @@ import (
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/etoro"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 const (
@@ -186,7 +187,7 @@ func (c *etoroConnector) stream(ctx context.Context, out chan<- fwtrading.Event)
 	}()
 	handshakeCtx, cancel := context.WithTimeout(ctx, etoroHandshakeTimeout)
 	defer cancel()
-	conn, err := etoro.DialStream(handshakeCtx, c.streamURL)
+	conn, err := vendorhttp.DialStream(handshakeCtx, "etoro", c.streamURL)
 	if err != nil {
 		return false, err
 	}

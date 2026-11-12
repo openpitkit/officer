@@ -24,9 +24,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,65 +88,5 @@ func TestWriteSubscribe(t *testing.T) {
 	err = WriteSubscribe(ctx, &conn, credentials, "subscription-1", time.Now())
 	if !errors.Is(err, context.Canceled) || conn.writes != 1 {
 		t.Error("subscription write error was lost or retried")
-	}
-}
-
-func TestDialStreamRefusesRedirect(t *testing.T) {
-	var reached atomic.Bool
-	target := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			reached.Store(true)
-			conn, err := websocket.Accept(w, r, nil)
-			if err == nil {
-				_ = conn.CloseNow()
-			}
-		}))
-	defer target.Close()
-	server := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
-		}))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	conn, err := DialStream(ctx, server.URL)
-	if conn != nil {
-		_ = conn.CloseNow()
-	}
-	if err == nil || reached.Load() {
-		t.Error("stream dial followed a redirect")
-	}
-}
-
-func TestDialStream(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			conn, err := websocket.Accept(w, r, nil)
-			if err != nil {
-				return
-			}
-			defer func() { _ = conn.CloseNow() }()
-			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-			defer cancel()
-			_ = conn.Write(ctx, websocket.MessageText, []byte(`{"status":200}`))
-		}))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	conn, err := DialStream(ctx, server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = conn.CloseNow() }()
-	typ, payload, err := conn.Read(ctx)
-	if err != nil || typ != websocket.MessageText ||
-		string(payload) != `{"status":200}` {
-		t.Error("stream connection could not read a server frame")
-	}
-	ctx, cancelDial := context.WithCancel(context.Background())
-	cancelDial()
-	_, err = DialStream(ctx, server.URL)
-	if !errors.Is(err, context.Canceled) {
-		t.Error("stream dial lost context cancellation")
 	}
 }
