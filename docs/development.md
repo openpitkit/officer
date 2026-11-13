@@ -3,6 +3,21 @@
 Everything a contributor needs beyond the build in the README: the developer-only
 recipes, and how they differ from the default ones.
 
+For local work on a fresh database, skip the setup wizard with
+`./pit-officer serve -init examples/setup/simple.json`. This chooses
+one default account, Check funds, open access, no encryption and no signing.
+Unset the master-key variables for this preset. Use this launch for routine
+development and tests; omit the initialization option when testing first-run
+setup itself. Once setup is complete, start without `-init`; repeating it is an
+error. To move the previous database aside and initialize again, use
+`just run-serve-reset-debug`. Every `run-serve` recipe has a reset counterpart:
+`run-serve-reset`, `run-serve-reset-debug`, `run-serve-reset-dev`, and
+`run-serve-reset-debug-dev`. The init file defaults to `examples/setup/simple.json`;
+pass another file as `init_config` (after `pit_checkout` for the `-dev` recipes).
+Stop Officer first. Reset renames the build's database and SQLite sidecars with
+a `.backup-YYYYMMDDTHHMMSS.microseconds+HHMM` suffix, using the local timezone.
+Backups survive the automatic cleanup of stale dev databases.
+
 ## Importable packages
 
 A program imports Officer from the one module:

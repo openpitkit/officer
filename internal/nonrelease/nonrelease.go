@@ -59,7 +59,8 @@ func ReleaseDatabaseExists(releasePath string) (bool, error) {
 }
 
 // RemoveStale removes entries with the release database's non-release prefix,
-// preserving the own database and its sidecars. Removed paths are sorted.
+// preserving the own database, its sidecars and timestamped reset backups.
+// Removed paths are sorted.
 // It stops at the first removal error and names the failed path.
 func RemoveStale(releasePath, commit string) ([]string, error) {
 	own, err := DatabasePath(releasePath, commit)
@@ -76,6 +77,9 @@ func RemoveStale(releasePath, commit string) ([]string, error) {
 	var removed []string
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		if strings.Contains(strings.TrimPrefix(entry.Name(), prefix), ".backup-") {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())

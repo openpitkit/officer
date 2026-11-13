@@ -39,6 +39,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"go.openpit.dev/officer"
 	"go.openpit.dev/officer/framework/auth"
 	fwbackend "go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
@@ -568,6 +569,144 @@ func TestMCPRefusesMissingNonReleaseDatabase(t *testing.T) {
 	assertEmptyDirectory(t, filepath.Dir(cfg.SQLitePath))
 }
 
+func TestSetupServeInitialConfig(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		for _, fixture := range []string{"simple", "multi-unsealed", "multi-sealed", "multi-track-only"} {
+			t.Run(fmt.Sprintf("release-%t/%s", release, fixture), func(t *testing.T) {
+				cfg := nonReleaseTestConfig(t)
+				if fixture != "multi-sealed" {
+					for _, name := range []string{config.EnvMasterKey, config.EnvMasterKeyFile} {
+						if err := os.Unsetenv(name); err != nil {
+							t.Fatal(err)
+						}
+					}
+					var err error
+					cfg, err = config.Load([]string{"-mode", "serve", "-sqlite-path", cfg.SQLitePath}, os.LookupEnv)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				initial, err := officer.LoadInitialSetup("../../examples/setup/simple.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fixture != "simple" {
+					initial.AccountMode = "multi"
+				}
+				if fixture == "multi-track-only" {
+					initial.FundsLimitMode = domain.SpotFundsLimitModeTrackOnly
+				}
+				if fixture == "multi-sealed" {
+					initial.Encryption = "enabled"
+				}
+				cfg.InitialSetup = initial
+				logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+				start := func() (http.Handler, func() error, error) {
+					return setupServe(context.Background(), cfg, release, testBuildCommit, testSPA, logger,
+						func(err error) { t.Errorf("unexpected fatal shutdown: %v", err) }, nil, make(chan lifecycleAction, 1))
+				}
+				request := func(handler http.Handler, method, path, body string) string {
+					t.Helper()
+					rec := httptest.NewRecorder()
+					req := httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(body))
+					if body != "" {
+						req.Header.Set("Content-Type", "application/json")
+					}
+					handler.ServeHTTP(rec, req)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("%s %s = %d %s", method, path, rec.Code, rec.Body)
+					}
+					return rec.Body.String()
+				}
+				handler, closeApp, err := start()
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := closeApp(); err != nil {
+						t.Error(err)
+					}
+				})
+				session := request(handler, http.MethodGet, "/app/api/v1/session", "")
+				if !strings.Contains(session, `"setupComplete":true`) || !strings.Contains(session, `"accessMode":"open"`) {
+					t.Fatalf("JSON setup session = %s", session)
+				}
+				mode := request(handler, http.MethodGet, "/api/v1/account-mode", "")
+				if !strings.Contains(mode, `"mode":"`+initial.AccountMode+`"`) || strings.Contains(mode, `"restartRequired":true`) {
+					t.Fatalf("JSON account mode = %s", mode)
+				}
+				funds := request(handler, http.MethodGet, "/api/v1/limits/spot-funds-limit-mode", "")
+				if !strings.Contains(funds, `"stored":true`) || !strings.Contains(funds, `"mode":"`+string(initial.FundsLimitMode)+`"`) {
+					t.Fatalf("JSON funds mode = %s", funds)
+				}
+				if err := closeApp(); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := start(); err == nil || !strings.Contains(err.Error(), "already initialized") {
+					t.Fatalf("repeated init error = %v", err)
+				}
+				cfg.InitialSetup = nil
+				handler, closeApp, err = start()
+				if err != nil {
+					t.Fatalf("open database after refused init: %v", err)
+				}
+				if got := request(handler, http.MethodGet, "/api/v1/account-mode", ""); got != mode {
+					t.Fatalf("refused init changed account mode: %s, want %s", got, mode)
+				}
+				request(handler, http.MethodPost, "/api/v1/database/reset", `{"confirm":true}`)
+				assertApplicationSession(t, handler)
+				if err := closeApp(); err != nil {
+					t.Fatal(err)
+				}
+				handler, closeApp, err = start()
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertApplicationSession(t, handler)
+				if err := closeApp(); err != nil {
+					t.Fatal(err)
+				}
+				cfg.InitialSetup = initial
+				handler, closeApp, err = start()
+				if err != nil {
+					t.Fatalf("initialize unfinished setup: %v", err)
+				}
+				session = request(handler, http.MethodGet, "/app/api/v1/session", "")
+				if !strings.Contains(session, `"setupComplete":true`) {
+					t.Fatalf("unfinished setup was not initialized: %s", session)
+				}
+			})
+		}
+	}
+}
+
+func TestInitialConfigRefusesInvalidBeforeCreatingDatabase(t *testing.T) {
+	for _, body := range []string{
+		`null`, `{} {}`, `{"unknown":true}`, `{"accountMode":"multi"}`,
+		`{"accountMode":"multi","fundsLimitMode":"enforce","encryption":"disabled","signing":"disabled","access":"open"}`,
+		`{"accountMode":"multi","fundsLimitMode":"enforce","encryption":"enabled","signing":"disabled","access":"open","acknowledged":true}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			original := nonReleaseTestConfig(t)
+			path := filepath.Join(t.TempDir(), "setup.json")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load([]string{"-mode", "serve", "-sqlite-path", original.SQLitePath, "-init", path}, os.LookupEnv)
+			if err == nil {
+				_, _, err = setupServe(context.Background(), cfg, false, testBuildCommit, testSPA,
+					slog.New(slog.NewTextHandler(io.Discard, nil)), func(error) {}, nil, make(chan lifecycleAction, 1))
+			}
+			if err == nil || !strings.Contains(err.Error(), "initial setup") {
+				t.Fatalf("invalid JSON setup error = %v", err)
+			}
+			if _, err := os.Stat(original.SQLitePath + ".non-release-" + testBuildCommit); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("invalid setup created database: %v", err)
+			}
+		})
+	}
+}
+
 func nonReleaseTestConfig(t *testing.T) config.Config {
 	t.Helper()
 	dir := t.TempDir()
@@ -933,6 +1072,16 @@ func TestRestartProcessArgsPinsHTTPAddr(t *testing.T) {
 		in   []string
 		want []string
 	}{
+		{
+			name: "initialization is not replayed",
+			in:   []string{"pit-officer", "serve", "-init", "setup.json", "-http-addr", "127.0.0.1:0", "--init=other.json"},
+			want: []string{"pit-officer", "serve", "-http-addr", addr, "-open-browser=false"},
+		},
+		{
+			name: "initialization spelling as a file path is preserved",
+			in:   []string{"pit-officer", "serve", "-sqlite-path", "-init", "--init", "setup.json"},
+			want: []string{"pit-officer", "serve", "-sqlite-path", "-init", "-http-addr", addr, "-open-browser=false"},
+		},
 		{
 			name: "append",
 			in:   []string{"pit-officer", "serve", "-sqlite-path", "db.sqlite"},

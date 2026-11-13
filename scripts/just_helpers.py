@@ -39,6 +39,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -668,11 +669,63 @@ def command_go_tool_dev(args: argparse.Namespace) -> None:
         )
 
 
+def reset_serve_database(init_config: str) -> None:
+    """Move this checkout's stopped dev database aside before initialization."""
+    if not Path(init_config).is_file():
+        raise SystemExit(f"initialization file not found: {init_config}")
+    configured = os.environ.get("PIT_OFFICER_SQLITE_PATH", "")
+    release_path = Path(configured if configured else "pit-officer.db")
+    if not release_path.is_absolute():
+        release_path = ROOT / release_path
+    state = release_path.parent / "officer-runtime.non-release.json"
+    if state.exists():
+        raise SystemExit(
+            f"stop Officer before resetting its database; runtime state exists: {state}"
+        )
+    commit = run(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise SystemExit(f"invalid build commit: {commit!r}")
+    database = Path(f"{release_path}.non-release-{commit}")
+    if database.is_symlink() or (database.exists() and not database.is_file()):
+        raise SystemExit(f"database is not a regular file: {database}")
+    suffixes = ("", "-wal", "-shm", "-journal")
+    sources = [Path(f"{database}{suffix}") for suffix in suffixes]
+    if not database.exists():
+        if any(source.exists() or source.is_symlink() for source in sources[1:]):
+            raise SystemExit(
+                f"SQLite sidecar files exist without their database: {database}"
+            )
+        return
+    stamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S.%f%z")
+    backup = Path(f"{database}.backup-{stamp}")
+    moves = []
+    for source, suffix in zip(sources, suffixes, strict=True):
+        if source.is_symlink() or (source.exists() and not source.is_file()):
+            raise SystemExit(f"SQLite file is not a regular file: {source}")
+        destination = Path(f"{backup}{suffix}")
+        if destination.exists() or destination.is_symlink():
+            raise SystemExit(f"backup destination already exists: {destination}")
+        if source.exists():
+            moves.append((source, destination))
+    for source, destination in moves:
+        source.rename(destination)
+        print(f"moved {source} to {destination}", flush=True)
+
+
+def officer_launch_args(args: argparse.Namespace) -> list[str]:
+    if args.reset_init is None:
+        return args.officer_args
+    if args.officer_args != ["serve"]:
+        raise SystemExit("--reset-init requires the serve subcommand")
+    reset_serve_database(args.reset_init)
+    return ["serve", "-init", args.reset_init]
+
+
 def command_run_officer(args: argparse.Namespace) -> None:
     executable = ROOT / officer_binary()
     if not executable.is_file():
         raise SystemExit(f"{executable} not found; run the build recipe first")
-    run([str(executable), *args.officer_args])
+    run([str(executable), *officer_launch_args(args)])
 
 
 def command_run_officer_dev(args: argparse.Namespace) -> None:
@@ -684,7 +737,7 @@ def command_run_officer_dev(args: argparse.Namespace) -> None:
     env["OPENPIT_RUNTIME_LIBRARY_PATH"] = str(
         local_runtime_library(args.pit_checkout, mode)
     )
-    run([str(executable), *args.officer_args], env=env)
+    run([str(executable), *officer_launch_args(args)], env=env)
 
 
 def docker_container_state(container: str) -> dict[str, Any]:
@@ -1013,12 +1066,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparser.set_defaults(func=command_go_tool_dev)
 
     subparser = subparsers.add_parser("run-officer")
+    subparser.add_argument("--reset-init", metavar="CONFIG")
     subparser.add_argument("officer_args", nargs=argparse.REMAINDER)
     subparser.set_defaults(func=command_run_officer)
 
     subparser = subparsers.add_parser("run-officer-dev")
     subparser.add_argument("mode", choices=sorted(BUILD_MODES))
     subparser.add_argument("pit_checkout")
+    subparser.add_argument("--reset-init", metavar="CONFIG")
     subparser.add_argument("officer_args", nargs=argparse.REMAINDER)
     subparser.set_defaults(func=command_run_officer_dev)
 

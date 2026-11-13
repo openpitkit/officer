@@ -58,8 +58,11 @@ import (
 // is not one of them: the SDK loads it at process start (see
 // engine.NewOpenPitEngineBuildFunc).
 type Config struct {
-	SQLitePath string
-	MasterKey  *secret.MasterKey
+	// InitialSetup finishes setup before serving requests. Supplying it when
+	// setup is already complete is an error.
+	InitialSetup *InitialSetup
+	SQLitePath   string
+	MasterKey    *secret.MasterKey
 	// AllowedHosts are extra host names the HTTP surface answers besides
 	// loopback; Register refuses an invalid one.
 	AllowedHosts []string
@@ -144,6 +147,11 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	if b == nil {
 		return errors.New("officer: nil builder")
 	}
+	if cfg.InitialSetup != nil {
+		if err := cfg.InitialSetup.Validate(cfg.MasterKey != nil); err != nil {
+			return err
+		}
+	}
 	// Build sets these in the node hook and the service factory before the
 	// app serves; the resolver and the route config read them afterwards.
 	var (
@@ -181,6 +189,9 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		accessService, err = access.New(accessState, n, os.Stderr, setupDecisions{node: n})
 		if err != nil {
 			return fmt.Errorf("officer: build access service: %w", err)
+		}
+		if cfg.InitialSetup != nil && accessService.Mode() != access.ModeSetup {
+			return fmt.Errorf("initial setup: configuration is already initialized; start without -init or reset the database")
 		}
 		sealReports = reports
 		backupNode = n
@@ -237,13 +248,22 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		if !fwbackend.ReleaseBuild() {
 			opts = append(opts, fwbackend.WithNonReleaseBuild())
 		}
-		return fwbackend.New(
+		svc, err := fwbackend.New(
 			n,
 			md,
 			signer,
 			engine.LockSettlementPrice,
 			opts...,
 		)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.InitialSetup != nil {
+			if err := cfg.InitialSetup.apply(ctx, svc, scope, accessService); err != nil {
+				return nil, err
+			}
+		}
+		return svc, nil
 	})
 	// A host that customises routes wraps b.RouteConfigBuilder(), so the
 	// account mode and the access mode Register enforces stay served.

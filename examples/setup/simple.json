@@ -1,0 +1,7 @@
+{
+  "accountMode": "single",
+  "fundsLimitMode": "enforce",
+  "encryption": "disabled",
+  "signing": "disabled",
+  "access": "open"
+}

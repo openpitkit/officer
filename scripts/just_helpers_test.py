@@ -15,17 +15,19 @@
 #
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
-"""Release tooling tests with real files and no Git writes."""
+"""Recipe helper tests with real files and no Git writes."""
 
 from __future__ import annotations
 
 import copy
 import io
 import json
+import os
 import re
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -200,6 +202,144 @@ class ReleaseTests(unittest.TestCase):
             server["version"] = "0.3.0"
             self.write_server(server)
             self.command("check-release-notes", "0.3.0")
+
+
+class ResetServeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.commit = "a" * 40
+        self.release = self.root / "custom.db"
+        self.database = Path(f"{self.release}.non-release-{self.commit}")
+        self.config = self.root / "setup.json"
+        self.config.write_text("{}", encoding="utf-8")
+        self.release.write_bytes(b"release data")
+        (self.root / helpers.officer_binary()).touch()
+        for mock in (
+            patch.object(helpers, "ROOT", self.root),
+            patch.dict(
+                os.environ, {"PIT_OFFICER_SQLITE_PATH": str(self.release)}, clear=True
+            ),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
+        self.timestamp = datetime(
+            2026, 11, 13, 14, 15, 16, 123456, tzinfo=timezone(timedelta(hours=2))
+        )
+        self.backup = Path(f"{self.database}.backup-20261113T141516.123456+0200")
+
+    def command(self, *arguments: str) -> None:
+        args = helpers.build_parser().parse_args(arguments)
+        args.func(args)
+
+    def test_reset_moves_database_and_sidecars_before_launching_init(self) -> None:
+        for dev in (False, True):
+            with self.subTest(dev=dev):
+                suffixes = ("", "-wal", "-shm", "-journal")
+                for suffix in suffixes:
+                    Path(f"{self.database}{suffix}").write_bytes(
+                        f"contents{suffix}".encode()
+                    )
+
+                def run(
+                    command: list[str],
+                    *,
+                    dev: bool = dev,
+                    suffixes: tuple[str, ...] = suffixes,
+                    **kwargs: object,
+                ):
+                    if command == ["git", "rev-parse", "HEAD"]:
+                        return subprocess.CompletedProcess(
+                            command, 0, self.commit + "\n", ""
+                        )
+                    self.assertEqual(command[1:], ["serve", "-init", str(self.config)])
+                    for suffix in suffixes:
+                        self.assertFalse(Path(f"{self.database}{suffix}").exists())
+                        backup = Path(f"{self.backup}{suffix}")
+                        self.assertEqual(
+                            backup.read_bytes(), f"contents{suffix}".encode()
+                        )
+                    if dev:
+                        self.assertEqual(
+                            kwargs["env"]["OPENPIT_RUNTIME_LIBRARY_PATH"],
+                            str(self.root / "runtime"),
+                        )
+                    return subprocess.CompletedProcess(command, 0)
+
+                with (
+                    patch.object(helpers, "datetime") as clock,
+                    patch.object(helpers, "run", side_effect=run) as launch,
+                    patch.object(
+                        helpers,
+                        "local_runtime_library",
+                        return_value=self.root / "runtime",
+                    ),
+                ):
+                    clock.now.return_value.astimezone.return_value = self.timestamp
+                    arguments = (
+                        [
+                            "run-officer-dev",
+                            "--reset-init",
+                            str(self.config),
+                            "debug",
+                            "../pit",
+                            "serve",
+                        ]
+                        if dev
+                        else ["run-officer", "--reset-init", str(self.config), "serve"]
+                    )
+                    self.command(*arguments)
+                    self.assertEqual(launch.call_count, 2)
+                self.assertEqual(self.release.read_bytes(), b"release data")
+                for suffix in suffixes:
+                    Path(f"{self.backup}{suffix}").unlink()
+
+    def test_missing_database_still_starts_init(self) -> None:
+        with patch.object(helpers, "run") as run:
+            run.return_value.stdout = self.commit
+            self.command("run-officer", "--reset-init", str(self.config), "serve")
+            self.assertEqual(
+                run.call_args.args[0][1:], ["serve", "-init", str(self.config)]
+            )
+        self.assertEqual(list(self.root.glob("*.backup-*")), [])
+
+    def test_backup_collision_preserves_both_files_and_does_not_launch(self) -> None:
+        self.database.write_bytes(b"current database")
+        self.backup.write_bytes(b"previous backup")
+        with (
+            patch.object(helpers, "datetime") as clock,
+            patch.object(helpers, "run") as run,
+        ):
+            clock.now.return_value.astimezone.return_value = self.timestamp
+            run.return_value.stdout = self.commit
+            with self.assertRaisesRegex(
+                SystemExit, "backup destination already exists"
+            ):
+                self.command("run-officer", "--reset-init", str(self.config), "serve")
+            self.assertEqual(run.call_count, 1)
+        self.assertEqual(self.database.read_bytes(), b"current database")
+        self.assertEqual(self.backup.read_bytes(), b"previous backup")
+
+    def test_runtime_state_refuses_reset_before_moving_anything(self) -> None:
+        self.database.write_bytes(b"current database")
+        (self.root / "officer-runtime.non-release.json").write_text(
+            "{}", encoding="utf-8"
+        )
+        with patch.object(helpers, "run") as run:
+            with self.assertRaisesRegex(SystemExit, "stop Officer"):
+                self.command("run-officer", "--reset-init", str(self.config), "serve")
+            run.assert_not_called()
+        self.assertEqual(self.database.read_bytes(), b"current database")
+
+    def test_missing_config_refuses_reset_before_moving_anything(self) -> None:
+        self.database.write_bytes(b"current database")
+        self.config.unlink()
+        with patch.object(helpers, "run") as run:
+            with self.assertRaisesRegex(SystemExit, "initialization file not found"):
+                self.command("run-officer", "--reset-init", str(self.config), "serve")
+            run.assert_not_called()
+        self.assertEqual(self.database.read_bytes(), b"current database")
 
 
 if __name__ == "__main__":

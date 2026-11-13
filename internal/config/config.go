@@ -26,6 +26,7 @@ import (
 	"os"
 	"strings"
 
+	"go.openpit.dev/officer"
 	"go.openpit.dev/officer/framework/secret"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
@@ -95,11 +96,15 @@ const (
 	// host.docker.internal, or on a widened bind. Neither the container image
 	// nor docker-compose sets it. It has no command-line flag.
 	EnvAllowedHosts = "PIT_OFFICER_ALLOWED_HOSTS"
+	// EnvInitConfig names the JSON used to finish first-run setup.
+	EnvInitConfig = "PIT_OFFICER_INIT_CONFIG"
 )
 
 // Config is the fully resolved Pit Officer configuration for one process. A
 // zero Config is not valid; obtain one from Load.
 type Config struct {
+	// InitialSetup holds parsed first-run decisions when -init was requested.
+	InitialSetup *officer.InitialSetup
 	// Mode selects the run surface (mcp or serve).
 	Mode RunMode
 	// MCPTransport selects how the MCP server is exposed. It is derived from
@@ -171,6 +176,8 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	fs := flag.NewFlagSet("officer", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
+	initConfig := fs.String("init", envOr(lookupEnv, EnvInitConfig, ""),
+		"path to the JSON file used to initialize an unfinished setup")
 	mode := fs.String("mode", "", "run mode: mcp or serve")
 	httpAddr := fs.String("http-addr", httpAddrDefault,
 		"HTTP listen address (serve mode)")
@@ -190,11 +197,22 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 		return Config{}, fmt.Errorf("config: unexpected argument %q", fs.Arg(0))
 	}
 	masterKeyFileFlagConfigured := false
+	initFlagConfigured := false
 	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "init" {
+			initFlagConfigured = true
+		}
 		if f.Name == "master-key-file" {
 			masterKeyFileFlagConfigured = true
 		}
 	})
+	if initFlagConfigured && *initConfig == "" {
+		return Config{}, fmt.Errorf("config: -init requires a configuration file path")
+	}
+	initial, err := officer.LoadInitialSetup(*initConfig)
+	if err != nil {
+		return Config{}, err
+	}
 
 	parsedMode, err := parseMode(*mode)
 	if err != nil {
@@ -218,6 +236,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 
 	cfg := Config{
+		InitialSetup:            initial,
 		Mode:                    parsedMode,
 		MCPTransport:            transportForMode(parsedMode),
 		HTTPAddr:                *httpAddr,

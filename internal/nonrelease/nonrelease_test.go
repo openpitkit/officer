@@ -75,13 +75,15 @@ func TestReleaseDatabaseExists(t *testing.T) {
 }
 
 func TestRemoveStalePreservesOwnDatabaseFiles(t *testing.T) {
-	release := filepath.Join(t.TempDir(), "release[1].db")
+	release := filepath.Join(t.TempDir(), "release.backup-name[1].db")
 	own, err := DatabasePath(release, "own")
 	if err != nil {
 		t.Fatal(err)
 	}
 	keep := append(sqlite.DatabaseFiles(release), sqlite.DatabaseFiles(own)...)
 	keep = append(keep, filepath.Join(filepath.Dir(release), "other.db.non-release-x"))
+	keep = append(keep, sqlite.DatabaseFiles(own+".backup-20261113T140000.123456+0200")...)
+	keep = append(keep, sqlite.DatabaseFiles(release+".non-release-old.backup-20261112T190000.123456-0500")...)
 	remove := []string{release + ".non-release-old", release + ".non-release-old-wal", own + ".prepare-crash"}
 	for _, path := range append(slices.Clone(keep), remove...) {
 		if err := os.WriteFile(path, []byte(path), 0600); err != nil {

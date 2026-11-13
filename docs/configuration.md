@@ -23,6 +23,36 @@ The run mode is not configured here - it comes from the subcommand.
 | `PIT_OFFICER_OPEN_BROWSER` | `-open-browser` | `true` | `serve` |
 | `PIT_OFFICER_MASTER_KEY` | - | _(empty)_ | `mcp`, `serve` |
 | `PIT_OFFICER_MASTER_KEY_FILE` | `-master-key-file` | _(empty)_ | `mcp`, `serve` |
+| `PIT_OFFICER_INIT_CONFIG` | `-init <path>` | _(empty)_ | `mcp`, `serve`; requires unfinished setup |
+
+## Unattended first run
+
+To create a local configuration without the setup wizard, run from the checkout:
+
+```sh
+./pit-officer serve -init examples/setup/simple.json
+```
+
+The supplied JSON chooses one default account, `enforce` funds checks, disabled
+encryption and signing, and `open` access without a password. Supplying the
+configuration confirms those choices; there is no separate acknowledgment field.
+`accountMode` also accepts `multi`, and `fundsLimitMode` accepts `track_only`.
+`encryption` accepts `enabled` when a master key is supplied separately; disabled
+encryption refuses a configured key. Every field is required; unknown fields,
+invalid values and extra JSON values fail startup before database creation.
+This format supports open access and disabled signing.
+
+The file is decoded and validated while loading CLI configuration. `-init`
+requires a non-empty path; malformed JSON fails before the database is opened.
+If setup has already completed, initialization fails explicitly and keeps the
+database. Start without `-init` to reuse it, or use a `run-serve-reset*` recipe
+to move it aside and initialize afresh. An unfinished setup, including after a
+database reset, can be completed with `-init`. Ordinary restarts use no init
+configuration; a service-requested restart removes the one-time init inputs.
+In a non-release build,
+the option creates a fresh build-specific database without the data-choice
+screen; it never copies the release database. Without the option, first run
+keeps its interactive behavior.
 
 ## Subcommands
 

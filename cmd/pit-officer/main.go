@@ -160,7 +160,13 @@ func resolveAppConfig(cfg config.Config) (officer.Config, error) {
 	if err != nil {
 		return officer.Config{}, err
 	}
+	if cfg.InitialSetup != nil {
+		if err := cfg.InitialSetup.Validate(masterKey != nil); err != nil {
+			return officer.Config{}, err
+		}
+	}
 	return officer.Config{
+		InitialSetup: cfg.InitialSetup,
 		SQLitePath:   cfg.SQLitePath,
 		MasterKey:    masterKey,
 		AllowedHosts: cfg.AllowedHosts,
@@ -176,7 +182,14 @@ func buildApp(
 		return nil, err
 	}
 	builder.SetSPAFactory(spa)
-	return builder.Build(ctx, logger, fatalHook)
+	app, err := builder.Build(ctx, logger, fatalHook)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.InitialSetup != nil {
+		logger.Info("initialized configuration from JSON")
+	}
+	return app, nil
 }
 
 // checkRuntimeLibraryPath fails when the configured runtime library path names
@@ -390,6 +403,9 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		}
 		stop()
 		logger.Warn("pit-officer restart requested; replacing current process")
+		if err := os.Unsetenv(config.EnvInitConfig); err != nil {
+			return fmt.Errorf("clear initialization environment before restart: %w", err)
+		}
 		args := restartProcessArgs(os.Args, actual)
 		if err := replaceCurrentProcess(args); err != nil {
 			return fmt.Errorf("replace current process: %w", err)
@@ -502,7 +518,12 @@ func setupServe(
 		app = built
 		return handler, nil
 	}
-	if release || ownExists {
+	if !release && !ownExists && appConfig.InitialSetup != nil {
+		if err := officer.PrepareNonReleaseDatabase(ctx, appConfig, releasePath, false); err != nil {
+			return nil, nil, err
+		}
+	}
+	if release || ownExists || appConfig.InitialSetup != nil {
 		handler, err := build(ctx)
 		if err != nil {
 			return nil, nil, err
@@ -517,7 +538,23 @@ func setupServe(
 }
 
 func restartProcessArgs(args []string, httpAddr string) []string {
-	out := append([]string(nil), args...)
+	out := make([]string, 0, len(args)+3)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if i > 1 && (arg == "-init" || arg == "--init") {
+			i++
+			continue
+		}
+		if i > 1 && (strings.HasPrefix(arg, "-init=") || strings.HasPrefix(arg, "--init=")) {
+			continue
+		}
+		out = append(out, arg)
+		// All value-taking serve flags are strings; the browser flag is bool.
+		if i > 1 && strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") && arg != "-open-browser" && arg != "--open-browser" && i+1 < len(args) {
+			i++
+			out = append(out, args[i])
+		}
+	}
 	for i := 1; i < len(out); i++ {
 		switch {
 		case out[i] == "-http-addr" || out[i] == "--http-addr":

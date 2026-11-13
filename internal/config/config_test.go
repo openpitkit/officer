@@ -29,6 +29,49 @@ import (
 	"go.openpit.dev/officer/framework/secret"
 )
 
+func TestLoadInitConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	body := `{"accountMode":"single","fundsLimitMode":"enforce","encryption":"disabled","signing":"disabled","access":"open"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		env       map[string]string
+		want      bool
+		wantError bool
+	}{
+		{name: "absent"},
+		{name: "environment", env: map[string]string{EnvInitConfig: path}, want: true},
+		{name: "flag", args: []string{"-init", path}, want: true},
+		{name: "flag overrides environment", args: []string{"-init", path}, env: map[string]string{EnvInitConfig: "missing.json"}, want: true},
+		{name: "missing value", args: []string{"-init"}, wantError: true},
+		{name: "empty value", args: []string{"-init="}, wantError: true},
+		{name: "missing file", args: []string{"-init", "missing.json"}, wantError: true},
+		{name: "old flag", args: []string{"-init-config", path}, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(append([]string{"-mode", "serve"}, tc.args...), envLookup(tc.env))
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("invalid init input was accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (cfg.InitialSetup != nil) != tc.want {
+				t.Fatalf("InitialSetup = %+v, expected configured %t", cfg.InitialSetup, tc.want)
+			}
+			if tc.want && cfg.InitialSetup.AccountMode != "single" {
+				t.Fatalf("JSON was not decoded: %+v", cfg.InitialSetup)
+			}
+		})
+	}
+}
+
 func TestLoadMasterKey(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(bytesOf(0x11, 32))
 	otherKey := base64.StdEncoding.EncodeToString(bytesOf(0x22, 32))

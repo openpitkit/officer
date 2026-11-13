@@ -34,7 +34,7 @@ node_version := env_var("CI_NODE")
 go_cache := env_var_or_default("GOCACHE", justfile_directory() / ".tmp" / "go-build-cache")
 golangci_lint_cache := env_var_or_default("GOLANGCI_LINT_CACHE", justfile_directory() / ".tmp" / "golangci-lint-cache")
 go_packages := ". ./web ./httpapi/... ./mcptools/... ./engine/... ./signing/... ./framework/... ./internal/... ./cmd/... ./examples/..."
-go_dirs := "register.go register_test.go nonrelease.go nonrelease_test.go web/dist.go httpapi mcptools engine signing framework internal cmd examples checks/semgrep/testdata"
+go_dirs := "register.go register_test.go initial_setup.go nonrelease.go nonrelease_test.go web/dist.go httpapi mcptools engine signing framework internal cmd examples checks/semgrep/testdata"
 export GOTOOLCHAIN := go_toolchain
 export GOCACHE := go_cache
 export GOLANGCI_LINT_CACHE := golangci_lint_cache
@@ -363,9 +363,17 @@ run-mcp-debug: build-debug
 run-serve: build-release
     {{ python }} {{ just_helper }} run-officer serve
 
+# Move the existing database aside and initialize a fresh serve configuration.
+run-serve-reset init_config="examples/setup/simple.json": build-release
+    {{ python }} {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve
+
 # Run pit-officer in serve mode with debug compiler flags.
 run-serve-debug: build-debug
     {{ python }} {{ just_helper }} run-officer serve
+
+# Reset and initialize serve with debug compiler flags.
+run-serve-reset-debug init_config="examples/setup/simple.json": build-debug
+    {{ python }} {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve
 
 # Print the running serve URL and open it (no rebuild; serve must be up).
 dashboard:
@@ -477,10 +485,17 @@ run-mcp-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
 run-serve-dev pit_checkout="../pit": (build-release-dev pit_checkout)
     {{ python }} {{ just_helper }} run-officer-dev release {{ quote(pit_checkout) }} serve
 
+# Reset and initialize serve against a local Pit checkout.
+run-serve-reset-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-release-dev pit_checkout)
+    {{ python }} {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} release {{ quote(pit_checkout) }} serve
+
 # Run pit-officer in serve mode against a debug local Pit checkout.
 run-serve-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
     {{ python }} {{ just_helper }} run-officer-dev debug {{ quote(pit_checkout) }} serve
 
+# Reset and initialize debug serve against a local Pit checkout.
+run-serve-reset-debug-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-debug-dev pit_checkout)
+    {{ python }} {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} debug {{ quote(pit_checkout) }} serve
 # Run a Go command with a temporary workspace using the local OpenPit binding.
 _go-dev pit_checkout +go_args:
     just _go-dev-mode release {{ quote(pit_checkout) }} {{ go_args }}
