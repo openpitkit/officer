@@ -629,21 +629,25 @@ no-currency list. A body naming an account, account group or asset is refused
 with 422. Switching back to `enforce` resets no balance; orders that need funds
 against a negative balance are refused again.
 
-`GET /limits` lists a stored mode as one row of kind `spot_funds_limit_mode` on
-the `global` scope, with `values.spotFundsLimitMode.mode`;
+`GET /limits` always lists one row of kind `spot_funds_limit_mode` on
+the `global` scope, with `values.spotFundsLimitMode.mode`. When no setting is
+stored, the row shows the effective default `enforce`;
 `policy=spot_funds_limit_mode` selects it alone.
-`DELETE /limits?policy=spot_funds_limit_mode&scope=global` removes it, so the
-mode is `enforce` again, and answers `204`, or `404` when no mode is stored.
+`DELETE /limits?policy=spot_funds_limit_mode&scope=global` is refused with 422:
+the policy is permanent. Change its mode through `PUT` instead.
 
 Like every policy, it is tighten-only for an agent (an MCP caller): the switch
 from `enforce` to `track_only` is refused with `loosening_refused`, while the
-switch to `enforce` and the delete, which also restores `enforce`, pass.
+switch to `enforce` passes. Deletion is refused for every caller.
 
 The stored mode is what every later engine build takes, a restart and a backup
 restore included: the mode travels with the backup's general settings, and a
 restore applies it to the running engine.
 
-The panel lists it on the Policies page as one global policy row, with the
+The panel lists it on the Policies page as one permanent global policy row.
+It can be edited, but cannot be added or deleted. Other policies are selected
+through the Orders, P&L, and Confirmation and review groups. Each policy links
+to its wiki section. The mode row has the
 values "Check funds" (`enforce`) and "Accounting without blocking"
 (`track_only`). The MCP tool `get_spot_funds_limit_mode` follows the REST
 `GET`, and `set_limit` with policy `spot_funds_limit_mode` and the one field

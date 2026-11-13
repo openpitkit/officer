@@ -480,18 +480,20 @@ describe("Limits currency warning", () => {
   it("refreshes the warning after a policy is saved from the dialog", async () => {
     const user = userEvent.setup();
     const reload = answerFundsMode("enforce", []);
+    useLimitsMock.mockReturnValue(readyPage([modeLimit("enforce")]));
     renderLimits();
-
-    const dialog = await openAddDialog(user);
-    await chooseInDialog(user, dialog, 0, "Funds limit mode");
+    await user.click(
+      within(policyRow("Funds limit mode")).getByRole("button", {
+        name: "Edit Funds limit mode",
+      }),
+    );
+    const dialog = screen.getByRole("dialog");
     await user.click(
       within(dialog).getByRole("radio", {
         name: "Accounting without blocking",
       }),
     );
-    await user.click(
-      within(dialog).getByRole("button", { name: "Add policy" }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
@@ -500,10 +502,10 @@ describe("Limits currency warning", () => {
   it("refreshes the warning after a policy is deleted", async () => {
     const user = userEvent.setup();
     const reload = answerFundsMode("track_only", ["desk-a"]);
-    useLimitsMock.mockReturnValue(readyPage([modeLimit("track_only")]));
+    useLimitsMock.mockReturnValue(readyPage([accountRateLimit("desk-a")]));
     renderLimits();
 
-    const confirm = await openDeleteConfirm(user, "Funds limit mode");
+    const confirm = await openDeleteConfirm(user, "Rate limit");
     await user.click(within(confirm).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(deleteLimitMock).toHaveBeenCalledTimes(1));
@@ -593,31 +595,17 @@ describe("Limits funds limit mode policy", () => {
     ).toBeInTheDocument();
   });
 
-  it("deletes the only row of the mode without the engine-rebuild warning", async () => {
-    const user = userEvent.setup();
+  it("keeps the permanent mode editable without a delete action", () => {
     useLimitsMock.mockReturnValue(readyPage([modeLimit("track_only")]));
     renderLimits();
-
-    const confirm = await openDeleteConfirm(user, "Funds limit mode");
+    const row = within(policyRow("Funds limit mode"));
     expect(
-      within(confirm).getByText(
-        "This removes the Funds limit mode barrier on Global.",
-      ),
-    ).toBeInTheDocument();
+      row.getByRole("button", { name: "Edit Funds limit mode" }),
+    ).toBeEnabled();
     expect(
-      within(confirm).queryByText(/rebuilds the risk engine/),
+      row.queryByRole("button", { name: "Delete Funds limit mode" }),
     ).not.toBeInTheDocument();
-    await user.click(within(confirm).getByRole("button", { name: "Delete" }));
-
-    await waitFor(() =>
-      expect(deleteLimitMock).toHaveBeenCalledWith({
-        policy: "spot_funds_limit_mode",
-        scope: "global",
-        account: "",
-        accountGroup: "",
-        asset: "",
-      }),
-    );
+    expect(deleteLimitMock).not.toHaveBeenCalled();
   });
 });
 
@@ -753,17 +741,15 @@ describe("LimitDialog framework controls", () => {
     renderLimitDialog(null);
 
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", { name: "Order size limit" }),
-    );
+
+    await chooseInDialog(user, dialog, 0, "Order size limit");
 
     const maxQuantity = within(dialog).getByLabelText("max quantity");
     const maxNotional = within(dialog).getByLabelText("max notional");
     await user.type(maxQuantity, "5");
     await user.type(maxNotional, "1000");
 
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
       within(dialog).getByRole("option", { name: "Underlying asset" }),
     );
@@ -795,21 +781,19 @@ describe("LimitDialog framework controls", () => {
     renderLimitDialog(null);
 
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", { name: "Order size limit" }),
-    );
+
+    await chooseInDialog(user, dialog, 0, "Order size limit");
     await user.type(within(dialog).getByLabelText("max quantity"), "5");
     await user.type(within(dialog).getByLabelText("max notional"), "1000");
 
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
       within(dialog).getByRole("option", { name: "Underlying asset" }),
     );
 
     expect(within(dialog).queryByLabelText("max notional")).toBeNull();
 
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(within(dialog).getByRole("option", { name: "Broker" }));
 
     expect(within(dialog).getByLabelText("max notional")).toHaveValue("1000");
@@ -820,14 +804,12 @@ describe("LimitDialog framework controls", () => {
     renderLimitDialog(null);
 
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", { name: "Order size limit" }),
-    );
+
+    await chooseInDialog(user, dialog, 0, "Order size limit");
     await user.type(within(dialog).getByLabelText("max quantity"), "5");
     await user.type(within(dialog).getByLabelText("max notional"), "1000");
 
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
       within(dialog).getByRole("option", { name: "Settlement asset" }),
     );
@@ -864,6 +846,7 @@ describe("LimitDialog framework controls", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
+    await chooseInDialog(user, dialog, 0, "Rate limit");
     const maxOrders = within(dialog).getByLabelText("max orders");
     const maxOrdersControls = within(maxOrders.parentElement as HTMLElement);
 
@@ -881,11 +864,8 @@ describe("LimitDialog framework controls", () => {
     );
     expect(maxOrders).toHaveValue("");
 
+    await chooseInDialog(user, dialog, 0, "Order size limit");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", { name: "Order size limit" }),
-    );
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
     await user.click(
       within(dialog).getByRole("option", {
         name: "Account + underlying asset",
@@ -930,13 +910,14 @@ describe("LimitDialog framework controls", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", {
-        name: "Realized Profit and Loss Kill Switch",
-      }),
+
+    await chooseInDialog(
+      user,
+      dialog,
+      0,
+      "Realized Profit and Loss Kill Switch",
     );
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(
       within(dialog).getByRole("option", { name: "Account group" }),
     );
@@ -975,11 +956,12 @@ describe("LimitDialog framework controls", () => {
         screen.getAllByRole("button", { name: "Add policy" })[0],
       );
       const dialog = screen.getByRole("dialog");
-      await user.click(within(dialog).getAllByRole("combobox")[0]);
-      await user.click(
-        within(dialog).getByRole("option", {
-          name: `${label} Profit and Loss Kill Switch`,
-        }),
+
+      await chooseInDialog(
+        user,
+        dialog,
+        0,
+        `${label} Profit and Loss Kill Switch`,
       );
       const currencyValidationMessage = within(dialog).getByText(
         `${policy} requires currency`,
@@ -1000,7 +982,7 @@ describe("LimitDialog framework controls", () => {
         ),
       ).toBeInTheDocument();
       await user.type(currencyWithValidation, "EUR");
-      await user.click(within(dialog).getAllByRole("combobox")[1]);
+      await user.click(within(dialog).getAllByRole("combobox")[0]);
       await user.click(within(dialog).getByRole("option", { name: "Account" }));
 
       const account = within(dialog).getByLabelText("Account");
@@ -1110,14 +1092,13 @@ describe("LimitDialog framework controls", () => {
     await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
     const choose = async (label: string) => {
-      await user.click(within(dialog).getAllByRole("combobox")[0]);
-      await user.click(within(dialog).getByRole("option", { name: label }));
+      await chooseInDialog(user, dialog, 0, label);
     };
 
+    await choose("Realized Profit and Loss Kill Switch");
     expect(within(dialog).getByText("Policy").parentElement).toHaveClass(
       "col-span-2",
     );
-    await choose("Realized Profit and Loss Kill Switch");
     expect(within(dialog).getByText(/^FX fail-safe:/)).toBeInTheDocument();
     expect(within(dialog).queryByText(/^Price fail-safe:/)).toBeNull();
     for (const label of [
@@ -1136,11 +1117,12 @@ describe("LimitDialog framework controls", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", {
-        name: "Realized Profit and Loss Kill Switch",
-      }),
+
+    await chooseInDialog(
+      user,
+      dialog,
+      0,
+      "Realized Profit and Loss Kill Switch",
     );
     await user.type(within(dialog).getByLabelText("currency"), "US D");
     await user.type(within(dialog).getByLabelText("lower bound"), "-100");
@@ -1178,13 +1160,14 @@ describe("LimitDialog framework controls", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", {
-        name: "Realized Profit and Loss Kill Switch",
-      }),
+
+    await chooseInDialog(
+      user,
+      dialog,
+      0,
+      "Realized Profit and Loss Kill Switch",
     );
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
     await user.click(within(dialog).getByRole("option", { name: "Account" }));
 
     const account = within(dialog).getByLabelText("Account");
@@ -1240,7 +1223,7 @@ describe("LimitDialog framework controls", () => {
     });
     const dialog = screen.getByRole("dialog");
 
-    expect(within(dialog).getAllByRole("combobox")[1]).toBeDisabled();
+    expect(within(dialog).getAllByRole("combobox")[0]).toBeDisabled();
     expect(within(dialog).getByLabelText("Account")).toBeDisabled();
     await waitFor(() =>
       expect(within(dialog).getByLabelText("currency")).toBeDisabled(),
@@ -1258,7 +1241,7 @@ describe("LimitDialog framework controls", () => {
     });
     const dialog = screen.getByRole("dialog");
 
-    expect(within(dialog).getAllByRole("combobox")[1]).toBeDisabled();
+    expect(within(dialog).getAllByRole("combobox")[0]).toBeDisabled();
     expect(within(dialog).getByLabelText("Account group")).toBeDisabled();
     expect(within(dialog).getByLabelText("currency")).toBeEnabled();
   });
@@ -1272,11 +1255,12 @@ describe("LimitDialog framework controls", () => {
 
     await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", {
-        name: "Realized Profit and Loss Kill Switch",
-      }),
+
+    await chooseInDialog(
+      user,
+      dialog,
+      0,
+      "Realized Profit and Loss Kill Switch",
     );
     await user.type(within(dialog).getByLabelText("currency"), "XYZ");
     await user.type(within(dialog).getByLabelText("lower bound"), "-100");
@@ -1355,7 +1339,9 @@ async function openAddDialog(
   user: ReturnType<typeof userEvent.setup>,
 ): Promise<HTMLElement> {
   await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
-  return screen.getByRole("dialog");
+  const dialog = screen.getByRole("dialog");
+  await chooseInDialog(user, dialog, 0, "Rate limit");
+  return dialog;
 }
 
 /** Pick `option` in the dialog's policy (0) or scope (1) select. */
@@ -1365,7 +1351,28 @@ async function chooseInDialog(
   select: 0 | 1,
   option: string,
 ) {
-  await user.click(within(dialog).getAllByRole("combobox")[select]);
+  if (select === 0) {
+    const change = within(dialog).queryByRole("button", {
+      name: "Change policy",
+    });
+    if (change) {
+      await user.click(change);
+    }
+    const group = option.includes("Profit and Loss") ? "P&L" : "Orders";
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: new RegExp(`^${group.replace("&", "\\&")}`),
+      }),
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: new RegExp(`^${option}`) }),
+    );
+    return;
+  }
+  if (within(dialog).queryAllByRole("combobox").length === 0) {
+    await chooseInDialog(user, dialog, 0, "Rate limit");
+  }
+  await user.click(within(dialog).getAllByRole("combobox")[0]);
   await user.click(within(dialog).getByRole("option", { name: option }));
 }
 
@@ -1393,83 +1400,18 @@ async function openDeleteConfirm(
 }
 
 describe("LimitDialog funds limit mode", () => {
-  async function openModeDialog(user: ReturnType<typeof userEvent.setup>) {
-    renderLimits();
-    const dialog = await openAddDialog(user);
-    await chooseInDialog(user, dialog, 0, "Funds limit mode");
-    return dialog;
-  }
-
-  it("offers only the global scope and no account, group or asset field", async () => {
-    const user = userEvent.setup();
-    const dialog = await openModeDialog(user);
-
-    const scope = within(dialog).getAllByRole("combobox")[1];
-    expect(scope).toHaveTextContent("global");
-    await user.click(scope);
-    expect(within(dialog).getAllByRole("option")).toHaveLength(1);
+  it("edits the permanent global mode without identity choices", () => {
+    renderLimitDialog(modeLimit("enforce"));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("combobox")).toBeDisabled();
+    expect(within(dialog).getByRole("combobox")).toHaveTextContent("global");
     expect(
-      within(dialog).getByRole("option", { name: "Global" }),
-    ).toBeInTheDocument();
+      within(dialog).queryByRole("button", { name: "Change policy" }),
+    ).not.toBeInTheDocument();
     for (const field of ["Account", "Account group", "Asset"]) {
       expect(within(dialog).queryByLabelText(field)).not.toBeInTheDocument();
     }
   });
-
-  it("preselects no mode and refuses to save until one is chosen", async () => {
-    const user = userEvent.setup();
-    const dialog = await openModeDialog(user);
-
-    const group = within(dialog).getByRole("radiogroup", { name: "mode" });
-    const radios = within(group).getAllByRole("radio");
-    expect(radios).toHaveLength(2);
-    for (const radio of radios) {
-      expect(radio).not.toBeChecked();
-    }
-    expect(within(dialog).getByRole("alert")).toHaveTextContent(
-      "choose a funds limit mode",
-    );
-    expect(within(dialog).getByText("A mode is required.")).toBeInTheDocument();
-    const add = within(dialog).getByRole("button", { name: "Add policy" });
-    expect(add).toBeDisabled();
-    await user.click(add);
-    expect(putLimitMock).not.toHaveBeenCalled();
-
-    await user.click(within(group).getByRole("radio", { name: "Check funds" }));
-    expect(add).toBeEnabled();
-  });
-
-  it("saves the chosen mode as a global row without a rebuild confirmation", async () => {
-    const user = userEvent.setup();
-    const dialog = await openModeDialog(user);
-
-    await user.click(
-      within(dialog).getByRole("radio", {
-        name: "Accounting without blocking",
-      }),
-    );
-    await user.click(
-      within(dialog).getByRole("button", { name: "Add policy" }),
-    );
-
-    expect(
-      screen.queryByRole("button", { name: "Rebuild and apply" }),
-    ).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(putLimitMock).toHaveBeenCalledWith(
-        {
-          policy: "spot_funds_limit_mode",
-          scope: "global",
-          account: "",
-          accountGroup: "",
-          asset: "",
-          values: { mode: "track_only" },
-        },
-        "reject",
-      ),
-    );
-  });
-
   it("preselects the stored mode on edit, locks policy and scope and saves a change", async () => {
     const user = userEvent.setup();
     renderLimitDialog(modeLimit("track_only"));
@@ -1736,7 +1678,7 @@ describe("Limits with accounts hidden", () => {
       0,
       "Realized Profit and Loss Kill Switch",
     );
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
     expect(
       within(dialog)
         .getAllByRole("option")

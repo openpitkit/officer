@@ -199,6 +199,7 @@ describe("framework registries", () => {
       kinds: [{ kind: "first" }],
       catalog: {
         wikiUrl: "https://example.invalid/first",
+        group: "orders",
         fields: [{ key: "first" }],
       },
     });
@@ -211,6 +212,7 @@ describe("framework registries", () => {
       kinds: [{ kind: "second" }],
       catalog: {
         wikiUrl: "https://example.invalid/second",
+        group: "pnl",
         fields: [{ key: "second" }],
       },
     });

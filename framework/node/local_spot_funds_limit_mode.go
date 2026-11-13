@@ -114,7 +114,7 @@ func (n *localNode) SetSpotFundsLimitMode(
 			return fmt.Errorf("set spot funds limit mode: %w", err)
 		}
 	}
-	if err := n.applySpotFundsLimitMode(ctx, caller, &mode, store.AuditEntry{
+	if err := n.applySpotFundsLimitMode(ctx, caller, mode, store.AuditEntry{
 		Action: domain.AuditActionSetLimit,
 		Detail: setSpotFundsLimitModeDetail(mode),
 	}); err != nil {
@@ -123,56 +123,21 @@ func (n *localNode) SetSpotFundsLimitMode(
 	return nil
 }
 
-// deleteSpotFundsLimitMode removes the Spot Funds limit-mode meta-policy that
-// target addresses and applies Enforce, the mode an absent setting means. The
-// removal restores Enforce, which only tightens, so a tighten-only caller may
-// make it. The meta-policy has no engine barrier, so nothing is rebuilt or
-// reconfigured. An absent setting is refused with domain.ErrNotFound, as the
-// store refuses the deletion of an absent barrier.
-func (n *localNode) deleteSpotFundsLimitMode(
-	ctx context.Context, target LimitTarget, caller domain.Caller,
-) error {
-	if err := domain.ValidateLimitScopeAndAxes(
-		target.Policy, target.Scope, target.Account, target.Asset, target.AccountGroup,
-	); err != nil {
-		return err
-	}
-	if err := n.beginLivePolicyConfiguration(); err != nil {
-		return err
-	}
-	defer n.endLivePolicyConfiguration()
-
-	if err := n.applySpotFundsLimitMode(ctx, caller, nil, store.AuditEntry{
-		Action:  domain.AuditActionDeleteLimit,
-		Account: target.Account,
-		Detail:  deleteLimitDetail(target),
-	}); err != nil {
-		return fmt.Errorf("delete spot funds limit mode: %w", err)
-	}
-	return nil
-}
-
-// applySpotFundsLimitMode stores next, or deletes the stored mode when next is
-// nil, applies the mode that leaves in force to the live engine, and audits
+// applySpotFundsLimitMode stores next, applies it to the live engine, and audits
 // entry. When the engine refuses, it restores the stored state it found - the
 // raw value, or no value - so a failed change leaves no row it did not find.
 // The caller holds the live-policy configuration gate.
 func (n *localNode) applySpotFundsLimitMode(
 	ctx context.Context, caller domain.Caller,
-	next *domain.SpotFundsLimitMode, entry store.AuditEntry,
+	next domain.SpotFundsLimitMode, entry store.AuditEntry,
 ) error {
 	key := domain.SettingKeySpotFundsLimitMode
 	prev, hadPrev, err := n.realm.GetSetting(ctx, key)
 	if err != nil {
 		return err
 	}
-	trackOnly := false
-	if next == nil {
-		err = n.realm.DeleteSetting(ctx, key)
-	} else {
-		trackOnly = *next == domain.SpotFundsLimitModeTrackOnly
-		err = n.realm.SetSetting(ctx, key, string(*next))
-	}
+	trackOnly := next == domain.SpotFundsLimitModeTrackOnly
+	err = n.realm.SetSetting(ctx, key, string(next))
 	if err != nil {
 		return err
 	}

@@ -294,6 +294,7 @@ export {
   type Policy,
   type PolicyCatalogEntry,
   type PolicyField,
+  type PolicyGroup,
   type PolicyRegistration,
   type Scope,
 } from "./registries/vocabulary";

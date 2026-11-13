@@ -35,7 +35,6 @@ import (
 	fwengine "go.openpit.dev/officer/framework/engine"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
-	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/accountmode"
 )
@@ -202,7 +201,7 @@ func TestSetLimitRateOnControlPlane(t *testing.T) {
 		"spotFundsPnlBoundsLimits":           []any{},
 		"spotFundsUnrealizedPnlBoundsLimits": []any{},
 		"spotFundsTotalPnlBoundsLimits":      []any{},
-		"spotFundsLimitModes":                []any{},
+		"spotFundsLimitModes":                []httpx.SpotFundsLimitModeLimitDTO{httpx.ToSpotFundsLimitModeLimitDTO(domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce})},
 	}})
 }
 
@@ -548,16 +547,14 @@ func spotFundsLimitModeDriver(
 	return setLimitDriver[domain.LimitSpotFundsLimitMode]{
 		t: t, src: src,
 		stored: func() []domain.LimitSpotFundsLimitMode {
-			kind := store.PolicyKindSpotFundsLimitMode
-			page, err := service.ListPolicyRows(systemCtx(), store.PolicyListFilter{Kind: &kind})
+			state, err := service.SpotFundsLimitMode(systemCtx())
 			if err != nil {
-				t.Fatalf("list policy rows: %v", err)
+				t.Fatalf("read funds limit mode: %v", err)
 			}
-			var out []domain.LimitSpotFundsLimitMode
-			for _, row := range page.Rows {
-				out = append(out, *row.SpotFundsLimitMode)
+			if !state.Stored {
+				return nil
 			}
-			return out
+			return []domain.LimitSpotFundsLimitMode{{Scope: domain.ScopeGlobal, Mode: state.Mode}}
 		},
 		body: func(limit domain.LimitSpotFundsLimitMode) map[string]any {
 			return map[string]any{"spotFundsLimitMode": httpx.ToSpotFundsLimitModeLimitDTO(limit)}
@@ -735,10 +732,8 @@ func TestSetLimitSpotFundsLimitModeDisabledChangesNothing(t *testing.T) {
 	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
 }
 
-// TestDeleteSpotFundsLimitModeOnControlPlane removes the meta-policy row
-// through the service as an agent would reach it: a tighten-only caller may
-// remove a stored track_only, which restores enforce and lists no row, and a
-// second removal answers like an absent barrier.
+// TestDeleteSpotFundsLimitModeOnControlPlane proves neither an operator nor an
+// agent can delete the permanent mode or change it through a refused deletion.
 func TestDeleteSpotFundsLimitModeOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
@@ -748,15 +743,15 @@ func TestDeleteSpotFundsLimitModeOnControlPlane(t *testing.T) {
 		Source: domain.SourceMCP, Principal: domain.PrincipalOperator,
 	})
 	target := node.LimitTarget{Policy: domain.PolicySpotFundsLimitMode, Scope: domain.ScopeGlobal}
-	if err := service.DeleteLimit(agent, target); err != nil {
-		t.Fatalf("agent delete of the mode row: %v", err)
-	}
-	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
-	if got := mode.stored(); len(got) != 0 {
-		t.Fatalf("rows after delete = %+v, want none", got)
-	}
-	if err := service.DeleteLimit(agent, target); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("second delete = %v, want ErrNotFound", err)
+	for _, ctx := range []context.Context{systemCtx(), agent} {
+		if err := service.DeleteLimit(ctx, target); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("delete of permanent mode = %v, want ErrInvalid", err)
+		}
+		requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
+		want := []domain.LimitSpotFundsLimitMode{{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly}}
+		if got := mode.stored(); !slices.Equal(got, want) {
+			t.Fatalf("rows after refused delete = %+v, want %+v", got, want)
+		}
 	}
 }
 

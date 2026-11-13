@@ -99,10 +99,9 @@ SELECT 'spot_funds_limit_mode' AS kind, 'global' AS scope,
        NULL AS max_orders, NULL AS window,
        NULL AS max_quantity, NULL AS max_notional,
        NULL AS lower_bound, NULL AS upper_bound,
-       s.value AS mode,
+       COALESCE((SELECT value FROM setting WHERE key = '` + domain.SettingKeySpotFundsLimitMode + `'), 'enforce') AS mode,
        'spot_funds_limit_mode:global' AS stable_id
-FROM setting s
-WHERE s.key = '` + domain.SettingKeySpotFundsLimitMode + `'`
+`
 
 // ListPolicyRows returns the typed barrier tables and the meta-policy setting
 // flattened into one sorted, paged list with the pre-paging total. It applies filters in SQL and

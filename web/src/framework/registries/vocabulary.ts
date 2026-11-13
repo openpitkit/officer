@@ -20,6 +20,9 @@ import type { TFunction } from "i18next";
 export type Policy = string;
 export type Scope = string;
 
+/** Semantic groups of policies available for selection. */
+export type PolicyGroup = "orders" | "pnl" | "approval";
+
 export interface KindSpec {
   kind: string;
 }
@@ -30,6 +33,7 @@ export interface PolicyField {
 
 export interface PolicyCatalogEntry {
   id: string;
+  group: PolicyGroup | null;
   wikiUrl: string;
   fields: PolicyField[];
 }
@@ -39,6 +43,7 @@ export interface PolicyRegistration {
   allowedScopes: string[];
   kinds: KindSpec[];
   catalog: {
+    group: PolicyGroup | null;
     wikiUrl: string;
     fields: PolicyField[];
   };
@@ -102,6 +107,7 @@ export function getPolicyCatalogEntry(
   }
   return {
     id,
+    group: entry.group,
     wikiUrl: entry.wikiUrl,
     fields: [...entry.fields],
   };

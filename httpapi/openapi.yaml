@@ -3268,9 +3268,9 @@ paths:
         Returns the typed limit barriers (rate, order-size, P&L-bounds, and
         SpotFunds P&L-bounds)
         flattened into one sorted, paged policy list. Barriers reference accounts
-        by code; no surrogate or engine id is involved. The stored Spot Funds
+        by code; no surrogate or engine id is involved. The Spot Funds
         limit mode is one more row of kind `spot_funds_limit_mode` on the
-        `global` scope, listed only while a mode is stored; with no row the
+        `global` scope and always present; with no setting stored its
         mode is `enforce`. Having no account, account group or asset, it is
         dropped by those filters; in single-account mode it is listed like
         any other global barrier.
@@ -3353,11 +3353,9 @@ paths:
         When the server runs in single-account mode the account may be omitted
         and defaults to that account; naming any other account is refused with
         422 (constraint `single_account_mode`). Account groups are not
-        accepted in single-account mode. Policy `spot_funds_limit_mode` takes
-        the `global` scope and no axis: deleting it removes the stored Spot
-        Funds limit mode, so the mode is `enforce` again, applied live without
-        an engine rebuild. Unlike a barrier, it may be deleted by an agent too,
-        as that only tightens; with no mode stored the answer is 404.
+        accepted in single-account mode. Policy `spot_funds_limit_mode` is
+        permanent and cannot be deleted; deletion is refused with 422 for
+        every caller. Change its mode through PUT instead.
       tags: [limits]
       parameters:
         - name: policy

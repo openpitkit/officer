@@ -475,6 +475,7 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 		rateA       = "rate_limit|account|a|"
 		rateB       = "rate_limit|account|b|"
 		rateBroker  = "rate_limit|broker||"
+		modeGlobal  = "spot_funds_limit_mode|global||"
 		boundsA     = "spot_funds_pnl_bounds_kill_switch|account|a|"
 		boundsDesk  = "spot_funds_pnl_bounds_kill_switch|account_group||desk"
 		boundsOps   = "spot_funds_pnl_bounds_kill_switch|account_group||ops"
@@ -488,9 +489,9 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 	}{
 		{
 			name:      "zero restriction lists every barrier",
-			wantTotal: 8,
+			wantTotal: 9,
 			want: []string{
-				sizeA, rateA, rateB, rateBroker, boundsA, boundsDesk, boundsOps, boundsGlobe,
+				sizeA, rateA, rateB, rateBroker, modeGlobal, boundsA, boundsDesk, boundsOps, boundsGlobe,
 			},
 		},
 		{
@@ -510,16 +511,16 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 		{
 			name:      "include unowned adds account-less barriers except other groups'",
 			filter:    fwstore.PolicyListFilter{Restriction: restrictAUnowned},
-			wantTotal: 6,
-			want:      []string{sizeA, rateA, rateBroker, boundsA, boundsDesk, boundsGlobe},
+			wantTotal: 7,
+			want:      []string{sizeA, rateA, rateBroker, modeGlobal, boundsA, boundsDesk, boundsGlobe},
 		},
 		{
 			name: "page inside the set with unowned barriers",
 			filter: fwstore.PolicyListFilter{
 				Restriction: restrictAUnowned, Page: fwstore.PageSpec{Limit: 2, Offset: 2},
 			},
-			wantTotal: 6,
-			want:      []string{rateBroker, boundsA},
+			wantTotal: 7,
+			want:      []string{rateBroker, modeGlobal},
 		},
 		{
 			name: "account filter narrows on top",

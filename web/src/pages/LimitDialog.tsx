@@ -16,7 +16,6 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { isSpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
@@ -24,7 +23,6 @@ import type { Account, Limit } from "@/api/types";
 import { validateLimit } from "@/api/validate";
 import {
   getAllowedScopes,
-  getPolicies,
   getPolicyCatalogEntry,
   getPolicyKinds,
   kindHint,
@@ -49,6 +47,9 @@ import { Autocomplete } from "@/components/Autocomplete";
 import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import { ErrorBanner } from "@/components/PageStates";
 import { SpotFundsModeCards } from "@/components/SpotFundsModeCards";
+import { PolicyPicker } from "@/components/PolicyPicker";
+import { PolicyWikiLink } from "@/components/PolicyWikiLink";
+import { PolicyVideoLink } from "@/components/PolicyVideoLink";
 import { accountScope } from "@/lib/accountScope";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -333,6 +334,7 @@ export function LimitDialog({
   const [form, setForm] = useState<FormState>(() => emptyForm(seededAccount));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [choosingPolicy, setChoosingPolicy] = useState(editing === null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
     useState(false);
@@ -375,6 +377,7 @@ export function LimitDialog({
       // Reseed the form from the edited barrier each time the dialog opens.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm(editing ? fromLimit(editing) : emptyForm(seededAccount));
+      setChoosingPolicy(editing === null);
       setError(null);
       setBusy(false);
       setConfirmOpen(false);
@@ -583,319 +586,346 @@ export function LimitDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent
+          className={cn(
+            "max-h-[90vh] overflow-y-auto",
+            choosingPolicy ? "max-w-3xl" : "max-w-2xl",
+          )}
+        >
           <DialogHeader>
             <DialogTitle>
               {isEdit ? t("dialog.editTitle") : t("dialog.addTitle")}
             </DialogTitle>
-            {catalogEntry && (
-              <DialogDescription>
-                {policyCatalogDescription(t, catalogEntry.id)}{" "}
-                <a
-                  href={catalogEntry.wikiUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-0.5 text-accent hover:underline"
-                >
-                  {t("wikiDetails")}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              </DialogDescription>
+            {choosingPolicy ? (
+              <DialogDescription>{t("picker.description")}</DialogDescription>
+            ) : (
+              catalogEntry && (
+                <DialogDescription>
+                  {policyCatalogDescription(t, catalogEntry.id)}
+                </DialogDescription>
+              )
             )}
           </DialogHeader>
 
-          <div className="flex flex-col gap-y-4">
-            {isSpotFundsPnl && (
-              <p className="text-xs text-muted-lt">
-                {form.policy === "spot_funds_pnl_bounds_kill_switch"
-                  ? t("dialog.fxFailSafeNote")
-                  : t("dialog.positionFailSafeNote")}
-              </p>
-            )}
-
-            <div className="grid grid-cols-2 gap-3">
-              {/* A full row for the spelled-out policy names. A name longer
-                  than the row wraps inside the trigger instead of being cut,
-                  since the word that tells the policies apart comes last. */}
-              <div className="col-span-2 flex flex-col gap-y-1.5">
-                <Label>{t("dialog.policy")}</Label>
-                <Select
-                  value={form.policy}
-                  onValueChange={setPolicy}
-                  disabled={isEdit}
-                >
-                  <SelectTrigger className="h-auto min-h-[var(--dens-field-h)] text-left">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {getPolicies().map((p) => (
-                      <SelectItem key={p} value={p}>
-                        {policyCatalogLabel(t, p)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="flex flex-col gap-y-1.5">
-                <Label>{t("dialog.scope")}</Label>
-                <Select
-                  value={form.scope}
-                  onValueChange={setScope}
-                  disabled={isEdit}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {allowedScopes.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {scopeLabel(tc, s)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {(showsAccountField ||
-              hasAccountGroupAxis ||
-              scopeHasAsset(form.scope)) && (
-              <div className={cn("grid gap-3", showsAccounts && "grid-cols-2")}>
-                {showsAccountField && (
-                  <div className="flex flex-col gap-y-1.5">
-                    <Label htmlFor="limit-account">{t("dialog.account")}</Label>
-                    <Autocomplete
-                      id="limit-account"
-                      value={form.account}
-                      spellCheck={false}
-                      placeholder={t("dialog.accountPlaceholder")}
-                      disabled={isEdit}
-                      suggestions={searchableAccountSuggestions}
-                      onChange={(v) =>
-                        setForm((prev) => ({ ...prev, account: v }))
-                      }
-                      onSuggestionSelect={(account) =>
-                        setForm((prev) => ({ ...prev, account }))
-                      }
-                      onClear={() =>
-                        setForm((prev) => ({ ...prev, account: "" }))
-                      }
-                      clearLabel={tc("filters.clearField")}
-                    />
-                  </div>
+          {choosingPolicy ? (
+            <PolicyPicker
+              onSelect={(policy) => {
+                setPolicy(policy);
+                setChoosingPolicy(false);
+              }}
+            />
+          ) : (
+            <>
+              <div className="flex flex-col gap-y-4">
+                {isSpotFundsPnl && (
+                  <p className="text-xs text-muted-lt">
+                    {form.policy === "spot_funds_pnl_bounds_kill_switch"
+                      ? t("dialog.fxFailSafeNote")
+                      : t("dialog.positionFailSafeNote")}
+                  </p>
                 )}
-                {hasAccountGroupAxis && (
-                  <div className="flex flex-col gap-y-1.5">
-                    <Label htmlFor="limit-account-group">
-                      {t("dialog.accountGroup")}
-                    </Label>
-                    <Autocomplete
-                      id="limit-account-group"
-                      value={form.accountGroup}
-                      spellCheck={false}
-                      placeholder={t("dialog.accountGroupPlaceholder")}
-                      disabled={isEdit}
-                      suggestions={searchableAccountGroupSuggestions}
-                      onChange={(v) =>
-                        setForm((prev) => ({ ...prev, accountGroup: v }))
-                      }
-                      onClear={() =>
-                        setForm((prev) => ({ ...prev, accountGroup: "" }))
-                      }
-                      clearLabel={tc("filters.clearField")}
-                    />
-                  </div>
-                )}
-                {!isSpotFundsPnl && scopeHasAsset(form.scope) && (
-                  <div className="flex flex-col gap-y-1.5">
-                    <Label htmlFor="limit-asset">{t("dialog.asset")}</Label>
-                    <Autocomplete
-                      id="limit-asset"
-                      value={form.asset}
-                      spellCheck={false}
-                      placeholder={t("dialog.assetPlaceholder")}
-                      disabled={isEdit}
-                      suggestions={searchableAssetSuggestions}
-                      onChange={(v) =>
-                        setForm((prev) => ({ ...prev, asset: v }))
-                      }
-                      onClear={() =>
-                        setForm((prev) => ({ ...prev, asset: "" }))
-                      }
-                      clearLabel={tc("filters.clearField")}
-                    />
-                    <CodeSuggestionFailure
-                      kind="asset"
-                      failed={dialogAssetSuggestionResult.failed}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
 
-            <div className="flex flex-col gap-y-3 rounded-card border border-border p-3">
-              <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-                {t("dialog.values")}
-              </p>
-              {visibleKinds.map(({ kind }) => {
-                // Human label/hint come from the policy catalog (domain ns), keyed
-                // by policy id + field key; the field-label helper shows the
-                // mnemonic key and reports it, and the hint falls back to the
-                // kind hint, so unknown fields still render.
-                const fieldLabel = policyFieldLabel(t, form.policy, kind);
-                const catalogHint = policyFieldHint(t, form.policy, kind);
-                const fieldHint = catalogHint || kindHint(t, form.policy, kind);
-                const isDuration = kind === "window";
-                const isCurrency = kind === "currency";
-                const isMode = kind === "mode";
-                const chosenMode = form.values[kind];
-                const currencyValidationError =
-                  isCurrency &&
-                  (validation?.key === "limit.pnlCurrencyRequired" ||
-                    validation?.key.startsWith("asset."));
-                return (
-                  <div key={kind} className="flex flex-col gap-y-1.5">
-                    <Label htmlFor={isMode ? undefined : `kind-${kind}`}>
-                      {fieldLabel}
-                    </Label>
-                    {isMode ? (
-                      <>
-                        <SpotFundsModeCards
-                          label={fieldLabel}
-                          value={
-                            isSpotFundsLimitMode(chosenMode) ? chosenMode : null
-                          }
-                          onChange={(mode) => setValue(kind, mode)}
-                          disabled={busy}
-                        />
-                        <p className="text-[0.6875rem] text-muted">
-                          {fieldHint}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2 flex flex-col gap-y-1.5">
+                    <Label>{t("dialog.policy")}</Label>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <p className="text-sm font-semibold">
+                          {policyCatalogLabel(t, form.policy)}
                         </p>
-                      </>
-                    ) : isDuration ? (
-                      <DurationPicker
-                        id={`kind-${kind}`}
-                        value={form.values[kind] ?? ""}
-                        onChange={(v) => setValue(kind, v)}
-                      />
-                    ) : isCurrency ? (
-                      <>
+                        {catalogEntry && (
+                          <PolicyWikiLink entry={catalogEntry} />
+                        )}
+                        <PolicyVideoLink policy={form.policy} />
+                      </div>
+                      {!isEdit && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setChoosingPolicy(true)}
+                        >
+                          {t("picker.changePolicy")}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-y-1.5">
+                    <Label>{t("dialog.scope")}</Label>
+                    <Select
+                      value={form.scope}
+                      onValueChange={setScope}
+                      disabled={isEdit}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allowedScopes.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {scopeLabel(tc, s)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {(showsAccountField ||
+                  hasAccountGroupAxis ||
+                  scopeHasAsset(form.scope)) && (
+                  <div
+                    className={cn("grid gap-3", showsAccounts && "grid-cols-2")}
+                  >
+                    {showsAccountField && (
+                      <div className="flex flex-col gap-y-1.5">
+                        <Label htmlFor="limit-account">
+                          {t("dialog.account")}
+                        </Label>
                         <Autocomplete
-                          id={`kind-${kind}`}
-                          value={
-                            pnlAccount
-                              ? (candidate.values[kind] ?? "")
-                              : (form.values[kind] ?? "")
-                          }
-                          onChange={(value) => setValue(kind, value)}
-                          suggestions={
-                            pnlAccount ? [] : currencySuggestionResult.codes
-                          }
-                          disabled={busy || pnlAccount !== undefined}
-                          aria-describedby="kind-currency-hint"
-                          placeholder={
-                            pnlAccount
-                              ? undefined
-                              : t("dialog.currencyPlaceholder")
-                          }
+                          id="limit-account"
+                          value={form.account}
                           spellCheck={false}
-                          aria-invalid={currencyValidationError || undefined}
-                          aria-errormessage={
-                            currencyValidationError
-                              ? "kind-currency-error"
-                              : undefined
+                          placeholder={t("dialog.accountPlaceholder")}
+                          disabled={isEdit}
+                          suggestions={searchableAccountSuggestions}
+                          onChange={(v) =>
+                            setForm((prev) => ({ ...prev, account: v }))
                           }
-                          onClear={
-                            pnlAccount ? undefined : () => setValue(kind, "")
+                          onSuggestionSelect={(account) =>
+                            setForm((prev) => ({ ...prev, account }))
+                          }
+                          onClear={() =>
+                            setForm((prev) => ({ ...prev, account: "" }))
+                          }
+                          clearLabel={tc("filters.clearField")}
+                        />
+                      </div>
+                    )}
+                    {hasAccountGroupAxis && (
+                      <div className="flex flex-col gap-y-1.5">
+                        <Label htmlFor="limit-account-group">
+                          {t("dialog.accountGroup")}
+                        </Label>
+                        <Autocomplete
+                          id="limit-account-group"
+                          value={form.accountGroup}
+                          spellCheck={false}
+                          placeholder={t("dialog.accountGroupPlaceholder")}
+                          disabled={isEdit}
+                          suggestions={searchableAccountGroupSuggestions}
+                          onChange={(v) =>
+                            setForm((prev) => ({ ...prev, accountGroup: v }))
+                          }
+                          onClear={() =>
+                            setForm((prev) => ({ ...prev, accountGroup: "" }))
+                          }
+                          clearLabel={tc("filters.clearField")}
+                        />
+                      </div>
+                    )}
+                    {!isSpotFundsPnl && scopeHasAsset(form.scope) && (
+                      <div className="flex flex-col gap-y-1.5">
+                        <Label htmlFor="limit-asset">{t("dialog.asset")}</Label>
+                        <Autocomplete
+                          id="limit-asset"
+                          value={form.asset}
+                          spellCheck={false}
+                          placeholder={t("dialog.assetPlaceholder")}
+                          disabled={isEdit}
+                          suggestions={searchableAssetSuggestions}
+                          onChange={(v) =>
+                            setForm((prev) => ({ ...prev, asset: v }))
+                          }
+                          onClear={() =>
+                            setForm((prev) => ({ ...prev, asset: "" }))
                           }
                           clearLabel={tc("filters.clearField")}
                         />
                         <CodeSuggestionFailure
                           kind="asset"
-                          failed={currencySuggestionResult.failed}
+                          failed={dialogAssetSuggestionResult.failed}
                         />
-                        <p
-                          id="kind-currency-hint"
-                          className="text-[0.6875rem] text-muted"
-                        >
-                          {pnlAccount
-                            ? t(
-                                pnlAccount.effectiveCurrency
-                                  ? "dialog.accountCurrencyHint"
-                                  : "dialog.accountCurrencyMissingHint",
-                              )
-                            : fieldHint}
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <NumberStepper
-                          id={`kind-${kind}`}
-                          value={form.values[kind] ?? ""}
-                          spellCheck={false}
-                          min={isSpotFundsPnl ? null : "0"}
-                          allowSignedInput={isSpotFundsPnl}
-                          onChange={(value) => setValue(kind, value)}
-                          onClear={() => setValue(kind, "")}
-                          clearLabel={tc("filters.clearField")}
-                        />
-                        <p className="text-[0.6875rem] text-muted">
-                          {fieldHint}
-                        </p>
-                      </>
+                      </div>
                     )}
                   </div>
-                );
-              })}
-              <p className="text-[0.6875rem] text-muted">
-                {form.policy === "rate_limit"
-                  ? t("dialog.rateLimitFootnote")
-                  : isSpotFundsPnl
-                    ? t(
-                        pnlAccount
-                          ? "dialog.pnlAccountBoundsFootnote"
-                          : "dialog.pnlBoundsFootnote",
-                      )
-                    : isSpotFundsMode
-                      ? t("dialog.modeFootnote")
-                      : t("dialog.atLeastOneFootnote")}
-              </p>
-            </div>
+                )}
 
-            {validation && (
-              <p
-                id="kind-currency-error"
-                role="alert"
-                className="text-[0.6875rem] text-[var(--danger)]"
-              >
-                {pnlAccount && validation.key === "limit.pnlCurrencyRequired"
-                  ? t("dialog.accountCurrencyMissingHint")
-                  : tv(validation.key, validation.values)}
-              </p>
-            )}
-            {error && !confirmOpen && (
-              <ErrorBanner message={error} onDismiss={() => setError(null)} />
-            )}
-          </div>
+                <div className="flex flex-col gap-y-3 rounded-card border border-border p-3">
+                  <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
+                    {t("dialog.values")}
+                  </p>
+                  {visibleKinds.map(({ kind }) => {
+                    // Human label/hint come from the policy catalog (domain ns), keyed
+                    // by policy id + field key; the field-label helper shows the
+                    // mnemonic key and reports it, and the hint falls back to the
+                    // kind hint, so unknown fields still render.
+                    const fieldLabel = policyFieldLabel(t, form.policy, kind);
+                    const catalogHint = policyFieldHint(t, form.policy, kind);
+                    const fieldHint =
+                      catalogHint || kindHint(t, form.policy, kind);
+                    const isDuration = kind === "window";
+                    const isCurrency = kind === "currency";
+                    const isMode = kind === "mode";
+                    const chosenMode = form.values[kind];
+                    const currencyValidationError =
+                      isCurrency &&
+                      (validation?.key === "limit.pnlCurrencyRequired" ||
+                        validation?.key.startsWith("asset."));
+                    return (
+                      <div key={kind} className="flex flex-col gap-y-1.5">
+                        <Label htmlFor={isMode ? undefined : `kind-${kind}`}>
+                          {fieldLabel}
+                        </Label>
+                        {isMode ? (
+                          <>
+                            <SpotFundsModeCards
+                              label={fieldLabel}
+                              value={
+                                isSpotFundsLimitMode(chosenMode)
+                                  ? chosenMode
+                                  : null
+                              }
+                              onChange={(mode) => setValue(kind, mode)}
+                              disabled={busy}
+                            />
+                            <p className="text-[0.6875rem] text-muted">
+                              {fieldHint}
+                            </p>
+                          </>
+                        ) : isDuration ? (
+                          <DurationPicker
+                            id={`kind-${kind}`}
+                            value={form.values[kind] ?? ""}
+                            onChange={(v) => setValue(kind, v)}
+                          />
+                        ) : isCurrency ? (
+                          <>
+                            <Autocomplete
+                              id={`kind-${kind}`}
+                              value={
+                                pnlAccount
+                                  ? (candidate.values[kind] ?? "")
+                                  : (form.values[kind] ?? "")
+                              }
+                              onChange={(value) => setValue(kind, value)}
+                              suggestions={
+                                pnlAccount ? [] : currencySuggestionResult.codes
+                              }
+                              disabled={busy || pnlAccount !== undefined}
+                              aria-describedby="kind-currency-hint"
+                              placeholder={
+                                pnlAccount
+                                  ? undefined
+                                  : t("dialog.currencyPlaceholder")
+                              }
+                              spellCheck={false}
+                              aria-invalid={
+                                currencyValidationError || undefined
+                              }
+                              aria-errormessage={
+                                currencyValidationError
+                                  ? "kind-currency-error"
+                                  : undefined
+                              }
+                              onClear={
+                                pnlAccount
+                                  ? undefined
+                                  : () => setValue(kind, "")
+                              }
+                              clearLabel={tc("filters.clearField")}
+                            />
+                            <CodeSuggestionFailure
+                              kind="asset"
+                              failed={currencySuggestionResult.failed}
+                            />
+                            <p
+                              id="kind-currency-hint"
+                              className="text-[0.6875rem] text-muted"
+                            >
+                              {pnlAccount
+                                ? t(
+                                    pnlAccount.effectiveCurrency
+                                      ? "dialog.accountCurrencyHint"
+                                      : "dialog.accountCurrencyMissingHint",
+                                  )
+                                : fieldHint}
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <NumberStepper
+                              id={`kind-${kind}`}
+                              value={form.values[kind] ?? ""}
+                              spellCheck={false}
+                              min={isSpotFundsPnl ? null : "0"}
+                              allowSignedInput={isSpotFundsPnl}
+                              onChange={(value) => setValue(kind, value)}
+                              onClear={() => setValue(kind, "")}
+                              clearLabel={tc("filters.clearField")}
+                            />
+                            <p className="text-[0.6875rem] text-muted">
+                              {fieldHint}
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <p className="text-[0.6875rem] text-muted">
+                    {form.policy === "rate_limit"
+                      ? t("dialog.rateLimitFootnote")
+                      : isSpotFundsPnl
+                        ? t(
+                            pnlAccount
+                              ? "dialog.pnlAccountBoundsFootnote"
+                              : "dialog.pnlBoundsFootnote",
+                          )
+                        : isSpotFundsMode
+                          ? t("dialog.modeFootnote")
+                          : t("dialog.atLeastOneFootnote")}
+                  </p>
+                </div>
 
-          <DialogFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onOpenChange(false)}
-              disabled={busy}
-            >
-              {tc("actions.cancel")}
-            </Button>
-            <Button
-              size="sm"
-              onClick={requestSubmit}
-              disabled={busy || validation !== null}
-            >
-              {isEdit ? t("dialog.save") : t("dialog.addTitle")}
-            </Button>
-          </DialogFooter>
+                {validation && (
+                  <p
+                    id="kind-currency-error"
+                    role="alert"
+                    className="text-[0.6875rem] text-[var(--danger)]"
+                  >
+                    {pnlAccount &&
+                    validation.key === "limit.pnlCurrencyRequired"
+                      ? t("dialog.accountCurrencyMissingHint")
+                      : tv(validation.key, validation.values)}
+                  </p>
+                )}
+                {error && !confirmOpen && (
+                  <ErrorBanner
+                    message={error}
+                    onDismiss={() => setError(null)}
+                  />
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onOpenChange(false)}
+                  disabled={busy}
+                >
+                  {tc("actions.cancel")}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={requestSubmit}
+                  disabled={busy || validation !== null}
+                >
+                  {isEdit ? t("dialog.save") : t("dialog.addTitle")}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>

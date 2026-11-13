@@ -263,17 +263,15 @@ func TestPutSpotFundsLimitModeReadBackError(t *testing.T) {
 	}
 }
 
-// TestDeleteSpotFundsLimitMode proves DELETE /limits removes the meta-policy
-// row like any barrier: 204 on success, and the absent-barrier status when no
-// mode is stored.
+// TestDeleteSpotFundsLimitMode proves the permanent-policy refusal is mapped
+// to a validation response by DELETE /limits.
 func TestDeleteSpotFundsLimitMode(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		err        error
 		wantStatus int
 	}{
-		{"stored", nil, http.StatusNoContent},
-		{"absent", fmt.Errorf("setting %q: %w", domain.SettingKeySpotFundsLimitMode, domain.ErrNotFound), http.StatusNotFound},
+		{"permanent", fmt.Errorf("funds limit mode is permanent: %w", domain.ErrInvalid), http.StatusUnprocessableEntity},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &fakeService{delLimErr: tc.err}

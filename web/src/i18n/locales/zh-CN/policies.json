@@ -20,6 +20,20 @@
   "intro": "持久化于控制平面并按策略应用于 OpenPit 引擎的关系型风控屏障。每行为某目标的一条屏障配置。",
   "addPolicy": "添加策略",
   "wikiDetails": "详情",
+  "picker": {
+    "description": "请选择策略组。",
+    "groupsLabel": "策略组",
+    "allGroups": "所有分组",
+    "changePolicy": "更改策略",
+    "groups": {
+      "orders": { "title": "订单", "description": "检查订单属性和提交频率。" },
+      "pnl": { "title": "P&L", "description": "盈利和亏损边界。" },
+      "approval": {
+        "title": "确认与审核",
+        "description": "将订单提交给操作员审核的条件。"
+      }
+    }
+  },
   "filter": {
     "account": "按账户筛选",
     "accountPlaceholder": "acc-1",

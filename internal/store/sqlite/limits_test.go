@@ -453,14 +453,15 @@ func TestListPolicyRowsUnionOrderAndTotal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPolicyRows all: %v", err)
 	}
-	if page.Total != 3 {
-		t.Fatalf("total = %d, want 3", page.Total)
+	if page.Total != 4 {
+		t.Fatalf("total = %d, want 4", page.Total)
 	}
 	// kind sorts lexically: order_size_limit, rate_limit.
 	wantOrder := []string{
 		"order_size_limit|acc-1",
 		"rate_limit|acc-1",
 		"rate_limit|acc-2",
+		"spot_funds_limit_mode|",
 	}
 	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder) {
 		t.Fatalf("default order = %v, want %v", got, wantOrder)
@@ -674,6 +675,7 @@ func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
 		[]string{
 			"rate_limit|acc-1",
 			"rate_limit|acc-2",
+			"spot_funds_limit_mode|",
 			"order_size_limit|acc-1",
 			"spot_funds_pnl_bounds_kill_switch|",
 			"rate_limit|",
@@ -805,8 +807,7 @@ func TestDeleteAssetRequiresForceForSpotFundsPnlBoundsCurrencyDependent(t *testi
 func TestListPolicyRowsSortAndPage(t *testing.T) {
 	ctx, rs := seedPolicyFixtures(t)
 
-	// Sort by account ascending: acc-1's two barriers (ordered by the kind
-	// tiebreak) then acc-2's rate barrier.
+	// Sort by account ascending: the global mode, then the account barriers.
 	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
 		Sort: fwstore.SortSpec{Column: "account"},
 	})
@@ -814,6 +815,7 @@ func TestListPolicyRowsSortAndPage(t *testing.T) {
 		t.Fatalf("ListPolicyRows sort account: %v", err)
 	}
 	wantOrder := []string{
+		"spot_funds_limit_mode|",
 		"order_size_limit|acc-1",
 		"rate_limit|acc-1",
 		"rate_limit|acc-2",
@@ -830,8 +832,8 @@ func TestListPolicyRowsSortAndPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPolicyRows page 0: %v", err)
 	}
-	if page.Total != 3 {
-		t.Fatalf("page 0 total = %d, want 3", page.Total)
+	if page.Total != 4 {
+		t.Fatalf("page 0 total = %d, want 4", page.Total)
 	}
 	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder[:2]) {
 		t.Fatalf("page 0 = %v, want %v", got, wantOrder[:2])
@@ -867,8 +869,8 @@ func TestListPolicyRowsSpotFundsLimitModeRow(t *testing.T) {
 		return page
 	}
 	kind := fwstore.PolicyKindSpotFundsLimitMode
-	if page := list(fwstore.PolicyListFilter{Kind: &kind}); page.Total != 0 || len(page.Rows) != 0 {
-		t.Fatalf("mode rows with no stored mode = %+v, want none", page)
+	if page := list(fwstore.PolicyListFilter{Kind: &kind}); page.Total != 1 || len(page.Rows) != 1 || page.Rows[0].SpotFundsLimitMode.Mode != domain.SpotFundsLimitModeEnforce {
+		t.Fatalf("mode rows with no stored setting = %+v, want one enforce row", page)
 	}
 
 	if err := rs.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, string(domain.SpotFundsLimitModeTrackOnly)); err != nil {
@@ -947,8 +949,8 @@ func TestListPolicyRowsSpotFundsLimitModeRow(t *testing.T) {
 	if err := rs.DeleteSetting(ctx, domain.SettingKeySpotFundsLimitMode); err != nil {
 		t.Fatalf("DeleteSetting(mode): %v", err)
 	}
-	if page := list(fwstore.PolicyListFilter{}); page.Total != 3 || !equalStrings(policyKeys(page.Rows), all[:3]) {
-		t.Fatalf("rows after delete = %v total %d, want %v", policyKeys(page.Rows), page.Total, all[:3])
+	if page := list(fwstore.PolicyListFilter{}); page.Total != 4 || !equalStrings(policyKeys(page.Rows), all) || page.Rows[3].SpotFundsLimitMode.Mode != domain.SpotFundsLimitModeEnforce {
+		t.Fatalf("rows after clearing setting = %v total %d, want %v", policyKeys(page.Rows), page.Total, all)
 	}
 }
 

@@ -20,6 +20,23 @@
   "intro": "Barreiras relacionais de políticas de risco, mantidas no plano de controle e aplicadas ao motor OpenPit por política. Cada linha é uma barreira para um alvo.",
   "addPolicy": "Adicionar política",
   "wikiDetails": "Detalhes",
+  "picker": {
+    "description": "Selecione um grupo de políticas.",
+    "groupsLabel": "Grupos de políticas",
+    "allGroups": "Todos os grupos",
+    "changePolicy": "Alterar política",
+    "groups": {
+      "orders": {
+        "title": "Ordens",
+        "description": "Verificação dos atributos e da frequência de envio de ordens."
+      },
+      "pnl": { "title": "P&L", "description": "Limites de lucro e perda." },
+      "approval": {
+        "title": "Confirmação e revisão",
+        "description": "Condições para enviar uma ordem à revisão de um operador."
+      }
+    }
+  },
   "filter": {
     "account": "Filtrar por conta",
     "accountPlaceholder": "acc-1",

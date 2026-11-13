@@ -20,6 +20,23 @@
   "intro": "Relational risk-policy barriers persisted in the control plane and applied to the OpenPit engine per policy. Each row is one barrier for a target.",
   "addPolicy": "Add policy",
   "wikiDetails": "Details",
+  "picker": {
+    "description": "Choose a policy group.",
+    "groupsLabel": "Policy groups",
+    "allGroups": "All groups",
+    "changePolicy": "Change policy",
+    "groups": {
+      "orders": {
+        "title": "Orders",
+        "description": "Check order attributes and submission rate."
+      },
+      "pnl": { "title": "P&L", "description": "Profit and loss bounds." },
+      "approval": {
+        "title": "Confirmation and review",
+        "description": "Conditions for sending an order to an operator for review."
+      }
+    }
+  },
   "filter": {
     "account": "Filter by account",
     "accountPlaceholder": "acc-1",

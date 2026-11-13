@@ -74,6 +74,7 @@ export function registerCustomHostComposition(): void {
     kinds: [{ kind: "threshold" }],
     catalog: {
       wikiUrl: "https://openpit.dev/docs/examples/host-policy",
+      group: "orders",
       fields: [{ key: "limit" }],
     },
   });

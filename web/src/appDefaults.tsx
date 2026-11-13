@@ -55,6 +55,7 @@ export function registerAppVocabulary(): void {
     kinds: [{ kind: "max_orders" }, { kind: "window" }],
     catalog: {
       wikiUrl: siteLink("wiki", "/Policies/", "ratelimitpolicy"),
+      group: "orders",
       fields: [{ key: "max_orders" }, { key: "window" }],
     },
   });
@@ -70,6 +71,7 @@ export function registerAppVocabulary(): void {
     kinds: [{ kind: "max_quantity" }, { kind: "max_notional" }],
     catalog: {
       wikiUrl: siteLink("wiki", "/Policies/", "ordersizelimitpolicy"),
+      group: "orders",
       fields: [{ key: "max_quantity" }, { key: "max_notional" }],
     },
   });
@@ -94,6 +96,7 @@ export function registerAppVocabulary(): void {
       ],
       catalog: {
         wikiUrl: siteLink("wiki", "/Spot-Funds/", anchor),
+        group: "pnl",
         fields: [
           { key: "currency" },
           { key: "lower_bound" },
@@ -108,6 +111,7 @@ export function registerAppVocabulary(): void {
     kinds: [{ kind: "mode" }],
     catalog: {
       wikiUrl: siteLink("wiki", "/Spot-Funds/", "funds-limit-mode"),
+      group: null,
       fields: [{ key: "mode" }],
     },
   });

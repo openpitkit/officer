@@ -358,8 +358,8 @@ func TestLocalNode_SpotFundsLimitModeListsStoredRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list without a stored mode: %v", err)
 	}
-	if len(limits.SpotFundsLimitModes) != 0 {
-		t.Fatalf("modes without a stored mode = %+v, want none", limits.SpotFundsLimitModes)
+	if !reflect.DeepEqual(limits.SpotFundsLimitModes, []domain.LimitSpotFundsLimitMode{{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce}}) {
+		t.Fatalf("modes without a stored setting = %+v, want one enforce row", limits.SpotFundsLimitModes)
 	}
 	if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "track_only"); err != nil {
 		t.Fatalf("seed mode: %v", err)
@@ -681,10 +681,8 @@ var spotFundsLimitModeTarget = LimitTarget{
 	Scope:  domain.ScopeGlobal,
 }
 
-// TestLocalNode_SpotFundsLimitModeDelete proves removing the meta-policy row
-// deletes the stored mode, applies Enforce to the live engine without a
-// rebuild, audits one delete_limit, and that a tighten-only caller may make
-// it, since Enforce only tightens.
+// TestLocalNode_SpotFundsLimitModeDelete proves every caller is refused without
+// changing the stored setting, the engine, or the audit.
 func TestLocalNode_SpotFundsLimitModeDelete(t *testing.T) {
 	t.Parallel()
 	for name, caller := range map[string]domain.Caller{
@@ -692,227 +690,26 @@ func TestLocalNode_SpotFundsLimitModeDelete(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			eng := newFakeEngine()
-			n, realm := newTestNode(t, eng)
-			ctx := context.Background()
-			if err := n.SetSpotFundsLimitMode(ctx, domain.SpotFundsLimitModeTrackOnly, testCaller); err != nil {
-				t.Fatalf("set track_only: %v", err)
-			}
-			n.build = func(engine.Snapshot) (engine.Engine, error) {
-				t.Fatal("mode delete rebuilt the engine")
-				return nil, nil
-			}
-			before := auditRowCount(t, ctx, realm)
-			sink, err := n.DeleteLimit(ctx, spotFundsLimitModeTarget, caller)
-			if err != nil || sink != nil {
-				t.Fatalf("DeleteLimit = %v, %v; want nil sink and no error", sink, err)
-			}
-			requireStoredSpotFundsLimitMode(t, realm, "", false)
-			if !reflect.DeepEqual(eng.spotFundsTrackOnlyCalls, []bool{true, false}) {
-				t.Fatalf("engine mode calls = %v, want [true false]", eng.spotFundsTrackOnlyCalls)
-			}
-			state, err := n.SpotFundsLimitMode(ctx)
-			if err != nil || state.Mode != domain.SpotFundsLimitModeEnforce || state.Stored {
-				t.Fatalf("state after delete = %+v, %v; want enforce with no stored row", state, err)
-			}
-			if after := auditRowCount(t, ctx, realm); after != before+1 {
-				t.Fatalf("audit rows = %d, want %d", after, before+1)
-			}
-			rows := modeAuditRows(t, ctx, realm, domain.AuditActionDeleteLimit)
-			if len(rows) != 1 || rows[0].Detail.Code != domain.AuditDetailDeleteLimit ||
-				rows[0].Detail.Params["scope"] != string(domain.ScopeGlobal) ||
-				len(rows[0].Detail.Fields) != 0 ||
-				rows[0].Actor != caller.Principal || rows[0].Source != caller.Source {
-				t.Fatalf("delete_limit audits = %+v, want one global row attributed to the caller", rows)
-			}
-
-			// The row is gone: a second delete answers like an absent barrier.
-			_, err = n.DeleteLimit(ctx, spotFundsLimitModeTarget, caller)
-			if !errors.Is(err, domain.ErrNotFound) {
-				t.Fatalf("second delete error = %v, want ErrNotFound", err)
-			}
-			if len(eng.spotFundsTrackOnlyCalls) != 2 || auditRowCount(t, ctx, realm) != before+1 {
-				t.Fatal("deleting an absent mode changed the engine or audit")
-			}
-		})
-	}
-}
-
-// TestLocalNode_SpotFundsLimitModeDeleteRefusals proves an absent row and a
-// non-global address are refused before the engine or the audit is touched,
-// and that the address is validated even before the live-configuration gate.
-func TestLocalNode_SpotFundsLimitModeDeleteRefusals(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name    string
-		target  LimitTarget
-		stored  bool
-		want    error
-		pointer string
-	}{
-		{"absent", spotFundsLimitModeTarget, false, domain.ErrNotFound, ""},
-		{"account_scope", LimitTarget{
-			Policy: domain.PolicySpotFundsLimitMode, Scope: domain.ScopeAccount, Account: "acc",
-		}, true, domain.ErrInvalid, "/scope"},
-		{"global_with_account", LimitTarget{
-			Policy: domain.PolicySpotFundsLimitMode, Scope: domain.ScopeGlobal, Account: "acc",
-		}, true, domain.ErrInvalid, "/account"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			eng := newFakeEngine()
-			n, realm := newTestNode(t, eng)
-			ctx := context.Background()
-			if tc.stored {
-				if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "track_only"); err != nil {
-					t.Fatalf("seed mode: %v", err)
-				}
-			}
-			if tc.want == domain.ErrInvalid {
-				// The address check must precede even the live-configuration
-				// gate; an absent row is only found under it.
-				n.restarting.Store(true)
-			}
-			before := auditRowCount(t, ctx, realm)
-			_, err := n.DeleteLimit(ctx, tc.target, agentCaller)
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("DeleteLimit error = %v, want %v", err, tc.want)
-			}
-			if tc.pointer != "" && domain.ValidationPointer(err) != tc.pointer {
-				t.Fatalf("DeleteLimit pointer = %q, want %q", domain.ValidationPointer(err), tc.pointer)
-			}
-			if tc.stored {
-				requireStoredSpotFundsLimitMode(t, realm, "track_only", true)
-			}
-			if len(eng.spotFundsTrackOnlyCalls) != 0 || auditRowCount(t, ctx, realm) != before {
-				t.Fatal("refused mode delete changed the engine or audit")
-			}
-		})
-	}
-}
-
-// TestLocalNode_SpotFundsLimitModeDeleteEngineErrorRestores proves a refused
-// engine apply puts the removed value back, so the stored mode and the engine
-// agree, and nothing is audited.
-func TestLocalNode_SpotFundsLimitModeDeleteEngineErrorRestores(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	n, realm := newTestNode(t, eng)
-	ctx := context.Background()
-	if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "track_only"); err != nil {
-		t.Fatalf("seed mode: %v", err)
-	}
-	engineErr := errors.New("mode engine failure")
-	eng.spotFundsTrackOnlyErr = engineErr
-	before := auditRowCount(t, ctx, realm)
-	_, err := n.DeleteLimit(ctx, spotFundsLimitModeTarget, testCaller)
-	if !errors.Is(err, engineErr) {
-		t.Fatalf("DeleteLimit error = %v, want engine failure", err)
-	}
-	requireStoredSpotFundsLimitMode(t, realm, "track_only", true)
-	if auditRowCount(t, ctx, realm) != before {
-		t.Fatal("failed mode delete was audited")
-	}
-}
-
-// TestLocalNode_SpotFundsLimitModeDeleteFatals proves a failed restore after a
-// refused engine apply, and a failed audit after a successful one, both route
-// to the fatal hook naming the meta-policy.
-func TestLocalNode_SpotFundsLimitModeDeleteFatals(t *testing.T) {
-	t.Parallel()
-	auditErr := errors.New("mode delete audit failure")
-	for _, tc := range []struct {
-		name      string
-		operation string
-		failure   error
-		wrap      func(store.RealmStore, *fakeEngine) store.RealmStore
-	}{
-		// On the delete path the restore is the only realm-setting write.
-		{"restore", "revert spot funds limit mode", errSetSettingStore, func(
-			realm store.RealmStore, eng *fakeEngine,
-		) store.RealmStore {
-			eng.spotFundsTrackOnlyErr = errors.New("mode engine failure")
-			return &failSetSettingRealm{RealmStore: realm}
-		}},
-		{"audit", "audit spot funds limit mode", auditErr, func(
-			realm store.RealmStore, _ *fakeEngine,
-		) store.RealmStore {
-			return &failActionAuditRealm{RealmStore: realm, action: domain.AuditActionDeleteLimit, err: auditErr}
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			eng := newFakeEngine()
-			n, realm := newTestNode(t, eng)
-			ctx := context.Background()
-			if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "track_only"); err != nil {
-				t.Fatalf("seed mode: %v", err)
-			}
-			failure := tc.failure
-			n.realm = tc.wrap(realm, eng)
-			var fatalErr error
-			n.fatal = func(err error) { fatalErr = err }
-			_, err := n.DeleteLimit(ctx, spotFundsLimitModeTarget, testCaller)
-			if !errors.Is(err, failure) || !errors.Is(fatalErr, failure) {
-				t.Fatalf("delete error = %v, fatal error = %v; want the failure in both", err, fatalErr)
-			}
-			if !strings.Contains(fatalErr.Error(), `operation="`+tc.operation+`"`) ||
-				!strings.Contains(fatalErr.Error(), "policy="+domain.PolicySpotFundsLimitMode) {
-				t.Fatalf("fatal error = %v, want operation %q and the policy", fatalErr, tc.operation)
-			}
-			if rows := modeAuditRows(t, ctx, realm, domain.AuditActionDeleteLimit); len(rows) != 0 {
-				t.Fatalf("delete_limit audits = %+v, want none", rows)
-			}
-		})
-	}
-}
-
-// TestLocalNode_SpotFundsLimitModeDeleteFinishesAfterCancellation proves a
-// caller cancellation during the engine apply neither skips the audit of a
-// done delete nor the restore of a refused one.
-func TestLocalNode_SpotFundsLimitModeDeleteFinishesAfterCancellation(t *testing.T) {
-	t.Parallel()
-	for _, failEngine := range []bool{false, true} {
-		name := "audit"
-		if failEngine {
-			name = "restore"
-		}
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			eng := newFakeEngine()
-			n, realm := newTestNode(t, eng)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "track_only"); err != nil {
-				t.Fatalf("seed mode: %v", err)
-			}
-			n.realm = &spotFundsLimitModeCancellationProbeRealm{RealmStore: realm}
-			n.engine = &cancelSpotFundsLimitModeEngine{fakeEngine: eng, cancel: cancel}
-			engineErr := errors.New("mode engine failure")
-			if failEngine {
-				eng.spotFundsTrackOnlyErr = engineErr
-			}
-			_, err := n.DeleteLimit(ctx, spotFundsLimitModeTarget, testCaller)
-			if !errors.Is(ctx.Err(), context.Canceled) {
-				t.Fatal("engine did not cancel the caller context")
-			}
-			rows := modeAuditRows(t, context.Background(), realm, domain.AuditActionDeleteLimit)
-			if failEngine {
-				if !errors.Is(err, engineErr) {
-					t.Fatalf("delete error = %v, want engine failure after durable restore", err)
-				}
-				requireStoredSpotFundsLimitMode(t, realm, "track_only", true)
-				if len(rows) != 0 {
-					t.Fatalf("delete_limit audits = %+v, want none after restore", rows)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("delete after engine canceled caller: %v", err)
-			}
-			requireStoredSpotFundsLimitMode(t, realm, "", false)
-			if len(rows) != 1 {
-				t.Fatalf("delete_limit audits = %d, want 1 after caller cancellation", len(rows))
+			for _, storedMode := range []string{"", "enforce", "track_only"} {
+				t.Run(storedMode, func(t *testing.T) {
+					eng := newFakeEngine()
+					n, realm := newTestNode(t, eng)
+					ctx := context.Background()
+					if storedMode != "" {
+						if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, storedMode); err != nil {
+							t.Fatal(err)
+						}
+					}
+					before := auditRowCount(t, ctx, realm)
+					sink, err := n.DeleteLimit(ctx, spotFundsLimitModeTarget, caller)
+					if !errors.Is(err, domain.ErrInvalid) || sink != nil {
+						t.Fatalf("DeleteLimit = %v, %v; want nil sink and ErrInvalid", sink, err)
+					}
+					requireStoredSpotFundsLimitMode(t, realm, storedMode, storedMode != "")
+					if len(eng.spotFundsTrackOnlyCalls) != 0 || auditRowCount(t, ctx, realm) != before {
+						t.Fatal("refused deletion changed the engine or audit")
+					}
+				})
 			}
 		})
 	}

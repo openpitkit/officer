@@ -304,9 +304,7 @@ type Node interface {
 	// named policy from the persisted full barrier set, audits the action, and
 	// returns a replacement market-data sink only when the engine was rebuilt.
 	// A tighten-only caller is refused, since removing a barrier only loosens.
-	// The Spot Funds limit-mode meta-policy is the exception: its removal
-	// deletes the stored mode and applies Enforce to the live engine without a
-	// rebuild, which only tightens, so a tighten-only caller may make it.
+	// The permanent Spot Funds limit-mode policy cannot be deleted.
 	DeleteLimit(
 		ctx context.Context, target LimitTarget, caller domain.Caller,
 	) (marketdata.Sink, error)

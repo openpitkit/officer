@@ -95,14 +95,14 @@ func (d setupDecisions) AccountModeChosen(ctx context.Context) (bool, error) {
 	return accountmode.Chosen(ctx, d.node)
 }
 
-// FundsLimitModeChosen reads the stored rows, where the Spot Funds limit-mode
-// meta-policy row is present only once a mode was stored.
+// FundsLimitModeChosen distinguishes an explicit stored choice from the
+// effective default displayed by the permanent policy row.
 func (d setupDecisions) FundsLimitModeChosen(ctx context.Context) (bool, error) {
-	limits, err := d.node.ListLimits(ctx, "")
+	state, err := d.node.SpotFundsLimitMode(ctx)
 	if err != nil {
 		return false, err
 	}
-	return len(limits.SpotFundsLimitModes) != 0, nil
+	return state.Stored, nil
 }
 
 func (d setupDecisions) CredentialsSealed() bool { return d.node.CredentialsSealed() }

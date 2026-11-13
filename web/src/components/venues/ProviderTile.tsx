@@ -18,7 +18,7 @@
 import { ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { Card } from "@/components/ui/card";
+import { SelectionTile } from "@/components/SelectionTile";
 import { ProviderIcon } from "./ProviderIcon";
 
 /** Caller-resolved provider identity, display text, and reference URLs. */
@@ -44,25 +44,17 @@ export function ProviderTile({ provider, onSelect }: ProviderTileProps) {
   const { siteUrl, docsUrl, symbolsUrl } = provider;
 
   return (
-    <Card className="overflow-hidden">
-      <button
-        type="button"
-        className="block w-full p-4 text-left transition-colors hover:bg-surface-hover"
-        onClick={() => onSelect(provider)}
-      >
-        <div className="flex items-start gap-3">
-          <ProviderIcon
-            type={provider.type}
-            className="mt-0.5 h-5 w-5 shrink-0 text-accent"
-          />
-          <div className="min-w-0">
-            <p className="font-semibold text-text">{provider.title}</p>
-            {provider.description !== undefined && (
-              <p className="mt-1 text-xs text-muted">{provider.description}</p>
-            )}
-          </div>
-        </div>
-      </button>
+    <SelectionTile
+      title={provider.title}
+      description={provider.description}
+      onSelect={() => onSelect(provider)}
+      icon={
+        <ProviderIcon
+          type={provider.type}
+          className="mt-0.5 h-5 w-5 shrink-0 text-accent"
+        />
+      }
+    >
       {(siteUrl || docsUrl || symbolsUrl) && (
         <div className="flex flex-wrap gap-3 border-t border-border px-4 py-2">
           {siteUrl && (
@@ -100,6 +92,6 @@ export function ProviderTile({ provider, onSelect }: ProviderTileProps) {
           )}
         </div>
       )}
-    </Card>
+    </SelectionTile>
   );
 }

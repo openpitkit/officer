@@ -511,12 +511,14 @@ function PoliciesTable({
                       })}
                       onClick={() => onEdit(limit)}
                     />
-                    <DeleteButton
-                      title={tc("rowActions.deleteTitle", {
-                        entity: policyLabel(tc, limit.policy),
-                      })}
-                      onClick={() => onDelete(limit)}
-                    />
+                    {limit.policy !== "spot_funds_limit_mode" && (
+                      <DeleteButton
+                        title={tc("rowActions.deleteTitle", {
+                          entity: policyLabel(tc, limit.policy),
+                        })}
+                        onClick={() => onDelete(limit)}
+                      />
+                    )}
                   </RowActions>
                 )}
               </TableCell>
