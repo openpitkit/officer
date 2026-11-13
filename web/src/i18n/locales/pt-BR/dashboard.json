@@ -81,6 +81,8 @@
       "executionReport": "Relatório de execução",
       "setMcpAccess": "Alteração do acesso MCP",
       "setSetting": "Alteração de configuração",
+      "alertDelivery": "Entrega de alerta",
+      "resolveAlert": "Resolver alerta",
       "setMarketData": "Alteração de dados de mercado",
       "setTrading": "Alteração de conexão de negociação",
       "venueFeeSkipped": "Taxa da plataforma ignorada",

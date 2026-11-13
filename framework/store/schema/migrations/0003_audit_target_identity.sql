@@ -20,3 +20,26 @@
 -- reconstructed from a mutable code.
 ALTER TABLE audit ADD COLUMN account_identity BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE audit ADD COLUMN group_identity BIGINT NOT NULL DEFAULT 0;
+
+-- Open events and personal marks live in the durable realm database.
+CREATE TABLE actionable_alert (
+    id {{PK}},
+    external_id {{XID}} UNIQUE,
+    type TEXT NOT NULL,
+    at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE TABLE alert_read_state (
+    alert_id BIGINT NOT NULL REFERENCES actionable_alert(id) ON DELETE CASCADE,
+    principal TEXT NOT NULL,
+    is_read {{BOOL}} NOT NULL,
+    PRIMARY KEY(alert_id, principal)
+);
+CREATE TABLE alert_delivery (
+    alert_id BIGINT NOT NULL REFERENCES actionable_alert(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    failed {{BOOL}} NOT NULL,
+    PRIMARY KEY(alert_id, channel)
+);
+CREATE INDEX idx_actionable_alert_at ON actionable_alert(at, id);

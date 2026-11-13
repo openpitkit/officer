@@ -63,6 +63,9 @@ func (rt *restoreTx) prune(ctx context.Context, scope backup.Scope, data backup.
 		}
 	}
 	if scope.Included(backup.SectionActivityHistory) {
+		if err := rt.pruneAlerts(ctx, data.Alerts); err != nil {
+			return err
+		}
 		if err := rt.pruneActivity(ctx, accountScope, data); err != nil {
 			return err
 		}

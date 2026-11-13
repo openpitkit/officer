@@ -2,6 +2,7 @@ go.openpit.dev/officer
 go.openpit.dev/officer/cmd/pit-officer
 go.openpit.dev/officer/engine
 go.openpit.dev/officer/examples/customhost
+go.openpit.dev/officer/framework/alerts
 go.openpit.dev/officer/framework/app
 go.openpit.dev/officer/framework/auth
 go.openpit.dev/officer/framework/backend

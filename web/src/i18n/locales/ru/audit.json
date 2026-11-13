@@ -59,6 +59,9 @@
     }
   },
   "detail": {
+    "alert_delivery": "Оповещение {{alert}} доставлено через канал {{channel}}",
+    "alert_delivery_failed": "Ошибка доставки оповещения {{alert}} через канал {{channel}}",
+    "resolve_alert": "Оповещение {{alert}} решено действием {{action}}: {{result}}",
     "create_account": "Создание счёта {{account}}",
     "auto_create_account": "Автоматическое создание счёта {{account}} операцией {{operation}}",
     "set_account_notes": "Изменение примечаний счёта {{account}}",

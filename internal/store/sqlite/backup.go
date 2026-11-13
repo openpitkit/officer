@@ -205,6 +205,9 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 		data backup.Data
 		err  error
 	)
+	if data.Alerts, err = r.exportAlerts(ctx); err != nil {
+		return backup.Data{}, err
+	}
 	if data.AssetClasses, err = r.ListAssetClasses(ctx); err != nil {
 		return backup.Data{}, err
 	}
@@ -419,6 +422,10 @@ func (r *realmStore) RestoreBackup(
 	if err != nil {
 		return backup.RestoreSummary{}, err
 	}
+	if scope.Included(backup.SectionActivityHistory) {
+		r.store.alertResolutionMu.Lock()
+		defer r.store.alertResolutionMu.Unlock()
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return backup.RestoreSummary{}, fmt.Errorf("store: begin restore: %w", err)
@@ -536,6 +543,9 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 		}
 	}
 	if scope.Included(backup.SectionActivityHistory) {
+		if err := rt.restoreAlerts(ctx, data.Alerts); err != nil {
+			return err
+		}
 		if err := rt.restoreActivity(ctx, data); err != nil {
 			return err
 		}

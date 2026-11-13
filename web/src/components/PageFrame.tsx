@@ -45,7 +45,7 @@ const MAX_COMPACT_LEVEL = 4;
  */
 export function PageFrame({ title, controls, children }: PageFrameProps) {
   const { t } = useTranslation();
-  const { toggle } = useSidebar();
+  const { toggle, indicator, menuButtonRef } = useSidebar();
   const headerRef = useRef<HTMLElement | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const [compactLevel, setCompactLevel] = useState(0);
@@ -103,13 +103,19 @@ export function PageFrame({ title, controls, children }: PageFrameProps) {
           )}
         >
           <Button
+            ref={menuButtonRef}
             variant="outline"
             size="icon"
-            className="shrink-0 md:hidden"
+            className="relative shrink-0 overflow-visible md:hidden"
             aria-label={t("topBar.toggleNav")}
             onClick={toggle}
           >
             <Menu />
+            {indicator && (
+              <span className="absolute -right-2 -top-2 [&>[data-slot=badge]]:px-1">
+                {indicator}
+              </span>
+            )}
           </Button>
           <span className="hidden h-5 w-px shrink-0 bg-accent sm:block" />
           <h1

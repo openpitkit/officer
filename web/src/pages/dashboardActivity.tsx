@@ -139,6 +139,8 @@ export type AuditIconMeta = {
 
 /** Title keys of the audit actions that have no icon of their own. */
 const AUDIT_ACTION_TITLE_KEYS = new Map<string, string>([
+  ["alert_delivery", "audit.action.alertDelivery"],
+  ["resolve_alert", "audit.action.resolveAlert"],
   ["hydrate", "audit.action.hydrate"],
   ["create_asset", "audit.action.createAsset"],
   ["update_asset", "audit.action.updateAsset"],

@@ -1,0 +1,15 @@
+{
+  "title": "Alertas",
+  "description": "Os eventos pendentes permanecem aqui até que uma decisão seja concluída. O estado de leitura é pessoal e compartilhado entre suas sessões.",
+  "unresolved": "Pendentes: {{count}}",
+  "unread": "Não lidos: {{count}}",
+  "unreadLabel": "Não lido",
+  "loadFailed": "Não foi possível carregar os alertas",
+  "emptyTitle": "Nenhum alerta pendente",
+  "emptyHint": "Novos eventos que exigem ações aparecerão aqui.",
+  "unsupported": "Nenhuma visualização registrada para o tipo de alerta {{type}}",
+  "unsupportedAction": "Esta ação não está registrada para o alerta.",
+  "deliveryFailed": "Falha na entrega: {{channel}}. O alerta continua disponível aqui.",
+  "markRead": "Marcar como lido",
+  "markUnread": "Marcar como não lido"
+}

@@ -88,6 +88,9 @@ const (
 // optional part is split into one code per variant, so every template reads
 // as a whole sentence in every language.
 const (
+	AuditDetailAlertDelivery                   AuditDetailCode = "alert_delivery"
+	AuditDetailAlertDeliveryFailed             AuditDetailCode = "alert_delivery_failed"
+	AuditDetailResolveAlert                    AuditDetailCode = "resolve_alert"
 	AuditDetailCreateAccount                   AuditDetailCode = "create_account"
 	AuditDetailAutoCreateAccount               AuditDetailCode = "auto_create_account"
 	AuditDetailSetAccountNotes                 AuditDetailCode = "set_account_notes"
@@ -201,6 +204,9 @@ const (
 
 // auditDetailTemplates is the English template of every detail code.
 var auditDetailTemplates = map[AuditDetailCode]string{
+	AuditDetailAlertDelivery:                   "Alert {{alert}} delivered through {{channel}}",
+	AuditDetailAlertDeliveryFailed:             "Alert {{alert}} delivery failed through {{channel}}",
+	AuditDetailResolveAlert:                    "Alert {{alert}} resolved by {{action}}: {{result}}",
 	AuditDetailCreateAccount:                   "Account {{account}} created",
 	AuditDetailAutoCreateAccount:               "Account {{account}} created automatically by {{operation}}",
 	AuditDetailSetAccountNotes:                 "Account {{account}} notes changed",

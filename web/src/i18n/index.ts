@@ -36,9 +36,11 @@ const STORAGE_KEY = "pit-officer-lang";
 // is loaded eagerly and folded into { [locale]: { [namespace]: json } }.
 // Adding a namespace or language file needs no edit here.
 type Catalog = { default: ResourceLanguage };
-const modules = import.meta.glob<Catalog>("./locales/**/*.json", {
+// Vitest detects the literal import.meta.glob( call to avoid caching a stale
+// file list; a type argument prevents that detection in Vitest 5.
+const modules = import.meta.glob("./locales/**/*.json", {
   eager: true,
-});
+}) as Record<string, Catalog>;
 
 export const appLocaleResources: Resource = {};
 for (const [path, mod] of Object.entries(modules)) {

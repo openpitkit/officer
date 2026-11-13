@@ -80,6 +80,9 @@ func pnlBoundV1Fixture(t *testing.T) string {
 		DELETE FROM schema_migration WHERE version > 1;
 		ALTER TABLE audit DROP COLUMN account_identity;
 		ALTER TABLE audit DROP COLUMN group_identity;
+		DROP TABLE alert_delivery;
+		DROP TABLE alert_read_state;
+		DROP TABLE actionable_alert;
 	`); err != nil {
 		t.Fatalf("build 0.1 P&L-bound fixture with raw SQL: %v", err)
 	}

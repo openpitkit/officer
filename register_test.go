@@ -280,6 +280,7 @@ func TestRegisterBuildUsesPopulatedMCPCatalog(t *testing.T) {
 	}
 	expected := frameworkmcp.NewToolRegistry()
 	mcptools.RegisterTools(expected, nil)
+	mcptools.RegisterAlertTools(expected, nil)
 	if len(commands) != len(expected.Descriptors()) {
 		t.Fatalf("ListMcpAccess returned %d commands, want %d", len(commands), len(expected.Descriptors()))
 	}
@@ -1058,6 +1059,7 @@ func TestRegisterRouteBaseline(t *testing.T) {
 	for _, route := range httpapi.NewRouteRegistry(app.Service(), nil, sealReports).Routes() {
 		v1 = append(v1, operation{route.Method, route.Pattern})
 	}
+	v1 = append(v1, operation{"GET", "/alerts"}, operation{"GET", "/alerts/{id}"}, operation{"PUT", "/alerts/{id}/read"}, operation{"POST", "/alerts/{id}/actions/{action}"})
 	v1 = append(v1,
 		operation{http.MethodGet, "/account-mode"},
 		operation{http.MethodPut, "/account-mode"},

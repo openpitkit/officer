@@ -3583,6 +3583,9 @@ func TestBackupRestoreResolvesForeignKeysDictionaryFirst(t *testing.T) {
 // (one per backup.Data section). Keep it in lockstep with backup.Data: a new
 // exported table must appear here.
 var backupExportedTables = map[string]bool{
+	"actionable_alert":           true,
+	"alert_read_state":           true,
+	"alert_delivery":             true,
 	"asset":                      true,
 	"asset_class":                true,
 	"principal":                  true,

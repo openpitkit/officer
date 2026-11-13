@@ -1,0 +1,15 @@
+{
+  "title": "Alerts",
+  "description": "Open events remain here until a decision succeeds. Read state is personal and shared across your sessions.",
+  "unresolved": "Unresolved: {{count}}",
+  "unread": "Unread: {{count}}",
+  "unreadLabel": "Unread",
+  "loadFailed": "Could not load alerts",
+  "emptyTitle": "No unresolved alerts",
+  "emptyHint": "New actionable events will appear here.",
+  "unsupported": "No renderer registered for alert type {{type}}",
+  "unsupportedAction": "This action is not registered for the alert.",
+  "deliveryFailed": "Delivery failed: {{channel}}. The alert remains available here.",
+  "markRead": "Mark read",
+  "markUnread": "Mark unread"
+}

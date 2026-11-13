@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -811,9 +812,12 @@ var businessCSVEntityContracts = []businessCSVEntityContract{
 var expectedSchemaTableNames = []string{
 	"account",
 	"account_group",
+	"actionable_alert",
 	"adjustment",
 	"adjustment_status",
 	"adjustment_type",
+	"alert_delivery",
+	"alert_read_state",
 	"asset",
 	"asset_class",
 	"attestation_alg",
@@ -872,6 +876,9 @@ var nonClientDataSchemaTables = map[string]string{
 // means the surface intentionally does not carry that column and must be covered
 // by an allowlist entry when the table participates in that surface.
 var schemaClientTables = map[string]schemaSurfaceSpec{
+	"actionable_alert": {backup: map[string]string{"external_id": "ID", "type": "Type", "at": "At", "source": "Source", "payload": "Payload"}},
+	"alert_read_state": {backup: map[string]string{"alert_id": "Alerts.ID", "principal": "ReadStates key", "is_read": "ReadStates value"}},
+	"alert_delivery":   {backup: map[string]string{"alert_id": "Alerts.ID", "channel": "Deliveries key", "failed": "Deliveries value"}},
 	"asset": {
 		backup: map[string]string{
 			"code":     "Code",
@@ -1491,6 +1498,10 @@ func seedClientDataDriftRealm(
 	t *testing.T, ctx context.Context, rs store.RealmStore,
 ) {
 	t.Helper()
+	alertScope := backup.Scope{Sections: []backup.Section{backup.SectionActivityHistory}}
+	alertArchive := backup.NewArchive(time.Now(), "sentinel", backup.RealmLabel{Code: string(domain.DefaultRealm)}, alertScope, backup.Data{Alerts: []backup.ActionableAlert{{ID: "alert-sentinel", Type: "archive-sentinel", At: time.Date(2026, 7, 8, 9, 10, 11, 0, time.UTC), Source: domain.SourceSystem, Payload: json.RawMessage(`{"reference":"sentinel"}`), ReadStates: map[string]bool{"operator": true}, Deliveries: map[string]bool{"sentinel": true}}}}, backup.CredentialFormPlaintext)
+	_, alertErr := rs.RestoreBackup(ctx, alertArchive, backup.RestoreOptions{Scope: alertScope, Mode: backup.RestoreModeInsertMissing})
+	must(t, "restore alert sentinel", alertErr)
 	must(t, "CreateAssetClass equity", rs.CreateAssetClass(ctx, domain.AssetClass{
 		Code:  "equity",
 		Title: "Equity Sentinel",
@@ -2069,6 +2080,7 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		value  any
 	}{
 		{"asset-classes", data.AssetClasses},
+		{"alerts", data.Alerts},
 		{"assets", data.Assets},
 		{"principals", data.Principals},
 		{"account-groups", data.Groups},

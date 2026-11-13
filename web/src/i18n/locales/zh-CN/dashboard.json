@@ -81,6 +81,8 @@
       "executionReport": "执行报告",
       "setMcpAccess": "设置 MCP 访问",
       "setSetting": "更改设置",
+      "alertDelivery": "发送提醒",
+      "resolveAlert": "处理提醒",
       "setMarketData": "更改行情数据",
       "setTrading": "更改交易连接",
       "venueFeeSkipped": "已跳过交易场所费用",

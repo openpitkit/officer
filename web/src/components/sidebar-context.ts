@@ -18,12 +18,21 @@
 // Context and hook for the mobile sidebar drawer, kept apart from the provider
 // component so the provider file exports only a component (Fast Refresh).
 
-import { createContext, useContext } from "react";
+import {
+  createContext,
+  useContext,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 export interface SidebarState {
   open: boolean;
   toggle: () => void;
   close: () => void;
+  /** Optional status on the existing mobile menu affordance. */
+  indicator?: ReactNode;
+  setIndicator?: (indicator: ReactNode) => void;
+  menuButtonRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export const SidebarContext = createContext<SidebarState | null>(null);

@@ -1,0 +1,15 @@
+{
+  "title": "Alertas",
+  "description": "Los eventos pendientes permanecen aquí hasta que una decisión se complete. El estado de lectura es personal y se comparte entre sus sesiones.",
+  "unresolved": "Pendientes: {{count}}",
+  "unread": "Sin leer: {{count}}",
+  "unreadLabel": "Sin leer",
+  "loadFailed": "No se pudieron cargar las alertas",
+  "emptyTitle": "No hay alertas pendientes",
+  "emptyHint": "Los nuevos eventos que requieran acciones aparecerán aquí.",
+  "unsupported": "No hay una vista registrada para el tipo de alerta {{type}}",
+  "unsupportedAction": "Esta acción no está registrada para la alerta.",
+  "deliveryFailed": "Error de entrega: {{channel}}. La alerta sigue disponible aquí.",
+  "markRead": "Marcar como leída",
+  "markUnread": "Marcar como no leída"
+}

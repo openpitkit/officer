@@ -73,6 +73,10 @@ keeps its interactive behavior.
 
 ## Authorization
 
+The panel's [actionable alerts](alerts.md) keep read state for the trusted
+operator principal across sessions. Alert business types and additional delivery
+channels are programmatic registrations, with no extra environment switches.
+
 Pit Officer has three access states. The state is kept in the database, not
 in the environment: a new database starts in `setup`, and so does the one
 `POST /database/reset` recreates. First-run setup completes in the panel with

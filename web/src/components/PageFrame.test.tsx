@@ -34,6 +34,25 @@ function renderFrame(ui: ReactNode, toggle = vi.fn()) {
 }
 
 describe("PageFrame", () => {
+  it("keeps an optional status on the existing menu affordance", () => {
+    render(
+      <SidebarContext.Provider
+        value={{
+          open: false,
+          toggle: vi.fn(),
+          close: vi.fn(),
+          indicator: <span>3 unread alerts</span>,
+        }}
+      >
+        <PageFrame title="Orders">content</PageFrame>
+      </SidebarContext.Provider>,
+    );
+    expect(
+      within(
+        screen.getByRole("button", { name: "Toggle navigation" }),
+      ).getByText("3 unread alerts"),
+    ).toBeInTheDocument();
+  });
   it("shows the title and toggles the navigation from the menu button", async () => {
     const toggle = renderFrame(<PageFrame title="Orders">content</PageFrame>);
 

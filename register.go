@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/engine"
+	"go.openpit.dev/officer/framework/alerts"
 	frameworkapp "go.openpit.dev/officer/framework/app"
 	"go.openpit.dev/officer/framework/auth"
 	fwbackend "go.openpit.dev/officer/framework/backend"
@@ -66,6 +67,12 @@ type Config struct {
 	// AllowedHosts are extra host names the HTTP surface answers besides
 	// loopback; Register refuses an invalid one.
 	AllowedHosts []string
+	// AlertTypes and AlertChannels attach business decisions and enabled delivery
+	// channels. The panel channel is always installed by the alert service.
+	AlertTypes    []alerts.Type
+	AlertChannels []alerts.Channel
+	// AlertServiceReady connects producers after storage and registries are ready.
+	AlertServiceReady func(*alerts.Service) error
 }
 
 // loopbackHosts are the host names the HTTP surface always answers to, since
@@ -157,6 +164,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	var (
 		sealReports   httpapi.SealReportSource
 		accessService *access.Service
+		alertService  *alerts.Service
 		backupNode    node.Node
 		// Stays nil when a host replaces the service factory.
 		accountScope *accountmode.Scope
@@ -195,6 +203,23 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		}
 		sealReports = reports
 		backupNode = n
+		realmStore, err := st.ForRealm(ctx, domain.DefaultRealm)
+		if err != nil {
+			return err
+		}
+		alertState, ok := realmStore.(alerts.Store)
+		if !ok {
+			return errors.New("officer: the realm store does not implement alerts.Store")
+		}
+		alertService, err = alerts.New(alertState, cfg.AlertTypes, cfg.AlertChannels)
+		if err != nil {
+			return fmt.Errorf("officer: build alert service: %w", err)
+		}
+		if cfg.AlertServiceReady != nil {
+			if err := cfg.AlertServiceReady(alertService); err != nil {
+				return fmt.Errorf("officer: attach alert producers: %w", err)
+			}
+		}
 		return nil
 	})
 	b.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) {
@@ -271,6 +296,9 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		svc fwbackend.ControlPlane, logs httpx.LogSource,
 	) frameworkapp.RouteConfig {
 		config := httpapi.RouteConfig(svc, logs, sealReports)
+		for _, route := range httpapi.AlertRoutes(alertService) {
+			config.Routes.Register(route)
+		}
 		serialiseWithSetup(config.Routes, fundsLimitModePutRoute, accessService)
 		for _, route := range accountmode.Routes(svc, accountScope, accessService) {
 			config.Routes.Register(route)
@@ -291,6 +319,9 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		return config
 	})
 	b.AddToolRegistrar(mcptools.RegisterTools)
+	b.AddToolRegistrar(func(reg *frameworkmcp.ToolRegistry, _ frameworkmcp.Source) {
+		mcptools.RegisterAlertTools(reg, alertService)
+	})
 	b.SetSPAFactory(web.Dist)
 	return nil
 }

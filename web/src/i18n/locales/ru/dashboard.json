@@ -81,6 +81,8 @@
       "executionReport": "Отчёт об исполнении",
       "setMcpAccess": "Изменение доступа MCP",
       "setSetting": "Изменение настройки",
+      "alertDelivery": "Доставка оповещения",
+      "resolveAlert": "Решение по оповещению",
       "setMarketData": "Изменение рыночных данных",
       "setTrading": "Изменение торгового подключения",
       "venueFeeSkipped": "Комиссия площадки пропущена",

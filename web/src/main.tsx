@@ -20,6 +20,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import App from "@/App";
+import { registerAlerts } from "@/alerts/register";
 import { ApiClientProvider, AuthProvider } from "@/framework";
 import i18n from "@/i18n";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -37,6 +38,7 @@ import {
 
 void initOfficerI18n();
 registerOfficerDefaults();
+registerAlerts();
 
 const container = document.getElementById("root");
 if (!container) {

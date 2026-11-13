@@ -21,6 +21,14 @@ import { describe, expect, it } from "vitest";
 import { auditActionMeta } from "@/pages/dashboardActivity";
 
 describe("dashboard audit action metadata", () => {
+  it("names alert delivery and decisions through the audit catalog", () => {
+    expect(auditActionMeta("alert_delivery").titleKey).toBe(
+      "audit.action.alertDelivery",
+    );
+    expect(auditActionMeta("resolve_alert").titleKey).toBe(
+      "audit.action.resolveAlert",
+    );
+  });
   it("renders drop-copy submissions with the shared danger variant", () => {
     const dropCopy = auditActionMeta("submit_drop_copy_order");
     const ordinary = auditActionMeta("submit_order");

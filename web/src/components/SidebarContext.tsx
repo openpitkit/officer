@@ -18,16 +18,20 @@
 // Open/closed state for the mobile (<md) off-canvas sidebar drawer.
 // Irrelevant at md+ where the sidebar is permanently visible.
 
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 
 import { SidebarContext } from "@/components/sidebar-context";
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [indicator, setIndicator] = useState<ReactNode>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const toggle = useCallback(() => setOpen((v) => !v), []);
   const close = useCallback(() => setOpen(false), []);
   return (
-    <SidebarContext.Provider value={{ open, toggle, close }}>
+    <SidebarContext.Provider
+      value={{ open, toggle, close, indicator, setIndicator, menuButtonRef }}
+    >
       {children}
     </SidebarContext.Provider>
   );

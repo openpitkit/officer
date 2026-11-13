@@ -1,0 +1,15 @@
+{
+  "title": "提醒",
+  "description": "待处理事件将保留在此处，直到成功完成决策。已读状态为个人状态，并在您的各个会话间同步。",
+  "unresolved": "待处理：{{count}}",
+  "unread": "未读：{{count}}",
+  "unreadLabel": "未读",
+  "loadFailed": "无法加载提醒",
+  "emptyTitle": "没有待处理提醒",
+  "emptyHint": "新的待处理事件将显示在此处。",
+  "unsupported": "提醒类型 {{type}} 未注册显示组件",
+  "unsupportedAction": "此提醒未注册该操作。",
+  "deliveryFailed": "发送失败：{{channel}}。仍可在此处查看提醒。",
+  "markRead": "标记为已读",
+  "markUnread": "标记为未读"
+}

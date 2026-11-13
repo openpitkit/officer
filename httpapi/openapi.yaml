@@ -61,6 +61,8 @@ tags:
     description: Signing keys and the order approval flow
   - name: audit
     description: Append-only audit trail
+  - name: alerts
+    description: Unresolved alerts, personal read state and registered decisions
   - name: mcp-access
     description: MCP command access control
   - name: account-mode
@@ -3745,6 +3747,169 @@ paths:
           $ref: "#/components/responses/SetupRequiredError"
 
   # ---------------------------------------------------------------------------
+  # Alerts
+  # ---------------------------------------------------------------------------
+
+  /alerts:
+    get:
+      operationId: listAlerts
+      summary: List unresolved alerts with the caller's personal read state
+      description: Query parameters are not supported. Reading does not mark alerts read.
+      tags: [alerts]
+      responses:
+        "200":
+          description: Unresolved alerts and their unread and total counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alerts, unread, total]
+                properties:
+                  alerts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Alert"
+                  unread:
+                    type: integer
+                  total:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignHostError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
+  /alerts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/AlertId"
+    get:
+      operationId: getAlert
+      summary: Read one unresolved alert, its decisions and delivery outcomes
+      description: Query parameters are not supported. Reading does not mark the alert read.
+      tags: [alerts]
+      responses:
+        "200":
+          description: The unresolved alert with the caller's personal read state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alert"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignHostError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
+  /alerts/{id}/read:
+    parameters:
+      - $ref: "#/components/parameters/AlertId"
+    put:
+      operationId: setAlertRead
+      summary: Set the caller's personal read or unread mark
+      description: Changing the read mark does not resolve the alert.
+      tags: [alerts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [read]
+              properties:
+                read:
+                  type: boolean
+      responses:
+        "200":
+          description: The caller's updated read mark.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [read]
+                properties:
+                  read:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
+  /alerts/{id}/actions/{action}:
+    parameters:
+      - $ref: "#/components/parameters/AlertId"
+      - name: action
+        in: path
+        required: true
+        description: A registered decision name from the alert's actions.
+        schema:
+          type: string
+    post:
+      operationId: resolveAlert
+      summary: Resolve an alert through a registered type-specific decision
+      description: >
+        Success records the decision result and removes the unresolved alert.
+        Invalid input or an action failure leaves it unresolved.
+      tags: [alerts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                input:
+                  description: Input accepted by the registered decision.
+      responses:
+        "200":
+          description: The recorded decision and its result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertResolution"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
+  # ---------------------------------------------------------------------------
   # MCP access control
   # ---------------------------------------------------------------------------
 
@@ -5912,6 +6077,14 @@ components:
         type: integer
         minimum: 0
 
+    AlertId:
+      name: id
+      in: path
+      required: true
+      description: Stable alert ID.
+      schema:
+        type: string
+
     OrderId:
       name: id
       in: path
@@ -6496,6 +6669,67 @@ components:
         pointer:
           type: string
           description: JSON Pointer to the invalid member; empty means the request root.
+
+    AlertEvent:
+      type: object
+      required: [id, type, at, source, payload]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          description: Registered alert type.
+        at:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [panel, api, mcp, system]
+        payload:
+          description: JSON payload defined by the registered alert type.
+
+    Alert:
+      allOf:
+        - $ref: "#/components/schemas/AlertEvent"
+        - type: object
+          required: [read, deliveries, actions]
+          properties:
+            read:
+              type: boolean
+              description: The caller's personal read mark.
+            deliveries:
+              type: array
+              items:
+                type: object
+                required: [channel, failed]
+                properties:
+                  channel:
+                    type: string
+                  failed:
+                    type: boolean
+            actions:
+              type: array
+              items:
+                type: string
+
+    AlertResolution:
+      type: object
+      required: [event, at, actor, source, action, result]
+      properties:
+        event:
+          $ref: "#/components/schemas/AlertEvent"
+        at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        source:
+          type: string
+          enum: [panel, api, mcp, system]
+        action:
+          type: string
+        result:
+          description: JSON result returned by the registered decision.
 
     Error:
       type: object

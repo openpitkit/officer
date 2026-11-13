@@ -59,6 +59,9 @@
     }
   },
   "detail": {
+    "alert_delivery": "Alerta {{alert}} entregue por {{channel}}",
+    "alert_delivery_failed": "Falha na entrega do alerta {{alert}} por {{channel}}",
+    "resolve_alert": "Alerta {{alert}} resolvido por {{action}}: {{result}}",
     "create_account": "Criação da conta {{account}}",
     "auto_create_account": "Criação automática da conta {{account}} por {{operation}}",
     "set_account_notes": "Alteração das notas da conta {{account}}",

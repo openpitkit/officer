@@ -71,6 +71,9 @@ type sqliteStore struct {
 	// leaves, so the published snapshot is always the last one committed.
 	// A writer resolves the database only once it holds accessMu.
 	accessMu sync.Mutex
+	// Serialises alert handlers across realm handles without holding the sole
+	// SQL connection while a domain handler calls back into the store.
+	alertResolutionMu sync.Mutex
 
 	mu        sync.Mutex
 	reachable bool

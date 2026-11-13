@@ -81,6 +81,8 @@
       "executionReport": "Execution report",
       "setMcpAccess": "Set MCP access",
       "setSetting": "Change setting",
+      "alertDelivery": "Alert delivery",
+      "resolveAlert": "Resolve alert",
       "setMarketData": "Change market data",
       "setTrading": "Change trading connection",
       "venueFeeSkipped": "Venue fee skipped",

@@ -59,6 +59,9 @@
     }
   },
   "detail": {
+    "alert_delivery": "提醒 {{alert}} 已通过 {{channel}} 发送",
+    "alert_delivery_failed": "提醒 {{alert}} 通过 {{channel}} 发送失败",
+    "resolve_alert": "提醒 {{alert}} 已通过 {{action}} 处理：{{result}}",
     "create_account": "创建账户 {{account}}",
     "auto_create_account": "由 {{operation}} 自动创建账户 {{account}}",
     "set_account_notes": "设置账户 {{account}} 的备注",

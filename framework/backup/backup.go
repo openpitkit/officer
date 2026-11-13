@@ -31,6 +31,7 @@
 package backup
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -66,7 +67,7 @@ const (
 	// settings.
 	SectionGeneralSettings Section = "general_settings"
 	// SectionActivityHistory carries adjustments, orders (with approvals),
-	// order events and trades.
+	// order events, trades, and open actionable alerts with personal/delivery state.
 	SectionActivityHistory Section = "activity_history"
 	// SectionTrading carries trading connections, instruments, access, and venue
 	// order links.
@@ -551,6 +552,9 @@ type ExecutionReportEventLink struct {
 // and accounts, then the account-addressed facts. Every list uses portable
 // identity; no list carries a surrogate key or an engine id.
 type Data struct {
+	// Alerts are realm-wide open events and their personal/delivery state,
+	// carried with activity_history independently of account selectors.
+	Alerts []ActionableAlert `json:"alerts,omitempty"`
 	// AssetClasses is the asset-class dictionary (by code). Always carried so the
 	// asset->class foreign key resolves on import.
 	AssetClasses []domain.AssetClass `json:"assetClasses,omitempty"`
@@ -918,6 +922,13 @@ func FilterData(data Data, scope Scope) Data {
 		out.SigningKeys = append([]SigningKey(nil), data.SigningKeys...)
 	}
 	if scope.Included(SectionActivityHistory) {
+		out.Alerts = make([]ActionableAlert, len(data.Alerts))
+		for i, a := range data.Alerts {
+			a.Payload = append(json.RawMessage(nil), a.Payload...)
+			a.ReadStates = cloneAlertMarks(a.ReadStates)
+			a.Deliveries = cloneAlertMarks(a.Deliveries)
+			out.Alerts[i] = a
+		}
 		out.Adjustments = filterAdjustments(data.Adjustments, scope.Accounts, groupByAccount)
 		out.Orders = filterOrders(data.Orders, scope.Accounts, groupByAccount)
 		orderIDs := make(map[domain.ExternalID]bool, len(out.Orders))
@@ -951,6 +962,30 @@ func FilterData(data Data, scope Scope) Data {
 	}
 	if scope.Included(SectionAuditLog) {
 		out.Audit = filterAudit(data.Audit, scope.Accounts, groupByAccount)
+	}
+	return out
+}
+
+// ActionableAlert is a portable open event. ReadStates is keyed by the trusted
+// principal code; Deliveries maps a channel name to its failure status. Neither
+// map contains local session identities or internal database keys.
+type ActionableAlert struct {
+	ID         string          `json:"id"`
+	Type       string          `json:"type"`
+	At         time.Time       `json:"at"`
+	Source     domain.Source   `json:"source"`
+	Payload    json.RawMessage `json:"payload"`
+	ReadStates map[string]bool `json:"readStates"`
+	Deliveries map[string]bool `json:"deliveries"`
+}
+
+func cloneAlertMarks(in map[string]bool) map[string]bool {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]bool, len(in))
+	for key, value := range in {
+		out[key] = value
 	}
 	return out
 }

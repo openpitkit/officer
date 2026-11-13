@@ -554,6 +554,11 @@ func ResolveCurrencyCascade(
 type AuditAction string
 
 const (
+	AuditActionAlertDelivery AuditAction = "alert_delivery"
+	AuditActionResolveAlert  AuditAction = "resolve_alert"
+)
+
+const (
 	AuditActionHydrate                    AuditAction = "hydrate"
 	AuditActionCreateAsset                AuditAction = "create_asset"
 	AuditActionUpdateAsset                AuditAction = "update_asset"
@@ -644,6 +649,8 @@ func (a AuditAction) Category() AuditCategory {
 // added here so the default control-only listing keeps excluding trading noise.
 func AllAuditActions() []AuditAction {
 	return []AuditAction{
+		AuditActionAlertDelivery,
+		AuditActionResolveAlert,
 		AuditActionHydrate,
 		AuditActionCreateAsset,
 		AuditActionUpdateAsset,
