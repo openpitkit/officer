@@ -21,12 +21,12 @@ import type { ServiceInfo } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
 
-/** Poll GET /service. */
-export function useService(): PollingResult<ServiceInfo> {
+/** Poll GET /service; changing refreshKey restarts the background poll. */
+export function useService(refreshKey?: unknown): PollingResult<ServiceInfo> {
   const api = useOfficerApi();
   const fetcher = useCallback(
     (signal: AbortSignal) => api.fetchServiceInfo(signal),
     [api],
   );
-  return usePolling(fetcher);
+  return usePolling(fetcher, undefined, refreshKey);
 }

@@ -1425,7 +1425,8 @@ export function ServiceCard({
 export function Service() {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
-  const { load, reload } = useService();
+  const [serviceRefreshKey, setServiceRefreshKey] = useState(0);
+  const { load, reload } = useService(serviceRefreshKey);
   const { restartMarketData, restartService, stopService } = useOfficerApi();
   const location = useLocation();
   const navigate = useNavigate();
@@ -1495,10 +1496,10 @@ export function Service() {
     try {
       if (action === "restart") {
         await restartService();
-        // Acceptance precedes shutdown. Cancel the old poll and wait for a
-        // fresh successful response before releasing the lifecycle controls.
+        // Acceptance precedes shutdown. Restart the background poll so an
+        // expected disconnect preserves the page until the service is back.
         awaitingRestartRecovery.current = true;
-        reload();
+        setServiceRefreshKey((key) => key + 1);
       } else {
         await stopService();
       }
