@@ -86,6 +86,16 @@ func (r *realmStore) exportBackup(
 	scope backup.Scope,
 	afterSnapshot func() error,
 ) (archive backup.Archive, err error) {
+	return r.captureBackup(ctx, scope, afterSnapshot, true)
+}
+
+// CaptureBackupRollback captures local rollback state without applying operator
+// progress-transfer requirements to unrelated live account receipts.
+func (r *realmStore) CaptureBackupRollback(ctx context.Context, scope backup.Scope) (backup.Archive, error) {
+	return r.captureBackup(ctx, scope.Normalize(), nil, false)
+}
+
+func (r *realmStore) captureBackup(ctx context.Context, scope backup.Scope, afterSnapshot func() error, validateProgress bool) (archive backup.Archive, err error) {
 	snapshot, cleanup, err := r.backupSnapshot(ctx)
 	if err != nil {
 		return backup.Archive{}, err
@@ -116,6 +126,11 @@ func (r *realmStore) exportBackup(
 		return backup.Archive{}, err
 	}
 	credentialForm, err := snapshot.exportCredentialForm(ctx)
+	if validateProgress {
+		if err := backup.ValidatePnlResetScope(data, scope); err != nil {
+			return backup.Archive{}, err
+		}
+	}
 	if err != nil {
 		return backup.Archive{}, err
 	}
@@ -289,6 +304,16 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.Settings, err = r.exportSettings(ctx); err != nil {
 		return backup.Data{}, err
 	}
+	scheduled := &SchedulerStore{realm: r}
+	if data.ScheduledJobs, err = scheduled.List(ctx); err != nil {
+		return backup.Data{}, err
+	}
+	if data.ScheduledExecutions, err = scheduled.History(ctx, ""); err != nil {
+		return backup.Data{}, err
+	}
+	if data.AccountPnlResetReceipts, err = r.exportPnlResetReceipts(ctx); err != nil {
+		return backup.Data{}, err
+	}
 	if data.McpAccess, err = r.ListMcpAccess(ctx); err != nil {
 		return backup.Data{}, err
 	}
@@ -339,9 +364,21 @@ func (r *realmStore) RestoreBackup(
 		return backup.RestoreSummary{}, err
 	}
 	scope := opts.Scope.Normalize()
+	if err := backup.ValidatePnlResetScope(archive.Data, scope); err != nil {
+		return backup.RestoreSummary{}, err
+	}
 	// Re-narrow the archive to the restore scope so a caller may restore a subset
 	// of a full archive; the archive already filtered to its own scope at export.
 	data := backup.FilterData(archive.Data, scope)
+	accounts := make(map[domain.AccountID]bool, len(data.Accounts))
+	for _, account := range data.Accounts {
+		accounts[domain.AccountID(account.Code)] = true
+	}
+	for _, receipt := range data.AccountPnlResetReceipts {
+		if !accounts[receipt.Account] {
+			return backup.RestoreSummary{}, fmt.Errorf("reset receipt requires accounts_groups account %q in archive: %w", receipt.Account, domain.ErrInvalid)
+		}
+	}
 	if accountSelectorNarrowed(scope) && archiveCarriesTrading(data) {
 		return backup.RestoreSummary{}, fmt.Errorf(
 			"store: backup restore with an account selector cannot apply an "+
@@ -431,6 +468,9 @@ func (r *realmStore) RestoreBackup(
 		return backup.RestoreSummary{}, fmt.Errorf("store: begin restore: %w", err)
 	}
 	defer rollbackTransaction(&err, tx)
+	if err := refuseRunningSchedulerJobs(ctx, tx); err != nil {
+		return backup.RestoreSummary{}, err
+	}
 
 	summary = backup.NewSummary()
 	rt := &restoreTx{
@@ -518,7 +558,7 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 		if err := rt.restoreGroups(ctx, data.Groups, data.DefaultGroupCurrency); err != nil {
 			return err
 		}
-		if err := rt.restoreAccounts(ctx, data.Accounts); err != nil {
+		if err := rt.restoreAccounts(ctx, data.Accounts, data.AccountPnlResetReceipts); err != nil {
 			return err
 		}
 	}
@@ -541,6 +581,9 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 		if err := rt.restoreGeneralSettings(ctx, data); err != nil {
 			return err
 		}
+		if err := rt.restoreSchedulerJobs(ctx, data.ScheduledJobs); err != nil {
+			return err
+		}
 	}
 	if scope.Included(backup.SectionActivityHistory) {
 		if err := rt.restoreAlerts(ctx, data.Alerts); err != nil {
@@ -558,6 +601,14 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 	if scope.Included(backup.SectionAuditLog) {
 		if err := rt.restoreAudit(ctx, data.Audit); err != nil {
 			return err
+		}
+		if err := rt.restoreSchedulerExecutions(ctx, data.ScheduledExecutions); err != nil {
+			return err
+		}
+		if rt.mode == backup.RestoreModeReplaceAll && scope.Accounts.All {
+			if err := rt.pruneSchedulerExecutions(ctx, data.ScheduledExecutions); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

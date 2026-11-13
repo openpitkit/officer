@@ -35,6 +35,9 @@ type accountRuntimePnl struct {
 	value       string
 	storedValue string
 	haltReason  domain.PnlHaltReason
+	readCurrent bool
+	prepare     func(domain.Account) error
+	onSet       func(domain.Account, []domain.AccountBlock) error
 }
 
 type accountRuntimeBlock struct {
@@ -149,7 +152,7 @@ func (n *localNode) runAccountRuntimeChain(
 			)
 			return nil, state.err
 		}
-		if pnl != nil && (current.Pnl != pnl.storedValue ||
+		if pnl != nil && !pnl.readCurrent && (current.Pnl != pnl.storedValue ||
 			current.PnlHaltReason != pnl.haltReason) {
 			state.err = fmt.Errorf(
 				"account %q pnl state changed before %s: %w",
@@ -179,6 +182,13 @@ func (n *localNode) runAccountRuntimeChain(
 			state.currencyAsset = asset
 		}
 		if pnl != nil {
+			state.expected = current
+			if pnl.prepare != nil {
+				if err := pnl.prepare(current); err != nil {
+					state.err = err
+					return nil, err
+				}
+			}
 			assignment, assignmentErr := eng.SpotFundsAccountPnlAssignment(
 				pnl.value, pnl.haltReason,
 			)
@@ -249,6 +259,10 @@ func (n *localNode) runAccountRuntimeChain(
 						return state.err
 					}
 					state.pnlBlocks = blocks
+					if pnl.onSet != nil {
+						state.err = pnl.onSet(state.expected, blocks)
+						return state.err
+					}
 					return nil
 				},
 			},

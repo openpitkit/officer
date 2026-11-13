@@ -44,6 +44,7 @@ import (
 	"go.openpit.dev/officer/httpapi"
 	"go.openpit.dev/officer/internal/access"
 	"go.openpit.dev/officer/internal/accountmode"
+	"go.openpit.dev/officer/internal/jobs"
 	appmarketdata "go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/nonrelease"
 	"go.openpit.dev/officer/internal/store/sqlite"
@@ -168,6 +169,9 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		backupNode    node.Node
 		// Stays nil when a host replaces the service factory.
 		accountScope *accountmode.Scope
+		resetStore   jobs.StoreProvider
+		resetHost    node.PnlResetHost
+		resetControl fwbackend.AccountPnlResetControl
 	)
 	b.SetStoreFactory(func() (store.Store, error) {
 		return newStore(cfg)
@@ -203,6 +207,13 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		}
 		sealReports = reports
 		backupNode = n
+		resetHost, resetStore, resetControl = nil, nil, nil
+		host, supportedNode := n.(node.PnlResetHost)
+		provider, supportedStore := st.(jobs.StoreProvider)
+		if supportedNode && supportedStore {
+			resetHost = host
+			resetStore = provider
+		}
 		realmStore, err := st.ForRealm(ctx, domain.DefaultRealm)
 		if err != nil {
 			return err
@@ -288,6 +299,29 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 				return nil, err
 			}
 		}
+		if resetHost != nil && resetStore != nil {
+			jobStore, err := resetStore.SchedulerStore(ctx, n.Realm())
+			if err != nil {
+				return nil, err
+			}
+			runtime, err := jobs.New(n, resetHost, jobStore)
+			if err != nil {
+				return nil, err
+			}
+			// Standalone operators configure a realm-wide schedule even when
+			// the panel is presenting just one account. Manual resets retain scope.
+			control, err := fwbackend.NewAccountPnlResetControl(svc, resetHost, runtime, fwbackend.EveryAccount{})
+			if err != nil {
+				return nil, err
+			}
+			if err := resetHost.InstallPnlResetScheduler(runtime); err != nil {
+				return nil, err
+			}
+			if err := runtime.Start(); err != nil {
+				return nil, err
+			}
+			resetControl = control
+		}
 		return svc, nil
 	})
 	// A host that customises routes wraps b.RouteConfigBuilder(), so the
@@ -299,8 +333,11 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		for _, route := range httpapi.AlertRoutes(alertService) {
 			config.Routes.Register(route)
 		}
+		if resetControl != nil {
+			httpapi.RegisterAccountPnlResetRoutes(config.Routes, svc, resetControl)
+		}
 		serialiseWithSetup(config.Routes, fundsLimitModePutRoute, accessService)
-		for _, route := range accountmode.Routes(svc, accountScope, accessService) {
+		for _, route := range accountmode.Routes(svc, accountScope, accessService, resetControl != nil) {
 			config.Routes.Register(route)
 		}
 		for _, route := range httpapi.PreMigrationBackupRoutes(preMigrationBackupSource(cfg.SQLitePath, backupNode)) {
@@ -320,6 +357,9 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 	})
 	b.AddToolRegistrar(mcptools.RegisterTools)
 	b.AddToolRegistrar(func(reg *frameworkmcp.ToolRegistry, _ frameworkmcp.Source) {
+		if resetControl != nil {
+			mcptools.RegisterAccountPnlResetTools(reg, resetControl)
+		}
 		mcptools.RegisterAlertTools(reg, alertService)
 	})
 	b.SetSPAFactory(web.Dist)

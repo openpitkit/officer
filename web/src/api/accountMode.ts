@@ -33,6 +33,8 @@ export interface AccountFeatures {
   accounts: boolean;
   /** The default account requests act on; empty while accounts are shown. */
   account: string;
+  /** Whether the host installed realized-account-P&L reset operations. */
+  accountPnlReset: boolean;
 }
 
 /** The answer of `GET /account-mode`. */
@@ -68,7 +70,7 @@ function decodeAccountMode(value: unknown): AccountModeState {
   if (!isRecord(features)) {
     throw invalid(RESPONSE, "features", "must be an object");
   }
-  const { accounts, account: defaultAccount } = features;
+  const { accounts, account: defaultAccount, accountPnlReset } = features;
   if (typeof accounts !== "boolean") {
     throw invalid(RESPONSE, "features.accounts", "must be a boolean");
   }
@@ -85,13 +87,16 @@ function decodeAccountMode(value: unknown): AccountModeState {
   if (typeof restartRequired !== "boolean") {
     throw invalid(RESPONSE, "restartRequired", "must be a boolean");
   }
+  if (typeof accountPnlReset !== "boolean") {
+    throw invalid(RESPONSE, "features.accountPnlReset", "must be a boolean");
+  }
   if (typeof live !== "boolean") {
     throw invalid(RESPONSE, "live", "must be a boolean");
   }
   return {
     mode,
     account,
-    features: { accounts, account: defaultAccount },
+    features: { accounts, account: defaultAccount, accountPnlReset },
     restartRequired,
     live,
   };

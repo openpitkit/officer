@@ -110,6 +110,8 @@ const (
 	AuditDetailSetAccountGroup                 AuditDetailCode = "set_account_group"
 	AuditDetailSetAccountGroupCurrencyRefused  AuditDetailCode = "set_account_group_currency_refused"
 	AuditDetailSetAccountCurrency              AuditDetailCode = "set_account_currency"
+	AuditDetailResetAccountPnl                 AuditDetailCode = "reset_account_pnl"
+	AuditDetailResetAccountPnlPreviousHalt     AuditDetailCode = "reset_account_pnl_previous_halt"
 	AuditDetailSetAccountCurrencyRefused       AuditDetailCode = "set_account_currency_refused"
 	AuditDetailSetGroupCurrency                AuditDetailCode = "set_group_currency"
 	AuditDetailSetGroupCurrencyRefused         AuditDetailCode = "set_group_currency_refused"
@@ -226,6 +228,8 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 	AuditDetailSetAccountGroup:                 "Account {{account}} group changed: {{from}} → {{to}}",
 	AuditDetailSetAccountGroupCurrencyRefused:  "Account {{account}} group change refused (currency {{from}} → {{to}}): {{refusal}}",
 	AuditDetailSetAccountCurrency:              "Account {{account}} currency changed: {{from}} → {{to}}",
+	AuditDetailResetAccountPnl:                 "Account {{account}} realized P&L reset to 0; previous value {{previousPnl}}",
+	AuditDetailResetAccountPnlPreviousHalt:     "Account {{account}} realized P&L reset to 0; previous value {{previousPnl}}; P&L calculation halt reason before reset: {{previousHalt}}",
 	AuditDetailSetAccountCurrencyRefused:       "Account {{account}} currency change {{from}} → {{to}} refused: {{refusal}}",
 	AuditDetailSetGroupCurrency:                "Group {{group}} currency changed: {{from}} → {{to}}",
 	AuditDetailSetGroupCurrencyRefused:         "Group {{group}} currency change {{from}} → {{to}} refused: {{refusal}}",

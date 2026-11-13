@@ -269,7 +269,11 @@ func (rt *restoreTx) restoreDefaultGroupCurrency(
 // restoreAccounts inserts the account, resolving the optional group link by
 // group code (the group is already inserted) and preserving the code. A new
 // account runs on its surrogate id (the engine account id).
-func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Account) error {
+func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Account, receipts []backup.AccountPnlResetReceipt) error {
+	byAccount := make(map[domain.AccountID][]backup.AccountPnlResetReceipt)
+	for _, receipt := range receipts {
+		byAccount[receipt.Account] = append(byAccount[receipt.Account], receipt)
+	}
 	for _, a := range accounts {
 		if err := restoreValidationError(
 			domain.ValidateAccountID(domain.AccountID(a.Code)),
@@ -342,6 +346,15 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 			a.BlockReason, a.BlockPolicy, a.BlockCode, a.BlockDetails,
 		); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
+		}
+		// Receipts describe this exact authoritative snapshot, not the account's
+		// later receiver state. Preserve both only when insert_missing skipped it.
+		if _, err := rt.tx.ExecContext(ctx, `DELETE FROM account_pnl_reset_receipt
+			WHERE account_id = (SELECT id FROM account WHERE code = ?)`, a.Code); err != nil {
+			return err
+		}
+		if err := rt.restorePnlResetReceipts(ctx, byAccount[domain.AccountID(a.Code)]); err != nil {
+			return err
 		}
 		rt.applyRuntime(backup.SectionAccountsGroups, 1)
 	}

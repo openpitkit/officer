@@ -36,7 +36,11 @@ it("renders the built asset page with the public display provider", async () => 
   }));
   await officer.initOfficerI18n();
   officer.registerOfficerDefaults();
-  officer.setAccountScope({ accounts: true, account: "" });
+  officer.setAccountScope({
+    accounts: true,
+    account: "",
+    accountPnlReset: false,
+  });
   officer.setPanelSession("token");
   const assets = officer.getRoutes().find(({ id }) => id === "assets");
   expect(assets?.Component).toBeTypeOf("function");

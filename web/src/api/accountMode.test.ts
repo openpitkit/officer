@@ -35,7 +35,7 @@ function clientAnswering(body: unknown) {
 const single = {
   mode: "single",
   account: "main",
-  features: { accounts: false, account: "main" },
+  features: { accounts: false, account: "main", accountPnlReset: false },
   restartRequired: false,
   live: false,
 };
@@ -55,7 +55,7 @@ describe("fetchAccountMode", () => {
     const unchosen = {
       mode: null,
       account: "",
-      features: { accounts: true, account: "" },
+      features: { accounts: true, account: "", accountPnlReset: false },
       restartRequired: true,
       live: false,
     };
@@ -72,19 +72,37 @@ describe("fetchAccountMode", () => {
     ["features", "missing features", { ...single, features: undefined }],
     ["features", "non-object features", { ...single, features: "main" }],
     [
+      "features.accountPnlReset",
+      "missing explicit reset capability",
+      { ...single, features: { accounts: false, account: "main" } },
+    ],
+    [
       "features.accounts",
       "a non-boolean features.accounts",
-      { ...single, features: { accounts: "false", account: "main" } },
+      {
+        ...single,
+        features: {
+          accounts: "false",
+          account: "main",
+          accountPnlReset: false,
+        },
+      },
     ],
     [
       "features.account",
       "a non-string features.account",
-      { ...single, features: { accounts: false, account: null } },
+      {
+        ...single,
+        features: { accounts: false, account: null, accountPnlReset: false },
+      },
     ],
     [
       "features.account",
       "hidden accounts without a default account",
-      { ...single, features: { accounts: false, account: "" } },
+      {
+        ...single,
+        features: { accounts: false, account: "", accountPnlReset: false },
+      },
     ],
     [
       "restartRequired",
@@ -106,7 +124,7 @@ describe("putAccountMode", () => {
     const stored = {
       mode: "single",
       account: "main",
-      features: { accounts: true, account: "" },
+      features: { accounts: true, account: "", accountPnlReset: false },
       restartRequired: true,
       live: false,
     };

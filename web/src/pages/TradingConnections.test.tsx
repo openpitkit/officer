@@ -3772,7 +3772,11 @@ describe("Trading connections while accounts are hidden", () => {
   }
 
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
   });
 
   it.each([[], [ownGrant], [deskGrant]])(
@@ -4218,7 +4222,11 @@ describe("IB trading connections", () => {
     "guides IB's venue account in %s mode without naming a grant only when accounts are hidden",
     async (mode) => {
       if (mode === "single-account")
-        setAccountScope({ accounts: false, account: "main" });
+        setAccountScope({
+          accounts: false,
+          account: "main",
+          accountPnlReset: false,
+        });
       const user = userEvent.setup();
       renderTrading();
       const dialog = await openIBCreate(user);

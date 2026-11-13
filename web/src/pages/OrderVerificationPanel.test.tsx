@@ -731,7 +731,11 @@ describe("OrderVerificationPanel - accounts", () => {
   });
 
   it("keeps the account out of the breakdown but not out of the signed artifacts while accounts are hidden", async () => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
     const { fixture, bundle } = await renderReproductionNaming("main");
 
     expect(screen.queryByText("Account")).not.toBeInTheDocument();

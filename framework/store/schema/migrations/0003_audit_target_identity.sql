@@ -21,6 +21,54 @@
 ALTER TABLE audit ADD COLUMN account_identity BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE audit ADD COLUMN group_identity BIGINT NOT NULL DEFAULT 0;
 
+-- One row per job, including its recurrence and progress. Task arguments and
+-- schedule definition live in spec; mutable progress has one scalar authority.
+-- No future occurrence rows are materialized.
+CREATE TABLE scheduler_job (
+    job_id   TEXT PRIMARY KEY,
+    spec     TEXT NOT NULL,
+    state    TEXT NOT NULL CHECK (state IN
+             ('ready', 'paused', 'running', 'failed', 'interrupted', 'completed')),
+    next_at  TEXT,
+    next_day TEXT NOT NULL,
+    next_skip {{BOOL}} NOT NULL,
+    completed_runs BIGINT NOT NULL CHECK (completed_runs >= 0),
+    run_id   TEXT,
+    run_started_at TEXT,
+    run_attempt BIGINT,
+    last_run_id TEXT,
+    last_attempt BIGINT,
+    error TEXT NOT NULL,
+    revision BIGINT NOT NULL CHECK (revision > 0),
+    CHECK ((state = 'running' AND run_id IS NOT NULL AND
+            run_started_at IS NOT NULL AND run_attempt IS NOT NULL AND run_attempt > 0) OR
+           (state <> 'running' AND run_id IS NULL AND
+            run_started_at IS NULL AND run_attempt IS NULL)),
+    CHECK ((state = 'completed' AND next_at IS NULL) OR
+           (state <> 'completed' AND next_at IS NOT NULL)),
+    CHECK ((last_run_id IS NULL AND last_attempt IS NULL) OR
+           (last_run_id IS NOT NULL AND last_attempt IS NOT NULL AND last_attempt > 0))
+);
+CREATE INDEX scheduler_job_due ON scheduler_job (state, next_at, job_id);
+
+-- Past outcomes survive job removal. There is deliberately no foreign key
+-- from history to the editable/removable job definition.
+CREATE TABLE scheduler_execution (
+    run_id TEXT NOT NULL,
+    attempt BIGINT NOT NULL CHECK (attempt > 0),
+    job_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    PRIMARY KEY (run_id, attempt)
+);
+CREATE INDEX scheduler_execution_job ON scheduler_execution (job_id, run_id);
+
+-- Past successful account effects, not future recurrence occurrences. A rename
+-- retains the live identity; deleting an account deletes its receipts.
+CREATE TABLE account_pnl_reset_receipt (
+    run_id TEXT NOT NULL,
+    account_id INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    PRIMARY KEY (run_id, account_id)
+);
 -- Open events and personal marks live in the durable realm database.
 CREATE TABLE actionable_alert (
     id {{PK}},

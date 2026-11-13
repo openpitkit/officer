@@ -170,7 +170,9 @@
     "export_business_csv_unfiltered": "导出业务 CSV：{{entity}}，分隔符 {{delimiter}}，ZIP {{zip}}，无筛选条件",
     "activity_order": "{{side}} {{amount}} {{base}}/{{quote}} {{status}}",
     "activity_adjustment_accepted": "调整 {{asset}}：已接受",
-    "activity_adjustment_rejected": "调整 {{asset}}：已拒绝"
+    "activity_adjustment_rejected": "调整 {{asset}}：已拒绝",
+    "reset_account_pnl": "账户 {{account}} 的已实现 P&L 已重置为 0；先前值 {{previousPnl}}",
+    "reset_account_pnl_previous_halt": "账户 {{account}} 的已实现 P&L 已重置为 0；先前值 {{previousPnl}}；重置前 P&L 计算停止的原因：{{previousHalt}}"
   },
   "detailField": {
     "account": "账户",

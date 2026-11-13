@@ -89,6 +89,10 @@ rules:
         | Ed25519 | HMAC-SHA256 | raw-base64 | base64url | base64 | authorized_keys
         | crypto/ed25519 | JavaScript | Go | macOS | Windows | Linux | Docker
         | PowerShell | localhost | Cmd | Ctrl
+        # Timezone standards, exact time input formats and UTC suffix.
+        | IANA | UTC | YYYY-MM-DDTHH:mm:ssZ | HH:mm | Z
+        # Mathematical count variable, as displayed in repetition controls.
+        | N
         # Abbreviations, trading codes and the trade abbreviations.
         | API | SDK | CLI | URL | CPU | LTO | AI | ID | GET | FX
         | P&L | PX | QTY | NTL | MTM | TIF | CCY

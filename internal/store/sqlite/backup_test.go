@@ -3583,6 +3583,9 @@ func TestBackupRestoreResolvesForeignKeysDictionaryFirst(t *testing.T) {
 // (one per backup.Data section). Keep it in lockstep with backup.Data: a new
 // exported table must appear here.
 var backupExportedTables = map[string]bool{
+	"scheduler_job":              true,
+	"account_pnl_reset_receipt":  true,
+	"scheduler_execution":        true,
 	"actionable_alert":           true,
 	"alert_read_state":           true,
 	"alert_delivery":             true,

@@ -15,7 +15,8 @@
   },
   "tabs": {
     "accounts": "Contas",
-    "groups": "Grupos"
+    "groups": "Grupos",
+    "settings": "Configurações das contas"
   },
   "pagination": {
     "pageSize": {
@@ -407,5 +408,51 @@
   "tradingCheck": {
     "checking": "As conexões de negociação ainda estão sendo verificadas.",
     "failed": "Não foi possível verificar as conexões de negociação: {{error}}"
+  },
+  "pnlReset": {
+    "action": "Repor o P&L realizado de {{account}}",
+    "confirmTitle": "Repor o P&L realizado de {{account}}?",
+    "confirmDescription": "Apenas o P&L realizado desta conta será definido como 0. As posições, o custo de aquisição e o histórico serão mantidos. As contas já bloqueadas permanecerão bloqueadas.",
+    "reset": "Repor para 0",
+    "schedule": "Reposição diária de P&L",
+    "scheduleDescription": "Uma programação diária repõe o P&L realizado de todas as contas. Os resultados são independentes. As execuções vencidas são ignoradas. As posições e o histórico são mantidos. As contas já bloqueadas permanecerão bloqueadas.",
+    "loading": "Carregando…",
+    "status": "Estado",
+    "absent": "Não configurado",
+    "completedRuns": "Execuções bem-sucedidas",
+    "next": "Próxima execução",
+    "last": "Último resultado",
+    "missedBoundary": "Horário diário vencido; reposição ignorada.",
+    "accountSucceeded": "Reposição concluída",
+    "enableDaily": "Ativar reposição diária",
+    "time": "Horário da reposição diária",
+    "timezone": "Fuso horário",
+    "invalidTimezone": "Selecione um fuso horário da lista.",
+    "invalidTime": "Selecione um horário válido para a reposição diária.",
+    "enabled": "Ativado",
+    "paused": "Pausado",
+    "end": "Fim da repetição",
+    "ends": {
+      "forever": "Nunca",
+      "count": "Após N execuções bem-sucedidas",
+      "until": "Em uma data e hora UTC absoluta"
+    },
+    "count": "Total de execuções bem-sucedidas, incluindo a primeira",
+    "until": "Data e hora final (UTC)",
+    "invalidCount": "Informe um número inteiro positivo de execuções bem-sucedidas.",
+    "invalidUntil": "Selecione uma data e hora final válida em UTC.",
+    "edit": "Configurar",
+    "skip": "Ignorar execução",
+    "retry": "Repetir execução",
+    "states": {
+      "ready": "Agendado",
+      "paused": "Pausado",
+      "running": "Em execução",
+      "failed": "Falhou",
+      "interrupted": "Interrompido",
+      "completed": "Concluído",
+      "succeeded": "Bem-sucedido",
+      "skipped": "Ignorado"
+    }
   }
 }

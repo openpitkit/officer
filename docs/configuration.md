@@ -183,6 +183,47 @@ blank, the variable adds no name. It has no flag.
 A name matches the request's host exactly and case-insensitively, an IP
 address in its canonical form; the port is not checked.
 
+## Daily realized P&L reset
+
+The Accounts and single-account pages configure the local daily realized P&L
+reset: HH:mm, explicit IANA timezone, enabled state, and an end after N successful
+runs or at a UTC datetime (or no end). SQLite retains one job definition and progress.
+The schedule affects every stored account, including accounts hidden in
+single-account mode. Only standalone operators can change it. Manual
+reset beside account P&L retains positions/history and active kill switches.
+Failed/interrupted work requires explicit retry or skip. Failures, skipped
+boundaries and interruptions do not count as successful runs. A running callback
+may finish after the end instant, but a new one cannot start after it. A repeated
+DST minute runs once; a missing daily minute is skipped. The task skips boundaries
+missed while stopped or more than one minute late instead of erasing later P&L.
+
+The standalone task `reset_realized_account_pnl` takes empty arguments `{}`.
+Each account commits independently through the same serialized Engine operation
+as manual reset, including from unset or halted realized P&L. Accounts already
+blocked stay blocked. Newly raised Engine blocks are persisted.
+
+A successful reset atomically persists the account snapshot, audit and receipt
+identified by run ID and live account identity. Retry preserves later fills of
+completed accounts. Rename retains receipts; deleting and recreating an account
+does not. A crash after Engine effects but before persistence remains uncertain;
+the node fail-stops on post-Engine persistence failure.
+
+General settings backups carry definitions and counters; account/group backups
+carry receipts with current account codes. Exporting or restoring job progress
+with receipts requires those accounts in `accounts_groups` in the same selected
+scope. This dependency is validated, never automatically expanded. Settings-only
+operations without such progress retain their normal scope. Restored receipts
+replace evidence with each overwritten account snapshot; insert-missing preserves
+both snapshot and receipts for existing accounts. The local owner stops and joins
+before restore, database reset and close, and validates restored definitions
+before commit. Agent principals cannot mutate or recover the schedule. MCP exposes
+only its read operation.
+
+Custom hosts use the native Go contract in
+[`framework/scheduler`](https://pkg.go.dev/go.openpit.dev/officer/framework/scheduler).
+They explicitly supply schedule authority; an account-restricted host supplies its
+restrictive scope. Standalone authority covers every stored account in both modes.
+
 ## SQLite path
 
 The on-disk path of the database. The container image sets it to

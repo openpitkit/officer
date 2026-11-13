@@ -21,6 +21,7 @@ import type { AuditDetail } from "@/api/types";
 import {
   codeLabel,
   policyLabel,
+  pnlHaltText,
   rejectLabel,
   scopeLabel,
   sideLabel,
@@ -34,6 +35,7 @@ const booleanLabel = (v: string) => codeLabel(`audit:detailValue.${v}`, v);
  *  name. Every other value - an identifier, a number, operator text, an engine
  *  message - is shown as written. */
 const VALUE_LABELS: Record<string, (value: string) => string> = {
+  previousHalt: (v) => pnlHaltText(i18n.t, v) ?? v,
   zip: booleanLabel,
   overfill: booleanLabel,
   forced: booleanLabel,

@@ -15,7 +15,8 @@
   },
   "tabs": {
     "accounts": "Cuentas",
-    "groups": "Grupos"
+    "groups": "Grupos",
+    "settings": "Configuración de cuentas"
   },
   "pagination": {
     "pageSize": {
@@ -407,5 +408,51 @@
   "tradingCheck": {
     "checking": "Todavía se están comprobando las conexiones de negociación.",
     "failed": "No se pudieron comprobar las conexiones de negociación: {{error}}"
+  },
+  "pnlReset": {
+    "action": "Restablecer el P&L realizado de {{account}}",
+    "confirmTitle": "¿Restablecer el P&L realizado de {{account}}?",
+    "confirmDescription": "Solo se establece en 0 el P&L realizado de esta cuenta. Se conservan las posiciones, el coste de adquisición y el historial. Las cuentas ya bloqueadas permanecen bloqueadas.",
+    "reset": "Restablecer a 0",
+    "schedule": "Restablecimiento diario de P&L",
+    "scheduleDescription": "Una programación diaria restablece el P&L realizado de todas las cuentas. Los resultados son independientes. Se omiten las ejecuciones vencidas. Se conservan las posiciones y el historial. Las cuentas ya bloqueadas permanecen bloqueadas.",
+    "loading": "Cargando…",
+    "status": "Estado",
+    "absent": "Sin configurar",
+    "completedRuns": "Ejecuciones correctas",
+    "next": "Próxima ejecución",
+    "last": "Último resultado",
+    "missedBoundary": "Hora diaria vencida; restablecimiento omitido.",
+    "accountSucceeded": "Restablecimiento completado",
+    "enableDaily": "Activar restablecimiento diario",
+    "time": "Hora del restablecimiento diario",
+    "timezone": "Zona horaria",
+    "invalidTimezone": "Seleccione una zona horaria de la lista.",
+    "invalidTime": "Seleccione una hora válida para el restablecimiento diario.",
+    "enabled": "Activado",
+    "paused": "En pausa",
+    "end": "Fin de la repetición",
+    "ends": {
+      "forever": "Nunca",
+      "count": "Tras N ejecuciones correctas",
+      "until": "En una fecha y hora UTC absoluta"
+    },
+    "count": "Total de ejecuciones correctas, incluida la primera",
+    "until": "Fecha y hora de finalización (UTC)",
+    "invalidCount": "Indique un número entero positivo de ejecuciones correctas.",
+    "invalidUntil": "Seleccione una fecha y hora de finalización válida en UTC.",
+    "edit": "Configurar",
+    "skip": "Omitir ejecución",
+    "retry": "Reintentar ejecución",
+    "states": {
+      "ready": "Programado",
+      "paused": "En pausa",
+      "running": "En ejecución",
+      "failed": "Error",
+      "interrupted": "Interrumpido",
+      "completed": "Completado",
+      "succeeded": "Correcto",
+      "skipped": "Omitido"
+    }
   }
 }

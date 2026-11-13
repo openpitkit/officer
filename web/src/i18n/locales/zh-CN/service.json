@@ -159,7 +159,8 @@
     },
     "errors": {
       "fileRequired": "请选择备份文件。"
-    }
+    },
+    "resetProgressScope": "若包含重置计划的执行进度，请同时选择相同账户的“账户与分组”。"
   },
   "logs": {
     "title": "日志",

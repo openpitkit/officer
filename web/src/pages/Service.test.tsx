@@ -211,8 +211,12 @@ beforeEach(async () => {
   await i18n.changeLanguage("en");
 });
 
-const runningSingle = { accounts: false, account: "main" };
-const runningMulti = { accounts: true, account: "" };
+const runningSingle = {
+  accounts: false,
+  account: "main",
+  accountPnlReset: false,
+};
+const runningMulti = { accounts: true, account: "", accountPnlReset: false };
 // Stored multi while the process runs single: a restart is pending.
 const waitingMulti: AccountModeState = {
   mode: "multi",
@@ -831,6 +835,20 @@ describe("Service", () => {
 });
 
 describe("BackupCard", () => {
+  it.each([false, true])(
+    "shows reset progress scope guidance only when capability is %s",
+    async (accountPnlReset) => {
+      setAccountScope({ accounts: true, account: "", accountPnlReset });
+      renderBackupCard();
+      await waitFor(() =>
+        expect(fetchCredentialStorageMock).toHaveBeenCalled(),
+      );
+      const guidance = screen.queryByText(
+        "To include completed reset schedule progress, select Accounts and groups for the same accounts.",
+      );
+      expect(guidance !== null).toBe(accountPnlReset);
+    },
+  );
   it("fetches trading once per poll and keeps the last snapshot on refresh failure", async () => {
     vi.useFakeTimers();
     fetchTradingMock.mockResolvedValue(tradingSnapshot);
@@ -1715,7 +1733,11 @@ describe("BackupCard", () => {
 
 describe("BackupCard with accounts hidden", () => {
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
   });
 
   it("shows no account or position selector and keeps the data sections", async () => {

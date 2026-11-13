@@ -30,6 +30,7 @@ import {
   Pencil,
   Receipt,
   ShieldCheck,
+  RotateCcw,
   Trash2,
 } from "lucide-react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
@@ -77,6 +78,7 @@ const ICONS = {
   policies: ShieldCheck,
   orders: ArrowLeftRight,
   "venue-access": Cable,
+  "reset-pnl": RotateCcw,
 };
 
 function shouldOpenInNewTab(event: MouseEvent): boolean {

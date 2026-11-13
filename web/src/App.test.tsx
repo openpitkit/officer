@@ -125,7 +125,7 @@ function renderApp(
         : {
             mode,
             account: "",
-            features: { accounts: true, account: "" },
+            features: { accounts: true, account: "", accountPnlReset: false },
             restartRequired: false,
             live: false,
           },

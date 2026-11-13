@@ -161,6 +161,9 @@ func (rt *restoreTx) pruneAccountsGroups(
 		if !accounts.in(p.a) {
 			continue
 		}
+		if _, err := rt.tx.ExecContext(ctx, `DELETE FROM account_pnl_reset_receipt WHERE account_id = (SELECT id FROM account WHERE code = ?)`, p.a); err != nil {
+			return err
+		}
 		if keepAccounts[p.a] {
 			continue
 		}
@@ -578,6 +581,9 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 // order approval are kept (the RESTRICT foreign key forbids dropping a key in
 // use); such a key is still in the archive whenever the order it signs is.
 func (rt *restoreTx) pruneGeneralSettings(ctx context.Context, data backup.Data) error {
+	if err := rt.pruneSchedulerJobs(ctx, data.ScheduledJobs); err != nil {
+		return err
+	}
 	keepMcp := make(map[string]bool, len(data.McpAccess))
 	for command := range data.McpAccess {
 		keepMcp[command] = true

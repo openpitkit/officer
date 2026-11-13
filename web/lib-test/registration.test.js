@@ -143,13 +143,21 @@ describe("published officer defaults", () => {
       .find(({ id }) => id === "account");
     const logout = officer.getNav("footer").find(({ id }) => id === "logout");
 
-    officer.setAccountScope({ accounts: false, account: "primary" });
+    officer.setAccountScope({
+      accounts: false,
+      account: "primary",
+      accountPnlReset: false,
+    });
     officer.setPanelSession("token");
     expect(accounts.when()).toBe(false);
     expect(account.when()).toBe(true);
     expect(logout.when()).toBe(true);
 
-    officer.setAccountScope({ accounts: true, account: "" });
+    officer.setAccountScope({
+      accounts: true,
+      account: "",
+      accountPnlReset: false,
+    });
     officer.setPanelSession("open");
     expect(accounts.when()).toBe(true);
     expect(account.when()).toBe(false);
@@ -183,7 +191,11 @@ describe("published officer defaults", () => {
 
   it("loads the account scope and session through the exported StartupGate", async () => {
     expect(officer.StartupGate).toBeTypeOf("function");
-    officer.setAccountScope({ accounts: true, account: "" });
+    officer.setAccountScope({
+      accounts: true,
+      account: "",
+      accountPnlReset: false,
+    });
     officer.setPanelSession("open");
     const fetch = vi.fn(async (url) => {
       if (url === "/host/api/session") {
@@ -197,7 +209,11 @@ describe("published officer defaults", () => {
         return Response.json({
           mode: "single",
           account: "loaded",
-          features: { accounts: false, account: "loaded" },
+          features: {
+            accounts: false,
+            account: "loaded",
+            accountPnlReset: false,
+          },
           restartRequired: false,
           live: false,
         });

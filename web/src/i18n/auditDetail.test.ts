@@ -38,6 +38,31 @@ const regroup = detail(
 );
 
 describe("auditDetailText", () => {
+  it("omits halt wording for an ordinary reset and labels a previous calculation halt", async () => {
+    for (const language of LOCALE_CODES) {
+      await i18n.changeLanguage(language);
+      const plain = auditDetailText(
+        detail("reset_account_pnl", {
+          account: "desk",
+          previousPnl: "12",
+        }),
+      );
+      expect(plain).not.toContain("{{");
+      expect(plain).not.toContain("halt");
+      const halted = auditDetailText(
+        detail("reset_account_pnl_previous_halt", {
+          account: "desk",
+          previousPnl: "12",
+          previousHalt: "missing_fx",
+        }),
+      );
+      expect(halted).not.toContain("missing_fx");
+      expect(halted).not.toContain("{{");
+      expect(halted.length).toBeGreaterThan(plain.length);
+      if (language === "en")
+        expect(halted).toContain("halt reason before reset:");
+    }
+  });
   afterEach(async () => {
     vi.restoreAllMocks();
     await i18n.changeLanguage("en");

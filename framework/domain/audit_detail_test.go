@@ -53,6 +53,31 @@ func TestNewAuditDetailKeepsEmptyValuesNil(t *testing.T) {
 	}
 }
 
+func TestResetAccountPnlAuditHaltContext(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		code   AuditDetailCode
+		params AuditDetailParams
+		want   string
+	}{
+		{AuditDetailResetAccountPnl, AuditDetailParams{"account": "desk", "previousPnl": "12"},
+			"Account desk realized P&L reset to 0; previous value 12"},
+		{AuditDetailResetAccountPnlPreviousHalt, AuditDetailParams{"account": "desk", "previousPnl": "12", "previousHalt": "missing_fx"},
+			"Account desk realized P&L reset to 0; previous value 12; P&L calculation halt reason before reset: missing_fx"},
+	} {
+		t.Run(string(test.code), func(t *testing.T) {
+			t.Parallel()
+			d := NewAuditDetail(test.code, test.params)
+			if d.Text != test.want {
+				t.Fatalf("Text = %q, want %q", d.Text, test.want)
+			}
+			if err := d.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestNewAuditDetailWithoutRenderingFailsValidate(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

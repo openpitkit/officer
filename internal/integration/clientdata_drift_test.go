@@ -812,6 +812,7 @@ var businessCSVEntityContracts = []businessCSVEntityContract{
 var expectedSchemaTableNames = []string{
 	"account",
 	"account_group",
+	"account_pnl_reset_receipt",
 	"actionable_alert",
 	"adjustment",
 	"adjustment_status",
@@ -843,6 +844,8 @@ var expectedSchemaTableNames = []string{
 	"order_status",
 	"principal",
 	"realm",
+	"scheduler_execution",
+	"scheduler_job",
 	"secret_state",
 	"setting",
 	"signing_key",
@@ -876,6 +879,24 @@ var nonClientDataSchemaTables = map[string]string{
 // means the surface intentionally does not carry that column and must be covered
 // by an allowlist entry when the table participates in that surface.
 var schemaClientTables = map[string]schemaSurfaceSpec{
+	"account_pnl_reset_receipt": {backup: map[string]string{"run_id": "AccountPnlResetReceipts[].RunID", "account_id": "AccountPnlResetReceipts[].Account"}},
+	"scheduler_job": {
+		backup: map[string]string{
+			"job_id": "ID", "spec": "Spec", "state": "State",
+			"next_at": "Next.At", "next_day": "Next.Day", "next_skip": "Next.Skip",
+			"completed_runs": "CompletedRuns", "run_id": "Active.ID",
+			"run_started_at": "Active.StartedAt", "run_attempt": "Active.Attempt",
+			"last_run_id": "Last.ID", "last_attempt": "Last.Attempt",
+			"error": "Error", "revision": "Revision",
+		},
+	},
+	"scheduler_execution": {
+		backup: map[string]string{
+			"run_id": "Run.ID", "attempt": "Run.Attempt", "job_id": "Run.JobID",
+			// The immutable JSON record is the complete portable Execution.
+			"record": "ScheduledExecutions[]",
+		},
+	},
 	"actionable_alert": {backup: map[string]string{"external_id": "ID", "type": "Type", "at": "At", "source": "Source", "payload": "Payload"}},
 	"alert_read_state": {backup: map[string]string{"alert_id": "Alerts.ID", "principal": "ReadStates key", "is_read": "ReadStates value"}},
 	"alert_delivery":   {backup: map[string]string{"alert_id": "Alerts.ID", "channel": "Deliveries key", "failed": "Deliveries value"}},

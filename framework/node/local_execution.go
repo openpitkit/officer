@@ -812,13 +812,17 @@ func (n *localNode) CheckOrder(
 // Close stops the engine and closes the store. It is idempotent: the engine's
 // Stop and the store's Close are both idempotent.
 func (n *localNode) Close() error {
+	var schedulerErr error
+	if n.pnlResetOwner != nil {
+		schedulerErr = n.pnlResetOwner.Close()
+	}
 	n.mutate.Lock()
 	defer n.mutate.Unlock()
 	n.engineMu.Lock()
 	stopFinalEngine(n.engine)
 	n.engineMu.Unlock()
 	if err := n.db.Close(); err != nil {
-		return fmt.Errorf("close store: %w", err)
+		return errors.Join(schedulerErr, fmt.Errorf("close store: %w", err))
 	}
-	return nil
+	return schedulerErr
 }

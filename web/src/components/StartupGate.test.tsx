@@ -39,7 +39,11 @@ import {
 import { errorResponse, jsonResponse, renderWithApi } from "@/test/apiClient";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
-const HIDDEN: AccountFeatures = { accounts: false, account: "main" };
+const HIDDEN: AccountFeatures = {
+  accounts: false,
+  account: "main",
+  accountPnlReset: false,
+};
 
 function accountModeResponse(
   features: AccountFeatures,
@@ -177,8 +181,14 @@ describe("StartupGate", () => {
     });
 
     it.each([
-      ["accounts and the account", { accounts: true, account: "" }],
-      ["only the account", { accounts: false, account: "other" }],
+      [
+        "accounts and the account",
+        { accounts: true, account: "", accountPnlReset: false },
+      ],
+      [
+        "only the account",
+        { accounts: false, account: "other", accountPnlReset: false },
+      ],
     ])(
       "reloads the page when a later poll changes %s",
       async (_change, changed) => {
@@ -198,7 +208,11 @@ describe("StartupGate", () => {
         .fn()
         .mockImplementationOnce(async () => accountModeResponse(HIDDEN))
         .mockImplementation(async () =>
-          accountModeResponse({ accounts: true, account: "" }),
+          accountModeResponse({
+            accounts: true,
+            account: "",
+            accountPnlReset: false,
+          }),
         );
       let release!: () => void;
       const held = holdingScopeReload(

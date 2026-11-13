@@ -170,7 +170,9 @@
     "export_business_csv_unfiltered": "Exportação de CSV de entidades: {{entity}}, delimitador {{delimiter}}, ZIP {{zip}}, sem filtros",
     "activity_order": "{{side}} {{amount}} {{base}}/{{quote}} {{status}}",
     "activity_adjustment_accepted": "Ajuste {{asset}}: aceito",
-    "activity_adjustment_rejected": "Ajuste {{asset}}: rejeitado"
+    "activity_adjustment_rejected": "Ajuste {{asset}}: rejeitado",
+    "reset_account_pnl": "P&L realizado da conta {{account}} reposto para 0; valor anterior {{previousPnl}}",
+    "reset_account_pnl_previous_halt": "P&L realizado da conta {{account}} reposto para 0; valor anterior {{previousPnl}}; motivo da interrupção do cálculo de P&L antes da reposição: {{previousHalt}}"
   },
   "detailField": {
     "account": "conta",

@@ -5500,7 +5500,11 @@ describe("Orders would-block preview with accounts shown", () => {
 
 describe("Orders add-order dialog with accounts hidden", () => {
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
   });
 
   it("shows no account field on any tab and fetches no account suggestions", async () => {
@@ -5837,7 +5841,11 @@ describe("Orders page with accounts hidden", () => {
   const mainTrade: Trade = { ...sampleTrade, account: "main" };
 
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
   });
 
   it("shows no account column, row filter, filter field or global toggle on either tab", async () => {

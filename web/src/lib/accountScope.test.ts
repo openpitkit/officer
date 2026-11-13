@@ -30,7 +30,7 @@ describe("accountScope", () => {
   });
 
   it("passes the chosen account through while accounts are shown", () => {
-    setAccountScope({ accounts: true, account: "" });
+    setAccountScope({ accounts: true, account: "", accountPnlReset: false });
 
     const scope = accountScope();
     expect(scope.showsAccounts).toBe(true);
@@ -40,7 +40,7 @@ describe("accountScope", () => {
   });
 
   it("carries the default account while accounts are hidden", () => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({ accounts: false, account: "main", accountPnlReset: false });
 
     const scope = accountScope();
     expect(scope.showsAccounts).toBe(false);
@@ -50,7 +50,7 @@ describe("accountScope", () => {
   });
 
   it("keeps a snapshot that later changes to the input do not reach", () => {
-    const features = { accounts: false, account: "main" };
+    const features = { accounts: false, account: "main", accountPnlReset: false };
     setAccountScope(features);
     features.account = "other";
 

@@ -222,8 +222,14 @@ describe("StorageSection", () => {
   );
 
   it.each([
-    [{ accounts: false, account: "main" }, "One account · main"],
-    [{ accounts: true, account: "" }, "Several accounts"],
+    [
+      { accounts: false, account: "main", accountPnlReset: false },
+      "One account · main",
+    ],
+    [
+      { accounts: true, account: "", accountPnlReset: false },
+      "Several accounts",
+    ],
   ])(
     "shows the account mode in force and links to its tab",
     async (features, value) => {

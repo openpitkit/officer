@@ -159,7 +159,8 @@
     },
     "errors": {
       "fileRequired": "Choose a backup file."
-    }
+    },
+    "resetProgressScope": "To include completed reset schedule progress, select Accounts and groups for the same accounts."
   },
   "logs": {
     "title": "Logs",

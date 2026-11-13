@@ -43,7 +43,7 @@ proto.scrollIntoView = () => {};
 // The app sets the scope from GET /account-mode before its shell renders;
 // tests that need hidden accounts set their own scope before rendering.
 beforeEach(() => {
-  setAccountScope({ accounts: true, account: "" });
+  setAccountScope({ accounts: true, account: "", accountPnlReset: false });
 });
 
 afterEach(() => {

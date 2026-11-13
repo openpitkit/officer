@@ -550,7 +550,11 @@ describe("Dashboard widgets with accounts shown", () => {
 
 describe("Dashboard widgets with accounts hidden", () => {
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
   });
 
   it("shows only the orders tile across the row", () => {

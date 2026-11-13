@@ -349,6 +349,8 @@ export interface TimeRangeFilterProps {
 }
 
 export interface DateTimeFieldProps {
+  id?: string;
+  disabled?: boolean;
   value?: string;
   onChange?: (value: string) => void;
   onClear?: () => void;
@@ -360,6 +362,8 @@ export interface DateTimeFieldProps {
 
 /** Shared datetime-local field with inline reset. */
 export function DateTimeField({
+  id,
+  disabled,
   value = "",
   onChange,
   onClear,
@@ -378,6 +382,8 @@ export function DateTimeField({
       <Input
         ref={inputRef}
         type="datetime-local"
+        id={id}
+        disabled={disabled}
         value={value}
         aria-invalid={customValidity === "" ? undefined : "true"}
         className={cn("h-8 text-xs", clearable && "pr-7")}

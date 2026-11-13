@@ -26,6 +26,8 @@ export interface AccountScope {
    * empty while accounts are shown.
    */
   readonly account: string;
+  /** Whether this host installed realized-account-P&L resets. */
+  readonly accountPnlReset: boolean;
   /**
    * The account a request carries: `chosen` while accounts are shown, the
    * default account otherwise.
@@ -40,10 +42,11 @@ let reloadHolds = 0;
 
 /** Store the running process's features as this page load's account scope. */
 export function setAccountScope(features: AccountFeatures): void {
-  const { accounts, account } = features;
+  const { accounts, account, accountPnlReset } = features;
   current = Object.freeze({
     showsAccounts: accounts,
     account,
+    accountPnlReset,
     accountFor: (chosen: string) => (accounts ? chosen : account),
   });
 }
@@ -73,8 +76,8 @@ export function accountScope(): AccountScope {
  * @throws Error when read before the scope is loaded.
  */
 export function isLoadedScope(features: AccountFeatures): boolean {
-  const { showsAccounts, account } = accountScope();
-  return features.accounts === showsAccounts && features.account === account;
+  const { showsAccounts, account, accountPnlReset } = accountScope();
+  return features.accounts === showsAccounts && features.account === account && features.accountPnlReset === accountPnlReset;
 }
 
 /**

@@ -75,13 +75,14 @@ func (e *engineRebuildError) Unwrap() error {
 // window is open, new mutating requests are rejected rather than queued behind
 // the rebuild.
 type localNode struct {
-	engineMu sync.RWMutex
-	engine   engine.Engine
-	build    engine.BuildFunc
-	db       store.Store
-	realm    store.RealmStore
-	realmID  domain.RealmID
-	fatal    func(error)
+	engineMu      sync.RWMutex
+	engine        engine.Engine
+	build         engine.BuildFunc
+	db            store.Store
+	realm         store.RealmStore
+	realmID       domain.RealmID
+	fatal         func(error)
+	pnlResetOwner PnlResetSchedulerOwner
 
 	mutate     sync.Mutex
 	reportMu   sync.Mutex
@@ -527,10 +528,19 @@ func (n *localNode) RestoreBackup(
 	archive backup.Archive,
 	opts backup.RestoreOptions,
 	caller domain.Caller,
-) (backup.RestoreSummary, marketdata.Sink, error) {
+) (restoredSummary backup.RestoreSummary, restoredSink marketdata.Sink, resultErr error) {
 	normalizedScope := effectiveRestoreScope(
 		opts.Scope, archive.Manifest.Sections,
 	)
+	if caller.TightenOnly() && (len(archive.Data.ScheduledJobs) != 0 || len(archive.Data.AccountPnlResetReceipts) != 0 ||
+		(n.pnlResetOwner != nil && (normalizedScope.Included(backup.SectionGeneralSettings) || normalizedScope.Included(backup.SectionAuditLog)))) {
+		return backup.RestoreSummary{}, n.currentMarketDataSink(), fmt.Errorf("restore scheduled reset configuration or evidence: %w", domain.ErrLoosening)
+	}
+	resume, err := n.suspendPnlResetScheduler()
+	if err != nil {
+		return backup.RestoreSummary{}, n.currentMarketDataSink(), err
+	}
+	defer func() { resultErr = errors.Join(resultErr, resume()) }()
 	// Settings scopes exclude account lanes before asset classification because
 	// they can change the live Spot Funds limit mode. Other scopes take a lane
 	// and either keep it or upgrade through a restart reservation. Neither path
@@ -538,7 +548,6 @@ func (n *localNode) RestoreBackup(
 	settingsScope := !backup.TouchesRuntime(normalizedScope) &&
 		normalizedScope.Included(backup.SectionGeneralSettings)
 	var endGate func()
-	var err error
 	if settingsScope {
 		err = n.beginLivePolicyConfiguration()
 		endGate = n.endLivePolicyConfiguration
@@ -599,7 +608,13 @@ func (n *localNode) RestoreBackup(
 		rollbackScope := normalizedScope
 		rollbackScope.Accounts = backup.EntitySelector{}
 		rollbackScope.Positions = backup.EntitySelector{}
-		rollback, err = n.realm.ExportBackup(ctx, rollbackScope)
+		if capture, ok := n.realm.(store.BackupRollbackStore); ok {
+			rollback, err = capture.CaptureBackupRollback(ctx, rollbackScope)
+		} else if n.pnlResetOwner != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(), fmt.Errorf("reset scheduler requires scoped rollback capture")
+		} else {
+			rollback, err = n.realm.ExportBackup(ctx, rollbackScope)
+		}
 		if err == nil {
 			rollback.Data = backup.FilterData(rollback.Data, normalizedScope)
 		}
@@ -611,6 +626,11 @@ func (n *localNode) RestoreBackup(
 
 	effectiveOpts := opts
 	effectiveOpts.Scope = normalizedScope
+	if n.pnlResetOwner != nil {
+		if err := n.pnlResetOwner.ValidateRestore(ctx, archive, effectiveOpts); err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
+		}
+	}
 	summary, err := n.realm.RestoreBackup(ctx, archive, effectiveOpts)
 	if err != nil {
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),
@@ -747,7 +767,15 @@ func (n *localNode) RestoreBackup(
 func (n *localNode) ResetDatabase(
 	ctx context.Context,
 	caller domain.Caller,
-) (marketdata.Sink, error) {
+) (resetSink marketdata.Sink, resultErr error) {
+	if caller.TightenOnly() {
+		return n.currentMarketDataSink(), fmt.Errorf("reset database: %w", domain.ErrLoosening)
+	}
+	resume, err := n.suspendPnlResetScheduler()
+	if err != nil {
+		return n.currentMarketDataSink(), err
+	}
+	defer func() { resultErr = errors.Join(resultErr, resume()) }()
 	if err := n.beginEngineRestart(); err != nil {
 		return n.currentMarketDataSink(), err
 	}

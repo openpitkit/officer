@@ -463,6 +463,9 @@ func (s *sqliteStore) Reset(ctx context.Context) (result error) {
 	defer func() {
 		result = errors.Join(result, conn.Close())
 	}()
+	if err := refuseRunningSchedulerJobs(ctx, conn); err != nil {
+		return err
+	}
 	if err := conn.Raw(func(driverConn any) error {
 		restorer, ok := driverConn.(interface {
 			NewRestore(string) (*sqlitedriver.Backup, error)

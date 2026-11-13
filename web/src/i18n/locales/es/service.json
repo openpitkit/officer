@@ -159,7 +159,8 @@
     },
     "errors": {
       "fileRequired": "Elija un archivo de copia de seguridad."
-    }
+    },
+    "resetProgressScope": "Para incluir el progreso de la programación de restablecimiento, seleccione Cuentas y grupos para las mismas cuentas."
   },
   "logs": {
     "title": "Registros",

@@ -1520,7 +1520,11 @@ describe("Limits with accounts shown", () => {
 
 describe("Limits with accounts hidden", () => {
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
   });
 
   it("shows no account column, filter or global toggle", () => {

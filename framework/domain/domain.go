@@ -576,6 +576,7 @@ const (
 	AuditActionSetNotes                   AuditAction = "set_notes"
 	AuditActionSetGroup                   AuditAction = "set_group"
 	AuditActionSetAccountCurrency         AuditAction = "set_account_currency"
+	AuditActionResetAccountPnl            AuditAction = "reset_account_pnl"
 	AuditActionSetGroupCurrency           AuditAction = "set_group_currency"
 	AuditActionAdjustment                 AuditAction = "adjustment"
 	AuditActionCreateGroup                AuditAction = "create_group"
@@ -668,6 +669,7 @@ func AllAuditActions() []AuditAction {
 		AuditActionSetNotes,
 		AuditActionSetGroup,
 		AuditActionSetAccountCurrency,
+		AuditActionResetAccountPnl,
 		AuditActionSetGroupCurrency,
 		AuditActionAdjustment,
 		AuditActionCreateGroup,

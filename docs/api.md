@@ -241,6 +241,33 @@ session cookie is `pit_officer_session`, set with
 `Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000`. A session ends 30 days
 after sign-in or 7 days after its last request, and survives a restart.
 
+## Realized account P&L reset
+
+The standalone host advertises `features.accountPnlReset` in `GET /account-mode`.
+When installed, `POST /accounts/{code}/realized-pnl/reset` force-sets whole-account
+realized P&L to zero, including halted/unset values. Positions, cost basis and
+history are retained; kill switches remain latched. Missing accounts are refused.
+
+`GET` and `PUT /account-pnl-reset-schedule` read/edit one daily all-account job.
+Writes require `enabled`, `time` (HH:mm), `timezone` (IANA), `termination` and
+`revision`. Termination is `{"mode":"forever"}`, `{"mode":"count","maxRuns":100}`
+or `{"mode":"until","until":"2030-12-31T23:59:00Z"}`. Revision zero creates the
+first job; edits retain its ID and successful-run count. Responses contain `job`
+(null when absent) and `runtimeError`. Job status includes next execution and
+last outcome with independent account results. Recovery uses
+`POST /account-pnl-reset-schedule/recover` with current `revision` and explicit
+`action` (`retry` or `skip`). Agents are always refused for mutations. MCP exposes
+only `get_account_pnl_reset_schedule`. Manual resets apply account scope; schedule access requires
+global authority. In standalone Officer, operators can configure the schedule in
+both account modes; it resets every stored account, including accounts hidden by
+single-account mode. Manual resets remain scoped to the visible account.
+Missed boundaries are skipped visibly. Backup/restore of reset
+job progress with receipts requires `accounts_groups` in the same selected scope.
+See [daily realized P&L reset](configuration.md#daily-realized-pl-reset) for
+count, end, DST, receipt identity and crash semantics, and the native Go
+[`scheduler` package](https://pkg.go.dev/go.openpit.dev/officer/framework/scheduler)
+for the generic host contract.
+
 ## Values
 
 Money and size values cross the wire as exact decimal strings, not as IEEE 754
@@ -387,6 +414,7 @@ Each of these tools makes the core call of one REST operation:
 - `create_account`, `update_account`, `delete_account`: `POST /accounts`,
   `PUT /accounts/{code}`, `DELETE /accounts/{code}`;
 - `set_account_currency`: `PUT /accounts/{code}/currency`;
+- `get_account_pnl_reset_schedule`: `GET /account-pnl-reset-schedule`;
 - `apply_adjustment`: `POST /accounts/{code}/adjustments`;
 - `create_asset`, `update_asset`, `delete_asset`: `POST /assets`,
   `PUT /assets/{code}`, `DELETE /assets/{code}`;

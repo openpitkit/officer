@@ -40,7 +40,7 @@ describe("useGlobalAccountFilter", () => {
 
   it("reports no filter while accounts are hidden and keeps it stored", () => {
     setGlobalAccountFilter("acc-7");
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({ accounts: false, account: "main", accountPnlReset: false });
 
     const hidden = renderHook(() => useGlobalAccountFilter());
 
@@ -48,7 +48,7 @@ describe("useGlobalAccountFilter", () => {
     expect(hidden.result.current.enabled).toBe(false);
 
     hidden.unmount();
-    setAccountScope({ accounts: true, account: "" });
+    setAccountScope({ accounts: true, account: "", accountPnlReset: false });
     const shown = renderHook(() => useGlobalAccountFilter());
 
     expect(shown.result.current.account).toBe("acc-7");

@@ -715,7 +715,11 @@ describe("WelcomeQuickStart", () => {
 
 describe("WelcomeQuickStart while accounts are hidden", () => {
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
     fetchAccountsMock.mockResolvedValue([
       accountRow("main", { positionCount: 0 }),
     ]);

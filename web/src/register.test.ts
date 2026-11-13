@@ -89,7 +89,7 @@ const pageIds = Object.keys(pageEntries) as OfficerDefaultPageId[];
 beforeEach(() => {
   vi.restoreAllMocks();
   resetRegistries();
-  setAccountScope({ accounts: true, account: "" });
+  setAccountScope({ accounts: true, account: "", accountPnlReset: false });
   registerOfficerDefaults();
 });
 
@@ -231,7 +231,11 @@ describe("officer default registration", () => {
   });
 
   it("offers the Account entry and page in its place while accounts are hidden", () => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
 
     const ids = shownPrimaryIds();
     expect(ids).toContain("account");

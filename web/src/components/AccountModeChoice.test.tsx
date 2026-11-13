@@ -42,10 +42,12 @@ import {
 } from "@/test/apiClient";
 
 const runningMulti: AccountModeState["features"] = {
+  accountPnlReset: false,
   accounts: true,
   account: "",
 };
 const runningSingle: AccountModeState["features"] = {
+  accountPnlReset: false,
   accounts: false,
   account: "main",
 };
@@ -357,7 +359,7 @@ describe("AccountModeChoice", () => {
     const saved: AccountModeState = {
       mode: "single",
       account: "default",
-      features: { accounts: false, account: "default" },
+      features: { accounts: false, account: "default", accountPnlReset: false },
       restartRequired: false,
       live: true,
     };

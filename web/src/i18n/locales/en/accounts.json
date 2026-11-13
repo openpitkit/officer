@@ -15,7 +15,8 @@
   },
   "tabs": {
     "accounts": "Accounts",
-    "groups": "Groups"
+    "groups": "Groups",
+    "settings": "Account settings"
   },
   "pagination": {
     "pageSize": {
@@ -406,5 +407,51 @@
   "tradingCheck": {
     "checking": "Trading connections are still being checked.",
     "failed": "Trading connections could not be checked: {{error}}"
+  },
+  "pnlReset": {
+    "action": "Reset realized P&L for {{account}}",
+    "confirmTitle": "Reset realized P&L for {{account}}?",
+    "confirmDescription": "Sets only this account’s realized P&L to 0. Positions, cost basis and history are retained. Accounts already blocked stay blocked.",
+    "reset": "Reset to 0",
+    "schedule": "Daily P&L reset",
+    "scheduleDescription": "One daily schedule resets realized P&L for all accounts. Account results are independent. Missed boundaries are skipped. Positions and history are retained. Accounts already blocked stay blocked.",
+    "loading": "Loading…",
+    "status": "Status",
+    "absent": "Not configured",
+    "completedRuns": "Successful runs",
+    "next": "Next execution",
+    "last": "Last result",
+    "missedBoundary": "Missed daily boundary; reset skipped.",
+    "accountSucceeded": "Reset completed",
+    "enableDaily": "Enable daily reset",
+    "time": "Daily reset time",
+    "timezone": "Time zone",
+    "invalidTimezone": "Select a time zone from the list.",
+    "invalidTime": "Select a valid daily reset time.",
+    "enabled": "Enabled",
+    "paused": "Paused",
+    "end": "Repetition ends",
+    "ends": {
+      "forever": "Never",
+      "count": "After N successful runs",
+      "until": "At an absolute UTC datetime"
+    },
+    "count": "Total successful runs, including the first",
+    "until": "End date and time (UTC)",
+    "invalidCount": "Enter a positive whole number of successful runs.",
+    "invalidUntil": "Select a valid end date and time in UTC.",
+    "edit": "Configure",
+    "skip": "Skip occurrence",
+    "retry": "Retry occurrence",
+    "states": {
+      "ready": "Scheduled",
+      "paused": "Paused",
+      "running": "Running",
+      "failed": "Failed",
+      "interrupted": "Interrupted",
+      "completed": "Completed",
+      "succeeded": "Succeeded",
+      "skipped": "Skipped"
+    }
   }
 }

@@ -15,7 +15,8 @@
   },
   "tabs": {
     "accounts": "账户",
-    "groups": "账户组"
+    "groups": "账户组",
+    "settings": "账户设置"
   },
   "pagination": {
     "pageSize": {
@@ -406,5 +407,51 @@
   "tradingCheck": {
     "checking": "仍在检查交易连接。",
     "failed": "无法检查交易连接：{{error}}"
+  },
+  "pnlReset": {
+    "action": "重置账户 {{account}} 的已实现 P&L",
+    "confirmTitle": "重置账户 {{account}} 的已实现 P&L？",
+    "confirmDescription": "仅将此账户的已实现 P&L 设为 0。持仓、成本基础和历史记录均保留。已封锁的账户将保持封锁。",
+    "reset": "重置为 0",
+    "schedule": "每日 P&L 重置",
+    "scheduleDescription": "统一的每日计划重置所有账户的已实现 P&L。各账户结果相互独立。已错过的执行时间将跳过。持仓和历史记录保留。已封锁的账户将保持封锁。",
+    "loading": "正在加载…",
+    "status": "状态",
+    "absent": "未配置",
+    "completedRuns": "成功执行次数",
+    "next": "下次执行",
+    "last": "上次结果",
+    "missedBoundary": "已错过每日执行时间；已跳过重置。",
+    "accountSucceeded": "重置完成",
+    "enableDaily": "启用每日重置",
+    "time": "每日重置时间",
+    "timezone": "时区",
+    "invalidTimezone": "请从列表中选择时区。",
+    "invalidTime": "请选择有效的每日重置时间。",
+    "enabled": "已启用",
+    "paused": "已暂停",
+    "end": "重复结束条件",
+    "ends": {
+      "forever": "永不",
+      "count": "成功执行 N 次后",
+      "until": "在指定的 UTC 绝对日期和时间"
+    },
+    "count": "成功执行总次数，包含首次",
+    "until": "结束日期和时间（UTC）",
+    "invalidCount": "请输入成功执行次数的正整数。",
+    "invalidUntil": "请选择有效的 UTC 结束日期和时间。",
+    "edit": "配置",
+    "skip": "跳过本次执行",
+    "retry": "重试本次执行",
+    "states": {
+      "ready": "已计划",
+      "paused": "已暂停",
+      "running": "正在执行",
+      "failed": "失败",
+      "interrupted": "已中断",
+      "completed": "已完成",
+      "succeeded": "成功",
+      "skipped": "已跳过"
+    }
   }
 }

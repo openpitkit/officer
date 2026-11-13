@@ -406,7 +406,11 @@ describe("Audit with accounts shown", () => {
 
 describe("Audit with accounts hidden", () => {
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
   });
 
   it("shows no account column, account or group filter, or global toggle", async () => {

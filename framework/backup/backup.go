@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/scheduler"
 )
 
 // FormatVersion is the current portable archive shape.
@@ -625,8 +626,45 @@ type Data struct {
 	SigningKeys []SigningKey `json:"signingKeys,omitempty"`
 	// Settings are the realm-wide settings (enum keys).
 	Settings []SettingEntry `json:"settings,omitempty"`
+	// ScheduledJobs are task definitions and progress, carried with general
+	// settings. Last carries the last immutable outcome needed for status.
+	ScheduledJobs []scheduler.Job `json:"scheduledJobs,omitempty"`
+	// ScheduledExecutions are past task attempts, carried with the audit log.
+	ScheduledExecutions []scheduler.Execution `json:"scheduledExecutions,omitempty"`
+	// AccountPnlResetReceipts are completed account effects, carried with accounts.
+	AccountPnlResetReceipts []AccountPnlResetReceipt `json:"accountPnlResetReceipts,omitempty"`
 	// McpAccess is the per-command MCP enable/disable overrides.
 	McpAccess map[string]bool `json:"mcpAccess,omitempty"`
+}
+
+// AccountPnlResetReceipt identifies a completed reset by current account code.
+// The receiver resolves it to its live account identity, never an audit identity.
+type AccountPnlResetReceipt struct {
+	RunID   string           `json:"runId"`
+	Account domain.AccountID `json:"account"`
+}
+
+// ValidatePnlResetScope prevents restoring job progress without its completed
+// account effects. Settings-only archives without reset progress remain valid.
+func ValidatePnlResetScope(data Data, scope Scope) error {
+	scope = scope.Normalize()
+	if !scope.Included(SectionGeneralSettings) {
+		return nil
+	}
+	selected := make(map[domain.AccountID]bool)
+	if scope.Included(SectionAccountsGroups) {
+		for _, a := range filterAccounts(data.Accounts, scope.Accounts) {
+			selected[domain.AccountID(a.Code)] = true
+		}
+	}
+	for _, job := range data.ScheduledJobs {
+		for _, receipt := range data.AccountPnlResetReceipts {
+			if strings.HasPrefix(receipt.RunID, job.ID+":") && !selected[receipt.Account] {
+				return fmt.Errorf("scheduled reset progress requires accounts_groups including account %q: %w", receipt.Account, domain.ErrInvalid)
+			}
+		}
+	}
+	return nil
 }
 
 // Archive is the single JSON document copied between Officer realms. It is one
@@ -882,6 +920,11 @@ func FilterData(data Data, scope Scope) Data {
 		out.Accounts = filterAccounts(data.Accounts, scope.Accounts)
 		out.Groups = filterGroups(data.Groups, out.Accounts, scope.Accounts)
 		out.DefaultGroupCurrency = data.DefaultGroupCurrency
+		for _, receipt := range data.AccountPnlResetReceipts {
+			if selectorMatchesAccount(scope.Accounts, receipt.Account, groupByAccount) {
+				out.AccountPnlResetReceipts = append(out.AccountPnlResetReceipts, receipt)
+			}
+		}
 	}
 	if scope.Included(SectionPositions) {
 		out.Balances = filterBalances(data.Balances, scope.Positions, groupByAccount)
@@ -920,6 +963,10 @@ func FilterData(data Data, scope Scope) Data {
 		}
 		out.Settings = append([]SettingEntry(nil), data.Settings...)
 		out.SigningKeys = append([]SigningKey(nil), data.SigningKeys...)
+		out.ScheduledJobs = make([]scheduler.Job, len(data.ScheduledJobs))
+		for i, job := range data.ScheduledJobs {
+			out.ScheduledJobs[i] = job.Clone()
+		}
 	}
 	if scope.Included(SectionActivityHistory) {
 		out.Alerts = make([]ActionableAlert, len(data.Alerts))
@@ -962,6 +1009,12 @@ func FilterData(data Data, scope Scope) Data {
 	}
 	if scope.Included(SectionAuditLog) {
 		out.Audit = filterAudit(data.Audit, scope.Accounts, groupByAccount)
+		if scope.Accounts.All {
+			out.ScheduledExecutions = make([]scheduler.Execution, len(data.ScheduledExecutions))
+			for i, execution := range data.ScheduledExecutions {
+				out.ScheduledExecutions[i] = execution.Clone()
+			}
+		}
 	}
 	return out
 }

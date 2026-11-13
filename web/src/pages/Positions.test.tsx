@@ -2746,7 +2746,11 @@ describe("Positions page with accounts hidden", () => {
   };
 
   beforeEach(() => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
     useBalancesMock.mockReturnValue(readyPage<Balance>([mainBalance]));
     useAdjustmentsMock.mockReturnValue(readyPage<Adjustment>([mainAdjustment]));
     createAdjustmentMock.mockImplementation(async (code: string, body) => ({

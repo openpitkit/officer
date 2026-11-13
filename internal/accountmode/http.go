@@ -32,21 +32,21 @@ import (
 // applies a Request through Apply, so the choice waits for the next start even
 // during setup, and State.Live stays false.
 func Routes(
-	cp backend.ControlPlane, scope *Scope, gate SetupGate,
+	cp backend.ControlPlane, scope *Scope, gate SetupGate, accountPnlReset bool,
 ) []httpx.Route {
 	return []httpx.Route{
 		{
 			ID:          "account-mode.get",
 			Method:      http.MethodGet,
 			Pattern:     "/account-mode",
-			Handler:     handleGetAccountMode(cp, scope, gate),
+			Handler:     handleGetAccountMode(cp, scope, gate, accountPnlReset),
 			DuringSetup: true,
 		},
 		{
 			ID:          "account-mode.put",
 			Method:      http.MethodPut,
 			Pattern:     "/account-mode",
-			Handler:     handleSetAccountMode(cp, scope, gate),
+			Handler:     handleSetAccountMode(cp, scope, gate, accountPnlReset),
 			DuringSetup: true,
 		},
 	}
@@ -63,17 +63,19 @@ type stateDTO struct {
 
 // featuresDTO is the wire shape of backend.AccountFeatures.
 type featuresDTO struct {
-	Accounts bool   `json:"accounts"`
-	Account  string `json:"account"`
+	Accounts        bool   `json:"accounts"`
+	Account         string `json:"account"`
+	AccountPnlReset bool   `json:"accountPnlReset"`
 }
 
-func toStateDTO(state State) stateDTO {
+func toStateDTO(state State, accountPnlReset bool) stateDTO {
 	return stateDTO{
 		Mode:    state.Mode,
 		Account: state.Account,
 		Features: featuresDTO{
-			Accounts: state.Features.Accounts(),
-			Account:  string(state.Features.Account),
+			Accounts:        state.Features.Accounts(),
+			Account:         string(state.Features.Account),
+			AccountPnlReset: accountPnlReset,
 		},
 		RestartRequired: state.RestartRequired,
 		Live:            state.Live,
@@ -84,7 +86,7 @@ func toStateDTO(state State) stateDTO {
 // choice, what the running process enforces, and whether a choice stored now
 // takes effect at once.
 func handleGetAccountMode(
-	cp backend.ControlPlane, scope *Scope, gate SetupGate,
+	cp backend.ControlPlane, scope *Scope, gate SetupGate, accountPnlReset bool,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		state, err := Read(r.Context(), cp)
@@ -96,7 +98,7 @@ func handleGetAccountMode(
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, toStateDTO(state))
+		httpx.WriteJSON(w, http.StatusOK, toStateDTO(state, accountPnlReset))
 	}
 }
 
@@ -104,7 +106,7 @@ func handleGetAccountMode(
 // choice, for the next start once setup is complete, and answers the stored
 // state.
 func handleSetAccountMode(
-	cp backend.ControlPlane, scope *Scope, gate SetupGate,
+	cp backend.ControlPlane, scope *Scope, gate SetupGate, accountPnlReset bool,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req Request
@@ -124,6 +126,6 @@ func handleSetAccountMode(
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, toStateDTO(state))
+		httpx.WriteJSON(w, http.StatusOK, toStateDTO(state, accountPnlReset))
 	}
 }

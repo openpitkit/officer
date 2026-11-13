@@ -17,8 +17,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
-import { AlertTriangle, Users } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
 import type { Account as AccountRecord } from "@/api/types";
 import { useAccounts } from "@/api/useAccounts";
@@ -29,6 +28,10 @@ import {
   UnblockAccountConfirm,
 } from "@/components/AccountDialogs";
 import { AccountStatusBadge } from "@/components/AccountState";
+import {
+  AccountRealizedPnl,
+  ResetAccountPnlConfirm,
+} from "@/components/AccountPnlReset";
 import { Notice } from "@/components/Notice";
 import { Page } from "@/components/Page";
 import { ErrorState, StaleState, TableSkeleton } from "@/components/PageStates";
@@ -36,8 +39,10 @@ import { StatRow } from "@/components/StatRow";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { accountScope } from "@/lib/accountScope";
+import { AccountManagementSettings } from "@/components/AccountManagementSettings";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
-type AccountDialog = "currency" | "block" | "unblock";
+type AccountDialog = "currency" | "block" | "unblock" | "pnl-reset";
 
 /** The account's currency and block state, and the shared dialogs that
  *  change them. */
@@ -66,6 +71,20 @@ function AccountSettings({
           <CardTitle>{t("account.settingsTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
+          <StatRow
+            label={t("accounts.columns.pnl")}
+            mono={false}
+            value={
+              <AccountRealizedPnl
+                account={account}
+                onReset={
+                  accountScope().accountPnlReset
+                    ? () => setDialog("pnl-reset")
+                    : undefined
+                }
+              />
+            }
+          />
           <StatRow
             label={t("accounts.columns.currency")}
             mono={false}
@@ -133,6 +152,11 @@ function AccountSettings({
         onOpenChange={onOpenChange}
         onDone={onDone}
       />
+      <ResetAccountPnlConfirm
+        account={dialog === "pnl-reset" ? account : null}
+        onClose={() => setDialog(null)}
+        onDone={onDone}
+      />
       <UnblockAccountConfirm
         account={account}
         open={dialog === "unblock"}
@@ -164,34 +188,35 @@ export function Account() {
       : undefined;
 
   return (
-    <Page
-      title={t("account.title")}
-      actions={
-        <Button asChild variant="ghost" size="sm">
-          <Link to="/service#account-mode">
-            <Users className="h-3.5 w-3.5" />
-            {t("account.switchToSeveral")}
-          </Link>
-        </Button>
-      }
-    >
-      {load.state === "loading" && <TableSkeleton rows={2} cols={2} />}
-      <StaleState load={load} reload={reload} />
-      {load.state === "error" && (
-        <ErrorState message={load.error} onRetry={reload} />
-      )}
-      {load.state === "ready" &&
-        (account === undefined ? (
-          <Notice
-            tone="warn"
-            icon={AlertTriangle}
-            title={t("account.missing.title")}
-          >
-            <p>{t("account.missing.detail")}</p>
-          </Notice>
-        ) : (
-          <AccountSettings account={account} onChanged={reload} />
-        ))}
+    <Page title={t("account.title")}>
+      <Tabs defaultValue="account">
+        <TabsList>
+          <TabsTrigger value="account">{t("account.title")}</TabsTrigger>
+          <TabsTrigger value="settings">{t("tabs.settings")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="settings">
+          <AccountManagementSettings />
+        </TabsContent>
+        <TabsContent value="account">
+          {load.state === "loading" && <TableSkeleton rows={2} cols={2} />}
+          <StaleState load={load} reload={reload} />
+          {load.state === "error" && (
+            <ErrorState message={load.error} onRetry={reload} />
+          )}
+          {load.state === "ready" &&
+            (account === undefined ? (
+              <Notice
+                tone="warn"
+                icon={AlertTriangle}
+                title={t("account.missing.title")}
+              >
+                <p>{t("account.missing.detail")}</p>
+              </Notice>
+            ) : (
+              <AccountSettings account={account} onChanged={reload} />
+            ))}
+        </TabsContent>
+      </Tabs>
     </Page>
   );
 }

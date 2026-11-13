@@ -32,7 +32,7 @@ let previousScope: ReturnType<typeof accountScope>;
 
 beforeEach(async () => {
   previousScope = accountScope();
-  setAccountScope({ accounts: true, account: "" });
+  setAccountScope({ accounts: true, account: "", accountPnlReset: false });
   await i18n.changeLanguage("en");
 });
 
@@ -40,6 +40,7 @@ afterEach(() => {
   setAccountScope({
     accounts: previousScope.showsAccounts,
     account: previousScope.account,
+    accountPnlReset: previousScope.accountPnlReset,
   });
 });
 
@@ -99,7 +100,11 @@ describe("SpotFundsCurrencyWarning", () => {
   });
 
   it("links to the account page while accounts are hidden", () => {
-    setAccountScope({ accounts: false, account: "main" });
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: false,
+    });
     renderWarning("track_only", ["main"]);
 
     expect(screen.getByText(warningTitle)).toBeInTheDocument();

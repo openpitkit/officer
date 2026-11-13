@@ -704,10 +704,13 @@ function BackupScopeControls(props: {
   setPositionGroups: (value: string) => void;
 }) {
   const { t } = useTranslation("service");
-  const { showsAccounts } = accountScope();
+  const { showsAccounts, accountPnlReset } = accountScope();
 
   return (
     <div className="flex flex-col gap-y-4">
+      {accountPnlReset && (
+        <p className="text-xs text-muted">{t("backup.resetProgressScope")}</p>
+      )}
       <label className="inline-flex w-fit items-center gap-2 text-xs text-text">
         <input
           type="checkbox"
@@ -1430,9 +1433,20 @@ export function Service() {
   const [lifecycleBusyAction, setLifecycleBusyAction] =
     useState<ServiceLifecycleAction | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const awaitingRestartRecovery = useRef(false);
   const [activeTab, setActiveTab] = useState<ServiceTab>("application");
   const scrolledToLogs = useRef(false);
   const refreshing = load.state === "loading";
+  useEffect(() => {
+    if (
+      awaitingRestartRecovery.current &&
+      load.state === "ready" &&
+      load.error === null
+    ) {
+      awaitingRestartRecovery.current = false;
+      setLifecycleBusyAction(null);
+    }
+  }, [load]);
   const displayedTab: ServiceTab =
     location.hash === "#logs"
       ? "logs"
@@ -1481,6 +1495,10 @@ export function Service() {
     try {
       if (action === "restart") {
         await restartService();
+        // Acceptance precedes shutdown. Cancel the old poll and wait for a
+        // fresh successful response before releasing the lifecycle controls.
+        awaitingRestartRecovery.current = true;
+        reload();
       } else {
         await stopService();
       }

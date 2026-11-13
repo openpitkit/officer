@@ -22,6 +22,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fetchCredentialStorage } from "@/api/credentialStorage";
+import { resetRealizedAccountPnl } from "@/api/accountPnlReset";
 import type { Account as AccountRecord } from "@/api/types";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { ApiError } from "@/framework";
@@ -44,6 +45,12 @@ vi.mock("@/api/usePreMigrationBackups", () => ({
   }),
 }));
 vi.mock("@/api/credentialStorage");
+vi.mock("@/api/accountPnlReset", async () => ({
+  ...(await vi.importActual<typeof import("@/api/accountPnlReset")>(
+    "@/api/accountPnlReset",
+  )),
+  resetRealizedAccountPnl: vi.fn(),
+}));
 const fetchCredentialStorageMock = vi.mocked(fetchCredentialStorage);
 
 const NOT_OWN_BLOCK =
@@ -121,15 +128,52 @@ beforeEach(async () => {
     resealedSecrets: 0,
   });
   await i18n.changeLanguage("en");
-  setAccountScope({ accounts: false, account: "main" });
+  setAccountScope({ accounts: false, account: "main", accountPnlReset: false });
 });
 
 describe("Account page", () => {
+  it("shows authoritative P&L and confirms a supported single-account reset before refreshing", async () => {
+    setAccountScope({
+      accounts: false,
+      account: "main",
+      accountPnlReset: true,
+    });
+    vi.mocked(resetRealizedAccountPnl).mockResolvedValue();
+    answering(mainAccount({ pnl: "-12" }));
+    renderAccount();
+    const action = await screen.findByRole("button", {
+      name: "Reset realized P&L for main",
+    });
+    expect(
+      screen.queryByRole("button", { name: "Daily P&L reset" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Account settings" })).toBeVisible();
+    expect(screen.getByText("-12")).toHaveClass("text-[var(--pnl-neg)]");
+    expect(resetRealizedAccountPnl).not.toHaveBeenCalled();
+    await userEvent.setup().click(action);
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      "Reset realized P&L for main?",
+    );
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      "Accounts already blocked stay blocked",
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Reset to 0" }));
+    await waitFor(() => expect(fetchAccountsMock).toHaveBeenCalledTimes(2));
+    expect(resetRealizedAccountPnl).toHaveBeenCalledWith(
+      expect.anything(),
+      "main",
+    );
+  });
   it("shows the default account's currency and block state", async () => {
     answering(mainAccount());
     renderAccount();
 
     expect(await screen.findByText("USD · account")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Daily P&L reset" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("active")).toBeInTheDocument();
     expect(screen.queryByText("Reason")).not.toBeInTheDocument();
     expect(fetchAccountsMock).toHaveBeenCalledWith(
@@ -252,13 +296,19 @@ describe("Account page", () => {
     await waitFor(() => expect(fetchAccountsMock).toHaveBeenCalledTimes(2));
   });
 
-  it("links to the account mode choice", async () => {
+  it("opens account mode settings in a separate tab", async () => {
     answering(mainAccount());
     renderAccount();
 
     expect(
-      await screen.findByRole("link", { name: "Switch to several accounts" }),
-    ).toHaveAttribute("href", "/service#account-mode");
+      screen.queryByRole("link", { name: "Switch to several accounts" }),
+    ).not.toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("tab", { name: "Account settings" }));
+    expect(
+      await screen.findByRole("heading", { name: "Account mode" }),
+    ).toBeVisible();
   });
 
   it("says the account is not in the database and the next start follows the saved mode", async () => {

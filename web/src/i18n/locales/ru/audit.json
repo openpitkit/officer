@@ -170,7 +170,9 @@
     "export_business_csv_unfiltered": "Экспорт CSV бизнес-сущностей: {{entity}}, разделитель {{delimiter}}, ZIP {{zip}}, без фильтров",
     "activity_order": "{{side}} {{amount}} {{base}}/{{quote}} {{status}}",
     "activity_adjustment_accepted": "Корректировка {{asset}}: принята",
-    "activity_adjustment_rejected": "Корректировка {{asset}}: отклонена"
+    "activity_adjustment_rejected": "Корректировка {{asset}}: отклонена",
+    "reset_account_pnl": "Реализованный P&L счёта {{account}} сброшен в 0; предыдущее значение {{previousPnl}}",
+    "reset_account_pnl_previous_halt": "Реализованный P&L счёта {{account}} сброшен в 0; предыдущее значение {{previousPnl}}; причина остановки расчёта P&L до сброса: {{previousHalt}}"
   },
   "detailField": {
     "account": "счёт",

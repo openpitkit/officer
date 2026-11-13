@@ -159,7 +159,8 @@
     },
     "errors": {
       "fileRequired": "Escolha um arquivo de cópia de segurança."
-    }
+    },
+    "resetProgressScope": "Para incluir o progresso da programação de reposição, selecione Contas e grupos para as mesmas contas."
   },
   "logs": {
     "title": "Registros",

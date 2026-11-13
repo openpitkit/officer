@@ -110,7 +110,7 @@ function accountMode(
   return {
     mode: "multi",
     account: "",
-    features: { accounts: true, account: "" },
+    features: { accounts: true, account: "", accountPnlReset: false },
     restartRequired: false,
     live: false,
     ...overrides,
@@ -309,7 +309,7 @@ beforeEach(async () => {
   vi.mocked(completeSetup).mockReset().mockResolvedValue(undefined);
   admitMock.mockImplementation((accessMode) => setPanelSession(accessMode));
   // The startup gate loads the scope of a process that runs several accounts.
-  setAccountScope({ accounts: true, account: "" });
+  setAccountScope({ accounts: true, account: "", accountPnlReset: false });
   mockAccountMode(accountMode());
   mockFundsMode("enforce", true);
   mockStorage(true);
@@ -579,7 +579,11 @@ describe("Setup", () => {
       const taken = accountMode({
         mode: "single",
         account: "default",
-        features: { accounts: false, account: "default" },
+        features: {
+          accounts: false,
+          account: "default",
+          accountPnlReset: false,
+        },
         live: true,
       });
 

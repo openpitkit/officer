@@ -23,7 +23,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Ban,
   CircleCheck,
-  CircleAlert,
   Folder,
   Globe2,
   Plus,
@@ -47,7 +46,13 @@ import type {
   TradingSnapshot,
 } from "@/api/types";
 import { useAccountsPage } from "@/api/useAccounts";
+import {
+  accountPnlClass,
+  AccountRealizedPnl,
+  ResetAccountPnlConfirm,
+} from "@/components/AccountPnlReset";
 import { useGroupsPage } from "@/api/useGroups";
+import { AccountManagementSettings } from "@/components/AccountManagementSettings";
 import type { PollingResult } from "@/api/usePolling";
 import { useTrading } from "@/api/useTrading";
 import { validateAccountID } from "@/api/validate";
@@ -153,6 +158,7 @@ import { sortDirection } from "@/lib/sortDirection";
 import { auditDetailText } from "@/i18n/auditDetail";
 import { codeLabel, sourceLabel } from "@/i18n/codeLabel";
 import { formatDateTime } from "@/i18n/format";
+import { accountScope } from "@/lib/accountScope";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import {
@@ -165,7 +171,7 @@ import { useVenueConnectionLabels } from "@/lib/useVenueConnectionLabels";
 import { VenueAccessDialogContainer } from "@/pages/VenueAccessDialogContainer";
 import { auditActionLabel } from "@/pages/dashboardActivity";
 
-type AccountsTab = "accounts" | "groups";
+type AccountsTab = "accounts" | "groups" | "settings";
 
 const ACCOUNT_SORT_KEYS = new Set([
   "blockReason",
@@ -2849,39 +2855,6 @@ function groupDisplayName(group: Group): string {
   return group.title !== "" ? group.title : group.code;
 }
 
-function pnlText(pnl: string | undefined): string {
-  return pnl && pnl !== "" ? pnl : "-";
-}
-
-function pnlHaltText(t: TFunction, reason: string): string | null {
-  if (!reason) return null;
-  switch (reason) {
-    case "missing_fx":
-      return t("accounts.pnlHalt.missingFx");
-    case "missing_account_currency":
-      return t("accounts.pnlHalt.missingAccountCurrency");
-    case "missing_initial_pnl":
-      return t("accounts.pnlHalt.missingInitialPnl");
-    case "missing_cost_basis":
-      return t("accounts.pnlHalt.missingCostBasis");
-    case "arithmetic_overflow":
-      return t("accounts.pnlHalt.arithmeticOverflow");
-    default:
-      return t("accounts.pnlHalt.unknown");
-  }
-}
-
-function pnlClass(pnl: string | undefined): string {
-  const value = (pnl ?? "").trim();
-  if (value === "" || /^0+(\.0+)?$/.test(value)) {
-    return "text-[var(--pnl-flat)]";
-  }
-  if (value.startsWith("-") || value.startsWith("−")) {
-    return "text-[var(--pnl-neg)]";
-  }
-  return "text-[var(--pnl-pos)]";
-}
-
 function CurrencyCell({
   currency,
   title,
@@ -3298,6 +3271,7 @@ function AccountsTable({
   groupsByCode,
   onSortChange,
   onEditAccount,
+  onResetPnl,
   onAssignGroup,
   onEditCurrency,
   onEditNotes,
@@ -3322,6 +3296,7 @@ function AccountsTable({
   groupsByCode: Map<string, Group>;
   onSortChange: (sort?: string, order?: SortOrder) => void;
   onEditAccount: (account: Account) => void;
+  onResetPnl?: (account: Account) => void;
   onAssignGroup: (account: Account) => void;
   onEditCurrency: (account: Account) => void;
   onEditNotes: (account: Account) => void;
@@ -3482,7 +3457,6 @@ function AccountsTable({
       <TableBody>
         {accounts.map((account) => {
           const title = account.title;
-          const haltText = pnlHaltText(t, account.pnlHaltReason);
           return (
             <TableRow
               key={account.code}
@@ -3582,22 +3556,13 @@ function AccountsTable({
               <TableCell
                 className={cn(
                   "w-[6rem] nums text-right text-xs",
-                  pnlClass(account.pnl),
+                  accountPnlClass(account.pnl),
                 )}
               >
-                {haltText ? (
-                  <span
-                    className="inline-flex text-[var(--warn)]"
-                    title={haltText}
-                    aria-label={haltText}
-                    role="note"
-                    tabIndex={0}
-                  >
-                    <CircleAlert className="size-4" aria-hidden="true" />
-                  </span>
-                ) : (
-                  pnlText(account.pnl)
-                )}
+                <AccountRealizedPnl
+                  account={account}
+                  onReset={onResetPnl ? () => onResetPnl(account) : undefined}
+                />
               </TableCell>
 
               <TableCell className="w-[2.5rem] text-xs text-muted-lt">
@@ -3722,6 +3687,8 @@ function AccountsTable({
 export function Accounts() {
   const { t } = useTranslation("accounts");
   const { fetchAccounts, fetchGroups } = useOfficerApi();
+  const resetSupported = accountScope().accountPnlReset;
+  const [resetTarget, setResetTarget] = useState<Account | null>(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
@@ -4348,54 +4315,61 @@ export function Accounts() {
     <Page
       title={t("page.title")}
       actions={
-        <>
-          <PageSizeSelect
-            value={tab === "accounts" ? accountSize : groupSize}
-            onChange={(value) => {
-              if (tab === "accounts") {
-                setAccountSize(value);
-                setAccountPage(0);
-              } else {
-                setGroupSize(value);
-                setGroupPage(0);
+        tab === "settings" ? undefined : (
+          <>
+            <PageSizeSelect
+              value={tab === "accounts" ? accountSize : groupSize}
+              onChange={(value) => {
+                if (tab === "accounts") {
+                  setAccountSize(value);
+                  setAccountPage(0);
+                } else {
+                  setGroupSize(value);
+                  setGroupPage(0);
+                }
+              }}
+              ariaLabel={t("pagination.pageSize.ariaLabel")}
+              rowCountLabel={(count) =>
+                t("pagination.pageSize.rowCount", { count })
               }
-            }}
-            ariaLabel={t("pagination.pageSize.ariaLabel")}
-            rowCountLabel={(count) =>
-              t("pagination.pageSize.rowCount", { count })
-            }
-          />
-          <RefreshButton onClick={reloadAll} busy={isLoading} />
-          <CsvTransferMenu
-            exports={[
-              {
-                entity: "account_groups",
-                label: t("businessCsv.exportGroupsCsv"),
-              },
-              {
-                entity: "accounts",
-                filters: accountCsvFilters,
-                label: t("businessCsv.exportAccountsCsv"),
-              },
-            ]}
-          />
-          <CreateGroupDialog
-            onCreated={() => {
-              setLocalGroups(null);
-              reloadGroups();
-            }}
-          />
-          <CreateAccountDialog
-            groupSuggestions={groupSuggestions}
-            onCreated={() => {
-              setLocalAccounts(null);
-              reloadAccounts();
-            }}
-          />
-        </>
+            />
+            <RefreshButton onClick={reloadAll} busy={isLoading} />
+            <CsvTransferMenu
+              exports={[
+                {
+                  entity: "account_groups",
+                  label: t("businessCsv.exportGroupsCsv"),
+                },
+                {
+                  entity: "accounts",
+                  filters: accountCsvFilters,
+                  label: t("businessCsv.exportAccountsCsv"),
+                },
+              ]}
+            />
+            <CreateGroupDialog
+              onCreated={() => {
+                setLocalGroups(null);
+                reloadGroups();
+              }}
+            />
+            <CreateAccountDialog
+              groupSuggestions={groupSuggestions}
+              onCreated={() => {
+                setLocalAccounts(null);
+                reloadAccounts();
+              }}
+            />
+          </>
+        )
       }
     >
       <p className="text-xs text-muted-lt">{t("page.description")}</p>
+      <ResetAccountPnlConfirm
+        account={resetTarget}
+        onClose={() => setResetTarget(null)}
+        onDone={reloadAll}
+      />
       {/* Without the snapshot the venue column and field are hidden; say why
           rather than look like an install with no trading connections. */}
       {trading.load.state === "error" && (
@@ -4410,7 +4384,7 @@ export function Accounts() {
       )}
 
       <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
-        {(["accounts", "groups"] as AccountsTab[]).map((tabId) => (
+        {(["accounts", "groups", "settings"] as AccountsTab[]).map((tabId) => (
           <button
             key={tabId}
             type="button"
@@ -4426,6 +4400,8 @@ export function Accounts() {
           </button>
         ))}
       </div>
+
+      {tab === "settings" && <AccountManagementSettings />}
 
       {/* Groups panel */}
       {tab === "groups" && (
@@ -4628,6 +4604,7 @@ export function Accounts() {
                   setAccountPage(0);
                 }}
                 onEditAccount={setEditAccountTarget}
+                onResetPnl={resetSupported ? setResetTarget : undefined}
                 onAssignGroup={setGroupTarget}
                 onEditCurrency={setCurrencyAccountTarget}
                 onEditNotes={setNotesAccountTarget}

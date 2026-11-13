@@ -45,6 +45,7 @@ import { SidebarProvider } from "@/components/SidebarContext";
 import { ApiError, AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework";
 import i18n from "@/i18n";
 import { setGlobalAccountFilter } from "@/lib/globalAccountFilter";
+import { setAccountScope } from "@/lib/accountScope";
 import { Accounts, CreateAccountDialog } from "@/pages/Accounts";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -414,6 +415,23 @@ beforeEach(async () => {
     value: vi.fn(),
   });
   HTMLAnchorElement.prototype.click = () => {};
+});
+
+it("shows reset beside account P&L only for an installed host and requires confirmation", async () => {
+  setAccountScope({ accounts: true, account: "", accountPnlReset: true });
+  renderAccounts();
+  const action = await screen.findByRole("button", {
+    name: "Reset realized P&L for desk-alpha",
+  });
+  expect(action.closest("td")).toHaveClass("nums");
+  await userEvent.setup().click(action);
+  expect(screen.getByRole("alertdialog")).toHaveTextContent(
+    "Reset realized P&L for desk-alpha?",
+  );
+  expect(screen.getByRole("alertdialog")).toHaveTextContent(
+    "Positions, cost basis and history are retained",
+  );
+  expect(screen.getByRole("table", { hidden: true })).toBeVisible();
 });
 
 afterEach(() => {

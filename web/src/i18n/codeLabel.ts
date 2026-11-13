@@ -21,6 +21,25 @@ import { isPolicy, isScope } from "@/framework/registries/vocabulary";
 
 const reported = new Set<string>();
 
+/** Describe why the engine stopped calculating an account's P&L. */
+export function pnlHaltText(t: TFunction, reason: string): string | null {
+  if (!reason) return null;
+  switch (reason) {
+    case "missing_fx":
+      return t("accounts:accounts.pnlHalt.missingFx");
+    case "missing_account_currency":
+      return t("accounts:accounts.pnlHalt.missingAccountCurrency");
+    case "missing_initial_pnl":
+      return t("accounts:accounts.pnlHalt.missingInitialPnl");
+    case "missing_cost_basis":
+      return t("accounts:accounts.pnlHalt.missingCostBasis");
+    case "arithmetic_overflow":
+      return t("accounts:accounts.pnlHalt.arithmeticOverflow");
+    default:
+      return t("accounts:accounts.pnlHalt.unknown") + " (" + reason + ")";
+  }
+}
+
 /** Report a catalog entry the panel lacks with `console.warn`, once per `key`
  *  for the panel's lifetime. */
 export function warnMissingOnce(key: string, message: string): void {

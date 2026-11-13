@@ -463,13 +463,13 @@ func TestGetRouteReportsLive(t *testing.T) {
 		{"scope of its own", nil, &setupGate{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			get := Routes(cp, tc.scope, tc.gate)[0]
+			get := Routes(cp, tc.scope, tc.gate, false)[0]
 			req := httptest.NewRequestWithContext(clientContext(), http.MethodGet,
 				"/account-mode", nil)
 			rec := httptest.NewRecorder()
 			get.Handler.ServeHTTP(rec, req)
 			want := fmt.Sprintf(`{"mode":null,"account":"",`+
-				`"features":{"accounts":true,"account":""},"restartRequired":false,`+
+				`"features":{"accounts":true,"account":"","accountPnlReset":false},"restartRequired":false,`+
 				`"live":%v}`, tc.want)
 			if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
 				t.Fatalf("GET /account-mode = %d %s, want 200 %s", rec.Code, got, want)
@@ -485,14 +485,14 @@ func TestSetRouteWithoutScope(t *testing.T) {
 	n := newTestNode(t)
 	cp := newTestControlPlane(t, n, backend.EveryAccount{})
 	gate := &setupGate{}
-	put := Routes(cp, nil, gate)[1]
+	put := Routes(cp, nil, gate, false)[1]
 	req := httptest.NewRequestWithContext(clientContext(), http.MethodPut,
 		"/account-mode", strings.NewReader(`{"mode":"single"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	put.Handler.ServeHTTP(rec, req)
 	want := `{"mode":"single","account":"default",` +
-		`"features":{"accounts":true,"account":""},"restartRequired":true,"live":false}`
+		`"features":{"accounts":true,"account":"","accountPnlReset":false},"restartRequired":true,"live":false}`
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != want {
 		t.Fatalf("PUT /account-mode = %d %s, want 200 %s", rec.Code, got, want)
 	}
@@ -521,7 +521,7 @@ func TestRoutes(t *testing.T) {
 		{"account-mode.get", http.MethodGet, "/account-mode"},
 		{"account-mode.put", http.MethodPut, "/account-mode"},
 	}
-	routes := Routes(nil, nil, nil)
+	routes := Routes(nil, nil, nil, false)
 	if len(routes) != len(want) {
 		t.Fatalf("routes = %d, want %d", len(routes), len(want))
 	}

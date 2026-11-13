@@ -1484,6 +1484,10 @@ func (r *realmStore) SetAccountPnl(
 	if err != nil {
 		return err
 	}
+	return setAccountPnl(ctx, db, code, pnl, haltReason)
+}
+
+func setAccountPnl(ctx context.Context, q sqlExecer, code domain.AccountID, pnl string, haltReason domain.PnlHaltReason) error {
 	if pnl != "" {
 		if _, err := domain.AddDecimals("", pnl); err != nil {
 			return fmt.Errorf("store: account pnl %q: %w", code, err)
@@ -1498,7 +1502,7 @@ func (r *realmStore) SetAccountPnl(
 	if pnl != "" && haltReason == "" {
 		storedPnl = pnl
 	}
-	res, err := db.ExecContext(
+	res, err := q.ExecContext(
 		ctx,
 		`UPDATE account SET pnl = ?, pnl_halt_reason = ? WHERE code = ?`,
 		storedPnl, haltReason, code.String(),

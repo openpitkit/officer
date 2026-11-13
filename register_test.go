@@ -35,6 +35,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -281,8 +282,8 @@ func TestRegisterBuildUsesPopulatedMCPCatalog(t *testing.T) {
 	expected := frameworkmcp.NewToolRegistry()
 	mcptools.RegisterTools(expected, nil)
 	mcptools.RegisterAlertTools(expected, nil)
-	if len(commands) != len(expected.Descriptors()) {
-		t.Fatalf("ListMcpAccess returned %d commands, want %d", len(commands), len(expected.Descriptors()))
+	if len(commands) != len(expected.Descriptors())+1 {
+		t.Fatalf("ListMcpAccess returned %d commands, want %d", len(commands), len(expected.Descriptors())+1)
 	}
 
 	getAccount, ok := findCommand(commands, "get_account_state")
@@ -740,7 +741,7 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 	})
 	assertAccountMode(t, handler, "/app/api/v1", http.MethodGet, "",
 		`{"mode":"single","account":"default",`+
-			`"features":{"accounts":false,"account":"default"},"restartRequired":false,"live":true}`)
+			`"features":{"accounts":false,"account":"default","accountPnlReset":true},"restartRequired":false,"live":true}`)
 	if got := listedAccounts(t, handler, "/app/api/v1"); !slices.Equal(got, []string{"default"}) {
 		t.Fatalf("listed accounts in setup = %v, want the default account alone", got)
 	}
@@ -776,7 +777,7 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 
 	assertAccountMode(t, handler, "/api/v1", http.MethodPut, `{"mode":"multi"}`,
 		`{"mode":"multi","account":"",`+
-			`"features":{"accounts":false,"account":"default"},"restartRequired":true,"live":false}`)
+			`"features":{"accounts":false,"account":"default","accountPnlReset":true},"restartRequired":true,"live":false}`)
 	if got := listedAccounts(t, handler, "/api/v1"); !slices.Equal(got, []string{"default"}) {
 		t.Fatalf("listed accounts after the stored switch = %v, want the default account alone", got)
 	}
@@ -785,6 +786,62 @@ func TestRegisterSingleAccountMode(t *testing.T) {
 	if errObj, _ := switched["error"].(map[string]any); errObj["code"] != "accounts_not_managed" ||
 		!strings.Contains(fmt.Sprint(errObj["message"]), "put multi-account mode into effect first") {
 		t.Fatalf("switch to another default account = %v, want accounts_not_managed with the way out", switched)
+	}
+}
+
+// Single-account presentation does not restrict a standalone operator's
+// explicit realm schedule authority or grant that authority to agents.
+func TestRegisterSingleAccountRealmPnlScheduleAuthority(t *testing.T) {
+	_, handler := serveSeededApp(t, Config{
+		SQLitePath: filepath.Join(t.TempDir(), "officer.db"),
+	}, map[string]string{accountmode.SettingKeyMode: "single:default"})
+	accesstest.CompleteOpen(t, handler,
+		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, false)
+	if got := listedAccounts(t, handler, "/api/v1"); !slices.Equal(got, []string{"default"}) {
+		t.Fatalf("single mode visibility = %v", got)
+	}
+	const path = "/account-pnl-reset-schedule"
+	if got := restCall(t, handler, http.MethodGet, path, "", http.StatusOK); got["job"] != nil {
+		t.Fatalf("unconfigured schedule = %v", got)
+	}
+	const body = `{"enabled":false,"time":"09:00","timezone":"UTC","termination":{"mode":"count","maxRuns":1},"revision":0}`
+	stored := restCall(t, handler, http.MethodPut, path, body, http.StatusOK)
+	read := restCall(t, handler, http.MethodGet, path, "", http.StatusOK)
+	if !reflect.DeepEqual(stored, read) || read["job"] == nil {
+		t.Fatalf("single-mode operator schedule: saved=%v read=%v", stored, read)
+	}
+	// The reset capability contributes only its read tool to MCP.
+	for _, name := range []string{"reset_account_pnl", "set_account_pnl_reset_schedule", "recover_account_pnl_reset_schedule"} {
+		restCall(t, handler, http.MethodPut, "/mcp-access/"+name, `{"enabled":true}`, http.StatusNotFound)
+	}
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
+	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readFound := false
+	for _, tool := range listed.Tools {
+		switch tool.Name {
+		case "reset_account_pnl", "set_account_pnl_reset_schedule", "recover_account_pnl_reset_schedule":
+			t.Fatalf("reset mutation published in MCP: %s", tool.Name)
+		case "get_account_pnl_reset_schedule":
+			readFound = true
+		}
+	}
+	if !readFound {
+		t.Fatal("reset read tool absent from MCP")
+	}
+	if after := restCall(t, handler, http.MethodGet, path, "", http.StatusOK); !reflect.DeepEqual(read, after) {
+		t.Fatalf("agent changed schedule: before=%v after=%v", read, after)
 	}
 }
 
@@ -797,7 +854,7 @@ func TestRegisterWithoutAccountMode(t *testing.T) {
 		t, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")}, nil,
 	)
 	assertAccountMode(t, handler, "/app/api/v1", http.MethodGet, "",
-		`{"mode":null,"account":"","features":{"accounts":true,"account":""},"restartRequired":false,"live":true}`)
+		`{"mode":null,"account":"","features":{"accounts":true,"account":"","accountPnlReset":true},"restartRequired":false,"live":true}`)
 	got := listedAccounts(t, handler, "/app/api/v1")
 	slices.Sort(got)
 	if !slices.Equal(got, []string{"default", "other"}) {
@@ -845,7 +902,7 @@ func TestRegisterSingleAccountModeChosenInSetup(t *testing.T) {
 	assertAccountMode(t, handler, "/app/api/v1", http.MethodPut,
 		`{"mode":"single","account":"default"}`,
 		`{"mode":"single","account":"default",`+
-			`"features":{"accounts":false,"account":"default"},"restartRequired":false,"live":true}`)
+			`"features":{"accounts":false,"account":"default","accountPnlReset":true},"restartRequired":false,"live":true}`)
 	accesstest.CompleteOpen(t, handler,
 		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, false)
 
@@ -860,7 +917,7 @@ func TestRegisterSingleAccountModeChosenInSetup(t *testing.T) {
 
 	assertAccountMode(t, handler, "/api/v1", http.MethodPut, `{"mode":"multi"}`,
 		`{"mode":"multi","account":"",`+
-			`"features":{"accounts":false,"account":"default"},"restartRequired":true,"live":false}`)
+			`"features":{"accounts":false,"account":"default","accountPnlReset":true},"restartRequired":true,"live":false}`)
 }
 
 // TestRegisterMCPServerVersionNonRelease initializes an MCP session over the
@@ -1061,6 +1118,10 @@ func TestRegisterRouteBaseline(t *testing.T) {
 	}
 	v1 = append(v1, operation{"GET", "/alerts"}, operation{"GET", "/alerts/{id}"}, operation{"PUT", "/alerts/{id}/read"}, operation{"POST", "/alerts/{id}/actions/{action}"})
 	v1 = append(v1,
+		operation{http.MethodPost, "/accounts/{code}/realized-pnl/reset"},
+		operation{http.MethodGet, "/account-pnl-reset-schedule"},
+		operation{http.MethodPut, "/account-pnl-reset-schedule"},
+		operation{http.MethodPost, "/account-pnl-reset-schedule/recover"},
 		operation{http.MethodGet, "/account-mode"},
 		operation{http.MethodPut, "/account-mode"},
 		operation{http.MethodGet, "/database/pre-migration-backups"},
@@ -1467,6 +1528,65 @@ func TestRegisterAccessWithReplacedFactories(t *testing.T) {
 			request("", http.StatusUnauthorized)
 			request(token, http.StatusOK)
 		})
+	}
+}
+
+type resetInstallProbe struct {
+	node.Node
+	node.PnlResetHost
+	installs *int
+}
+
+func (n resetInstallProbe) InstallPnlResetScheduler(owner node.PnlResetSchedulerOwner) error {
+	*n.installs++
+	return n.PnlResetHost.InstallPnlResetScheduler(owner)
+}
+
+func TestReplacedServiceDoesNotAttachResetWorkerOrControl(t *testing.T) {
+	builder := frameworkapp.NewBuilder()
+	if err := Register(builder, Config{SQLitePath: filepath.Join(t.TempDir(), "officer.db")}); err != nil {
+		t.Fatal(err)
+	}
+	installs := 0
+	builder.SetSPAFactory(func() (fs.FS, error) { return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil })
+	builder.SetNodeBuilder(func(ctx context.Context, st store.Store, fatal frameworkapp.FatalShutdownHook) (node.Node, engine.Engine, error) {
+		n, eng, err := fakeEngineNodeBuilder(ctx, st, fatal)
+		if err != nil {
+			return nil, eng, err
+		}
+		return resetInstallProbe{Node: n, PnlResetHost: n.(node.PnlResetHost), installs: &installs}, eng, nil
+	})
+	builder.SetServiceFactory(func(_ context.Context, n node.Node, md backend.MarketDataRuntime, rt backend.TradingRuntime, signer fwsigning.Service, _ *marketdata.Registry, _ *frameworkmcp.ToolRegistry) (backend.ControlPlane, error) {
+		return backend.New(n, md, signer, func([]byte, domain.Order) (string, error) { return "", errUnexpectedOrderChain }, backend.WithTradingRuntime(rt))
+	})
+	app, err := builder.Build(context.Background(), slog.Default(), failOnFatal(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+	if installs != 0 {
+		t.Fatalf("replaced service attached reset worker %d times", installs)
+	}
+	handler, err := app.BuildServeHandler(nil, "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accesstest.CompleteOpen(t, handler, accountmode.Request{Mode: accountmode.ModeMulti}, false)
+	for _, test := range []struct {
+		path   string
+		status int
+	}{
+		{"/api/v1/account-mode", http.StatusOK},
+		{"/api/v1/account-pnl-reset-schedule", http.StatusNotFound},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1"+test.path, nil))
+		if rec.Code != test.status {
+			t.Fatalf("%s = %d %s", test.path, rec.Code, rec.Body)
+		}
+		if test.status == http.StatusOK && !strings.Contains(rec.Body.String(), `"accountPnlReset":false`) {
+			t.Fatalf("unsupported reset advertised: %s", rec.Body)
+		}
 	}
 }
 

@@ -1238,6 +1238,157 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredError"
 
+  /accounts/{code}/realized-pnl/reset:
+    parameters:
+      - $ref: "#/components/parameters/AccountCode"
+    post:
+      operationId: resetAccountRealizedPnl
+      summary: Force realized account P&L to zero
+      description: >
+        Available only when the standalone local P&L reset capability is installed.
+        Mutations require an operator or system caller; agents are always refused.
+      tags: [accounts]
+      responses:
+        "200":
+          description: Current authoritative account or persisted schedule state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "404":
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+
+  /account-pnl-reset-schedule:
+    get:
+      operationId: getAccountPnlResetSchedule
+      summary: Read the daily all-account P&L reset schedule
+      description: >
+        Available only when the standalone local P&L reset capability is installed.
+        Mutations require an operator or system caller; agents are always refused.
+      tags: [accounts]
+      responses:
+        "200":
+          description: Current authoritative account or persisted schedule state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountPnlResetScheduleState"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "404":
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+
+    put:
+      operationId: setAccountPnlResetSchedule
+      summary: Configure the daily all-account P&L reset schedule
+      description: >
+        Available only when the standalone local P&L reset capability is installed.
+        Mutations require an operator or system caller; agents are always refused.
+      tags: [accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountPnlResetScheduleInput"
+      responses:
+        "200":
+          description: Current authoritative account or persisted schedule state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountPnlResetScheduleState"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "404":
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+
+  /account-pnl-reset-schedule/recover:
+    post:
+      operationId: recoverAccountPnlResetSchedule
+      summary: Explicitly retry or skip an uncertain reset occurrence
+      description: >
+        Available only when the standalone local P&L reset capability is installed.
+        Mutations require an operator or system caller; agents are always refused.
+      tags: [accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountPnlResetRecovery"
+      responses:
+        "200":
+          description: Current authoritative account or persisted schedule state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountPnlResetScheduleState"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "404":
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+
   /accounts/{code}/unblock:
     parameters:
       - $ref: "#/components/parameters/AccountCode"
@@ -7402,6 +7553,113 @@ components:
           minimum: 0
           description: Number of assets referencing this class.
 
+    AccountPnlResetTermination:
+      type: object
+      required: [mode]
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum: [forever, count, until]
+        maxRuns:
+          type: integer
+          minimum: 1
+          description: Required only for count; total successful completions including the first.
+        until:
+          type: string
+          format: date-time
+          description: Required only for until. Scheduled instant and actual handler start must be at or before this UTC instant.
+    AccountPnlResetScheduleInput:
+      type: object
+      required: [enabled, time, timezone, termination, revision]
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        time:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'
+        timezone:
+          type: string
+          minLength: 1
+          description: Explicit IANA timezone name. Unknown names are refused.
+        termination:
+          $ref: "#/components/schemas/AccountPnlResetTermination"
+        revision:
+          type: integer
+          minimum: 0
+          description: Zero for first creation; current job revision for edits. Identity and completed-run count are retained.
+    AccountPnlResetRecovery:
+      type: object
+      required: [revision, action]
+      additionalProperties: false
+      properties:
+        revision:
+          type: integer
+          minimum: 1
+        action:
+          type: string
+          enum: [retry, skip]
+          description: Explicit recovery only. Retry retains the run identifier and skips accounts with committed reset receipts.
+    AccountPnlResetScheduleState:
+      type: object
+      required: [job, runtimeError]
+      properties:
+        runtimeError:
+          type: string
+          description: Non-empty when the worker has failed or stopped unexpectedly.
+        job:
+          type: [object, 'null']
+          description: Null means no configured schedule. One persisted job contains the full daily rule and its progress.
+          required: [id, spec, state, next, completedRuns, revision]
+          properties:
+            id:
+              type: string
+            spec:
+              type: object
+              required: [kind, config, schedule, termination]
+              properties:
+                kind:
+                  const: reset_realized_account_pnl
+                config:
+                  type: object
+                  additionalProperties: false
+                schedule:
+                  type: object
+                  required: [kind, startAt, time, timezone]
+                  properties:
+                    kind:
+                      const: daily
+                    startAt:
+                      type: string
+                      format: date-time
+                    time:
+                      type: string
+                    timezone:
+                      type: string
+                termination:
+                  $ref: "#/components/schemas/AccountPnlResetTermination"
+            state:
+              type: string
+              enum: [ready, paused, running, failed, interrupted, completed]
+            next:
+              type: object
+              description: Next daily occurrence; zero instant when completed. Missing DST minutes are skipped, repeated minutes execute once.
+            completedRuns:
+              type: integer
+              minimum: 0
+            revision:
+              type: integer
+              minimum: 1
+            active:
+              type: object
+              description: Claimed occurrence identifier and start instant.
+            last:
+              type: object
+              description: Last execution including outcome, reason, error and independent per-account results. Partial failure does not count as success.
+            error:
+              type: string
+
     # Account
 
     Account:
@@ -8853,8 +9111,11 @@ components:
     AccountFeatures:
       type: object
       additionalProperties: false
-      required: [accounts, account]
+      required: [accounts, account, accountPnlReset]
       properties:
+        accountPnlReset:
+          type: boolean
+          description: Whether this host installed realized-account-P&L reset operations and the daily realm schedule.
         accounts:
           type: boolean
           description: >-
