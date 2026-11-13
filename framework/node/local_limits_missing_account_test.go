@@ -202,6 +202,11 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitCreatesNamedAccount(t *testing.T) {
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
+	createCurrencyAssets(t, n.realm, "USD")
+	if err := n.realm.SetGroupCurrency(ctx, "", "USD"); err != nil {
+		t.Fatal(err)
+	}
+
 	limit := domain.LimitSpotFundsPnlBounds{
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
@@ -245,29 +250,44 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitCreatesNamedAccount(t *testing.T) {
 // live policy is never reconfigured.
 func TestLocalNode_PutSpotFundsPnlBoundsLimitRejectsMissingAccount(t *testing.T) {
 	t.Parallel()
-	eng := newFakeEngine()
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
+	for name, defaultCurrency := range map[string]string{
+		"no default currency":        "",
+		"different default currency": "EUR",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
 
-	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
-		Axis:       domain.SpotFundsPnlAxisRealized,
-		Scope:      domain.ScopeAccount,
-		Account:    "fresh",
-		Currency:   "USD",
-		LowerBound: "-100",
-	}, domain.MissingAccountReject, testCaller)
-	if !errors.Is(err, domain.ErrAccountMissing) {
-		t.Fatalf("PutSpotFundsPnlBoundsLimit = %v, want ErrAccountMissing", err)
-	}
-	stored, err := st.ListSpotFundsPnlBoundsLimits(ctx, "")
-	if err != nil {
-		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
-	}
-	if len(stored) != 0 {
-		t.Fatalf("stored P&L bounds limits = %+v, want none", stored)
-	}
-	if len(eng.configureCalls) != 0 {
-		t.Fatalf("engine configure calls = %+v, want none", eng.configureCalls)
+			if defaultCurrency != "" {
+				createCurrencyAssets(t, n.realm, defaultCurrency)
+				if err := n.realm.SetGroupCurrency(ctx, "", defaultCurrency); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+				Axis:       domain.SpotFundsPnlAxisRealized,
+				Scope:      domain.ScopeAccount,
+				Account:    "fresh",
+				Currency:   "USD",
+				LowerBound: "-100",
+			}, domain.MissingAccountReject, testCaller)
+			if !errors.Is(err, domain.ErrAccountMissing) {
+				t.Fatalf("PutSpotFundsPnlBoundsLimit = %v, want ErrAccountMissing", err)
+			}
+			stored, err := st.ListSpotFundsPnlBoundsLimits(ctx, "")
+			if err != nil {
+				t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+			}
+			if len(stored) != 0 {
+				t.Fatalf("stored P&L bounds limits = %+v, want none", stored)
+			}
+			if len(eng.configureCalls) != 0 {
+				t.Fatalf("engine configure calls = %+v, want none", eng.configureCalls)
+			}
+		})
 	}
 }
 

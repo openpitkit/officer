@@ -958,76 +958,149 @@ describe("LimitDialog framework controls", () => {
     expect(accountGroup).toHaveValue("");
   });
 
-  it("requires an explicit PnL barrier currency without prefilling the account currency", async () => {
+  it.each([
+    ["Realized", "spot_funds_pnl_bounds_kill_switch"],
+    ["Unrealized", "spot_funds_unrealized_pnl_bounds_kill_switch"],
+    ["Total", "spot_funds_total_pnl_bounds_kill_switch"],
+  ] as const)(
+    "uses the account currency for a %s PnL barrier",
+    async (label, policy) => {
+      const user = userEvent.setup();
+      fetchAccountsMock.mockResolvedValue([
+        { code: "acc-usd", effectiveCurrency: "USD" },
+      ]);
+      renderLimits();
+
+      await user.click(
+        screen.getAllByRole("button", { name: "Add policy" })[0],
+      );
+      const dialog = screen.getByRole("dialog");
+      await user.click(within(dialog).getAllByRole("combobox")[0]);
+      await user.click(
+        within(dialog).getByRole("option", {
+          name: `${label} Profit and Loss Kill Switch`,
+        }),
+      );
+      const currencyValidationMessage = within(dialog).getByText(
+        `${policy} requires currency`,
+      );
+      const currencyWithValidation = within(dialog).getByLabelText("currency");
+      expect(currencyValidationMessage).toHaveAttribute(
+        "id",
+        "kind-currency-error",
+      );
+      expect(currencyWithValidation).toHaveAttribute("aria-invalid", "true");
+      expect(currencyWithValidation).toHaveAttribute(
+        "aria-errormessage",
+        currencyValidationMessage.id,
+      );
+      expect(
+        within(dialog).getByText(
+          "Currency and at least one P&L bound are required.",
+        ),
+      ).toBeInTheDocument();
+      await user.type(currencyWithValidation, "EUR");
+      await user.click(within(dialog).getAllByRole("combobox")[1]);
+      await user.click(within(dialog).getByRole("option", { name: "Account" }));
+
+      const account = within(dialog).getByLabelText("Account");
+      await user.type(account, "acc");
+      await waitFor(() =>
+        expect(fetchAccountsMock).toHaveBeenCalledWith(
+          expect.objectContaining({ code: "acc" }),
+          expect.any(AbortSignal),
+        ),
+      );
+      await user.click(await screen.findByRole("option", { name: "acc-usd" }));
+
+      await waitFor(() =>
+        expect(within(dialog).getByLabelText("currency")).toHaveValue("USD"),
+      );
+      const currency = within(dialog).getByLabelText("currency");
+      expect(currency).toBeDisabled();
+      expect(currency).toHaveAccessibleDescription(
+        "Currency is taken from the account.",
+      );
+      expect(
+        within(currency.parentElement as HTMLElement).queryByRole("button", {
+          name: "Clear field",
+        }),
+      ).toBeNull();
+      await user.type(currency, "EUR");
+      expect(currency).toHaveValue("USD");
+      await user.type(within(dialog).getByLabelText("lower bound"), "-100");
+
+      await user.click(
+        within(dialog).getByRole("button", { name: "Add policy" }),
+      );
+      expect(
+        screen.queryByRole("button", { name: "Rebuild and apply" }),
+      ).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(putLimitMock).toHaveBeenCalledWith(
+          {
+            policy,
+            scope: "account",
+            account: "acc-usd",
+            accountGroup: "",
+            asset: "",
+            values: { currency: "USD", lower_bound: "-100" },
+          },
+          "reject",
+        ),
+      );
+    },
+  );
+
+  it("uses the current inherited account currency when editing a PnL barrier", async () => {
     const user = userEvent.setup();
     fetchAccountsMock.mockResolvedValue([
-      { code: "acc-usd", effectiveCurrency: "USD" },
+      { code: "acc-inherited", currency: "", effectiveCurrency: "JPY" },
     ]);
-    renderLimits();
-
-    await user.click(screen.getAllByRole("button", { name: "Add policy" })[0]);
+    renderLimitDialog({
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      scope: "account",
+      account: "acc-inherited",
+      asset: "",
+      values: { currency: "USD", lower_bound: "-100" },
+    });
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getAllByRole("combobox")[0]);
-    await user.click(
-      within(dialog).getByRole("option", {
-        name: "Realized Profit and Loss Kill Switch",
-      }),
-    );
-    const currencyValidationMessage = within(dialog).getByText(
-      "spot_funds_pnl_bounds_kill_switch requires currency",
-    );
-    const currencyWithValidation = within(dialog).getByLabelText("currency");
-    expect(currencyValidationMessage).toHaveAttribute(
-      "id",
-      "kind-currency-error",
-    );
-    expect(currencyWithValidation).toHaveAttribute("aria-invalid", "true");
-    expect(currencyWithValidation).toHaveAttribute(
-      "aria-errormessage",
-      currencyValidationMessage.id,
-    );
-    expect(
-      within(dialog).getByText(
-        "Currency and at least one P&L bound are required.",
-      ),
-    ).toBeInTheDocument();
-    await user.click(within(dialog).getAllByRole("combobox")[1]);
-    await user.click(within(dialog).getByRole("option", { name: "Account" }));
-
-    const account = within(dialog).getByLabelText("Account");
-    await user.type(account, "acc");
     await waitFor(() =>
-      expect(fetchAccountsMock).toHaveBeenCalledWith(
-        expect.objectContaining({ code: "acc" }),
-        expect.any(AbortSignal),
-      ),
+      expect(within(dialog).getByLabelText("currency")).toHaveValue("JPY"),
     );
-    await user.click(await screen.findByRole("option", { name: "acc-usd" }));
-
-    const currency = within(dialog).getByLabelText("currency");
-    expect(currency).toHaveValue("");
-    await user.type(currency, "EUR");
-    await user.type(within(dialog).getByLabelText("lower bound"), "-100");
-
-    await user.click(
-      within(dialog).getByRole("button", { name: "Add policy" }),
-    );
-    expect(
-      screen.queryByRole("button", { name: "Rebuild and apply" }),
-    ).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(putLimitMock).toHaveBeenCalledWith(
-        {
-          policy: "spot_funds_pnl_bounds_kill_switch",
-          scope: "account",
-          account: "acc-usd",
-          accountGroup: "",
-          asset: "",
-          values: { currency: "EUR", lower_bound: "-100" },
-        },
+        expect.objectContaining({
+          account: "acc-inherited",
+          values: { currency: "JPY", lower_bound: "-100" },
+        }),
         "reject",
       ),
     );
+  });
+
+  it("blocks an account PnL barrier without an effective currency", async () => {
+    fetchAccountsMock.mockResolvedValue([{ code: "acc-no-currency" }]);
+    renderLimitDialog({
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      scope: "account",
+      account: "acc-no-currency",
+      asset: "",
+      values: { currency: "USD", lower_bound: "-100" },
+    });
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("currency")).toHaveValue(""),
+    );
+    const currency = within(dialog).getByLabelText("currency");
+    expect(currency).toBeDisabled();
+    expect(currency).not.toHaveAttribute("placeholder");
+    expect(currency).toHaveAccessibleDescription(
+      "The account has no currency. Set a currency on the account or its group before adding a P&L bound.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(putLimitMock).not.toHaveBeenCalled();
   });
 
   it("gives the policy a full row and states its fail-safe input", async () => {
@@ -1153,7 +1226,10 @@ describe("LimitDialog framework controls", () => {
     );
   });
 
-  it("keeps the PnL currency editable while account barrier identity stays locked", async () => {
+  it("locks the PnL currency while account barrier identity stays locked", async () => {
+    fetchAccountsMock.mockResolvedValue([
+      { code: "acc-usd", effectiveCurrency: "USD" },
+    ]);
     renderLimitDialog({
       policy: "spot_funds_pnl_bounds_kill_switch",
       scope: "account",
@@ -1166,7 +1242,9 @@ describe("LimitDialog framework controls", () => {
 
     expect(within(dialog).getAllByRole("combobox")[1]).toBeDisabled();
     expect(within(dialog).getByLabelText("Account")).toBeDisabled();
-    expect(within(dialog).getByLabelText("currency")).toBeEnabled();
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("currency")).toBeDisabled(),
+    );
   });
 
   it("keeps the PnL currency editable while account-group identity stays locked", async () => {
@@ -1525,6 +1603,39 @@ describe("Limits with accounts hidden", () => {
       account: "main",
       accountPnlReset: false,
     });
+  });
+
+  it("uses the hidden account currency for a PnL barrier", async () => {
+    const user = userEvent.setup();
+    fetchAccountsMock.mockResolvedValue([
+      { code: "main", effectiveCurrency: "EUR" },
+    ]);
+    renderLimits();
+    const dialog = await openAddDialog(user);
+    await chooseInDialog(
+      user,
+      dialog,
+      0,
+      "Realized Profit and Loss Kill Switch",
+    );
+    await chooseInDialog(user, dialog, 1, "Account");
+    expect(within(dialog).queryByLabelText("Account")).toBeNull();
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("currency")).toHaveValue("EUR"),
+    );
+    await user.type(within(dialog).getByLabelText("lower bound"), "-100");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
+    await waitFor(() =>
+      expect(putLimitMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          account: "main",
+          values: { currency: "EUR", lower_bound: "-100" },
+        }),
+        "reject",
+      ),
+    );
   });
 
   it("shows no account column, filter or global toggle", () => {

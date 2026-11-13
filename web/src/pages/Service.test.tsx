@@ -30,6 +30,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
+import { deferred } from "@/test/deferred";
 import { setAccountScope } from "@/lib/accountScope";
 import { checkSession, setPanelSession } from "@/lib/panelSession";
 import { SidebarProvider } from "@/components/SidebarContext";
@@ -625,9 +626,14 @@ describe("Service", () => {
   it("restarts from the notice only after confirming, then blocks the choice", async () => {
     const user = userEvent.setup();
     const restartService = vi.fn().mockResolvedValue(undefined);
+    const recovery = deferred<ServiceInfo>();
+    const fetchServiceInfo = vi
+      .fn()
+      .mockResolvedValueOnce(serviceInfo)
+      .mockReturnValue(recovery.promise);
     renderService(
       "/service#account-mode",
-      { restartService },
+      { restartService, fetchServiceInfo },
       answeringAccountMode(waitingMulti),
     );
     await user.click(
@@ -648,15 +654,24 @@ describe("Service", () => {
       screen.getByRole("button", { name: "Several accounts" }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await act(async () => recovery.resolve(serviceInfo));
+    await waitFor(() => expect(noticeRestartButton()).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
   it("restarts a saved choice under the page's lifecycle busy state", async () => {
     const user = userEvent.setup();
     const restartService = vi.fn().mockResolvedValue(undefined);
+    const recovery = deferred<ServiceInfo>();
+    const fetchServiceInfo = vi
+      .fn()
+      .mockResolvedValueOnce(serviceInfo)
+      .mockReturnValue(recovery.promise);
     renderService(
       "/service#account-mode",
       {
         restartService,
+        fetchServiceInfo,
         fetchAccounts: vi.fn().mockResolvedValue([mainAccount]),
       },
       answeringAccountMode(waitingOldAccount, {
@@ -677,6 +692,8 @@ describe("Service", () => {
     ).toBeInTheDocument();
     expect(restartService).toHaveBeenCalledTimes(1);
     expect(noticeRestartButton()).toBeDisabled();
+    await act(async () => recovery.resolve(serviceInfo));
+    await waitFor(() => expect(noticeRestartButton()).toBeEnabled());
   });
 
   it("shows a refused restart of a saved choice once and offers the restart again", async () => {

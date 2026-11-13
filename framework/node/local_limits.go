@@ -286,6 +286,27 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 			"unknown spot funds pnl axis %q: %w", limit.Axis, domain.ErrInvalid,
 		)
 	}
+	var groupCode, currency string
+	if limit.Scope == domain.ScopeAccount {
+		if missing != domain.MissingAccountCreate {
+			if err := n.ensureLimitAccount(
+				ctx, limit.Scope, limit.Account, missing,
+				"put spot-funds P&L bounds limit", caller,
+			); err != nil {
+				return nil, err
+			}
+		}
+		var err error
+		groupCode, currency, err = n.spotFundsPnlAccountCurrency(ctx, limit.Account)
+		if err != nil {
+			return nil, err
+		}
+		if currency == "" || currency != limit.Currency {
+			return nil, domain.NewPnlBoundCurrencyMismatchError(
+				limit.Account, currency, limit.Currency,
+			)
+		}
+	}
 	target := LimitTarget{
 		Policy:       policy,
 		Scope:        limit.Scope,
@@ -297,15 +318,17 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 		return nil, err
 	}
 	if err := n.guardTightenOnlySpotFundsPnlBounds(
-		ctx, limit, prev, hadPrev, caller,
+		ctx, limit, prev, hadPrev, groupCode, currency, caller,
 	); err != nil {
 		return nil, fmt.Errorf("put spot funds pnl-bounds limit: %w", err)
 	}
-	if err := n.ensureLimitAccount(
-		ctx, limit.Scope, limit.Account, missing,
-		"put spot-funds P&L bounds limit", caller,
-	); err != nil {
-		return nil, err
+	if limit.Scope != domain.ScopeAccount || missing == domain.MissingAccountCreate {
+		if err := n.ensureLimitAccount(
+			ctx, limit.Scope, limit.Account, missing,
+			"put spot-funds P&L bounds limit", caller,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	audit, err := n.captureAuditTarget(ctx, store.AuditEntry{
@@ -408,6 +431,7 @@ func (n *localNode) guardTightenOnlySpotFundsPnlBounds(
 	ctx context.Context,
 	limit, prev domain.LimitSpotFundsPnlBounds,
 	hadPrev bool,
+	groupCode, currency string,
 	caller domain.Caller,
 ) error {
 	if !caller.TightenOnly() {
@@ -430,7 +454,7 @@ func (n *localNode) guardTightenOnlySpotFundsPnlBounds(
 			Scope:  domain.ScopeGlobal,
 		})
 	case domain.ScopeAccount:
-		ref, ok, err = n.resolvedSpotFundsPnlBounds(ctx, limit.Axis, limit.Account)
+		ref, ok, err = n.resolvedSpotFundsPnlBounds(ctx, limit.Axis, groupCode, currency)
 	default:
 		return fmt.Errorf(
 			"scope %q not allowed for policy %q: %w",
@@ -446,35 +470,43 @@ func (n *localNode) guardTightenOnlySpotFundsPnlBounds(
 	return limit.NoLooserThan(ref)
 }
 
-// resolvedSpotFundsPnlBounds returns the Spot Funds P&L bound of axis the
-// engine's cascade applies to account while it has no bound of its own: its
-// group's bound when that bound is in the account's effective currency or
-// the account has none, else the global bound on the same currency test. An account
-// Officer does not know yet resolves as the account a barrier would create: in
-// no group and with no currency of its own, so its effective currency is the
-// default group's. The bool is false when no bound applies.
-func (n *localNode) resolvedSpotFundsPnlBounds(
-	ctx context.Context, axis domain.SpotFundsPnlAxis, account domain.AccountID,
-) (domain.LimitSpotFundsPnlBounds, bool, error) {
+// spotFundsPnlAccountCurrency returns the account's group and effective
+// currency, resolved from the account, its group, then the default group.
+// An unknown account, which this request would create, takes the default
+// group's currency and belongs to no named group.
+func (n *localNode) spotFundsPnlAccountCurrency(
+	ctx context.Context, account domain.AccountID,
+) (groupCode, currency string, err error) {
 	stored, ok, err := n.realm.GetAccount(ctx, account)
 	if err != nil {
-		return domain.LimitSpotFundsPnlBounds{}, false,
+		return "", "",
 			fmt.Errorf("read account for spot funds pnl bounds: %w", err)
 	}
-	groupCode, currency := stored.GroupCode, stored.EffectiveCurrency
+	groupCode, currency = stored.GroupCode, stored.EffectiveCurrency
 	if !ok {
 		groupCode, currency = "", ""
 		defaultGroup, hasDefault, err := n.realm.GetGroup(ctx, "")
 		if err != nil {
-			return domain.LimitSpotFundsPnlBounds{}, false,
+			return "", "",
 				fmt.Errorf("read default group currency: %w", err)
 		}
 		if hasDefault {
 			currency = defaultGroup.Currency
 		}
 	}
+	return groupCode, currency, nil
+}
+
+// resolvedSpotFundsPnlBounds returns the Spot Funds P&L bound of axis the
+// engine's cascade applies while the account has no bound of its own: its
+// group's bound when that bound matches the resolved, non-empty account
+// currency, else the global bound on the same currency test. The bool is
+// false when no bound applies.
+func (n *localNode) resolvedSpotFundsPnlBounds(
+	ctx context.Context, axis domain.SpotFundsPnlAxis, groupCode, currency string,
+) (domain.LimitSpotFundsPnlBounds, bool, error) {
 	applies := func(bound domain.LimitSpotFundsPnlBounds) bool {
-		return currency == "" || bound.Currency == currency
+		return bound.Currency == currency
 	}
 	if groupCode != "" {
 		bound, ok, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{

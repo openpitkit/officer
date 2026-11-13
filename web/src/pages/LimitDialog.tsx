@@ -344,10 +344,16 @@ export function LimitDialog({
 
   const isEdit = editing !== null;
   const isSpotFundsPnl = isSpotFundsPnlPolicy(form.policy);
+  const isAccountPnl = isSpotFundsPnl && form.scope === "account";
+  const pnlAccount = isAccountPnl
+    ? dialogAccountSuggestions.find(
+        (account) => account.code === form.account.trim(),
+      )
+    : undefined;
   const isSpotFundsMode = form.policy === "spot_funds_limit_mode";
   const currencySuggestionResult = useAssetCodeSuggestions(
     form.values.currency ?? "",
-    open && isSpotFundsPnl,
+    open && isSpotFundsPnl && !pnlAccount,
   );
   const dialogAssetSuggestionResult = useAssetCodeSuggestions(
     form.asset,
@@ -373,14 +379,14 @@ export function LimitDialog({
       setBusy(false);
       setConfirmOpen(false);
       setMissingAccountConfirmOpen(false);
+      setDialogAccountSuggestions([]);
     }
   }, [open, editing, seededAccount]);
 
   useEffect(() => {
     if (
       !open ||
-      isEdit ||
-      !showsAccounts ||
+      (!isAccountPnl && (isEdit || !showsAccounts)) ||
       !scopeHasAccount(form.scope) ||
       accountSearch === ""
     ) {
@@ -407,7 +413,15 @@ export function LimitDialog({
         }
       });
     return () => controller.abort();
-  }, [accountSearch, fetchAccounts, form.scope, isEdit, open, showsAccounts]);
+  }, [
+    accountSearch,
+    fetchAccounts,
+    form.scope,
+    isAccountPnl,
+    isEdit,
+    open,
+    showsAccounts,
+  ]);
 
   useEffect(() => {
     if (
@@ -475,6 +489,13 @@ export function LimitDialog({
         values[kind] = v.trim();
       }
     }
+    if (pnlAccount) {
+      if (pnlAccount.effectiveCurrency) {
+        values.currency = pnlAccount.effectiveCurrency;
+      } else {
+        delete values.currency;
+      }
+    }
     return {
       policy: form.policy,
       scope: form.scope,
@@ -484,7 +505,7 @@ export function LimitDialog({
         !isSpotFundsPnl && scopeHasAsset(form.scope) ? form.asset.trim() : "",
       values,
     };
-  }, [form, hasAccountGroupAxis, isSpotFundsPnl, visibleKinds]);
+  }, [form, hasAccountGroupAxis, isSpotFundsPnl, pnlAccount, visibleKinds]);
 
   const validation = validateLimit(candidate);
   const policyCount = policyCounts[form.policy];
@@ -762,11 +783,22 @@ export function LimitDialog({
                       <>
                         <Autocomplete
                           id={`kind-${kind}`}
-                          value={form.values[kind] ?? ""}
+                          value={
+                            pnlAccount
+                              ? (candidate.values[kind] ?? "")
+                              : (form.values[kind] ?? "")
+                          }
                           onChange={(value) => setValue(kind, value)}
-                          suggestions={currencySuggestionResult.codes}
-                          disabled={busy}
-                          placeholder={t("dialog.currencyPlaceholder")}
+                          suggestions={
+                            pnlAccount ? [] : currencySuggestionResult.codes
+                          }
+                          disabled={busy || pnlAccount !== undefined}
+                          aria-describedby="kind-currency-hint"
+                          placeholder={
+                            pnlAccount
+                              ? undefined
+                              : t("dialog.currencyPlaceholder")
+                          }
                           spellCheck={false}
                           aria-invalid={currencyValidationError || undefined}
                           aria-errormessage={
@@ -774,15 +806,26 @@ export function LimitDialog({
                               ? "kind-currency-error"
                               : undefined
                           }
-                          onClear={() => setValue(kind, "")}
+                          onClear={
+                            pnlAccount ? undefined : () => setValue(kind, "")
+                          }
                           clearLabel={tc("filters.clearField")}
                         />
                         <CodeSuggestionFailure
                           kind="asset"
                           failed={currencySuggestionResult.failed}
                         />
-                        <p className="text-[0.6875rem] text-muted">
-                          {fieldHint}
+                        <p
+                          id="kind-currency-hint"
+                          className="text-[0.6875rem] text-muted"
+                        >
+                          {pnlAccount
+                            ? t(
+                                pnlAccount.effectiveCurrency
+                                  ? "dialog.accountCurrencyHint"
+                                  : "dialog.accountCurrencyMissingHint",
+                              )
+                            : fieldHint}
                         </p>
                       </>
                     ) : (
@@ -809,7 +852,11 @@ export function LimitDialog({
                 {form.policy === "rate_limit"
                   ? t("dialog.rateLimitFootnote")
                   : isSpotFundsPnl
-                    ? t("dialog.pnlBoundsFootnote")
+                    ? t(
+                        pnlAccount
+                          ? "dialog.pnlAccountBoundsFootnote"
+                          : "dialog.pnlBoundsFootnote",
+                      )
                     : isSpotFundsMode
                       ? t("dialog.modeFootnote")
                       : t("dialog.atLeastOneFootnote")}
@@ -822,7 +869,9 @@ export function LimitDialog({
                 role="alert"
                 className="text-[0.6875rem] text-[var(--danger)]"
               >
-                {tv(validation.key, validation.values)}
+                {pnlAccount && validation.key === "limit.pnlCurrencyRequired"
+                  ? t("dialog.accountCurrencyMissingHint")
+                  : tv(validation.key, validation.values)}
               </p>
             )}
             {error && !confirmOpen && (

@@ -583,6 +583,16 @@ refusal.
 
 ## Spot Funds P&L bounds
 
+For scope `account`, a realized, unrealized or total P&L bound must use the
+account's effective currency, resolved from the account, its group, then the
+default group. This includes the currency of the account a
+`missingAccount=create` request would create, which inherits the default
+group's currency. If no currency resolves, the bound is refused. REST returns
+`409` with code `pnl_bound_currency_mismatch`; MCP `set_limit` returns the
+same code and message. The rule does not apply to `account_group` or `global`
+scope. With `missingAccount=reject`, an unknown account still returns `404`
+`account_missing`. Barriers already stored are not re-checked.
+
 An unrealized or total P&L bound needs a price for every asset the account
 holds: an order of an account that holds an asset without a price is rejected
 and blocks the account, as the realized bound does when it cannot calculate the

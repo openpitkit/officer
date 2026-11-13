@@ -1478,6 +1478,9 @@ func TestLocalNode_AgentAccountPnlBoundTightensResolvedTier(t *testing.T) {
 	newNode := func(t *testing.T) (*localNode, *rebuildProbe) {
 		t.Helper()
 		n, probe := newLimitNode(t, AccountLimits{})
+		if err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller); err != nil {
+			t.Fatal(err)
+		}
 		for _, code := range []string{"desk", "fx", "pool"} {
 			if _, err := n.CreateGroup(
 				ctx, domain.AccountGroup{Code: code}, testCaller,
@@ -1631,12 +1634,10 @@ func TestLocalNode_AgentGroupPnlBoundTightensGlobal(t *testing.T) {
 // TestLocalNode_AgentPnlBoundForUnknownAccount compares an agent's Spot Funds
 // P&L bound for account ghost, which Officer does not know yet, with the bound
 // the cascade resolves for an account in no group and with no currency of its
-// own. Its effective currency is the default group's, unset here, so the
-// global bound applies and refuses the looser bound. Once the default group
-// currency is EUR, the global bound in USD does not apply to ghost, so the
-// bound passes the comparison, and registering ghost is refused instead, as
-// an agent may not create an account. Either refusal changes nothing, so
-// ghost is not created.
+// own. With default currency USD, the global USD bound refuses a looser
+// account bound. With default currency EUR and an EUR account bound, the global
+// USD bound does not apply, so registering ghost is refused instead, as an
+// agent may not create an account. Either refusal changes nothing.
 func TestLocalNode_AgentPnlBoundForUnknownAccount(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1656,7 +1657,7 @@ func TestLocalNode_AgentPnlBoundForUnknownAccount(t *testing.T) {
 		// refusal is what the refusal names: the resolved bound, or ghost.
 		refusal string
 	}{
-		"no default currency":  {"", "below the current -100:"},
+		"default currency USD": {"USD", "below the current -100:"},
 		"default currency EUR": {"EUR", `a new account "ghost"`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1671,6 +1672,8 @@ func TestLocalNode_AgentPnlBoundForUnknownAccount(t *testing.T) {
 					t.Fatalf("SetDefaultGroupCurrency: %v", err)
 				}
 			}
+			bound := bound
+			bound.Currency = tc.currency
 			unchanged := refusalKeepsRiskState(t, n, probe)
 			_, err := n.PutSpotFundsPnlBoundsLimit(
 				ctx, bound, domain.MissingAccountCreate, agentCaller,

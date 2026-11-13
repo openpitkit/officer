@@ -426,11 +426,14 @@ type PublicError struct {
 // as an error. Callers do not log err again.
 func DescribeErr(err error) PublicError {
 	var currencyBlocked domain.CurrencyChangeBlockedError
+	var pnlCurrencyMismatch domain.PnlBoundCurrencyMismatchError
 	switch {
 	// A refused loosening is matched first so it keeps its own code whatever
 	// else the refusal wraps.
 	case errors.Is(err, domain.ErrLoosening):
 		return PublicError{http.StatusForbidden, "loosening_refused", err.Error()}
+	case errors.As(err, &pnlCurrencyMismatch):
+		return PublicError{http.StatusConflict, "pnl_bound_currency_mismatch", pnlCurrencyMismatch.Error()}
 	case errors.Is(err, domain.ErrTooLarge):
 		return PublicError{http.StatusRequestEntityTooLarge, "too_large", err.Error()}
 	case errors.Is(err, domain.ErrInvalid):

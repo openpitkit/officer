@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,159 @@ import (
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
+
+type pnlBoundReadProbeRealm struct {
+	store.RealmStore
+	reads int
+}
+
+func (r *pnlBoundReadProbeRealm) ListSpotFundsPnlBoundsLimits(
+	ctx context.Context, account domain.AccountID,
+) ([]domain.LimitSpotFundsPnlBounds, error) {
+	r.reads++
+	return r.RealmStore.ListSpotFundsPnlBoundsLimits(ctx, account)
+}
+
+func TestLocalNode_PnlBoundAccountCurrency(t *testing.T) {
+	t.Parallel()
+	for _, axis := range []domain.SpotFundsPnlAxis{
+		domain.SpotFundsPnlAxisRealized,
+		domain.SpotFundsPnlAxisUnrealized,
+		domain.SpotFundsPnlAxisTotal,
+	} {
+		for _, tc := range []struct {
+			name            string
+			own, group, def string
+			bound, currency string
+			known, refused  bool
+		}{
+			{"own match", "USD", "EUR", "EUR", "USD", "USD", true, false},
+			{"own mismatch", "USD", "EUR", "EUR", "EUR", "USD", true, true},
+			{"group match", "", "USD", "EUR", "USD", "USD", true, false},
+			{"group mismatch", "", "USD", "EUR", "EUR", "USD", true, true},
+			{"default match", "", "", "USD", "USD", "USD", true, false},
+			{"default mismatch", "", "", "USD", "EUR", "USD", true, true},
+			{"no currency", "", "", "", "USD", "", true, true},
+			{"empty currency and bound", "", "", "", "", "", true, true},
+			{"unknown match", "", "", "USD", "USD", "USD", false, false},
+			{"unknown mismatch", "", "", "USD", "EUR", "USD", false, true},
+			{"unknown no currency", "", "", "", "USD", "", false, true},
+		} {
+			t.Run(string(axis)+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				eng := newFakeEngine()
+				n, st := newTestNode(t, eng)
+				setLiveConfigureProbe(t, n, eng)
+				createCurrencyAssets(t, st, "USD", "EUR")
+				if tc.def != "" {
+					if err := st.SetGroupCurrency(ctx, "", tc.def); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := st.CreateGroup(ctx, domain.AccountGroup{Code: "desk", Currency: tc.group}); err != nil {
+					t.Fatal(err)
+				}
+				if tc.known {
+					if _, err := st.CreateAccount(ctx, domain.Account{Code: "acc", Currency: tc.own, GroupCode: "desk"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				auditBefore, err := st.ListAudit(ctx, 100)
+				if err != nil {
+					t.Fatal(err)
+				}
+				probe := &pnlBoundReadProbeRealm{RealmStore: st}
+				n.realm = probe
+				bound := domain.LimitSpotFundsPnlBounds{
+					Axis: axis, Scope: domain.ScopeAccount, Account: "acc",
+					Currency: tc.bound, LowerBound: "-100",
+				}
+				sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, bound, domain.MissingAccountCreate, testCaller)
+				if sink != nil {
+					t.Fatalf("sink = %T, want nil", sink)
+				}
+				_, exists, getErr := st.GetAccount(ctx, "acc")
+				if getErr != nil || exists != (tc.known || !tc.refused) {
+					t.Errorf("account exists = %v, err = %v, want %v", exists, getErr, tc.known || !tc.refused)
+				}
+				stored, storeErr := st.ListSpotFundsPnlBoundsLimits(ctx, "")
+				if storeErr != nil {
+					t.Fatal(storeErr)
+				}
+				if !tc.refused {
+					if err != nil || len(stored) != 1 || stored[0] != bound {
+						t.Fatalf("accepted bound = %+v, err = %v, want %+v", stored, err, bound)
+					}
+					return
+				}
+				var mismatch domain.PnlBoundCurrencyMismatchError
+				if !errors.As(err, &mismatch) || mismatch.Account != "acc" ||
+					mismatch.AccountCurrency != tc.currency || mismatch.BoundCurrency != tc.bound {
+					t.Errorf("error = %#v, want PnlBoundCurrencyMismatchError{acc %q %q}", err, tc.currency, tc.bound)
+				}
+				if !errors.Is(err, domain.ErrPnlBoundCurrencyMismatch) {
+					t.Errorf("error = %v, want ErrPnlBoundCurrencyMismatch", err)
+				}
+				if probe.reads != 0 || len(stored) != 0 || len(eng.configureCalls) != 0 {
+					t.Errorf("refusal read barriers %d times, stored %+v, configured %+v; want no effects", probe.reads, stored, eng.configureCalls)
+				}
+				auditAfter, auditErr := st.ListAudit(ctx, 100)
+				if auditErr != nil || !reflect.DeepEqual(auditBefore, auditAfter) {
+					t.Errorf("audit after refusal = %+v, err = %v, want %+v", auditAfter, auditErr, auditBefore)
+				}
+			})
+		}
+	}
+}
+
+func TestLocalNode_PnlBoundOtherScopesIgnoreAccountCurrency(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []domain.LimitScope{domain.ScopeGlobal, domain.ScopeAccountGroup} {
+		for _, currency := range []string{"USD", "EUR"} {
+			t.Run(string(scope)+"/"+currency, func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				n, st := newTestNode(t, newFakeEngine())
+				createCurrencyAssets(t, st, "USD", "EUR")
+				if _, err := st.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+					t.Fatal(err)
+				}
+				bound := domain.LimitSpotFundsPnlBounds{
+					Axis: domain.SpotFundsPnlAxisRealized, Scope: scope, Currency: currency, LowerBound: "-100",
+				}
+				if scope == domain.ScopeAccountGroup {
+					bound.AccountGroup = "desk"
+				}
+				if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, bound, domain.MissingAccountCreate, testCaller); err != nil {
+					t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestLocalNode_PnlBoundCurrencyRefusalPrecedesTightenOnly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	n, st := newTestNode(t, newFakeEngine())
+	createCurrencyAssets(t, st, "USD", "EUR")
+	if _, err := st.CreateAccount(ctx, domain.Account{Code: "acc", Currency: "USD"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSpotFundsPnlBoundsLimit(ctx, pnlBound(domain.ScopeGlobal, "", "USD", "-100", "100")); err != nil {
+		t.Fatal(err)
+	}
+	for _, caller := range []domain.Caller{testCaller, agentCaller} {
+		_, err := n.PutSpotFundsPnlBoundsLimit(ctx,
+			pnlBound(domain.ScopeAccount, "acc", "EUR", "-200", "100"), domain.MissingAccountCreate, caller)
+		var mismatch domain.PnlBoundCurrencyMismatchError
+		if !errors.As(err, &mismatch) || mismatch.Account != "acc" ||
+			mismatch.AccountCurrency != "USD" || mismatch.BoundCurrency != "EUR" || errors.Is(err, domain.ErrLoosening) {
+			t.Fatalf("caller %+v: error = %#v, want typed currency refusal before loosening", caller, err)
+		}
+	}
+}
 
 func preparePolicyLifecycleBuild(
 	n *localNode,
@@ -614,6 +768,10 @@ func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterConfigure(t *testing.T) 
 		fatalErr = err
 	})
 	seedTestAccount(t, n.realm, "acc-1")
+	createCurrencyAssets(t, n.realm, "USD")
+	if err := n.realm.SetGroupCurrency(ctx, "", "USD"); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
@@ -671,6 +829,11 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore(t *testing.
 	n, probe := newRebuildProbeNode(t, eng)
 	ctx := context.Background()
 
+	createCurrencyAssets(t, n.realm, "USD")
+	if err := n.realm.SetGroupCurrency(ctx, "", "USD"); err != nil {
+		t.Fatal(err)
+	}
+
 	const account domain.AccountID = "acc-1"
 	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
@@ -714,6 +877,11 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
 	eng := newFakeEngine()
 	n, _ := newRebuildProbeNode(t, eng)
 	ctx := context.Background()
+	createCurrencyAssets(t, n.realm, "USD")
+	if err := n.realm.SetGroupCurrency(ctx, "", "USD"); err != nil {
+		t.Fatal(err)
+	}
+
 	const account domain.AccountID = "acc-1"
 	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)

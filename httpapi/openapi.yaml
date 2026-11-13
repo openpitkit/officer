@@ -3553,6 +3553,8 @@ paths:
           $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "409":
+          $ref: "#/components/responses/PnlBoundCurrencyMismatchError"
         "404":
           $ref: "#/components/responses/AccountMissingError"
         "501":
@@ -3602,6 +3604,8 @@ paths:
           $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "409":
+          $ref: "#/components/responses/PnlBoundCurrencyMismatchError"
         "404":
           $ref: "#/components/responses/AccountMissingError"
         "501":
@@ -3654,6 +3658,8 @@ paths:
           $ref: "#/components/responses/ForeignRequestError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "409":
+          $ref: "#/components/responses/PnlBoundCurrencyMismatchError"
         "404":
           $ref: "#/components/responses/AccountMissingError"
         "501":
@@ -6396,6 +6402,18 @@ components:
   # ---------------------------------------------------------------------------
 
   responses:
+    PnlBoundCurrencyMismatchError:
+      description: >-
+        An account-scoped Spot Funds P&L bound must use the account's effective
+        currency (account, group, then default group). An account a
+        `missingAccount=create` request would create takes the default group's
+        currency. No resolved currency or a different bound currency is refused
+        (pnl_bound_currency_mismatch).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     MalformedRequestError:
       description: Malformed HTTP request or JSON syntax.
       content:
@@ -6902,7 +6920,7 @@ components:
               type: string
               description: >
                 Machine-readable code: `validation`, `not_found`,
-                `account_missing`, `asset_missing`, `conflict`, `currency_change_blocked`, `has_dependents`,
+                `account_missing`, `asset_missing`, `pnl_bound_currency_mismatch`, `conflict`, `currency_change_blocked`, `has_dependents`,
                 `terminal_order`, `approval_required`,
                 `execution_report_required`, `precondition`, `too_large`,
                 `forbidden`, `host_not_allowed`, `origin_not_allowed`,

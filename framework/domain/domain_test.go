@@ -2135,6 +2135,7 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrNotFound":                 domain.ErrNotFound,
 		"ErrNotImplemented":           domain.ErrNotImplemented,
 		"ErrOriginNotAllowed":         domain.ErrOriginNotAllowed,
+		"ErrPnlBoundCurrencyMismatch": domain.ErrPnlBoundCurrencyMismatch,
 		"ErrReservedGroup":            domain.ErrReservedGroup,
 		"ErrSetupComplete":            domain.ErrSetupComplete,
 		"ErrSetupRequired":            domain.ErrSetupRequired,

@@ -34,6 +34,27 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+func TestDescribeErrPnlBoundCurrencyMismatch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		currency, message string
+	}{
+		{"USD", `P&L bound currency "EUR" differs from account "acc" currency "USD"`},
+		{"", `account "acc" has no currency: set one on the account, its group or the default group before setting a P&L bound`},
+	} {
+		t.Run(tc.currency, func(t *testing.T) {
+			t.Parallel()
+			err := domain.NewPnlBoundCurrencyMismatchError("acc", tc.currency, "EUR")
+			for _, wrapped := range []error{err, fmt.Errorf("internal context: %w", err)} {
+				want := PublicError{http.StatusConflict, "pnl_bound_currency_mismatch", tc.message}
+				if got := DescribeErr(wrapped); got != want {
+					t.Fatalf("DescribeErr(%v) = %+v, want %+v", wrapped, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestToTradingConnectionDTOSettings(t *testing.T) {
 	t.Parallel()
 

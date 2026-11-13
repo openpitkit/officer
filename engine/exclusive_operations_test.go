@@ -38,6 +38,9 @@ import (
 func TestExclusiveOperationsBesideOrderFlow(t *testing.T) {
 	ctx := context.Background()
 	n, caller := newMissingAccountNode(t)
+	if err := n.SetDefaultGroupCurrency(ctx, "USDT", caller); err != nil {
+		t.Fatalf("SetDefaultGroupCurrency: %v", err)
+	}
 	for _, code := range []string{"grp-a", "grp-b"} {
 		if _, err := n.CreateGroup(
 			ctx, domain.AccountGroup{Code: code, Title: code}, caller,

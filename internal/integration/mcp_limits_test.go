@@ -331,7 +331,7 @@ func TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 					t.Fatalf("create asset %s: %v", code, err)
 				}
 			}
-			if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "acc-1"}); err != nil {
+			if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "acc-1", Currency: "USD"}); err != nil {
 				t.Fatalf("create account: %v", err)
 			}
 			realized := domain.LimitSpotFundsPnlBounds{

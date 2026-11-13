@@ -185,6 +185,9 @@ var (
 	// ErrAccountMissing it is not an ErrNotFound: the asset is a request
 	// parameter, not the addressed resource. The concrete error carries the code.
 	ErrAssetMissing = registerSentinel(errors.New("asset does not exist"))
+	// ErrPnlBoundCurrencyMismatch marks an account P&L bound whose currency
+	// differs from the account's effective currency or cannot be resolved.
+	ErrPnlBoundCurrencyMismatch = registerSentinel(errors.New("P&L bound currency differs from the account's currency"))
 	// ErrAccountsNotManaged marks a request to change the account set itself -
 	// its accounts or its account groups - in a composition that does not let
 	// clients change it. The surface layer maps it to an HTTP 409.
@@ -328,6 +331,32 @@ func (e AssetMissingError) Unwrap() error { return ErrAssetMissing }
 // NewAssetMissingError creates a typed missing-asset error.
 func NewAssetMissingError(asset string) error {
 	return AssetMissingError{Asset: asset}
+}
+
+// PnlBoundCurrencyMismatchError carries the account and currencies of a
+// refused account-scoped P&L bound.
+type PnlBoundCurrencyMismatchError struct {
+	Account         AccountID
+	AccountCurrency string
+	BoundCurrency   string
+}
+
+// Error names the conflicting currencies or the missing account currency.
+func (e PnlBoundCurrencyMismatchError) Error() string {
+	if e.AccountCurrency == "" {
+		return fmt.Sprintf("account %q has no currency: set one on the account, its group or the default group before setting a P&L bound", e.Account)
+	}
+	return fmt.Sprintf("P&L bound currency %q differs from account %q currency %q", e.BoundCurrency, e.Account, e.AccountCurrency)
+}
+
+// Unwrap lets callers match the typed error with errors.Is.
+func (e PnlBoundCurrencyMismatchError) Unwrap() error { return ErrPnlBoundCurrencyMismatch }
+
+// NewPnlBoundCurrencyMismatchError creates a typed P&L bound currency error.
+func NewPnlBoundCurrencyMismatchError(account AccountID, accountCurrency, boundCurrency string) error {
+	return PnlBoundCurrencyMismatchError{
+		Account: account, AccountCurrency: accountCurrency, BoundCurrency: boundCurrency,
+	}
 }
 
 // MissingAccountPolicy is the caller's explicit choice for a request that names

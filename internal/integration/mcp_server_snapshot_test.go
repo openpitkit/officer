@@ -164,7 +164,10 @@ func TestServerToolSnapshot(t *testing.T) {
 				"overrides, and a new account_group or account bound must be in the " +
 				"currency of, and no looser than, the bound it takes over from: for " +
 				"a group the global bound, for an account the bound that applies to " +
-				"it now. The first order-size barrier is refused while any " +
+				"it now. An account P&L bound must use the account's effective " +
+				"currency: its own, else its group's, else the default group's. A different " +
+				"bound currency or no resolved currency is refused with pnl_bound_currency_mismatch. " +
+				"The first order-size barrier is refused while any " +
 				"rate-limit barrier is configured. spot_funds_limit_mode is the " +
 				"Officer policy that decides whether Spot Funds checks funds, on the " +
 				"global scope only, with the one field mode: enforce (Check funds) " +
