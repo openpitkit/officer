@@ -729,6 +729,14 @@ type customHostSource struct {
 	enabled bool
 }
 
+func (s *customHostSource) GetTestExecutionPolicy(context.Context, string) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.ErrNotImplemented
+}
+
+func (s *customHostSource) ReplaceTestExecutionPolicy(context.Context, string, domain.TestExecutionPolicy) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.ErrNotImplemented
+}
+
 func (s *customHostSource) Status(context.Context) (mcp.Status, error) {
 	return mcp.Status{}, nil
 }

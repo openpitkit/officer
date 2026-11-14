@@ -15,11 +15,12 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
 
@@ -45,6 +46,7 @@ export interface VenueCardHeaderProps {
   errorTone?: "danger" | "warn";
   links?: { siteUrl?: string; docsUrl?: string; symbolsUrl?: string };
   actions?: ReactNode;
+  disclosure?: { expanded: boolean; controls: string; onToggle: () => void };
 }
 
 /** Provider card heading, status content, reference links, and actions. */
@@ -58,6 +60,7 @@ export function VenueCardHeader({
   errorTone = "danger",
   links,
   actions,
+  disclosure,
 }: VenueCardHeaderProps) {
   const { t } = useTranslation("venues");
   const siteUrl = links?.siteUrl;
@@ -72,7 +75,21 @@ export function VenueCardHeader({
         />
         <div className="min-w-0">
           <CardTitle id={titleId} className="truncate">
-            {title}
+            {disclosure ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-auto max-w-full justify-start gap-2 p-0 text-inherit"
+                aria-expanded={disclosure.expanded}
+                aria-controls={disclosure.controls}
+                onClick={disclosure.onToggle}
+              >
+                {disclosure.expanded ? <ChevronUp /> : <ChevronDown />}
+                <span className="truncate">{title}</span>
+              </Button>
+            ) : (
+              title
+            )}
           </CardTitle>
           {description !== undefined && (
             <p className="mt-1 max-w-3xl text-xs text-muted">{description}</p>

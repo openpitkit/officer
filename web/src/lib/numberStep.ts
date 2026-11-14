@@ -26,6 +26,11 @@ interface DecimalValue {
 
 const DECIMAL_PATTERN = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/;
 
+/** Whether an unsigned integer edit contains only ASCII digits or is empty. */
+export function isUnsignedIntegerEdit(value: string): boolean {
+  return /^[0-9]*$/.test(value);
+}
+
 export function isDecimalString(value: string): boolean {
   const trimmed = value.trim();
   return trimmed === "" || DECIMAL_PATTERN.test(trimmed);
@@ -43,11 +48,10 @@ export function isPositiveDecimalString(value: string): boolean {
   return decimal !== null && decimal.units > 0n;
 }
 
-/** Whether a value is accepted as an open base quantity - leaves. The API
- *  records it verbatim, refusing surrounding space and exponent notation, so
- *  the untrimmed string is what gets checked. */
+/** Whether a leaves field contains a required plain decimal. Values travel
+ *  verbatim; the API owns the sign and value constraints. */
 export function isOpenQuantityString(value: string): boolean {
-  return value === value.trim() && isNonNegativeDecimalString(value);
+  return value !== "" && value === value.trim() && isDecimalString(value);
 }
 
 /** Whether an optional decimal field is empty or strictly positive. */
@@ -200,9 +204,6 @@ export function subtractDecimalStrings(a: string, b: string): string | null {
     return null;
   }
   const result = addDecimals(left, negateDecimal(right));
-  if (compareDecimals(result, decimalLiteral("0")) < 0) {
-    return "0";
-  }
   return formatDecimal(result);
 }
 
@@ -237,6 +238,8 @@ export function smartStep(value: string): string {
 }
 
 export interface StepOptions {
+  /** Restrict values and step sizes to unsigned whole numbers. */
+  integerOnly?: boolean;
   /** Lower clamp; defaults to 0. Use null for signed values. */
   min?: string | null;
 }
@@ -253,13 +256,27 @@ export function stepValue(
   options: StepOptions = {},
 ): string {
   const trimmed = value.trim();
+  if (
+    options.integerOnly &&
+    (!/^\d*$/.test(value) ||
+      (options.min !== null && !/^\d+$/.test(options.min ?? "0")))
+  ) {
+    return value;
+  }
   const current = parseDecimal(trimmed === "" ? "0" : trimmed);
-  const min = options.min === null ? null : parseDecimal(options.min ?? "0");
+  const min =
+    options.min === null && !options.integerOnly
+      ? null
+      : parseDecimal(options.min ?? "0");
   if (current === null || (options.min !== null && min === null)) {
     return value;
   }
 
-  const step = decimalLiteral(smartStep(trimmed));
+  const smart = decimalLiteral(smartStep(trimmed));
+  const step =
+    options.integerOnly && compareDecimals(smart, decimalLiteral("1")) < 0
+      ? decimalLiteral("1")
+      : smart;
   const next = addDecimals(
     current,
     direction === 1 ? step : negateDecimal(step),

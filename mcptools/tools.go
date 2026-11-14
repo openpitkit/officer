@@ -34,7 +34,9 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/officer/framework/web/httpapi/dto"
 )
 
 // listDefaultLimit and listMaxLimit are the default and the cap of the rows a
@@ -468,6 +470,12 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 	registerTool(reg, descriptor("list_trading_destinations", "List trading destinations",
 		"List the trading destinations available to an Officer account. Read-only - credentials are never exposed.",
 		"List the trading destinations available to an Officer account.", false, false, true, true), listTradingDestinationsHandler)
+	registerToolWithOutputSchema(reg, descriptor("get_test_execution_policy", "Get test execution policy",
+		getTestExecutionPolicyDescription, "Read a test connection's execution policy.",
+		false, false, true, true), getTestExecutionPolicyHandler, testExecutionPolicyOutputSchema)
+	registerToolWithOutputSchema(reg, descriptor("set_test_execution_policy", "Set test execution policy",
+		setTestExecutionPolicyDescription, "Replace only a test connection's execution policy.",
+		true, true, true, false), setTestExecutionPolicyHandler, testExecutionPolicyOutputSchema)
 }
 
 func descriptor(
@@ -497,6 +505,15 @@ func registerTool[In, Out any](
 	d frameworkmcp.ToolDescriptor,
 	handler func(frameworkmcp.Source) frameworkmcp.ToolBody[In, Out],
 ) {
+	registerToolWithOutputSchema(reg, d, handler, nil)
+}
+
+func registerToolWithOutputSchema[In, Out any](
+	reg *frameworkmcp.ToolRegistry,
+	d frameworkmcp.ToolDescriptor,
+	handler func(frameworkmcp.Source) frameworkmcp.ToolBody[In, Out],
+	transform func(*jsonschema.Schema) *jsonschema.Schema,
+) {
 	d.Register = func(server *sdkmcp.Server, deps frameworkmcp.RegisterDeps) {
 		outputSchema, err := outputSchemaFor[Out]()
 		if err != nil {
@@ -512,10 +529,13 @@ func registerTool[In, Out any](
 			Description:  d.Description,
 			OutputSchema: outputSchema,
 		}
-		// A composition that offers clients accounts uses the schema inferred
-		// from In by the framework registration helper.
+		if transform != nil {
+			tool.OutputSchema = transform(outputSchema)
+		}
 		if !deps.Source.AccountFeatures().Accounts() {
 			tool.InputSchema = oneAccountInputSchema[In]()
+		} else {
+			tool.InputSchema = inputSchemaFor[In]()
 		}
 		frameworkmcp.AddTool[In, Out](server, tool, frameworkmcp.Guard(d, deps, handler(deps.Source)))
 	}
@@ -539,11 +559,7 @@ const (
 // of the properties it relaxes say so in place of the default text. A tool
 // without these fields keeps the inferred schema unchanged.
 func oneAccountInputSchema[In any]() *jsonschema.Schema {
-	schema, err := jsonschema.For[In](nil)
-	if err != nil {
-		// sdkmcp.AddTool panics on the same inference failure.
-		panic(err)
-	}
+	schema := inputSchemaFor[In]()
 	_, group := schema.Properties["accountGroup"]
 	delete(schema.Properties, "accountGroup")
 	account := slices.Contains(schema.Required, "account")
@@ -566,6 +582,22 @@ func oneAccountInputSchema[In any]() *jsonschema.Schema {
 			))
 		}
 		property.Description = oneAccountMissingAccountPrefix + values
+	}
+	return schema
+}
+
+func inputSchemaFor[In any]() *jsonschema.Schema {
+	policy, err := testExecutionPolicySchema()
+	if err != nil {
+		panic(err)
+	}
+	schema, err := jsonschema.For[In](&jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			reflect.TypeFor[dto.TestExecutionPolicyDTO](): policy,
+		},
+	})
+	if err != nil {
+		panic(err)
 	}
 	return schema
 }
@@ -1951,9 +1983,10 @@ type sendVenueOrderOutput struct {
 }
 
 type venueSendDTO struct {
-	Status     string         `json:"status"`
-	Error      string         `json:"error,omitempty"`
-	VenueOrder *venueOrderDTO `json:"venueOrder,omitempty"`
+	Status     string                        `json:"status"`
+	Error      string                        `json:"error,omitempty"`
+	VenueOrder *venueOrderDTO                `json:"venueOrder,omitempty"`
+	Refusal    *trading.TestExecutionRefusal `json:"refusal,omitempty"`
 }
 
 // venueSend is the Source method that pre-checks, holds and sends an order
@@ -2005,7 +2038,7 @@ func sendVenueOrder(ctx context.Context, src frameworkmcp.Source, send venueSend
 		Verdict: approval.Verdict, Reasons: toMCPRejectDTOs(approval.Reasons),
 	}
 	if result.Send != nil {
-		out.VenueSend = &venueSendDTO{Status: result.Send.Status, Error: result.Send.Error}
+		out.VenueSend = &venueSendDTO{Status: result.Send.Status, Error: result.Send.Error, Refusal: result.Send.Refusal}
 		if result.Send.Order != nil {
 			link, err := toVenueOrderDTO(*result.Send.Order)
 			if err != nil {

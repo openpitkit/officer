@@ -19,10 +19,12 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -35,13 +37,35 @@ var (
 )
 
 type memoryStore struct {
-	mu                sync.Mutex
-	realm             *memoryRealm
-	path              string
-	version           int
-	closed            bool
-	resetErr          error
-	resetCommittedErr error
+	executionPolicyLookup domain.ExecutionPolicyProviderLookup
+	mu                    sync.Mutex
+	realm                 *memoryRealm
+	path                  string
+	version               int
+	closed                bool
+	resetErr              error
+	resetCommittedErr     error
+}
+
+func (s *memoryStore) BindExecutionPolicyProviders(classifier domain.ExecutionPolicyProviderLookup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if classifier == nil {
+		return errors.New("store: nil execution-policy provider lookup")
+	}
+	if s.executionPolicyLookup != nil {
+		return errors.New("store: execution-policy provider lookup already bound")
+	}
+	s.executionPolicyLookup = classifier
+	return nil
+}
+
+func (r *memoryRealm) GetTestExecutionPolicy(context.Context, domain.ExternalID) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, errors.New("memory store: test execution policy is not implemented")
+}
+
+func (r *memoryRealm) ReplaceTestExecutionPolicy(context.Context, domain.ExternalID, domain.TestExecutionPolicy) (domain.TestExecutionPolicyState, domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.TestExecutionPolicyState{}, errors.New("memory store: test execution policy is not implemented")
 }
 
 type memoryRealm struct {
@@ -89,6 +113,33 @@ func newMemoryStore(path string) *memoryStore {
 	st := &memoryStore{path: path, version: 1}
 	st.realm = newMemoryRealm(st)
 	return st
+}
+
+func bindMemoryTradingProviders(t *testing.T, st *memoryStore, classes map[string]bool) {
+	t.Helper()
+	if err := st.BindExecutionPolicyProviders(func(provider string) (bool, error) {
+		class, ok := classes[provider]
+		if !ok {
+			return false, fmt.Errorf("provider %q is not bound in fixture: %w", provider, domain.ErrTradingProviderUnavailable)
+		}
+		return class, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (r *memoryRealm) validateTradingAccessModes(account domain.Account, grants []domain.TradingAccess) error {
+	var modes []domain.TradingMode
+	for _, grant := range grants {
+		if grant.Account == account.Code || (account.GroupCode != "" && grant.AccountGroup == account.GroupCode) {
+			connection, ok := r.tradingConnections[grant.Connection]
+			if !ok {
+				return fmt.Errorf("trading connection %s for account %s: %w", grant.Connection, account.Code, domain.ErrNotFound)
+			}
+			modes = append(modes, connection.Mode)
+		}
+	}
+	return domain.ValidateTradingAccessModes(account.Code, modes)
 }
 
 func newMemoryRealm(st *memoryStore) *memoryRealm {

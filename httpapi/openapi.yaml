@@ -988,7 +988,8 @@ paths:
           description: >-
             Account list sort key. Unknown keys are rejected. `blockReason`
             orders by the effective reason, the same value the filter searches.
-            `venueAccess` orders by the `venueAccess` flag.
+            `venueAccess` orders by the number of distinct effective connections
+            from direct and inherited grants, including disabled connections.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -4918,6 +4919,41 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredError"
 
+  /trading/connections/{id}:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    delete:
+      operationId: deleteTradingConnection
+      summary: Delete an unused trading connection
+      tags: [trading]
+      description: >
+        Removes a disabled connection and its settings, instrument mappings,
+        execution policy and access grants. Refused while enabled or referenced
+        by any venue-order history. Refused for a tighten-only caller.
+      responses:
+        "204":
+          description: Connection deleted.
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
   /trading/connections/{id}/settings:
     parameters:
       - $ref: "#/components/parameters/TradingConnectionId"
@@ -4961,6 +4997,97 @@ paths:
           $ref: "#/components/responses/NotImplementedError"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+
+  /trading/connections/{id}/test-policy:
+    parameters:
+      - $ref: "#/components/parameters/TradingConnectionId"
+    get:
+      operationId: getTestExecutionPolicy
+      summary: Read the test execution policy
+      tags: [trading]
+      description: Requires a visible test trading connection.
+      responses:
+        "200":
+          description: The stored policy and its revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestExecutionPolicyState"
+              example:
+                connection: "00000000-0000-4000-8000-000000000001"
+                revision: "1"
+                rules: []
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+    put:
+      operationId: replaceTestExecutionPolicy
+      summary: Replace the entire test execution policy
+      tags: [trading]
+      description: >-
+        Requires a visible test trading connection. Each successful write
+        increments the revision, even when the rules are unchanged. This
+        operation alone permits a tighten-only caller to replace test rules.
+        Audit follows the policy commit; an audit failure returns an error
+        while GET exposes the saved revision, and retrying creates a new revision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestExecutionPolicy"
+            example:
+              rules:
+                - mask: { baseAsset: "A*", quoteAsset: "USD" }
+                  mode: split
+                  priceVariant: normal
+                  fills: 3
+                - mask: { baseAsset: "MSFT", quoteAsset: "USD" }
+                  mode: rest
+                  priceVariant: best
+                  wait: { kind: finite, seconds: 10 }
+      responses:
+        "200":
+          description: Exactly the committed rules, connection and new revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestExecutionPolicyState"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/TradingConflictError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
         "503":
           $ref: "#/components/responses/SetupRequiredError"
 
@@ -6670,6 +6797,9 @@ components:
         required unlinked-fee target returns fee_account_required. A venue-linked
         order refuses manual execution reports, confirm and cancel with
         venue_order_managed.
+        Execution policy operations refuse providers without this capability
+        with execution_policy_unsupported and an unavailable registered provider
+        with trading_provider_unavailable.
       content:
         application/json:
           schema:
@@ -7286,6 +7416,23 @@ components:
       type: object
       additionalProperties: false
       properties:
+        alerts:
+          type: array
+          description: Open actionable alerts with personal read marks and channel delivery state.
+          items:
+            allOf:
+              - $ref: "#/components/schemas/AlertEvent"
+              - type: object
+                required: [readStates, deliveries]
+                properties:
+                  readStates:
+                    type: [object, "null"]
+                    additionalProperties:
+                      type: boolean
+                  deliveries:
+                    type: [object, "null"]
+                    additionalProperties:
+                      type: boolean
         assetClasses:
           type: array
           description: Serialized asset-class dictionary rows.
@@ -7395,6 +7542,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BackupTradingAccess"
+        testExecutionPolicies:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupTestExecutionPolicy"
         venueOrders:
           type: array
           items:
@@ -9187,8 +9338,11 @@ components:
     TradingProvider:
       type: object
       additionalProperties: false
-      required: [type, title, venueAccounts, verifiesSymbols, searchesSymbols, unlinkedFees]
+      required: [type, title, executionPolicy, venueAccounts, verifiesSymbols, searchesSymbols, unlinkedFees]
       properties:
+        executionPolicy:
+          type: boolean
+          description: Uses Officer execution-policy masks instead of external symbol mappings.
         type:
           type: string
         title:
@@ -9245,8 +9399,11 @@ components:
     TradingConnection:
       type: object
       additionalProperties: false
-      required: [id, provider, label, mode, enabled, venueIdentity, feeAccount, state, diagnostics, secrets, instruments, access]
+      required: [executionPolicy, id, provider, label, mode, enabled, venueIdentity, feeAccount, state, diagnostics, secrets, instruments, access]
       properties:
+        executionPolicy:
+          type: boolean
+          description: The connection's provider supports Officer execution rules.
         id:
           $ref: "#/components/schemas/Id"
         provider:
@@ -9384,6 +9541,130 @@ components:
             Honoured only on the dashboard mirror `/app/api/v1` in a
             non-release build. Release builds and `/api/v1` ignore it.
             In a non-release build, `/api/v1` cannot enable trading.
+
+    InstrumentMask:
+      type: object
+      additionalProperties: false
+      required: [baseAsset, quoteAsset]
+      properties:
+        baseAsset:
+          type: string
+          minLength: 1
+          description: Case-sensitive whole-code mask; only * is a wildcard.
+        quoteAsset:
+          type: string
+          minLength: 1
+          description: Case-sensitive whole-code mask; only * is a wildcard.
+
+    TestExecutionWait:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [finite, infinite]
+        seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036
+      oneOf:
+        - properties:
+            kind:
+              enum: [finite]
+          required: [seconds]
+        - properties:
+            kind:
+              enum: [infinite]
+          not:
+            required: [seconds]
+
+    TestExecutionRule:
+      type: object
+      additionalProperties: false
+      required: [mask, mode]
+      properties:
+        mask:
+          $ref: "#/components/schemas/InstrumentMask"
+        mode:
+          type: string
+          enum: [execute, split, reject_even, rest]
+        priceVariant:
+          type: string
+          enum: [normal, best, worst]
+        fills:
+          type: integer
+          enum: [2, 3]
+        wait:
+          $ref: "#/components/schemas/TestExecutionWait"
+      oneOf:
+        - properties:
+            mode:
+              enum: [execute, reject_even]
+          required: [priceVariant]
+          not:
+            anyOf:
+              - required: [fills]
+              - required: [wait]
+        - properties:
+            mode:
+              enum: [split]
+          required: [priceVariant, fills]
+          not:
+            required: [wait]
+        - properties:
+            mode:
+              enum: [rest]
+            wait:
+              properties:
+                kind:
+                  enum: [finite]
+          required: [wait, priceVariant]
+          not:
+            required: [fills]
+        - properties:
+            mode:
+              enum: [rest]
+            wait:
+              properties:
+                kind:
+                  enum: [infinite]
+          required: [wait]
+          not:
+            anyOf:
+              - required: [fills]
+              - required: [priceVariant]
+
+    TestExecutionPolicy:
+      type: object
+      additionalProperties: false
+      required: [rules]
+      properties:
+        rules:
+          type: array
+          description: >-
+            Checked from top to bottom against Officer asset codes, without
+            external symbol mappings. The first matching mask wins. An unknown
+            symbol is refused with test_policy_no_match.
+          items:
+            $ref: "#/components/schemas/TestExecutionRule"
+
+    TestExecutionPolicyState:
+      type: object
+      additionalProperties: false
+      required: [connection, revision, rules]
+      properties:
+        connection:
+          $ref: "#/components/schemas/Id"
+        revision:
+          type: string
+          pattern: "^[1-9][0-9]*$"
+          description: Committed revision as a decimal string, at most 9223372036854775807.
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/TestExecutionRule"
 
     TradingConnectionSettingsUpdate:
       type: object
@@ -9638,6 +9919,21 @@ components:
           description: Account group code this grant applies to; omitted for an account grant.
         venueAccount:
           type: string
+
+    BackupTestExecutionPolicy:
+      type: object
+      additionalProperties: false
+      required: [connection, revision, rules]
+      properties:
+        connection:
+          $ref: "#/components/schemas/Id"
+        revision:
+          type: integer
+          minimum: 1
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/TestExecutionRule"
 
     BackupVenueOrder:
       type: object
@@ -10266,6 +10562,27 @@ components:
         venueOrder:
           $ref: "#/components/schemas/VenueOrder"
           description: Stored venue link; omitted when absent, never null.
+        refusal:
+          $ref: "#/components/schemas/TestExecutionRefusal"
+          description: Immediate test execution refusal; omitted for venue providers.
+
+    TestExecutionRefusal:
+      type: object
+      required: [code, baseAsset, quoteAsset, ruleIndexes, message]
+      properties:
+        code:
+          type: string
+        baseAsset:
+          type: string
+        quoteAsset:
+          type: string
+        ruleIndexes:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+        message:
+          type: string
 
     DropCopyOrderRequest:
       allOf:

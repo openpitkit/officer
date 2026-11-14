@@ -46,6 +46,7 @@ import type {
   TradingSnapshot,
 } from "@/api/types";
 import { useAccountsPage } from "@/api/useAccounts";
+import { AccountVenueAccess } from "@/components/AccountVenueAccess";
 import {
   accountPnlClass,
   AccountRealizedPnl,
@@ -994,6 +995,7 @@ function AdvancedFilterDialog({
             <Label>{t("filters.advanced.positionLabel")}</Label>
             <div className="flex items-center gap-2">
               <NumberRangeFilter
+                integerOnly
                 fluid
                 operator={numberOperatorFromCountMode(draft.positionMode)}
                 operators={operatorOptions(t, "number")}
@@ -1018,6 +1020,7 @@ function AdvancedFilterDialog({
               <Label>{t("filters.advanced.accountLabel")}</Label>
               <div className="flex items-center gap-2">
                 <NumberRangeFilter
+                  integerOnly
                   fluid
                   operator={numberOperatorFromCountMode(draft.accountMode)}
                   operators={operatorOptions(t, "number")}
@@ -1711,7 +1714,7 @@ function DeleteGroupConfirm({
 // Delete account confirm
 // ---------------------------------------------------------------------------
 
-function DeleteAccountConfirm({
+export function DeleteAccountConfirm({
   account,
   trading,
   open,
@@ -1826,7 +1829,7 @@ function DeleteAccountConfirm({
 // Edit account metadata dialog
 // ---------------------------------------------------------------------------
 
-function EditAccountMetadataDialog({
+export function EditAccountMetadataDialog({
   account,
   open,
   onOpenChange,
@@ -2187,7 +2190,7 @@ function EditGroupNotesDialog({
 // Assign group dialog (for accounts)
 // ---------------------------------------------------------------------------
 
-function AssignGroupDialog({
+export function AssignGroupDialog({
   account,
   groupSuggestions,
   open,
@@ -2403,7 +2406,7 @@ function GroupCurrencyDialog({
 // Edit account notes dialog
 // ---------------------------------------------------------------------------
 
-function EditAccountNotesDialog({
+export function EditAccountNotesDialog({
   account,
   open,
   onOpenChange,
@@ -2538,7 +2541,7 @@ function blockedDetailsAuditGroup(
   return target.account.blockSource === "group" ? target.account.group : null;
 }
 
-function BlockedDetailsDialog({
+export function BlockedDetailsDialog({
   target,
   open,
   onOpenChange,
@@ -3263,7 +3266,7 @@ function GroupsPanel({
 // Accounts table
 // ---------------------------------------------------------------------------
 
-function AccountsTable({
+export function AccountsTable({
   accounts,
   activeSort,
   activeOrder,
@@ -3286,15 +3289,17 @@ function AccountsTable({
   onVenueAccess,
   onDelete,
   showVenueAccess,
+  trading,
 }: {
   accounts: Account[];
   activeSort?: string;
   activeOrder?: SortOrder;
   /** Shows the venue access column; true once a trading connection exists. */
   showVenueAccess: boolean;
+  trading: PollingResult<TradingSnapshot>;
   selectedGroupCode: string | null;
   groupsByCode: Map<string, Group>;
-  onSortChange: (sort?: string, order?: SortOrder) => void;
+  onSortChange?: (sort?: string, order?: SortOrder) => void;
   onEditAccount: (account: Account) => void;
   onResetPnl?: (account: Account) => void;
   onAssignGroup: (account: Account) => void;
@@ -3313,6 +3318,29 @@ function AccountsTable({
 }) {
   const { t } = useTranslation("accounts");
   const { t: tc } = useTranslation("common");
+  const managementUnavailable = !accountScope().showsAccounts;
+  const managementTitle = (title: string) =>
+    managementUnavailable
+      ? `${title}: ${t("accounts.actions.managementUnavailable")}`
+      : title;
+  const header = (field: string, label: string, description: string) =>
+    onSortChange !== undefined &&
+    (field !== "venueAccess" || showVenueAccess) ? (
+      <SortableHeader
+        field={field}
+        label={label}
+        description={description}
+        direction={sortDirection(activeSort, activeOrder, field)}
+        onSort={(key, next) =>
+          onSortChange(
+            next === "none" ? undefined : key,
+            next === "none" ? undefined : next,
+          )
+        }
+      />
+    ) : (
+      <ColumnHeader description={description}>{label}</ColumnHeader>
+    );
   const currencyOriginTitle = (account: Account): string | undefined => {
     if (account.currencyOrigin !== "group") {
       return account.currencyOrigin
@@ -3336,41 +3364,27 @@ function AccountsTable({
         <col className="w-[9rem]" />
         <col className="w-[7rem]" />
         <col className="w-[6rem]" />
-        <col className="w-[2.5rem]" />
-        {showVenueAccess && <col className={VENUE_ACCESS_COLUMN_CLASS} />}
+        <col className="w-[5rem]" />
+        <col className={VENUE_ACCESS_COLUMN_CLASS} />
         <col className={STATUS_COLUMN_CLASS} />
         <col />
-        <col className="w-[14.75rem]" />
+        <col className="w-[10.75rem]" />
       </colgroup>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
           <TableHead className="w-[13rem]">
-            <SortableHeader
-              field="code"
-              label={t("accounts.columns.account")}
-              description={t("accounts.columnDescriptions.account")}
-              direction={sortDirection(activeSort, activeOrder, "code")}
-              onSort={(field, next) =>
-                onSortChange(
-                  next === "none" ? undefined : field,
-                  next === "none" ? undefined : next,
-                )
-              }
-            />
+            {header(
+              "code",
+              t("accounts.columns.account"),
+              t("accounts.columnDescriptions.account"),
+            )}
           </TableHead>
           <TableHead className="w-[9rem]">
-            <SortableHeader
-              field="group"
-              label={t("accounts.columns.group")}
-              description={t("accounts.columnDescriptions.group")}
-              direction={sortDirection(activeSort, activeOrder, "group")}
-              onSort={(field, next) =>
-                onSortChange(
-                  next === "none" ? undefined : field,
-                  next === "none" ? undefined : next,
-                )
-              }
-            />
+            {header(
+              "group",
+              t("accounts.columns.group"),
+              t("accounts.columnDescriptions.group"),
+            )}
           </TableHead>
           <TableHead className="w-[7rem]">
             <ColumnHeader
@@ -3387,64 +3401,35 @@ function AccountsTable({
               {t("accounts.columns.pnl")}
             </ColumnHeader>
           </TableHead>
-          <TableHead className="w-[2.5rem]">
-            <SortableHeader
-              field="positionCount"
-              label={t("accounts.columns.positions")}
-              description={t("accounts.columnDescriptions.positions")}
-              direction={sortDirection(
-                activeSort,
-                activeOrder,
-                "positionCount",
-              )}
-              onSort={(field, next) =>
-                onSortChange(
-                  next === "none" ? undefined : field,
-                  next === "none" ? undefined : next,
-                )
-              }
-            />
+          <TableHead className="w-[5rem]">
+            {header(
+              "positionCount",
+              t("accounts.columns.positions"),
+              t("accounts.columnDescriptions.positions"),
+            )}
           </TableHead>
-          {showVenueAccess && (
+          {
             <TableHead className={VENUE_ACCESS_COLUMN_CLASS}>
-              <SortableHeader
-                field="venueAccess"
-                label={t("accounts.columns.venueAccess")}
-                description={t("accounts.columnDescriptions.venueAccess")}
-                direction={sortDirection(
-                  activeSort,
-                  activeOrder,
-                  "venueAccess",
-                )}
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
+              {header(
+                "venueAccess",
+                t("accounts.columns.venueAccess"),
+                t("accounts.columnDescriptions.venueAccess"),
+              )}
             </TableHead>
-          )}
+          }
           <TableHead className={STATUS_COLUMN_CLASS}>
-            <SortableHeader
-              field="status"
-              label={t("accounts.columns.status")}
-              description={t("accounts.columnDescriptions.status")}
-              direction={sortDirection(activeSort, activeOrder, "status")}
-              onSort={(field, next) =>
-                onSortChange(
-                  next === "none" ? undefined : field,
-                  next === "none" ? undefined : next,
-                )
-              }
-            />
+            {header(
+              "status",
+              t("accounts.columns.status"),
+              t("accounts.columnDescriptions.status"),
+            )}
           </TableHead>
           <TableHead>
             <ColumnHeader description={t("accounts.columnDescriptions.notes")}>
               {t("accounts.columns.notes")}
             </ColumnHeader>
           </TableHead>
-          <TableHead className="w-[14.75rem] text-right">
+          <TableHead className="w-[10.75rem] text-right">
             <ColumnHeader
               align="right"
               description={t("accounts.columnDescriptions.actions")}
@@ -3495,7 +3480,8 @@ function AccountsTable({
                     <EditButton
                       size={28}
                       onClick={() => onEditAccount(account)}
-                      title={t("accounts.actions.editTitle")}
+                      disabled={managementUnavailable}
+                      title={managementTitle(t("accounts.actions.editTitle"))}
                     />
                   </span>
                 </div>
@@ -3520,22 +3506,25 @@ function AccountsTable({
                     )}
                   </span>
                   <span className="ml-auto flex shrink-0 items-center">
-                    {account.group && selectedGroupCode !== account.group && (
-                      <FilterByButton
-                        size={28}
-                        title={tc("rowActions.filterByTitle", {
-                          field: account.group,
-                        })}
-                        href={absoluteAppUrl(
-                          `/accounts?group=${encodeURIComponent(account.group)}`,
-                        )}
-                        onClick={() => onFilterGroup(account.group)}
-                      />
-                    )}
+                    {accountScope().showsAccounts &&
+                      account.group &&
+                      selectedGroupCode !== account.group && (
+                        <FilterByButton
+                          size={28}
+                          title={tc("rowActions.filterByTitle", {
+                            field: account.group,
+                          })}
+                          href={absoluteAppUrl(
+                            `/accounts?group=${encodeURIComponent(account.group)}`,
+                          )}
+                          onClick={() => onFilterGroup(account.group)}
+                        />
+                      )}
                     <EditButton
                       size={28}
                       onClick={() => onAssignGroup(account)}
-                      title={t("accounts.groupCell.editTitle")}
+                      disabled={managementUnavailable}
+                      title={managementTitle(t("accounts.groupCell.editTitle"))}
                     />
                   </span>
                 </div>
@@ -3565,15 +3554,33 @@ function AccountsTable({
                 />
               </TableCell>
 
-              <TableCell className="w-[2.5rem] text-xs text-muted-lt">
-                <span className="nums">{account.positionCount ?? 0}</span>
+              <TableCell className="w-[5rem] text-xs text-muted-lt">
+                <div className="flex items-center gap-1">
+                  <span className="nums">{account.positionCount ?? 0}</span>
+                  <span className="ml-auto flex shrink-0">
+                    <PositionsButton
+                      title={t("accounts.links.positions")}
+                      href={absoluteAppUrl(
+                        `/positions?account=${encodeURIComponent(account.code)}`,
+                      )}
+                      onClick={() => onOpenPositions(account)}
+                    />
+                  </span>
+                </div>
               </TableCell>
 
-              {showVenueAccess && (
+              {
                 <TableCell className={VENUE_ACCESS_COLUMN_CLASS}>
-                  <VenueAccessText access={account.venueAccess} />
+                  <AccountVenueAccess
+                    account={account.code}
+                    group={account.group}
+                    snapshot={
+                      trading.load.state === "ready" ? trading.load.data : null
+                    }
+                    onOpen={() => onVenueAccess(account)}
+                  />
                 </TableCell>
-              )}
+              }
 
               <TableCell
                 className={STATUS_COLUMN_CLASS}
@@ -3630,15 +3637,8 @@ function AccountsTable({
                 </div>
               </TableCell>
 
-              <TableCell className="w-[14.75rem] text-right">
+              <TableCell className="w-[10.75rem] text-right">
                 <RowActions>
-                  <PositionsButton
-                    title={t("accounts.links.positions")}
-                    href={absoluteAppUrl(
-                      `/positions?account=${encodeURIComponent(account.code)}`,
-                    )}
-                    onClick={() => onOpenPositions(account)}
-                  />
                   <TradingButton
                     title={t("accounts.links.trading")}
                     href={absoluteAppUrl(
@@ -3660,14 +3660,13 @@ function AccountsTable({
                     )}
                     onClick={() => onOpenHistory(account)}
                   />
-                  <VenueAccessButton
-                    title={t("venueAccessTitle")}
-                    onClick={() => onVenueAccess(account)}
-                  />
                   <DeleteButton
-                    title={tc("rowActions.deleteTitle", {
-                      entity: account.code,
-                    })}
+                    disabled={managementUnavailable}
+                    title={managementTitle(
+                      tc("rowActions.deleteTitle", {
+                        entity: account.code,
+                      }),
+                    )}
                     onClick={() => onDelete(account)}
                   />
                 </RowActions>
@@ -4377,6 +4376,7 @@ export function Accounts() {
           message={t("tradingCheck.failed", { error: trading.load.error })}
         />
       )}
+      <StaleState load={trading.load} reload={trading.reload} />
       {blockNotice !== null && (
         <p role="status" className="text-xs text-text">
           {blockNotice}
@@ -4597,6 +4597,7 @@ export function Accounts() {
                 activeSort={accountSort.sort}
                 activeOrder={accountSort.order}
                 showVenueAccess={showVenueAccess}
+                trading={trading}
                 selectedGroupCode={selectedGroupCode}
                 groupsByCode={groupsByCode}
                 onSortChange={(sort, order) => {

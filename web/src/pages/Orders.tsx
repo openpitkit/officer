@@ -20,7 +20,6 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-  AlertTriangle,
   Calculator,
   ExternalLink,
   Plus,
@@ -113,10 +112,9 @@ import { accountScope } from "@/lib/accountScope";
 import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import {
   isDecimalRangeValid,
+  isDecimalString,
   isNonNegativeDecimalString,
   isOpenQuantityString,
-  isOptionalPositiveDecimalString,
-  isPositiveDecimalString,
   subtractDecimalStrings,
 } from "@/lib/numberStep";
 import { shareUrl } from "@/lib/shareLink";
@@ -187,7 +185,7 @@ import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 
 const SUBMIT_TAB_PREFERENCE = "pit-officer-orders-submit-tab";
-const SUBMIT_TABS = ["immediate", "drop_copy", "hold", "venue"] as const;
+const SUBMIT_TABS = ["immediate", "hold", "venue", "drop_copy"] as const;
 type SubmitTab = (typeof SUBMIT_TABS)[number];
 
 function isSubmitTab(value: unknown): value is SubmitTab {
@@ -204,9 +202,12 @@ const VENUE_ORDER_OPTIONS: Record<
   string,
   {
     timeInForce: Record<"limit" | "market", string[]>;
-    docsUrl: string;
+    docsUrl?: string;
   }
 > = {
+  test: {
+    timeInForce: { limit: [], market: [] },
+  },
   alpaca: {
     timeInForce: {
       limit: ALPACA_TIME_IN_FORCE,
@@ -478,6 +479,8 @@ interface OrderInitialValues {
   amountKind: string;
   amountValue: string;
   price: string;
+  venueConnection?: string;
+  venueMode?: TradingMode;
 }
 
 interface SubmitOrderDialogProps {
@@ -648,6 +651,12 @@ function SubmitOrderDialog({
     const controller = new AbortController();
     destinationsAbortRef.current = controller;
     const requestKey = JSON.stringify([debouncedAccount, venueMode]);
+    const clonedConnection =
+      debouncedAccount === initialAccount &&
+      (initialValues?.venueMode === undefined ||
+        venueMode === initialValues.venueMode)
+        ? initialValues?.venueConnection
+        : undefined;
     // A changed account or mode invalidates the old target immediately.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setDestinationsKey(requestKey);
@@ -667,7 +676,15 @@ function SubmitOrderDialog({
         );
         setDestinations(nextDestinations);
         setSelectedConnection(
-          selectable.length === 1 ? selectable[0].connection : "",
+          clonedConnection !== undefined
+            ? nextDestinations.some(
+                (destination) => destination.connection === clonedConnection,
+              )
+              ? clonedConnection
+              : ""
+            : selectable.length === 1
+              ? selectable[0].connection
+              : "",
         );
         setDestinationsLoading(false);
       })
@@ -685,7 +702,15 @@ function SubmitOrderDialog({
         destinationsAbortRef.current = null;
       }
     };
-  }, [debouncedAccount, fetchTradingDestinations, open, tab, venueMode]);
+  }, [
+    debouncedAccount,
+    fetchTradingDestinations,
+    initialAccount,
+    initialValues,
+    open,
+    tab,
+    venueMode,
+  ]);
 
   // Debounced live check: fires after the shared search interval.
   useEffect(() => {
@@ -708,8 +733,8 @@ function SubmitOrderDialog({
       !baseT ||
       !quoteT ||
       !amountT ||
-      !isPositiveDecimalString(amountT) ||
-      !isOptionalPositiveDecimalString(price) ||
+      !isDecimalString(amountT) ||
+      !isDecimalString(price) ||
       !amountKind ||
       !side
     ) {
@@ -769,7 +794,12 @@ function SubmitOrderDialog({
   useEffect(() => {
     if (open) {
       const storedTab = readStoredPreference(SUBMIT_TAB_PREFERENCE);
-      const restoredTab = isSubmitTab(storedTab) ? storedTab : "";
+      const clonedVenue = initialValues?.venueConnection !== undefined;
+      const restoredTab = clonedVenue
+        ? "venue"
+        : isSubmitTab(storedTab)
+          ? storedTab
+          : "";
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccount(initialAccount);
       setBaseAsset(initialValues?.baseAsset ?? "");
@@ -786,7 +816,11 @@ function SubmitOrderDialog({
       setTab(restoredTab);
       const storedMode = readStoredPreference(VENUE_MODE_PREFERENCE);
       setVenueMode(
-        storedMode === "paper" || storedMode === "live" ? storedMode : "",
+        clonedVenue
+          ? (initialValues.venueMode ?? "")
+          : storedMode === "paper" || storedMode === "live"
+            ? storedMode
+            : "",
       );
       setDropCopyConfirmOpen(false);
       setBusy(false);
@@ -857,8 +891,8 @@ function SubmitOrderDialog({
       !baseAsset.trim() ||
       !quoteAsset.trim() ||
       !amountValue.trim() ||
-      !isPositiveDecimalString(amountValue) ||
-      !isOptionalPositiveDecimalString(price) ||
+      !isDecimalString(amountValue) ||
+      !isDecimalString(price) ||
       amountKind !== "quantity" ||
       venueMode === "" ||
       selectedDestination === undefined ||
@@ -966,7 +1000,7 @@ function SubmitOrderDialog({
       !baseAsset.trim() ||
       !quoteAsset.trim() ||
       !amountValue.trim() ||
-      !isPositiveDecimalString(amountValue)
+      !isDecimalString(amountValue)
     ) {
       setError(t("addOrder.dialog.validationError"));
       return;
@@ -984,9 +1018,8 @@ function SubmitOrderDialog({
       return;
     }
     if (
-      !isOptionalPositiveDecimalString(price) ||
-      ((tab === "drop_copy" || tab === "immediate") &&
-        !isPositiveDecimalString(price))
+      !isDecimalString(price) ||
+      ((tab === "drop_copy" || tab === "immediate") && price.trim() === "")
     ) {
       setError(
         t(
@@ -1083,9 +1116,9 @@ function SubmitOrderDialog({
     baseAsset.trim() !== "" &&
     quoteAsset.trim() !== "" &&
     amountValue.trim() !== "" &&
-    isPositiveDecimalString(amountValue) &&
-    isOptionalPositiveDecimalString(price) &&
-    (!priceRequired || isPositiveDecimalString(price)) &&
+    isDecimalString(amountValue) &&
+    isDecimalString(price) &&
+    (!priceRequired || price.trim() !== "") &&
     side !== "";
   const canSubmit =
     tab === "venue"
@@ -1098,26 +1131,26 @@ function SubmitOrderDialog({
 
   const fields = (
     <div className="flex flex-col gap-y-4">
-      {tab !== "venue" && (
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-[0.6875rem] text-muted">
-            {tab === "immediate"
-              ? t("addOrder.dialog.submitModeImmediateHelp")
-              : tab === "drop_copy"
-                ? t("addOrder.dialog.submitModeDropCopyHelp")
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[0.6875rem] text-muted">
+          {tab === "immediate"
+            ? t("addOrder.dialog.submitModeImmediateHelp")
+            : tab === "drop_copy"
+              ? t("addOrder.dialog.submitModeDropCopyHelp")
+              : tab === "venue"
+                ? t("addOrder.dialog.submitModeVenueHelp")
                 : t("addOrder.dialog.submitModeHoldHelp")}
-          </p>
-          <a
-            href="/docs"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
-          >
-            {t("addOrder.dialog.openApi")}
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        </div>
-      )}
+        </p>
+        <a
+          href="/docs"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
+        >
+          {t("addOrder.dialog.openApi")}
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      </div>
       <div className="flex flex-col gap-y-1.5">
         <Label htmlFor="so-external-id">
           {t("addOrder.dialog.externalId")}
@@ -1319,15 +1352,17 @@ function SubmitOrderDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                <a
-                  href={selectedVenueOptions.docsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
-                >
-                  {t("addOrder.dialog.venue.aboutTimeInForce")}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
+                {selectedVenueOptions.docsUrl !== undefined && (
+                  <a
+                    href={selectedVenueOptions.docsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
+                  >
+                    {t("addOrder.dialog.venue.aboutTimeInForce")}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
               </div>
             )}
 
@@ -1409,7 +1444,7 @@ function SubmitOrderDialog({
             onChange={setAmountValue}
             placeholder={t("addOrder.dialog.amountPlaceholder")}
             disabled={busy}
-            allowSignedInput={false}
+            valueType="quantity"
             className="flex-1"
             onClear={() => setAmountValue("")}
             clearLabel={tc("filters.clearField")}
@@ -1441,7 +1476,7 @@ function SubmitOrderDialog({
               : "addOrder.dialog.limitPricePlaceholder",
           )}
           disabled={busy}
-          allowSignedInput={false}
+          valueType="price"
           onClear={() => setPrice("")}
           clearLabel={tc("filters.clearField")}
         />
@@ -1496,15 +1531,14 @@ function SubmitOrderDialog({
             <TabsTrigger ref={firstTabRef} value="immediate" disabled={busy}>
               {t("addOrder.dialog.submitModeImmediate")}
             </TabsTrigger>
-            <TabsTrigger value="drop_copy" disabled={busy}>
-              <AlertTriangle className="h-3.5 w-3.5 text-[var(--danger)]" />
-              {t("addOrder.dialog.submitModeDropCopy")}
-            </TabsTrigger>
             <TabsTrigger value="hold" disabled={busy}>
               {t("addOrder.dialog.submitModeHold")}
             </TabsTrigger>
             <TabsTrigger value="venue" disabled={busy}>
               {t("addOrder.dialog.venue.sendToVenue")}
+            </TabsTrigger>
+            <TabsTrigger value="drop_copy" disabled={busy}>
+              {t("addOrder.dialog.submitModeDropCopy")}
             </TabsTrigger>
           </TabsList>
           {tab === "" && (
@@ -1916,18 +1950,19 @@ function ExecReportDialog({
     (!showFillFields ||
       (quantity !== "" &&
         quantity === quantity.trim() &&
-        isPositiveDecimalString(quantity)));
-  // A fill status carries the pair and its leaves or the API refuses the whole
-  // report; a commission never stands in for the trade. Values travel verbatim,
-  // so the checks accept exactly what the report contract accepts.
+        isDecimalString(quantity)));
+  // Check the decimal syntax here and leave the sign and value constraints to
+  // the API. Execution-report values travel verbatim.
   const fillFieldsValid =
     !showFillFields ||
     (quantity === quantity.trim() &&
       price === price.trim() &&
       lockPrice === lockPrice.trim() &&
-      isPositiveDecimalString(quantity) &&
-      isPositiveDecimalString(price) &&
-      isOptionalPositiveDecimalString(lockPrice));
+      quantity !== "" &&
+      price !== "" &&
+      isDecimalString(quantity) &&
+      isDecimalString(price) &&
+      isDecimalString(lockPrice));
   const leavesValid =
     (!requiresLeaves && leavesQuantity === "") ||
     isOpenQuantityString(leavesQuantity);
@@ -2100,7 +2135,7 @@ function ExecReportDialog({
                       onChange={setQuantity}
                       placeholder={t("execReport.dialog.fillQtyPlaceholder")}
                       disabled={busy}
-                      allowSignedInput={false}
+                      valueType="quantity"
                       onClear={() => setQuantity("")}
                       clearLabel={tc("filters.clearField")}
                       customValidity={
@@ -2125,7 +2160,7 @@ function ExecReportDialog({
                       onChange={setPrice}
                       placeholder={t("execReport.dialog.fillPricePlaceholder")}
                       disabled={busy}
-                      allowSignedInput={false}
+                      valueType="price"
                       onClear={() => setPrice("")}
                       clearLabel={tc("filters.clearField")}
                       customValidity={
@@ -2151,7 +2186,7 @@ function ExecReportDialog({
                     onChange={setLockPrice}
                     placeholder={t("execReport.dialog.lockPricePlaceholder")}
                     disabled={busy}
-                    allowSignedInput={false}
+                    valueType="price"
                     onClear={() => setLockPrice("")}
                     clearLabel={tc("filters.clearField")}
                     customValidity={
@@ -2239,7 +2274,6 @@ function ExecReportDialog({
                           "execReport.dialog.commissionAmountPlaceholder",
                         )}
                         disabled={busy}
-                        allowSignedInput={false}
                         onClear={() => setCommissionAmount("")}
                         clearLabel={tc("filters.clearField")}
                       />
@@ -2272,10 +2306,16 @@ function ExecReportDialog({
                 {t("execReport.dialog.leavesQty")}
               </Label>
               <div className="flex gap-2">
-                <ClearableInput
+                <NumberStepper
                   id="er-leaves"
                   value={leavesQuantity}
-                  onChange={(event) => setLeavesQuantity(event.target.value)}
+                  valueType="quantity"
+                  onChange={setLeavesQuantity}
+                  customValidity={
+                    leavesQuantity === leavesQuantity.trim()
+                      ? ""
+                      : t("execReport.dialog.leavesInvalid")
+                  }
                   placeholder={t("execReport.dialog.leavesQtyPlaceholder")}
                   disabled={busy}
                   onClear={() => setLeavesQuantity("")}
@@ -3021,6 +3061,7 @@ function OrderDetailDialog({
                                     state.order.price === "0"
                                       ? ""
                                       : state.order.price,
+                                  venueConnection: state.venueOrder?.connection,
                                 });
                                 onClose();
                               }}
@@ -3241,11 +3282,15 @@ function OrderDetailDialog({
                         <Label htmlFor="workflow-cancel-leaves">
                           {t("execReport.dialog.leavesQty")}
                         </Label>
-                        <ClearableInput
+                        <NumberStepper
                           id="workflow-cancel-leaves"
                           value={cancelLeavesQuantity}
-                          onChange={(event) =>
-                            setCancelLeavesQuantity(event.target.value)
+                          valueType="quantity"
+                          onChange={setCancelLeavesQuantity}
+                          customValidity={
+                            cancelLeavesQuantity === cancelLeavesQuantity.trim()
+                              ? ""
+                              : t("execReport.dialog.leavesInvalid")
                           }
                           placeholder={t(
                             "execReport.dialog.leavesQtyPlaceholder",
@@ -3310,6 +3355,7 @@ function OrderDetailDialog({
                         amountValue: state.order.amountValue,
                         price:
                           state.order.price === "0" ? "" : state.order.price,
+                        venueConnection: state.venueOrder?.connection,
                       });
                       onClose();
                     }}
@@ -3678,6 +3724,7 @@ function OrdersTable({
                       amountKind: order.amountKind,
                       amountValue: order.amountValue,
                       price: order.price === "0" ? "" : order.price,
+                      venueConnection: order.venueConnection,
                     })
                   }
                 />
@@ -5184,7 +5231,10 @@ export function Orders() {
   }
 
   function openCloneOrder(values: OrderInitialValues) {
-    setSubmitInitialValues(values);
+    const connection = tradingSnapshot?.connections.find(
+      (candidate) => candidate.id === values.venueConnection,
+    );
+    setSubmitInitialValues({ ...values, venueMode: connection?.mode });
     setSubmitOpen(true);
   }
 

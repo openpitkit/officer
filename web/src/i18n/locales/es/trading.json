@@ -1,4 +1,54 @@
 {
+  "testPolicy": {
+    "title": "Política de ejecución de prueba",
+    "rules": "Reglas de ejecución",
+    "rule": "Regla {{number}}",
+    "revision": "Revisión guardada {{revision}}",
+    "matching": "Las reglas se comprueban de arriba abajo. Se aplica la primera máscara de símbolo coincidente. Un símbolo desconocido se rechaza con {{noMatch}}.",
+    "moveUp": "Subir la regla {{number}}",
+    "moveDown": "Bajar la regla {{number}}",
+    "higherPriority": "Mayor prioridad",
+    "lowerPriority": "Menor prioridad",
+    "marketDataTitle": "Las pruebas de mercado requieren una sola fuente directa de precios",
+    "marketDataWarning": "Un par con más de un registro directo de datos de mercado se rechaza con {{code}}. Mantenga habilitado un solo instrumento de datos de mercado para el par, deshabilite las filas o instancias adicionales y pulse {{restart}}.",
+    "emptyTitle": "Sin reglas de ejecución",
+    "emptyDescription": "Esta política está vacía. Las órdenes no tienen una regla coincidente y se rechazan.",
+    "baseAsset": "Máscara del activo base",
+    "quoteAsset": "Máscara del activo cotizado",
+    "maskHint": "* - todos los códigos; BTC - solo BTC; USD* - USD, USDT, USDC.",
+    "completeField": "Regla {{number}}: complete el campo «{{field}}».",
+    "goToRule": "Ir a la regla {{number}}",
+    "allInstruments": "Para todos los instrumentos",
+    "mode": "Modo de ejecución",
+    "modes": {
+      "execute": "Ejecutar una vez",
+      "split": "Dividir la ejecución",
+      "reject_even": "Rechazar una de cada dos órdenes",
+      "rest": "Mantener la orden abierta"
+    },
+    "modeDetails": {
+      "execute": "Ejecutar toda la cantidad en una sola operación.",
+      "split": "Solicitar dos o tres operaciones para toda la cantidad.",
+      "reject_even": "Rechazar una de cada dos órdenes nuevas de este modo; ejecutar las demás una vez. El contador es compartido por esta conexión dentro de la revisión guardada.",
+      "rest": "Mantener la orden abierta hasta que transcurra la espera, o sin ejecución automática."
+    },
+    "fills": "Número de operaciones",
+    "wait": "Ejecución automática",
+    "afterSeconds": "Después de N segundos",
+    "finiteDescription": "Seleccione la espera en segundos antes de la ejecución.",
+    "withoutExecution": "Sin ejecución automática",
+    "infiniteDescription": "No hay cancelación individual. El libro de órdenes se pierde cada vez que se reinicia el entorno de negociación, incluso al reconectar o restaurar datos.",
+    "seconds": "Espera en segundos",
+    "priceVariant": "Variante de precio de la orden de mercado",
+    "prices": {
+      "normal": "Normal",
+      "best": "Mejor",
+      "worst": "Peor"
+    },
+    "priceExplanation": "Normal y peor compran al precio vendedor y venden al comprador. Mejor compra al precio comprador y vende al vendedor. Las órdenes limitadas siempre usan su propio precio límite.",
+    "addRule": "Añadir regla",
+    "removeRule": "Eliminar regla {{number}}"
+  },
   "nonReleaseConfirm": {
     "title": "¿Habilitar la negociación en una compilación no publicada?",
     "description": "Esta compilación no publicada es solo para pruebas rápidas. Habilitar esta conexión le permite enviar órdenes reales a la plataforma. La versión publicada no verá las órdenes que envíe esta compilación. Esta compilación puede dañar sus propios datos.",
@@ -36,10 +86,18 @@
     }
   },
   "actions": {
+    "deleteConnection": "Eliminar conexión de trading",
     "addConnection": "Añadir conexión de negociación",
     "check": "Comprobar conexión"
   },
+  "deleteConnection": {
+    "title": "¿Eliminar la conexión de trading?",
+    "description": "{{label}} y su configuración se eliminarán permanentemente. Desactive primero la conexión. Las conexiones con historial de órdenes no se pueden eliminar."
+  },
   "create": {
+    "test": {
+      "prepare": "Esta conexión ejecuta órdenes de prueba localmente y no necesita claves. Después de crearla, conceda acceso a una cuenta de prueba, configure las máscaras de símbolos y sus reglas de ejecución y habilite la conexión."
+    },
     "ib": {
       "install": "Instale IB Gateway (o TWS) e inicie sesión con su nombre de usuario de negociación simulada.",
       "download": "Descargar IB Gateway",
@@ -106,7 +164,8 @@
     "notDone": "Pendiente"
   },
   "check": {
-    "result": "Cuenta en la plataforma {{id}} · estado {{status}}"
+    "result": "Cuenta en la plataforma {{id}} · estado {{status}}",
+    "testResult": "Comprobación superada: la ejecución de prueba no se conecta a ninguna plataforma ni necesita claves."
   },
   "settings": {
     "description": "Deje los campos vacíos para conservar los valores guardados.",

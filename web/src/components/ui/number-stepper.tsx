@@ -27,7 +27,11 @@ import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Input } from "@/components/ui/input";
-import { isDecimalString, stepValue } from "@/lib/numberStep";
+import {
+  isDecimalString,
+  isUnsignedIntegerEdit,
+  stepValue,
+} from "@/lib/numberStep";
 import { cn } from "@/lib/utils";
 
 export interface NumberStepperProps extends Omit<
@@ -36,10 +40,13 @@ export interface NumberStepperProps extends Omit<
 > {
   value: string;
   onChange: (value: string) => void;
-  /** Lower clamp for the +/- controls; defaults to 0. Use null for signed values. */
+  /** Lower clamp for stepping; defaults to unbounded for prices and quantities,
+   *  and to 0 for other numbers. null removes the lower bound. */
   min?: string | null;
-  /** Whether typed values may include an explicit sign. */
-  allowSignedInput?: boolean;
+  /** The business value. Prices and asset quantities are signed decimals. */
+  valueType?: "price" | "quantity";
+  /** Accept unsigned ASCII digits only and step by whole numbers. */
+  integerOnly?: boolean;
   /** Clears the field; when set, an inline reset icon shows while non-empty. */
   onClear?: () => void;
   /** Accessible name + tooltip for the inline reset icon. */
@@ -61,15 +68,17 @@ function assignRef<T>(ref: ForwardedRef<T>, value: T) {
 /**
  * Decimal text input with smart +/- controls. The step size scales with the
  * current value's magnitude (see {@link stepValue}); ArrowUp/ArrowDown nudge it
- * too. Free-form typing is preserved - the controls only nudge.
+ * too. Prices and quantities accept signs; other fields follow their lower
+ * bound. Incomplete decimal prefixes remain invalid until digits are entered.
  */
 export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
   (
     {
       value,
       onChange,
-      min = "0",
-      allowSignedInput = true,
+      valueType,
+      integerOnly = false,
+      min = valueType === undefined ? "0" : null,
       onClear,
       clearLabel,
       customValidity = "",
@@ -85,10 +94,17 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
     const inputRef = useRef<HTMLInputElement | null>(null);
     const previousValueRef = useRef(value);
     const [draftValue, setDraftValue] = useState(value);
+    const acceptsSign =
+      !integerOnly &&
+      (valueType !== undefined || min === null || min.trim().startsWith("-"));
     const invalidMessage = t("filters.invalidNumber");
-    const validityMessage = !isDecimalString(draftValue)
-      ? invalidMessage
-      : customValidity;
+    const validityMessage =
+      (integerOnly
+        ? !isUnsignedIntegerEdit(draftValue)
+        : !isDecimalString(draftValue)) ||
+      (!acceptsSign && /^[+-]/.test(draftValue.trim()))
+        ? invalidMessage
+        : customValidity;
     const invalid = validityMessage !== "";
 
     useEffect(() => {
@@ -107,7 +123,7 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
         inputRef.current?.reportValidity();
         return;
       }
-      const next = stepValue(draftValue, direction, { min });
+      const next = stepValue(draftValue, direction, { min, integerOnly });
       setDraftValue(next);
       onChange(next);
     };
@@ -120,7 +136,7 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
             inputRef.current = node;
             assignRef(ref, node);
           }}
-          inputMode="decimal"
+          inputMode={integerOnly ? "numeric" : "decimal"}
           {...props}
           value={draftValue}
           disabled={disabled}
@@ -131,17 +147,21 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
             inputClassName,
           )}
           onChange={(e) => {
-            const next = e.target.value;
-            const hasExplicitSign = /^[+-]/.test(next.trim());
-            const nextValid =
-              isDecimalString(next) && (allowSignedInput || !hasExplicitSign);
-            if (!allowSignedInput && hasExplicitSign) {
+            const next = integerOnly
+              ? e.target.value
+              : e.target.value.replace(/,/g, ".");
+            const editable = integerOnly
+              ? isUnsignedIntegerEdit(next)
+              : acceptsSign
+                ? /^[+-]?\d*(?:\.\d*)?$/.test(next)
+                : /^\d*(?:\.\d*)?$/.test(next);
+            if (!editable) {
               e.currentTarget.value = draftValue;
               return;
             }
             setDraftValue(next);
             e.target.setCustomValidity(
-              nextValid ? customValidity : invalidMessage,
+              isDecimalString(next) ? customValidity : invalidMessage,
             );
             onChange(next);
           }}

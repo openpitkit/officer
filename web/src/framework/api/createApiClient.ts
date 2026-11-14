@@ -27,6 +27,8 @@ export type ApiErrorCode =
   | "non_release_archive"
   | "non_release_confirmation_required"
   | "trading_mode_mismatch"
+  | "trading_access_notification_failed"
+  | "trading_access_completion_failed"
   | "destination_ambiguous"
   | "no_destination"
   | "forbidden"
@@ -55,11 +57,20 @@ export type ApiErrorCode =
   | "network"
   | "signing";
 
+/** A structured member error returned in an API Problem Details response. */
+export interface ApiProblemError {
+  code: string;
+  pointer: string;
+  constraint?: string;
+}
+
 /** A failed API call, carrying the HTTP status and decoded error code. */
 export class ApiError extends Error {
   readonly status?: number;
   readonly code: ApiErrorCode;
   readonly dependents?: ApiErrorDependent[];
+  /** Exact server member pointers and constraints, when supplied. */
+  readonly errors?: ApiProblemError[];
   /** The account code the request named, when `code` is "account_missing". */
   readonly account?: string;
   /** The asset code the request named, when `code` is "asset_missing". */
@@ -78,6 +89,7 @@ export class ApiError extends Error {
     account?: string,
     asset?: string,
     retryAfterSeconds?: number,
+    errors?: ApiProblemError[],
   ) {
     super(message);
     this.name = "ApiError";
@@ -87,6 +99,11 @@ export class ApiError extends Error {
     this.account = account;
     this.asset = asset;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.errors = errors?.map(({ code, pointer, constraint }) => ({
+      code,
+      pointer,
+      constraint,
+    }));
   }
 }
 
@@ -167,6 +184,8 @@ function asCode(v: unknown): ApiErrorCode {
     case "non_release_archive":
     case "non_release_confirmation_required":
     case "trading_mode_mismatch":
+    case "trading_access_notification_failed":
+    case "trading_access_completion_failed":
     case "destination_ambiguous":
     case "no_destination":
     case "forbidden":
@@ -328,6 +347,7 @@ async function toApiError(
   let dependents: ApiErrorDependent[] | undefined;
   let account: string | undefined;
   let asset: string | undefined;
+  let errors: ApiProblemError[] | undefined;
   try {
     const body = (await res.json()) as unknown;
     if (isObject(body)) {
@@ -340,6 +360,16 @@ async function toApiError(
         asset = asEntityCode(pick(err, "asset", "Asset"));
       } else if (err === undefined && typeof body.detail === "string") {
         bodyMessage = body.detail;
+        if (Array.isArray(body.errors)) {
+          errors = body.errors.filter(
+            (error): error is ApiProblemError =>
+              isObject(error) &&
+              typeof error.code === "string" &&
+              typeof error.pointer === "string" &&
+              (error.constraint === undefined ||
+                typeof error.constraint === "string"),
+          );
+        }
       }
     }
   } catch {
@@ -378,6 +408,7 @@ async function toApiError(
     account,
     asset,
     asRetryAfterSeconds(res.headers.get("Retry-After")),
+    errors,
   );
 }
 

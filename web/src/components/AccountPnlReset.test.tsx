@@ -45,6 +45,36 @@ beforeEach(async () => {
   });
 });
 describe("account P&L force reset", () => {
+  it("rejects recurrence edits and keeps positive safe-count submit checks", async () => {
+    vi.mocked(fetchResetSchedule).mockResolvedValue({
+      runtimeError: "",
+      job: {
+        id: "saved",
+        state: "ready",
+        revision: 1,
+        completedRuns: 0,
+        spec: {
+          schedule: { time: "09:00", timezone: "UTC" },
+          termination: { mode: "count", maxRuns: 2 },
+        },
+        next: { at: "2030-01-01T09:00:00Z" },
+      },
+    });
+    renderWithApi(<AccountPnlResetSchedule />);
+    const input = await screen.findByLabelText(
+      "Total successful runs, including the first",
+    );
+    for (const value of ["-1", "1.5", "1,5", "1e2"]) {
+      fireEvent.change(input, { target: { value } });
+      expect(input).toHaveValue("2");
+    }
+    const user = userEvent.setup();
+    for (const value of ["0", "9007199254740992", ""]) {
+      fireEvent.change(input, { target: { value } });
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      expect(saveResetSchedule).not.toHaveBeenCalled();
+    }
+  });
   it("disables paused fields and edits the end datetime explicitly in UTC", async () => {
     const user = userEvent.setup();
     vi.mocked(fetchResetSchedule).mockResolvedValue({

@@ -22,6 +22,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -245,6 +246,11 @@ type Source interface {
 	) error
 	// GetTrading returns provider capabilities and connection status snapshots.
 	GetTrading(ctx context.Context) (backend.TradingStatus, error)
+	// GetTestExecutionPolicy reads the policy of a visible test connection.
+	GetTestExecutionPolicy(ctx context.Context, id string) (domain.TestExecutionPolicyState, error)
+	// ReplaceTestExecutionPolicy replaces only a visible test connection's policy,
+	// including for a tighten-only caller.
+	ReplaceTestExecutionPolicy(ctx context.Context, id string, policy domain.TestExecutionPolicy) (domain.TestExecutionPolicyState, error)
 	// CredentialStorage reports whether stored credentials are sealed and,
 	// when they are not, whether trading connections or market-data sources
 	// hold keys in plain text.
@@ -591,6 +597,14 @@ func AddTool[In, Out any](server *sdkmcp.Server, tool *sdkmcp.Tool, handler sdkm
 	server.AddTool(tool, handler)
 }
 
+// PublicToolError carries a handler's public REST body and client-visible message.
+type PublicToolError struct {
+	Body    any
+	Message string
+}
+
+func (e *PublicToolError) Error() string { return e.Message }
+
 // Guard decodes a typed MCP input, rejecting undeclared fields, then stamps
 // the caller and enforces authorization and the operator command-enable gate.
 // Missing or null members retain JSON decoding semantics; the tool body owns
@@ -625,6 +639,14 @@ func Guard[In, Out any](
 		}
 		text, out, err := inner(ctx, req.Session, args)
 		if err != nil {
+			var public *PublicToolError
+			if errors.As(err, &public) {
+				return &sdkmcp.CallToolResult{
+					IsError:           true,
+					StructuredContent: public.Body,
+					Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: public.Message}},
+				}, nil
+			}
 			return toolErr[Out](err.Error()), nil
 		}
 		return toolOK(text, out), nil
@@ -911,6 +933,14 @@ func SourceFor(cp backend.ControlPlane) Source {
 
 type controlPlaneSource struct {
 	cp backend.ControlPlane
+}
+
+func (s controlPlaneSource) GetTestExecutionPolicy(ctx context.Context, id string) (domain.TestExecutionPolicyState, error) {
+	return s.cp.GetTestExecutionPolicy(ctx, id)
+}
+
+func (s controlPlaneSource) ReplaceTestExecutionPolicy(ctx context.Context, id string, policy domain.TestExecutionPolicy) (domain.TestExecutionPolicyState, error) {
+	return s.cp.ReplaceTestExecutionPolicy(ctx, id, policy)
 }
 
 func (s controlPlaneSource) Status(ctx context.Context) (Status, error) {

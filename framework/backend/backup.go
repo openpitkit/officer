@@ -28,6 +28,7 @@ import (
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/framework/node"
 )
 
 // ExportBackup returns a portable JSON-ready archive and conventional filename.
@@ -62,7 +63,13 @@ func (s *Service) RestoreBackup(
 	ctx context.Context,
 	archive backup.Archive,
 	opts backup.RestoreOptions,
-) (backup.RestoreSummary, error) {
+) (result backup.RestoreSummary, resultErr error) {
+	ctx, finish := node.TradingAccessNotifications(ctx)
+	defer func() {
+		if err := finish(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	if err := backup.ValidateScope(opts.Scope, "restore"); err != nil {
 		return backup.RestoreSummary{}, err
 	}
@@ -177,8 +184,9 @@ func (s *Service) RestoreBackup(
 			)
 		}
 	} else if s.md != nil {
+		completionCtx := context.WithoutCancel(ctx)
 		manualUpdates, err := listRestoredManualUpdates(
-			ctx, n, mdPlan.manualUpdates,
+			completionCtx, n, mdPlan.manualUpdates,
 		)
 		if err != nil {
 			postRestoreErr = fmt.Errorf(
@@ -188,7 +196,7 @@ func (s *Service) RestoreBackup(
 		} else {
 			for _, instrument := range manualUpdates {
 				if err := s.md.PushManual(
-					ctx, instrument.Instance.String(), instrument,
+					completionCtx, instrument.Instance.String(), instrument,
 				); err != nil {
 					postRestoreErr = fmt.Errorf(
 						"backend: backup restored; live manual market-data update pending reconciliation: %w",

@@ -20,6 +20,7 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"slices"
@@ -38,7 +39,7 @@ import (
 
 const tradingSecret = "k8-known-credential-value"
 const tradingPath = "/trading/connections/connection-1"
-const freshTradingJSON = `{"id":"connection-1","provider":"alpaca","label":"Paper","mode":"paper","enabled":false,"venueIdentity":"venue-1","feeAccount":"","state":"stopped","diagnostics":[],"secrets":{"key":true},"instruments":[],"access":[]}`
+const freshTradingJSON = `{"executionPolicy":false,"id":"connection-1","provider":"alpaca","label":"Paper","mode":"paper","enabled":false,"venueIdentity":"venue-1","feeAccount":"","state":"stopped","diagnostics":[],"secrets":{"key":true},"instruments":[],"access":[]}`
 
 func tradingFixture(t *testing.T) *fakeService {
 	t.Helper()
@@ -386,7 +387,10 @@ func TestTradingOptionalFieldsAndEmptyCollections(t *testing.T) {
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/search-symbols", `{"query":"x"}`), 200, `{"supported":false,"matches":[]}`)
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "POST", tradingPath+"/verify-symbol", `{"externalSymbol":"x"}`), 200, `{"verification":{"supported":false,"exists":false,"tradable":false}}`)
 	svc = tradingFixture(t)
-	svc.tradingStatus.Providers = []backend.TradingProvider{{Type: "alpaca", Title: "Alpaca", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}}
+	svc.tradingStatus.Providers = []backend.TradingProvider{{
+		ExecutionPolicy: false,
+		Type:            "alpaca", Title: "Alpaca", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true,
+	}}
 	c := &svc.tradingStatus.Connections[0]
 	c.State = "unavailable"
 	c.Error = "keys unavailable"
@@ -403,7 +407,7 @@ func TestTradingOptionalFieldsAndEmptyCollections(t *testing.T) {
 		`{"account":"","accountGroup":"desk","venueAccount":"sub-g","group":""},`+
 		`{"account":"acc-1","accountGroup":"","venueAccount":"sub-1","group":"desk"},`+
 		`{"account":"acc-2","accountGroup":"","venueAccount":"","group":""}]`, 1)
-	providers := `{"type":"alpaca","title":"Alpaca","venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}`
+	providers := `{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}`
 	assertTradingJSON(t, rec, 200, `{"trading":{"providers":[`+providers+`],"connections":[`+expected+`]}}`)
 	svc.tradingDestinations[0].State = "unavailable"
 	svc.tradingDestinations[0].Error = "keys unavailable"
@@ -517,6 +521,30 @@ func TestTradingHandlerErrors(t *testing.T) {
 	svc := tradingFixture(t)
 	if rec := callTrading(t, svc, "/api/v1", "GET", "/accounts/acc-1/trading-destinations?mode=invalid", ""); rec.Code != 422 || len(svc.tradingCalls) != 0 {
 		t.Fatal("invalid mode reached service")
+	}
+}
+
+func TestDeleteTradingConnection(t *testing.T) {
+	for _, mount := range []string{"/api/v1", "/app/api/v1"} {
+		t.Run(mount, func(t *testing.T) {
+			svc := tradingFixture(t)
+			rec := callTrading(t, svc, mount, http.MethodDelete, tradingPath, "")
+			if rec.Code != http.StatusNoContent || svc.tradingID != "connection-1" || len(svc.tradingCalls) != 1 || svc.tradingCalls[0] != "delete-connection" {
+				t.Fatalf("delete: status=%d id=%q calls=%v body=%s", rec.Code, svc.tradingID, svc.tradingCalls, rec.Body)
+			}
+			for _, tc := range []struct {
+				err    error
+				status int
+			}{
+				{domain.ErrNotFound, 404}, {domain.ErrConflict, 409}, {domain.ErrLoosening, 403},
+			} {
+				svc.tradingErr = tc.err
+				rec := callTrading(t, svc, mount, http.MethodDelete, tradingPath, "")
+				if rec.Code != tc.status {
+					t.Fatalf("error %v: status=%d body=%s", tc.err, rec.Code, rec.Body)
+				}
+			}
+		})
 	}
 }
 

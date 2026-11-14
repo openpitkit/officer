@@ -28,6 +28,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccountFeatures, AccountMode } from "@/api/accountMode";
 import { LogoutNavEntry } from "@/components/SidebarExtras";
+import { SidebarProvider } from "@/components/SidebarContext";
 import { StartupGate, useStartupAdmit } from "@/components/StartupGate";
 import { ApiClientProvider } from "@/framework";
 import { accountScope, holdingScopeReload } from "@/lib/accountScope";
@@ -695,7 +696,9 @@ describe("StartupGate session step", () => {
       <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
         <StartupGate>
           <ShellProbe />
-          <LogoutNavEntry />
+          <SidebarProvider>
+            <LogoutNavEntry />
+          </SidebarProvider>
         </StartupGate>
       </ThemeProvider>,
       {

@@ -23,6 +23,7 @@ import type {
   FrameworkCredentialStorage,
   TradingAccessSubject,
   TradingSnapshot,
+  TestExecutionPolicy,
   VenueOrder,
 } from "@/api/types";
 import {
@@ -138,7 +139,168 @@ function okMarketDataResponse(): Response {
   );
 }
 
+describe("test execution policy client", () => {
+  const id = "test/desk #1";
+  const policy: TestExecutionPolicy = {
+    rules: [
+      {
+        mask: { baseAsset: "A*", quoteAsset: "USD" },
+        mode: "split",
+        priceVariant: "worst",
+        fills: 3,
+      },
+      {
+        mask: { baseAsset: "MSFT", quoteAsset: "EUR" },
+        mode: "rest",
+        wait: { kind: "infinite" },
+      },
+    ],
+  };
+  const state = { connection: id, revision: "2", ...policy };
+
+  it("GETs the policy on the encoded connection path without a body", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(state));
+    const controller = new AbortController();
+    expect(await api().fetchTestExecutionPolicy(id, controller.signal)).toEqual(
+      state,
+    );
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/app/api/v1/trading/connections/test%2Fdesk%20%231/test-policy",
+      expect.objectContaining({
+        method: "GET",
+        body: undefined,
+        signal: controller.signal,
+      }),
+    );
+  });
+
+  it("PUTs the whole policy once on the encoded connection path", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(state));
+    expect(await api().updateTestExecutionPolicy(id, policy)).toEqual(state);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/app/api/v1/trading/connections/test%2Fdesk%20%231/test-policy",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(policy) }),
+    );
+  });
+
+  it.each([
+    {},
+    { ...state, connection: undefined },
+    { ...state, revision: 2 },
+    { ...state, rules: null },
+    { ...state, rules: [{}] },
+    { ...state, rules: [{ ...policy.rules[0], mask: { baseAsset: "A*" } }] },
+    { ...state, rules: [{ ...policy.rules[0], mode: "unknown" }] },
+    { ...state, rules: [{ ...policy.rules[0], priceVariant: undefined }] },
+    { ...state, rules: [{ ...policy.rules[0], fills: 4 }] },
+    { ...state, rules: [{ ...policy.rules[1], priceVariant: "normal" }] },
+    { ...state, rules: [{ ...policy.rules[1], wait: { kind: "finite" } }] },
+  ])(
+    "rejects malformed policy state instead of supplying defaults: %j",
+    async (body) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(body));
+      await expect(api().fetchTestExecutionPolicy(id)).rejects.toBeInstanceOf(
+        ApiError,
+      );
+    },
+  );
+
+  it("decodes an explicitly empty rule list", async () => {
+    const empty = { connection: id, revision: "1", rules: [] };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(empty));
+    expect(await api().fetchTestExecutionPolicy(id)).toEqual(empty);
+  });
+
+  it("copies structured server errors when constructing an API error", () => {
+    const details = [
+      {
+        code: "validation",
+        pointer: "/rules/3/priceVariant",
+        constraint: "required",
+      },
+    ];
+    const error = new ApiError(
+      "Invalid policy",
+      "validation",
+      422,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      details,
+    );
+    details[0].pointer = "/rules/0/mode";
+    expect(error.errors).toEqual([
+      {
+        code: "validation",
+        pointer: "/rules/3/priceVariant",
+        constraint: "required",
+      },
+    ]);
+    expect(new ApiError("Network failure", "network").errors).toBeUndefined();
+  });
+
+  it("preserves a PUT validation problem from the server", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        {
+          type: "about:blank",
+          title: "Unprocessable Content",
+          status: 422,
+          detail: "fills must be 2 or 3",
+          errors: [
+            {
+              code: "validation",
+              constraint: "enum",
+              pointer: "/rules/0/fills",
+            },
+          ],
+        },
+        422,
+      ),
+    );
+    await expect(
+      api().updateTestExecutionPolicy(id, policy),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: "fills must be 2 or 3",
+      errors: [
+        { code: "validation", constraint: "enum", pointer: "/rules/0/fills" },
+      ],
+    });
+  });
+});
+
 describe("trading client", () => {
+  it.each([
+    ["trading_access_notification_failed", 409],
+    ["trading_access_completion_failed", 500],
+  ] as const)(
+    "preserves committed-access code %s and status %i",
+    async (code, status) => {
+      const message =
+        code === "trading_access_notification_failed"
+          ? "access change was saved, but its mixed paper/live warning could not be published or delivered; review current access and alerts before retrying"
+          : "access change was saved, but operation completion failed; review current access, alerts and service status before retrying";
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ error: { code, message } }, status),
+      );
+      await expect(
+        api().createTradingConnection({
+          provider: "test",
+          label: "Test",
+          mode: "paper",
+          credentials: {},
+          enabled: false,
+        }),
+      ).rejects.toMatchObject({
+        code,
+        status,
+        message,
+      });
+    },
+  );
+
   it("types an access subject as exactly one grantee", () => {
     // @ts-expect-error -- a subject cannot name both an account and a group
     const both: TradingAccessSubject = { account: "a", accountGroup: "g" };
@@ -150,6 +312,7 @@ describe("trading client", () => {
   });
 
   const connection = {
+    executionPolicy: false as const,
     id: "paper/desk #1",
     provider: "alpaca",
     label: "Paper desk",
@@ -180,6 +343,7 @@ describe("trading client", () => {
   const trading: TradingSnapshot = {
     providers: [
       {
+        executionPolicy: false,
         type: "alpaca",
         title: "Alpaca",
         venueAccounts: false,
@@ -190,6 +354,62 @@ describe("trading client", () => {
     ],
     connections: [connection],
   };
+
+  it.each([undefined, null, "", "unknown"])(
+    "rejects missing or unknown provider executionPolicy: %j",
+    async (executionPolicy) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          trading: {
+            ...trading,
+            providers: [{ ...trading.providers[0], executionPolicy }],
+          },
+        }),
+      );
+      await expect(api().fetchTrading()).rejects.toMatchObject({
+        code: "internal",
+        message: expect.stringContaining("executionPolicy"),
+      });
+    },
+  );
+
+  it.each([null, "", "unknown", "test", "venue", 1])(
+    "rejects invalid present connection executionPolicy: %j",
+    async (executionPolicy) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          trading: {
+            ...trading,
+            connections: [{ ...connection, executionPolicy }],
+          },
+        }),
+      );
+      await expect(api().fetchTrading()).rejects.toMatchObject({
+        code: "internal",
+        message: expect.stringContaining("executionPolicy"),
+      });
+    },
+  );
+
+  it("preserves available rows and restored connections without provider metadata", async () => {
+    const unavailable: TradingSnapshot["connections"][number] = {
+      ...connection,
+      id: "restored-custom",
+      provider: "custom",
+      state: "unavailable",
+      error: "Custom provider is unavailable",
+    };
+    delete unavailable.executionPolicy;
+    const mixed = {
+      ...trading,
+      connections: [connection, unavailable],
+    };
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ trading: mixed }));
+
+    const result = await api().fetchTrading();
+    expect(result).toEqual(mixed);
+    expect(result.connections[1]).not.toHaveProperty("executionPolicy");
+  });
   const venueOrder: VenueOrder = {
     connection: connection.id,
     venueAccount: "",

@@ -115,7 +115,7 @@ type fakeConnector struct {
 }
 
 func newVenue() *fakeVenue { return &fakeVenue{snapshots: make(map[string]trading.Snapshot)} }
-func (v *fakeVenue) build(domain.TradingConnection) (trading.Connector, error) {
+func (v *fakeVenue) build(trading.BuildContext) (trading.Connector, error) {
 	c := &fakeConnector{venue: v, events: make(chan trading.Event, 256)}
 	v.mu.Lock()
 	v.current = c
@@ -247,7 +247,7 @@ type fixture struct {
 	quiet      int
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t *testing.T, classes ...bool) *fixture {
 	t.Helper()
 	schema, err := fixtureSchema()
 	must(t, err)
@@ -269,11 +269,23 @@ func newFixture(t *testing.T) *fixture {
 	must(t, err)
 	f := &fixture{t: t, st: realm, n: n, svc: svc, registry: trading.NewRegistry(),
 		venue: newVenue(), logs: &safeBuffer{}}
+	must(t, st.BindExecutionPolicyProviders(f.registry.SupportsExecutionPolicy))
 	f.fund("desk", "1000")
 	// Register the base asset through the node, keeping its engine registry live.
 	_, err = n.CreateAsset(testCtx, domain.Asset{Code: "AAPL"}, testCaller)
 	must(t, err)
-	must(t, f.registry.Register(trading.Provider{Type: "fake", Title: "Test venue", Build: f.venue.build}))
+	class := false
+	if len(classes) != 0 {
+		class = classes[0]
+	}
+	build := f.venue.build
+	if class {
+		build = f.venue.buildTestBook
+	}
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: class,
+		Type:            "fake", Title: "Test venue", Build: build,
+	}))
 	f.connection = f.addConnection("fake", "primary", true)
 	f.dest = domain.TradingDestination{Connection: f.connection.ExternalID, Route: "{}"}
 	return f
@@ -350,7 +362,7 @@ func (f *fixture) start() {
 
 func (f *fixture) newRuntime() {
 	f.t.Helper()
-	r, err := trading.NewRuntime(f.registry, f.st, f.sink, f.adjustmentSink, f.feeSkipSink,
+	r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(f.t, err)
 	f.runtime = r

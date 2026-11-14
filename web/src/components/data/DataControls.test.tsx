@@ -488,6 +488,32 @@ describe("data controls", () => {
     });
   });
 
+  it("keeps both integer range bounds unsigned and steps them by whole numbers", async () => {
+    const user = userEvent.setup();
+    const onMinChange = vi.fn();
+    const onMaxChange = vi.fn();
+    render(
+      <NumberRangeFilter
+        integerOnly
+        min="1"
+        max="4"
+        onMinChange={onMinChange}
+        onMaxChange={onMaxChange}
+      />,
+    );
+    const inputs = screen.getAllByRole("textbox");
+    for (const input of inputs) {
+      expect(input).toHaveAttribute("inputmode", "numeric");
+      const previous = (input as HTMLInputElement).value;
+      await user.tripleClick(input);
+      await user.paste("1,25");
+      expect(input).toHaveValue(previous);
+      await user.keyboard("{ArrowUp}");
+    }
+    expect(onMinChange).toHaveBeenLastCalledWith("2");
+    expect(onMaxChange).toHaveBeenLastCalledWith("5");
+  });
+
   it("marks inverted time ranges invalid", async () => {
     const { container } = render(
       <TimeRangeFilter

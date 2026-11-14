@@ -1521,7 +1521,7 @@ func TestEtoroProvider(t *testing.T) {
 	if p.Type != "etoro" || p.Title != "eToro" || p.VenueAccounts || !p.VerifiesSymbols || !p.SearchesSymbols || p.UnlinkedFees {
 		t.Fatalf("eToro provider flags = %+v", p)
 	}
-	c, err := p.Build(domain.TradingConnection{Mode: domain.TradingModePaper, Credentials: etoroTestCredentials})
+	c, err := p.Build(fwtrading.BuildContext{Connection: domain.TradingConnection{Mode: domain.TradingModePaper, Credentials: etoroTestCredentials}})
 	if err != nil {
 		t.Fatal(err)
 	}

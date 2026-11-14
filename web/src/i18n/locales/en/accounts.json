@@ -1,4 +1,6 @@
 {
+  "mixedTradingAccess": "This account has access to both paper and live venue accounts, including group access and disabled connections. Check the destination mode before sending orders.",
+  "inheritedVenueAccess": "Includes access inherited from the account group.",
   "page": {
     "title": "Accounts",
     "description": "Operator accounts persisted in the control plane and applied to the engine. Block an account or group to halt orders via the kill switch."
@@ -164,10 +166,10 @@
       "currency": "Account currency.",
       "pnl": "This column shows the exact account P&L reported by Spot Funds.",
       "positions": "This column shows how many position rows are stored for the account.",
-      "venueAccess": "This column shows whether the account has access to at least one trading connection, its own or through its group.",
+      "venueAccess": "Number of trading connections this account can access directly or through its group, including disabled connections. Each connection is counted once.",
       "status": "This column shows whether the account is active or blocked.",
       "notes": "This column shows the operator notes stored on the account.",
-      "actions": "This column contains row actions for positions, trading, policies, audit, trading connection access, and deletion."
+      "actions": "Actions for trading, policies, audit and deletion. Positions and trading connection access open from their own columns."
     },
     "status": {
       "blocked": "blocked",
@@ -203,7 +205,8 @@
       "viewBlockDetails": "View block details",
       "block": "Block",
       "unblock": "Unblock",
-      "deleteTitle": "Delete account"
+      "deleteTitle": "Delete account",
+      "managementUnavailable": "Account identity, group and deletion are managed in the several-accounts mode."
     },
     "empty": {
       "title": "No accounts",

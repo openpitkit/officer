@@ -20,8 +20,10 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -523,6 +525,14 @@ type guardSource struct {
 	enabled bool
 }
 
+func (s *guardSource) GetTestExecutionPolicy(context.Context, string) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.ErrNotImplemented
+}
+
+func (s *guardSource) ReplaceTestExecutionPolicy(context.Context, string, domain.TestExecutionPolicy) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.ErrNotImplemented
+}
+
 type callerSource struct {
 	guardSource
 	mu      sync.Mutex
@@ -931,4 +941,61 @@ func (s *guardSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsL
 
 func (s *guardSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
 	return domain.ErrNotImplemented
+}
+
+func TestGuardPublicToolErrorAndLegacyTransport(t *testing.T) {
+	type output struct {
+		Value string `json:"value"`
+	}
+	body := map[string]any{"error": map[string]string{"code": "internal", "message": "internal error"}}
+	for _, tc := range []struct {
+		name    string
+		err     error
+		want    any
+		message string
+	}{
+		{"public", &PublicToolError{Body: body, Message: "internal error"}, body, "internal error"},
+		{"wrapped public", fmt.Errorf("private wrapper: %w", &PublicToolError{Body: body, Message: "internal error"}), body, "internal error"},
+		{"legacy", errors.New("validation: old message"), output{}, "validation: old message"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := Guard(ToolDescriptor{Name: "test"}, RegisterDeps{Source: &guardSource{enabled: true}, Authorizer: allowAuthorizer{}},
+				func(context.Context, *sdkmcp.ServerSession, struct{}) (string, output, error) {
+					return "", output{}, tc.err
+				})
+			got, err := handler(context.Background(), &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{}})
+			if err != nil || got == nil || !got.IsError {
+				t.Fatalf("result=%+v err=%v", got, err)
+			}
+			if !reflect.DeepEqual(got.StructuredContent, tc.want) {
+				t.Fatalf("body=%+v, want %+v", got.StructuredContent, tc.want)
+			}
+			if len(got.Content) != 1 {
+				t.Fatalf("content=%+v", got.Content)
+			}
+			text, ok := got.Content[0].(*sdkmcp.TextContent)
+			if !ok || text.Text != tc.message {
+				t.Fatalf("text=%+v, want %q", got.Content, tc.message)
+			}
+		})
+	}
+}
+
+func TestGuardMalformedArgumentsRemainProtocolErrors(t *testing.T) {
+	type input struct {
+		Connection string `json:"connection"`
+	}
+	ran := false
+	handler := Guard(ToolDescriptor{Name: "test"}, RegisterDeps{Source: &guardSource{}, Authorizer: denyAuthorizer{}},
+		func(context.Context, *sdkmcp.ServerSession, input) (string, struct{}, error) {
+			ran = true
+			return "", struct{}{}, nil
+		})
+	for _, raw := range []string{`{"connection":`, `{"connection":2}`, `{"connection":"x","unknown":1}`} {
+		got, err := handler(context.Background(), &sdkmcp.CallToolRequest{Params: &sdkmcp.CallToolParamsRaw{Arguments: []byte(raw)}})
+		var protocol *jsonrpc.Error
+		if got != nil || ran || !errors.As(err, &protocol) || protocol.Code != -32602 || !strings.HasPrefix(protocol.Message, "unmarshaling: ") {
+			t.Fatalf("args=%s result=%+v ran=%t err=%v", raw, got, ran, err)
+		}
+	}
 }

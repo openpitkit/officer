@@ -93,6 +93,7 @@ type Service struct {
 // TradingRuntime is the venue capability and lifecycle seam of the service.
 type TradingRuntime interface {
 	Providers() []trading.Provider
+	SupportsExecutionPolicy(provider string) (bool, error)
 	CheckAccount(context.Context, domain.TradingConnection) (trading.AccountInfo, error)
 	VerifySymbol(context.Context, domain.TradingConnection, string) (trading.SymbolVerification, error)
 	SearchSymbols(context.Context, domain.TradingConnection, string) ([]trading.SymbolMatch, error)

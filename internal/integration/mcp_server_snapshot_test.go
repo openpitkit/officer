@@ -431,6 +431,14 @@ func TestServerToolSnapshot(t *testing.T) {
 			name        string
 			description string
 		}{name: "list_trading_destinations", description: "List the trading destinations available to an Officer account. Read-only - credentials are never exposed."},
+		struct {
+			name        string
+			description string
+		}{name: "get_test_execution_policy", description: "Read the execution policy and revision of a test trading connection. Read-only - credentials are never exposed."},
+		struct {
+			name        string
+			description string
+		}{name: "set_test_execution_policy", description: "Replace the complete execution policy of one test trading connection. Rules use current quotes, not historical replay. Exactly one rule must match each order; no match (including an empty policy) or overlap refuses the order. Venue connections are refused. Mutating, protected and disabled by default."},
 	)
 	if len(list.Tools) != len(want) {
 		t.Fatalf("tool count: want %d got %d", len(want), len(list.Tools))

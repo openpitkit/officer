@@ -101,14 +101,19 @@ func newFeeFixture(t *testing.T) (*fixture, *feeVenue) {
 	f := newFixture(t)
 	v := &feeVenue{fakeVenue: f.venue}
 	f.registry = trading.NewRegistry()
-	must(t, f.registry.Register(trading.Provider{Type: "fake", Title: "Fee venue", UnlinkedFees: true,
-		Build: func(connection domain.TradingConnection) (trading.Connector, error) {
-			c, err := v.build(connection)
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "fake", Title: "Fee venue", UnlinkedFees: true,
+		Build: func(build trading.BuildContext) (trading.Connector, error) {
+			connection := build.Connection
+
+			c, err := v.build(trading.BuildContext{Connection: connection})
 			if err != nil {
 				return nil, err
 			}
 			return &feeConnector{fakeConnector: c.(*fakeConnector), fees: v}, nil
-		}}))
+		},
+	}))
 	return f, v
 }
 
@@ -407,7 +412,7 @@ func TestFeeAccountSnapshotPreventsMixedTarget(t *testing.T) {
 		must(t, f.n.RemoveTradingAccess(testCtx, f.connection.ExternalID, "desk", "", true, testCaller))
 		must(t, f.n.PutTradingAccess(testCtx, domain.TradingAccess{Account: "other", Connection: f.connection.ExternalID}, true, testCaller))
 	}
-	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+	r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(t, err)
 	f.runtime = r
@@ -439,7 +444,7 @@ func TestAppliedFeeReplayAfterTargetOrMappingRemoval(t *testing.T) {
 				applied.Add(1)
 				return f.adjustmentSink(ctx, account, id, req)
 			}
-			r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink, f.feeSkipSink,
+			r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, sink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			f.runtime = r
@@ -472,7 +477,7 @@ func TestAppliedFeeReplayAfterTargetOrMappingRemoval(t *testing.T) {
 
 func TestRuntimeRequiresFeeSkipSink(t *testing.T) {
 	f := newFixture(t)
-	r, err := trading.NewRuntime(f.registry, f.st, f.sink, f.adjustmentSink, nil, slog.Default())
+	r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, f.adjustmentSink, nil, slog.Default())
 	if r != nil || !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("runtime without fee skip sink = %v, err=%v", r, err)
 	}
@@ -494,7 +499,7 @@ func TestFeeSkipSinkFailureRetries(t *testing.T) {
 					}
 					return f.feeSkipSink(ctx, connection, feeID, reason)
 				}
-				r, err := trading.NewRuntime(f.registry, f.st, f.sink, f.adjustmentSink, sink,
+				r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, f.adjustmentSink, sink,
 					slog.New(slog.NewJSONHandler(f.logs, nil)))
 				must(t, err)
 				f.runtime = r
@@ -545,7 +550,7 @@ func TestFeeAccountReadFailuresRetry(t *testing.T) {
 		f, v := newFeeFixture(t)
 		v.fees = []trading.Fee{postedFee("retry", "USD", "-1")}
 		st := &feeAccountReadFailureStore{Store: f.st}
-		r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+		r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 			slog.New(slog.NewJSONHandler(f.logs, nil)))
 		must(t, err)
 		f.runtime = r
@@ -623,7 +628,7 @@ func TestFeeIntakeRefusesAmbiguity(t *testing.T) {
 				applied.Add(1)
 				return f.adjustmentSink(ctx, account, id, req)
 			}
-			r, err := trading.NewRuntime(f.registry, st, f.sink, sink, f.feeSkipSink,
+			r, err := trading.NewRuntime(f.registry, st, nil, f.sink, sink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			f.runtime = r
@@ -673,7 +678,7 @@ func TestFeeIntakePollRetries(t *testing.T) {
 				if failure == "reader" {
 					v.err = errors.New("venue fee read failed")
 				}
-				r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink, f.feeSkipSink,
+				r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, sink, f.feeSkipSink,
 					slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 				must(t, err)
 				f.runtime = r
@@ -778,7 +783,7 @@ func TestFeeCursorResumesAfterFailure(t *testing.T) {
 					}
 					return f.adjustmentSink(ctx, account, id, req)
 				}
-				r, err := trading.NewRuntime(f.registry, &feeRetryStore{Store: f.st, failure: failure}, f.sink, sink, f.feeSkipSink,
+				r, err := trading.NewRuntime(f.registry, &feeRetryStore{Store: f.st, failure: failure}, nil, f.sink, sink, f.feeSkipSink,
 					slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 				must(t, err)
 				f.runtime = r
@@ -864,7 +869,7 @@ func TestFeeCoreRejectionIsFinal(t *testing.T) {
 			}
 			return f.adjustmentSink(ctx, account, id, req)
 		}
-		r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink, f.feeSkipSink,
+		r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, sink, f.feeSkipSink,
 			slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		must(t, err)
 		f.runtime = r
@@ -907,7 +912,7 @@ func TestPersistedFeeCoreRejectionRetriesSkipReport(t *testing.T) {
 					}
 					return f.feeSkipSink(ctx, connection, feeID, reason)
 				}
-				r, err := trading.NewRuntime(f.registry, f.st, f.sink, adjust, skip,
+				r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, adjust, skip,
 					slog.New(slog.NewJSONHandler(f.logs, nil)))
 				must(t, err)
 				f.runtime = r
@@ -967,7 +972,7 @@ func TestFeeAdjustmentOutlivesReadDeadline(t *testing.T) {
 			}
 			return f.adjustmentSink(ctx, account, id, req)
 		}
-		r, err := trading.NewRuntime(f.registry, f.st, f.sink, sink, f.feeSkipSink,
+		r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, sink, f.feeSkipSink,
 			slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		must(t, err)
 		f.runtime = r

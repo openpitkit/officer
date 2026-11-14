@@ -42,6 +42,18 @@ func TestNewAuditDetailRendersTemplateAndTail(t *testing.T) {
 	}
 }
 
+func TestTestExecutionPolicyAuditDetail(t *testing.T) {
+	d := NewAuditDetail(AuditDetailSetTestExecutionPolicy, AuditDetailParams{
+		"connection": "fixture", "oldRevision": "9223372036854775806", "newRevision": "9223372036854775807",
+	}, AuditDetailField{Name: "oldRules", Value: "[]"}, AuditDetailField{Name: "newRules", Value: "[]"})
+	if err := d.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Trading connection fixture test execution policy replaced: revision 9223372036854775806 → 9223372036854775807 oldRules=[] newRules=[]"; d.Text != want {
+		t.Fatalf("text=%q want %q", d.Text, want)
+	}
+}
+
 func TestNewAuditDetailKeepsEmptyValuesNil(t *testing.T) {
 	t.Parallel()
 	d := NewAuditDetail(AuditDetailResetDatabase, AuditDetailParams{})

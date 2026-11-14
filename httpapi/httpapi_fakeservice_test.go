@@ -272,6 +272,12 @@ func (f *fakeService) DeleteTradingInstrument(_ context.Context, id, symbol stri
 	return f.tradingErr
 }
 
+func (f *fakeService) DeleteTradingConnection(_ context.Context, id string) error {
+	f.tradingCalls = append(f.tradingCalls, "delete-connection")
+	f.tradingID = id
+	return f.tradingErr
+}
+
 func (f *fakeService) VerifyTradingSymbol(_ context.Context, id, symbol string) (backend.TradingSymbolVerification, error) {
 	f.tradingCalls = append(f.tradingCalls, "verify")
 	f.tradingID, f.tradingSymbol = id, symbol

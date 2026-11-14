@@ -86,6 +86,9 @@ type Type struct {
 	Name     string
 	Validate func(json.RawMessage) error
 	Actions  map[string]Action
+	// Visible opts this type into caller-scoped reads and decisions. Nil retains
+	// realm-wide behavior. Publication and configured delivery remain trusted.
+	Visible func(context.Context, Event) (bool, error)
 }
 
 // Channel delivers an already stored event. Registered channels are enabled.
@@ -194,6 +197,17 @@ func (s *Service) decorate(a Alert) (Alert, error) {
 	return a, nil
 }
 
+func (s *Service) visible(ctx context.Context, e Event) (bool, error) {
+	typ, err := s.typ(e)
+	if err != nil {
+		return false, err
+	}
+	if typ.Visible == nil {
+		return true, nil
+	}
+	return typ.Visible(ctx, e)
+}
+
 // Publish persists before attempting every channel. A delivery error means the
 // stable event already exists; producers must not invent another ID on retry.
 // A decision may resolve the event while another channel is still delivering;
@@ -253,13 +267,21 @@ func (s *Service) List(ctx context.Context) (List, error) {
 	if err != nil {
 		return List{}, err
 	}
-	out := List{Alerts: make([]Alert, 0, len(rows)), Total: len(rows)}
+	out := List{Alerts: make([]Alert, 0, len(rows))}
 	for _, row := range rows {
+		visible, err := s.visible(ctx, row.Event)
+		if err != nil {
+			return List{}, err
+		}
+		if !visible {
+			continue
+		}
 		a, err := s.decorate(row)
 		if err != nil {
 			return List{}, err
 		}
 		out.Alerts = append(out.Alerts, a)
+		out.Total++
 		if !a.Read {
 			out.Unread++
 		}
@@ -280,6 +302,13 @@ func (s *Service) Detail(ctx context.Context, id string) (Alert, error) {
 	if err != nil {
 		return Alert{}, err
 	}
+	visible, err := s.visible(ctx, a.Event)
+	if err != nil {
+		return Alert{}, err
+	}
+	if !visible {
+		return Alert{}, domain.ErrNotFound
+	}
 	return s.decorate(a)
 }
 
@@ -290,6 +319,9 @@ func (s *Service) SetRead(ctx context.Context, id string, read bool) error {
 		return err
 	}
 	if err := domain.ValidateExternalID(id); err != nil {
+		return err
+	}
+	if _, err := s.Detail(ctx, id); err != nil {
 		return err
 	}
 	return s.store.SetAlertRead(ctx, id, caller.Principal, read)
@@ -303,6 +335,9 @@ func (s *Service) Resolve(ctx context.Context, id, name string, input json.RawMe
 		return Resolution{}, err
 	}
 	if err := domain.ValidateExternalID(id); err != nil {
+		return Resolution{}, err
+	}
+	if _, err := s.Detail(ctx, id); err != nil {
 		return Resolution{}, err
 	}
 	if !json.Valid(input) {

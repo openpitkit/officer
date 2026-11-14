@@ -58,6 +58,9 @@ import type {
   Health,
   Limit,
   TradingMode,
+  TestExecutionPolicy,
+  TestExecutionPolicyState,
+  TestExecutionRule,
   TradingConnectionState,
   TradingProvider,
   TradingInstrument,
@@ -1412,6 +1415,14 @@ function normalizeTradingConnectionState(v: unknown): TradingConnectionState {
   );
 }
 
+function normalizeExecutionPolicySupport(v: unknown): boolean {
+  if (typeof v === "boolean") return v;
+  throw new ApiError(
+    "Invalid or missing executionPolicy capability in the API response",
+    "internal",
+  );
+}
+
 function normalizeTradingProvider(v: unknown): TradingProvider {
   const o = isObject(v) ? v : {};
   if (typeof o.unlinkedFees !== "boolean") {
@@ -1421,6 +1432,7 @@ function normalizeTradingProvider(v: unknown): TradingProvider {
     );
   }
   return {
+    executionPolicy: normalizeExecutionPolicySupport(o.executionPolicy),
     type: asString(o.type),
     title: asString(o.title),
     venueAccounts: asBool(o.venueAccounts),
@@ -1504,6 +1516,11 @@ function normalizeTradingConnection(v: unknown): TradingConnection {
       "feeAccount",
     ),
   };
+  if (o.executionPolicy !== undefined) {
+    connection.executionPolicy = normalizeExecutionPolicySupport(
+      o.executionPolicy,
+    );
+  }
   if (o.error !== undefined) {
     connection.error = asString(o.error);
   }
@@ -1537,6 +1554,83 @@ function normalizeTradingSnapshot(v: unknown): TradingSnapshot {
   return {
     providers: o.providers.map(normalizeTradingProvider),
     connections: o.connections.map(normalizeTradingConnection),
+  };
+}
+
+function normalizeTestExecutionRule(v: unknown): TestExecutionRule {
+  const invalid = () =>
+    new ApiError("Invalid test execution rule in the API response", "internal");
+  if (!isObject(v) || !isObject(v.mask)) throw invalid();
+  if (
+    v.mode !== "execute" &&
+    v.mode !== "split" &&
+    v.mode !== "reject_even" &&
+    v.mode !== "rest"
+  ) {
+    throw invalid();
+  }
+  const rule: TestExecutionRule = {
+    mask: {
+      baseAsset: requireStringField(v.mask, "Test rule baseAsset", "baseAsset"),
+      quoteAsset: requireStringField(
+        v.mask,
+        "Test rule quoteAsset",
+        "quoteAsset",
+      ),
+    },
+    mode: v.mode,
+  };
+  if (v.mode === "rest") {
+    if (!isObject(v.wait)) throw invalid();
+    if (v.wait.kind === "infinite") {
+      if (v.priceVariant !== undefined || v.wait.seconds !== undefined) {
+        throw invalid();
+      }
+      rule.wait = { kind: "infinite" };
+    } else if (
+      v.wait.kind === "finite" &&
+      typeof v.wait.seconds === "number" &&
+      Number.isSafeInteger(v.wait.seconds)
+    ) {
+      rule.wait = { kind: "finite", seconds: v.wait.seconds };
+    } else {
+      throw invalid();
+    }
+  } else if (v.wait !== undefined) {
+    throw invalid();
+  }
+  if (v.mode !== "rest" || rule.wait?.kind !== "infinite") {
+    if (
+      v.priceVariant !== "normal" &&
+      v.priceVariant !== "best" &&
+      v.priceVariant !== "worst"
+    ) {
+      throw invalid();
+    }
+    rule.priceVariant = v.priceVariant;
+  }
+  if (v.mode === "split") {
+    if (v.fills !== 2 && v.fills !== 3) throw invalid();
+    rule.fills = v.fills;
+  } else if (v.fills !== undefined) {
+    throw invalid();
+  }
+  return rule;
+}
+
+function normalizeTestExecutionPolicyState(
+  v: unknown,
+): TestExecutionPolicyState {
+  if (!isObject(v) || !Array.isArray(v.rules)) {
+    throw new ApiError(
+      "Invalid test execution policy in the API response",
+      "internal",
+    );
+  }
+  return {
+    connection: requireStringField(v, "Test policy connection", "connection"),
+    revision: requireStringField(v, "Test policy revision", "revision"),
+    rules: v.rules.map(normalizeTestExecutionRule),
   };
 }
 
@@ -2212,6 +2306,30 @@ async function updateTradingConnectionSettings(
   return normalizeTradingSnapshot(v);
 }
 
+async function fetchTestExecutionPolicy(
+  client: ApiClient,
+  id: string,
+  signal?: AbortSignal,
+): Promise<TestExecutionPolicyState> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/test-policy`,
+    { signal },
+  );
+  return normalizeTestExecutionPolicyState(v);
+}
+
+async function updateTestExecutionPolicy(
+  client: ApiClient,
+  id: string,
+  policy: TestExecutionPolicy,
+): Promise<TestExecutionPolicyState> {
+  const v = await client.request(
+    `${client.baseUrl}/trading/connections/${encode(id)}/test-policy`,
+    { method: "PUT", body: policy },
+  );
+  return normalizeTestExecutionPolicyState(v);
+}
+
 async function setTradingConnectionEnabled(
   client: ApiClient,
   id: string,
@@ -2272,6 +2390,15 @@ async function deleteTradingInstrument(
     `${client.baseUrl}/trading/connections/${encode(id)}/instruments?${params.toString()}`,
     { method: "DELETE" },
   );
+}
+
+async function deleteTradingConnection(
+  client: ApiClient,
+  id: string,
+): Promise<void> {
+  await client.request(`${client.baseUrl}/trading/connections/${encode(id)}`, {
+    method: "DELETE",
+  });
 }
 
 async function verifyTradingSymbol(
@@ -4860,10 +4987,13 @@ export function createOfficerApi(client: ApiClient) {
     fetchTrading: bind(fetchTrading),
     createTradingConnection: bind(createTradingConnection),
     updateTradingConnectionSettings: bind(updateTradingConnectionSettings),
+    fetchTestExecutionPolicy: bind(fetchTestExecutionPolicy),
+    updateTestExecutionPolicy: bind(updateTestExecutionPolicy),
     setTradingConnectionEnabled: bind(setTradingConnectionEnabled),
     checkTradingConnection: bind(checkTradingConnection),
     upsertTradingInstrument: bind(upsertTradingInstrument),
     deleteTradingInstrument: bind(deleteTradingInstrument),
+    deleteTradingConnection: bind(deleteTradingConnection),
     verifyTradingSymbol: bind(verifyTradingSymbol),
     searchTradingSymbols: bind(searchTradingSymbols),
     grantTradingAccess: bind(grantTradingAccess),

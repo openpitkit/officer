@@ -58,6 +58,8 @@
     "ariaLabel": "Изменить язык"
   },
   "actions": {
+    "expand": "Развернуть",
+    "collapse": "Свернуть",
     "refresh": "Обновить",
     "restartFeeds": "Перезапустить фиды",
     "retry": "Повторить",
@@ -409,6 +411,8 @@
     }
   },
   "nav": {
+    "collapseSidebar": "Свернуть боковую панель",
+    "expandSidebar": "Развернуть боковую панель",
     "dashboard": "Панель",
     "accounts": "Счета",
     "account": "Счёт",

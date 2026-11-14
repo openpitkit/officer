@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -203,12 +204,35 @@ func (n *localNode) DeleteTradingInstrument(
 	return nil
 }
 
+func (n *localNode) DeleteTradingConnection(ctx context.Context, id domain.ExternalID, caller domain.Caller) error {
+	if caller.TightenOnly() {
+		return fmt.Errorf("delete trading connection: %w", domain.ErrLoosening)
+	}
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
+	if err := n.realm.DeleteTradingConnection(ctx, id); err != nil {
+		return fmt.Errorf("delete trading connection: %w", err)
+	}
+	return n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetTrading,
+		Detail: domain.NewAuditDetail(domain.AuditDetailDeleteTradingConnection, domain.AuditDetailParams{"connection": id.String()}),
+	})
+}
+
 // PutTradingAccess refuses a tighten-only caller's grant before anything is
 // read or changed: a grant widens what its account or group may send to.
 func (n *localNode) PutTradingAccess(
 	ctx context.Context, access domain.TradingAccess, requireFeeAccount bool,
 	caller domain.Caller,
-) error {
+) (resultErr error) {
+	ctx, finish := TradingAccessNotifications(ctx)
+	defer func() {
+		if err := finish(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	if caller.TightenOnly() {
 		return fmt.Errorf(
 			"put trading access %s: a grant widens what can be sent: %w",
@@ -254,13 +278,18 @@ func (n *localNode) PutTradingAccess(
 	if err != nil {
 		return err
 	}
+	beforeAccess, err := n.captureTradingAccessState(ctx, access.Account, access.AccountGroup)
+	if err != nil {
+		return err
+	}
 	if err := n.realm.PutTradingAccess(ctx, access); err != nil {
 		return fmt.Errorf("put trading access: %w", err)
 	}
-	if err := n.audit(ctx, caller, audit); err != nil {
-		return fmt.Errorf("audit put trading access: %w", err)
+	notificationErr := n.publishTradingAccessTransitions(ctx, beforeAccess, access.Account, access.AccountGroup, caller)
+	if err := n.audit(context.WithoutCancel(ctx), caller, audit); err != nil {
+		return errors.Join(fmt.Errorf("audit put trading access: %w", err), notificationErr)
 	}
-	return nil
+	return notificationErr
 }
 
 // SetTradingConnectionFeeAccount refuses a tighten-only caller's set and clear

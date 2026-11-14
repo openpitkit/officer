@@ -37,6 +37,7 @@ const fetchAccountsMock = vi.fn();
 const setAccountCurrencyMock = vi.fn();
 const blockAccountMock = vi.fn();
 const unblockAccountMock = vi.fn();
+const fetchTradingMock = vi.fn();
 // PreMigrationBackupBanner polls GET /database/pre-migration-backups.
 vi.mock("@/api/usePreMigrationBackups", () => ({
   usePreMigrationBackups: () => ({
@@ -106,6 +107,7 @@ function renderAccount() {
         blockAccount: blockAccountMock,
         unblockAccount: unblockAccountMock,
         fetchAssets: vi.fn().mockResolvedValue([]),
+        fetchTrading: fetchTradingMock,
         // The page frame's banners poll these.
         fetchMarketData: vi.fn().mockResolvedValue({
           providers: [],
@@ -120,6 +122,7 @@ function renderAccount() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  fetchTradingMock.mockResolvedValue({ providers: [], connections: [] });
   fetchCredentialStorageMock.mockResolvedValue({
     credentialsSealed: true,
     plaintextTradingKeys: false,
@@ -132,6 +135,73 @@ beforeEach(async () => {
 });
 
 describe("Account page", () => {
+  it("keeps vertical account settings with all metadata, counts, warnings and actions", async () => {
+    answering(
+      mainAccount({
+        title: "Main desk",
+        group: "desk-group",
+        notes: "Operator notes",
+        positionCount: 7,
+      }),
+    );
+    fetchTradingMock.mockResolvedValue({
+      providers: [],
+      connections: [
+        {
+          id: "paper",
+          mode: "paper",
+          enabled: false,
+          access: [{ account: "main" }],
+        },
+        {
+          id: "live",
+          mode: "live",
+          enabled: false,
+          access: [{ accountGroup: "desk-group" }],
+        },
+      ],
+    });
+    renderAccount();
+    expect(await screen.findByText("Main desk")).toBeVisible();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.getByText("desk-group")).toBeVisible();
+    expect(screen.getByText("Operator notes")).toBeVisible();
+    const venues = screen.getByText("Venues").parentElement!;
+    expect(await within(venues).findByText("2")).toBeVisible();
+    expect(within(venues).getByRole("note")).toHaveAccessibleName(
+      /both paper and live/,
+    );
+    const positions = screen.getByText("Pos").parentElement!;
+    expect(within(positions).getByText("7")).toBeVisible();
+    expect(
+      within(positions).getByRole("button", {
+        name: "Positions - spot limits for this account",
+      }),
+    ).toBeVisible();
+    for (const name of [
+      "Edit account currency",
+      "Edit reference notes",
+      "Trading - orders & trades",
+      "Policies - risk barriers",
+      "Audit - log for this account",
+    ]) {
+      expect(screen.getByRole("button", { name })).toBeVisible();
+    }
+    for (const name of ["Edit account", "Edit group assignment"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toBeVisible();
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute(
+        "title",
+        expect.stringMatching(/^Account identity/),
+      );
+      await userEvent.setup().click(button);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    }
+    expect(
+      screen.getByRole("button", { name: /^Delete main: Account identity/ }),
+    ).toBeDisabled();
+  });
   it("shows authoritative P&L and confirms a supported single-account reset before refreshing", async () => {
     setAccountScope({
       accounts: false,
@@ -212,7 +282,7 @@ describe("Account page", () => {
     expect(
       screen.queryByRole("button", { name: "Unblock" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText(/equity-desks/)).not.toBeInTheDocument();
+    expect(screen.getByText("equity-desks")).toBeInTheDocument();
   });
 
   it("sets the currency of the default account through the shared dialog", async () => {

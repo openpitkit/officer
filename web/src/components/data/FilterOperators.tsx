@@ -233,6 +233,8 @@ export function TextFilter({
 }
 
 export interface NumberRangeFilterProps {
+  /** Restrict both bounds to unsigned whole numbers. */
+  integerOnly?: boolean;
   operator?: string;
   /** Localized operator options forwarded to the inner select. */
   operators?: OperatorOption[];
@@ -251,6 +253,7 @@ export interface NumberRangeFilterProps {
 
 /** Operator + min/max for a numeric column. */
 export function NumberRangeFilter({
+  integerOnly = false,
   operator = "between",
   operators,
   operatorAriaLabel,
@@ -292,7 +295,8 @@ export function NumberRangeFilter({
       <NumberStepper
         value={minValue}
         placeholder={single ? "Value" : "Min"}
-        min={null}
+        min={integerOnly ? "0" : null}
+        integerOnly={integerOnly}
         className={wrapperClass}
         inputClassName={inputClass}
         style={fluid ? undefined : { width: single ? 130 : 90 }}
@@ -305,7 +309,8 @@ export function NumberRangeFilter({
         <NumberStepper
           value={maxValue}
           placeholder="Max"
-          min={null}
+          min={integerOnly ? "0" : null}
+          integerOnly={integerOnly}
           className={wrapperClass}
           inputClassName={inputClass}
           style={fluid ? undefined : { width: 90 }}

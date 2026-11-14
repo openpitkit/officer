@@ -117,7 +117,10 @@ func (s *tradingSource) ListTradingDestinations(_ context.Context, account domai
 func tradingFixture() *tradingSource {
 	return &tradingSource{
 		status: backend.TradingStatus{
-			Providers: []backend.TradingProvider{{Type: "alpaca", Title: "Alpaca", VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}},
+			Providers: []backend.TradingProvider{{
+				ExecutionPolicy: false,
+				Type:            "alpaca", Title: "Alpaca", VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true,
+			}},
 			Connections: []backend.TradingConnectionStatus{{
 				ExternalID: domain.ExternalID("conn"), Provider: "alpaca", Label: "Paper",
 				Mode: domain.TradingModePaper, Enabled: true, VenueIdentity: "venue",
@@ -155,11 +158,11 @@ func assertTradingWire(t *testing.T, got json.RawMessage, want string) {
 }
 
 func TestTradingToolsSuccess(t *testing.T) {
-	const connection = `{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"","state":"running","diagnostics":[],"secrets":{"key":true},"instruments":[],"access":[]}`
+	const connection = `{"executionPolicy":false,"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"","state":"running","diagnostics":[],"secrets":{"key":true},"instruments":[],"access":[]}`
 	runToolSuccess(t, tradingRecorded, []toolSuccessCase{
 		{"get_trading", map[string]any{},
 			[]string{"get"}, nil,
-			"trading connections", `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[` + connection + `]}`},
+			"trading connections", `{"providers":[{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[` + connection + `]}`},
 		{"create_trading_connection", map[string]any{"provider": "alpaca", "label": "Paper", "mode": "paper", "credentials": map[string]any{"z": "secret-value", "a": "first-value"}, "enabled": true},
 			[]string{"create", "get"}, []any{domain.TradingConnection{Provider: "alpaca", Label: "Paper", Mode: domain.TradingModePaper, Credentials: `{"a":"first-value","z":"secret-value"}`, Enabled: true}},
 			"trading connection created", `{"connection":` + connection + `}`},
@@ -228,7 +231,7 @@ func TestTradingOptionalAndEmptyShapes(t *testing.T) {
 		}
 		res := callTool[map[string]any](t, src, "get_trading", map[string]any{})
 		requireNotToolError(t, res.IsError)
-		assertTradingWire(t, res.Wire, `{"providers":[{"type":"alpaca","title":"Alpaca","venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"fees","state":"unavailable","error":"offline","diagnostics":[],"secrets":{"key":true},"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[`+
+		assertTradingWire(t, res.Wire, `{"providers":[{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[{"executionPolicy":false,"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"fees","state":"unavailable","error":"offline","diagnostics":[],"secrets":{"key":true},"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[`+
 			`{"account":"","accountGroup":"desks","venueAccount":"","group":""},`+
 			`{"account":"acc","accountGroup":"","venueAccount":"remote","group":"desks"},`+
 			`{"account":"solo","accountGroup":"","venueAccount":"","group":""}]}]}`)
@@ -269,7 +272,7 @@ func TestTradingOptionalAndEmptyShapes(t *testing.T) {
 		if !bytes.Equal(got.Connections[0], rest) {
 			t.Fatalf("MCP connection = %s, want the REST encoding %s", got.Connections[0], rest)
 		}
-		assertTradingWire(t, got.Connections[0], `{"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"","state":"degraded","error":"trade updates: stream refused","diagnostics":[`+
+		assertTradingWire(t, got.Connections[0], `{"executionPolicy":false,"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"","state":"degraded","error":"trade updates: stream refused","diagnostics":[`+
 			`{"level":"warn","code":"connection_error","kind":"environment","title":"Trade updates stream refused","detail":"stream refused","remediation":"Check the keys.","actions":[{"type":"open_symbols","target":"AAPL"}],"at":"2026-01-02T03:04:05Z"}],`+
 			`"secrets":{"key":true},"instruments":[],"access":[]}`)
 	})

@@ -315,6 +315,12 @@ argument the tool parses itself, except in the list tools (below) - and from
 the MCP gate's own refusals: an unauthorized caller, a failed command-access
 check, and a disabled command.
 
+The two test-policy tools, `get_test_execution_policy` and
+`set_test_execution_policy`, return a different tool-error shape after argument
+decoding: `isError: true`, the public REST error body in `structuredContent`, and
+the error's detail or message as text. Validation pointers and constraints are
+preserved. Protocol errors and command-gate refusals keep their existing shapes.
+
 The core answers a tool call that would loosen risk state - lift a block, drop
 or weaken a barrier, reset a rate window - with `loosening_refused` and changes
 nothing; REST and the operator panel are not affected. `delete_group` is
@@ -570,6 +576,39 @@ since local midnight: when reconciliation needs older executions, the order
 stays pending and the connection shows a diagnostic. It
 never treats the order as missing and never infers a fill.
 
+Execution Simulator (provider `test`) is a paper-only venue that takes credentials
+`{}` and sends no requests to external venues.
+It accepts quantity orders with `destination.route: {}` and uses Officer asset
+codes directly, without an external symbol mapping. Its saved execution rules
+are checked from top to bottom; the first matching mask wins. An unknown symbol
+is refused with `test_policy_no_match`. Only orders sent to this connection
+are processed; a normal `hold` submission stays open. `GET` and
+`PUT /trading/connections/{id}/test-policy` read and replace that policy through
+REST; `get_test_execution_policy` and `set_test_execution_policy` do the same
+through MCP. The policy write alone permits an agent to replace test rules;
+other trading setup remains subject to the restrictions above. An account may
+access any combination of provider kinds and paper/live modes. Effective access
+includes own and group grants, including disabled connections. A successful
+change that first creates mixed paper/live access publishes an account-named
+warning alert. Repeated writes while already mixed do not repeat it; removing
+the mixed access and later restoring it publishes another alert. The panel
+shows a current warning beside its effective venue count and in its access dialog.
+
+Account `venueAccess` sorting orders by the effective number of distinct
+connections, combining direct and inherited grants, including disabled
+connections and deduplicating overlap. The row's `venueAccess` flag and the
+`any`/`none` filters retain their boolean meaning. Mixed-access alert reads and
+acknowledgement use the installed account scope; hidden events contribute no
+unread or total count. Delivery completes synchronously after administrative
+locks and restore runtime completion. Warning-only failures use
+`trading_access_notification_failed`; joined operational completion failures use
+`trading_access_completion_failed` and require service reconciliation as well.
+Acknowledging the alert records awareness and changes no access or orders.
+If notification fails after persistence, `409`
+`trading_access_notification_failed` explicitly reports that access was saved;
+review current access and alerts before retrying the mutation.
+See the [test trading guide](test_trading.md) for setup and examples.
+
 Paper sends use `POST /orders/send-paper` or `send_paper_order`; live sends use
 `POST /orders/send-live` or `send_live_order`, with the same checks and outcomes.
 `acknowledged` means the venue accepted. `refused` means a definitive refusal by
@@ -685,6 +724,9 @@ While the mode runs:
   With the account named, in the path or as `account`, the default account
   included, `missingAccount` is required as in multi-account mode (422 with
   constraint `required` at pointer `/missingAccount`).
+  Paper submission (`POST /orders/send-paper`, `send_paper_order`) is an
+  exception: it does not use `missingAccount` and never creates an account;
+  the account must already exist.
 - Another account is refused with 422 with constraint `single_account_mode` at
   pointer `/account`, any account group with 422 with constraint
   `single_account_mode` at pointer `/accountGroup`, and an order of another

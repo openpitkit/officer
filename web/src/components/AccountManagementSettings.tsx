@@ -28,7 +28,7 @@ export function AccountManagementSettings() {
   const poll = useAccountMode();
   const { restartService } = useOfficerApi();
   return (
-    <div className="flex flex-col gap-y-6">
+    <div className="flex w-full max-w-xl flex-col gap-y-6">
       <section className="flex flex-col gap-y-4">
         <h2 className="text-sm font-medium">{t("accountMode.title")}</h2>
         <AccountModePanel

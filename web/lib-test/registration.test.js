@@ -17,6 +17,7 @@
 
 import * as officer from "@openpit/officer-web";
 import { cleanup, render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import i18next from "i18next";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -130,6 +131,28 @@ describe("published officer defaults", () => {
     source.registerOfficerDefaults();
 
     expect(inventory(officer)).toEqual(inventory(source));
+  });
+
+  it("provides shared input widgets to hosts through the built package", async () => {
+    await officer.initOfficerI18n();
+    expect(officer.TextField).toBeTypeOf("function");
+    expect(officer.AssetCodeField).toBeTypeOf("function");
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const view = render(
+      React.createElement(officer.NumberStepper, {
+        "aria-label": "Host price",
+        value: "",
+        valueType: "price",
+        onChange,
+      }),
+    );
+    const input = view.getByRole("textbox", { name: "Host price" });
+    await user.type(input, "-12.50");
+    expect(input.value).toBe("-12.50");
+    expect(onChange).toHaveBeenLastCalledWith("-12.50");
+    await user.type(input, "x");
+    expect(input.value).toBe("-12.50");
   });
 
   it("uses the account scope and session provided through the package", () => {

@@ -73,6 +73,8 @@ func (r *memoryRealm) DeletePrincipal(_ context.Context, code string) error {
 func (r *memoryRealm) CreateAccount(
 	_ context.Context, account domain.Account,
 ) (domain.Account, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, ok := r.accounts[account.Code]; ok {
 		return domain.Account{}, domain.ErrAlreadyExists
 	}
@@ -80,6 +82,9 @@ func (r *memoryRealm) CreateAccount(
 		if _, ok := r.groups[account.GroupCode]; !ok {
 			return domain.Account{}, domain.ErrInvalid
 		}
+	}
+	if err := r.validateTradingAccessModes(account, r.tradingAccess); err != nil {
+		return domain.Account{}, err
 	}
 	r.nextAccountID++
 	account.EngineAccountID = r.nextAccountID
@@ -219,6 +224,8 @@ func (r *memoryRealm) SetAccountBlock(
 func (r *memoryRealm) SetAccountGroup(
 	_ context.Context, code domain.AccountID, groupCode string,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	account, ok := r.accounts[code]
 	if !ok {
 		return domain.ErrNotFound
@@ -229,6 +236,9 @@ func (r *memoryRealm) SetAccountGroup(
 		}
 	}
 	account.GroupCode = groupCode
+	if err := r.validateTradingAccessModes(account, r.tradingAccess); err != nil {
+		return err
+	}
 	r.accounts[code] = account
 	return nil
 }

@@ -284,6 +284,21 @@ func handleDeleteTradingInstrument(svc backend.ControlPlane) http.HandlerFunc {
 	}
 }
 
+func handleDeleteTradingConnection(svc backend.ControlPlane) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := httpx.PathID(r)
+		if err != nil {
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
+			return
+		}
+		if err := svc.DeleteTradingConnection(r.Context(), id); err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func handleVerifyTradingSymbol(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
@@ -556,7 +571,7 @@ func handleSendVenueOrder(svc backend.ControlPlane, send venueSend) http.Handler
 		}}
 		if result.Send != nil {
 			out.VenueSend = &venueSendDTO{Status: result.Send.Status,
-				Error: result.Send.Error}
+				Error: result.Send.Error, Refusal: result.Send.Refusal}
 			if result.Send.Order != nil {
 				link, err := toVenueOrderDTO(*result.Send.Order)
 				if err != nil {

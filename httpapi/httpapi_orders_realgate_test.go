@@ -46,6 +46,7 @@ import (
 	"go.openpit.dev/officer/framework/secret"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	appsigning "go.openpit.dev/officer/signing"
 )
@@ -423,6 +424,9 @@ func newRealServiceRouterWithEngine(t *testing.T) (
 	}
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
+	}
+	if err := st.BindExecutionPolicyProviders(trading.NewRegistry().SupportsExecutionPolicy); err != nil {
+		t.Fatalf("BindTradingProviderClassifier: %v", err)
 	}
 	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
 	if err != nil {

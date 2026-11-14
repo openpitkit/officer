@@ -21,6 +21,7 @@ export {
   type ApiClient,
   type ApiClientConfig,
   type ApiErrorCode,
+  type ApiProblemError,
   type RequestOptions,
 } from "./api/createApiClient";
 export {
@@ -73,6 +74,11 @@ export { ErrorBanner } from "../components/PageStates";
 export { AuthScreen } from "../components/AuthScreen";
 export { StandaloneTopBar } from "../components/StandaloneTopBar";
 export { TextField } from "../components/TextField";
+export { AssetCodeField } from "../components/AssetCodeField";
+export {
+  NumberStepper,
+  type NumberStepperProps,
+} from "../components/ui/number-stepper";
 export { Button } from "../components/ui/button";
 export { useRetryCountdown } from "../lib/useRetryCountdown";
 export { ThemeProvider } from "../theme/ThemeProvider";

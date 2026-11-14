@@ -699,6 +699,8 @@ type Node interface {
 	CreateTradingConnection(
 		ctx context.Context, connection domain.TradingConnection, caller domain.Caller,
 	) (domain.TradingConnection, error)
+	GetTestExecutionPolicy(context.Context, domain.ExternalID) (domain.TestExecutionPolicyState, error)
+	ReplaceTestExecutionPolicy(context.Context, domain.ExternalID, domain.TestExecutionPolicy, domain.Caller) (domain.TestExecutionPolicyState, error)
 
 	// UpdateTradingConnectionSettings replaces label and credentials only.
 	// It audits the action after the store write succeeds.
@@ -718,6 +720,9 @@ type Node interface {
 	UpsertTradingInstrument(
 		ctx context.Context, instrument domain.TradingInstrument, caller domain.Caller,
 	) error
+
+	// DeleteTradingConnection removes a disabled connection with no venue orders.
+	DeleteTradingConnection(ctx context.Context, id domain.ExternalID, caller domain.Caller) error
 
 	// DeleteTradingInstrument removes one instrument mapping.
 	// It audits the action after the store write succeeds.

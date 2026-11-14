@@ -88,6 +88,7 @@ type tradingE2E struct {
 	app     *app.App
 	router  http.Handler
 	realm   store.RealmStore
+	core    fwengine.Engine
 	logs    tradingE2ELog
 	venueMu sync.Mutex
 	// closing, guarded by venueMu, marks app shutdown, when the connector
@@ -132,7 +133,7 @@ func tradingE2ENoSecrets(t *testing.T, where string, raw []byte) {
 	}
 }
 
-func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
+func newTradingE2E(t *testing.T, sealed bool, providers ...fwtrading.Provider) *tradingE2E {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
@@ -265,7 +266,9 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 	}))
 	t.Cleanup(venue.Close)
 	provider := AlpacaProvider()
-	provider.Build = func(c domain.TradingConnection) (fwtrading.Connector, error) {
+	provider.Build = func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+		c := ctx.Connection
+
 		return newAlpacaConnector(c, venue.URL, "ws"+strings.TrimPrefix(venue.URL, "http")+"/stream")
 	}
 	// Persist across app restarts without testing power-loss durability.
@@ -303,7 +306,9 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 		if err != nil {
 			return nil, nil, err
 		}
-		return node.NewLocalNode(ctx, domain.DefaultRealm, st, engine.NewOpenPitEngineBuildFunc(), fatal)
+		n, core, err := node.NewLocalNode(ctx, domain.DefaultRealm, st, engine.NewOpenPitEngineBuildFunc(), fatal)
+		f.core = core
+		return n, core, err
 	})
 	f.builder.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) { return signing.New(st) })
 	f.builder.SetServiceFactory(func(_ context.Context, n node.Node, md backend.MarketDataRuntime, rt backend.TradingRuntime, signer fwsigning.Service,
@@ -323,6 +328,9 @@ func newTradingE2E(t *testing.T, sealed bool) *tradingE2E {
 	})
 	f.builder.SetSPAFactory(func() (fs.FS, error) { return fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("test")}}, nil })
 	tradingE2EMust(t, f.builder.RegisterTradingProvider(provider))
+	for _, extra := range providers {
+		tradingE2EMust(t, f.builder.RegisterTradingProvider(extra))
+	}
 	logtest.SetDefault(t, slog.NewTextHandler(&f.logs, nil))
 	f.start()
 	t.Cleanup(f.close)
@@ -344,7 +352,7 @@ func (f *tradingE2E) start() {
 	connections, err := f.realm.ListTradingConnections(f.ctx)
 	tradingE2EMust(f.t, err)
 	for _, connection := range connections {
-		if connection.Enabled {
+		if connection.Enabled && connection.Provider == domain.TradingProviderAlpaca {
 			f.pendingStreams++
 		}
 	}
@@ -385,7 +393,8 @@ func (f *tradingE2E) rest(method, path string, body any, status int) []byte {
 	w := httptest.NewRecorder()
 	f.router.ServeHTTP(w, r)
 	if method == http.MethodPost && path == "/trading/connections" && w.Code == http.StatusCreated {
-		if tradingE2EDecode[tradingE2ECreated](f.t, w.Body.Bytes()).Connection.Enabled {
+		connection := tradingE2EDecode[tradingE2ECreated](f.t, w.Body.Bytes()).Connection
+		if connection.Enabled && connection.Provider == domain.TradingProviderAlpaca {
 			f.pendingStreams++
 			f.waitStreams()
 		}
@@ -439,7 +448,8 @@ func (f *tradingE2E) mcp(name string, input any, wantError bool) *sdkmcp.CallToo
 	result, callErr := f.callMCP(name, input)
 	tradingE2EMust(f.t, callErr)
 	if name == "create_trading_connection" && !result.IsError {
-		if tradingE2EStructured[tradingE2ECreated](f.t, result).Connection.Enabled {
+		connection := tradingE2EStructured[tradingE2ECreated](f.t, result).Connection
+		if connection.Enabled && connection.Provider == domain.TradingProviderAlpaca {
 			f.pendingStreams++
 			f.waitStreams()
 		}
@@ -533,6 +543,15 @@ func (f *tradingE2E) createREST() string {
 	f.t.Helper()
 	c := tradingE2EDecode[tradingE2ECreated](f.t, f.rest(http.MethodPost, "/trading/connections", tradingE2ECreateInput("Paper", "paper"), http.StatusCreated)).Connection
 	tradingE2EAssertCreated(f.t, c)
+	return c.ID
+}
+
+func (f *tradingE2E) createLiveREST() string {
+	f.t.Helper()
+	c := tradingE2EDecode[tradingE2ECreated](f.t, f.rest(http.MethodPost, "/trading/connections", tradingE2ECreateInput("Live", "live"), http.StatusCreated)).Connection
+	if c.Mode != "live" {
+		f.t.Fatalf("live connection mode = %q", c.Mode)
+	}
 	return c.ID
 }
 
@@ -694,7 +713,9 @@ func TestEtoroRegistrationRESTAndMCPEndToEnd(t *testing.T) {
 	}))
 	t.Cleanup(venue.Close)
 	p := EtoroProvider()
-	p.Build = func(c domain.TradingConnection) (fwtrading.Connector, error) {
+	p.Build = func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+		c := ctx.Connection
+
 		return newEtoroConnector(c, venue.URL)
 	}
 	tradingE2EMust(t, f.app.Close())
@@ -735,8 +756,14 @@ func TestEtoroRegistrationRESTAndMCPEndToEnd(t *testing.T) {
 			got = append(got, tradingE2EDecode[backend.TradingProvider](t, raw))
 		}
 		want := []backend.TradingProvider{
-			{Type: "alpaca", Title: "Alpaca", VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true},
-			{Type: "etoro", Title: "eToro", VerifiesSymbols: true, SearchesSymbols: true},
+			{
+				ExecutionPolicy: false,
+				Type:            "alpaca", Title: "Alpaca", VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true,
+			},
+			{
+				ExecutionPolicy: false,
+				Type:            "etoro", Title: "eToro", VerifiesSymbols: true, SearchesSymbols: true,
+			},
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("eToro registration catalogue = %+v, want %+v", got, want)
@@ -823,6 +850,82 @@ func TestTradingRefusalsEndToEnd(t *testing.T) {
 	tradingE2EMust(t, err)
 	if len(connections) != 1 {
 		t.Fatalf("connections after the refused creates = %d, want the operator's one", len(connections))
+	}
+}
+
+func TestTestConnectionSettingsValidationEndToEnd(t *testing.T) {
+	f := newTradingE2E(t, false, TestProvider())
+	input := map[string]any{
+		"provider": "test", "label": "Test desk", "mode": "live", "credentials": map[string]any{}, "enabled": false,
+	}
+	requireProblem := func(raw []byte, pointer, constraint string) {
+		t.Helper()
+		problem := tradingE2EDecode[httpx.ProblemDetails](t, raw)
+		if problem.Status != http.StatusUnprocessableEntity || len(problem.Errors) != 1 ||
+			problem.Errors[0].Code != "validation" || problem.Errors[0].Pointer != pointer || problem.Errors[0].Constraint != constraint {
+			t.Fatalf("settings problem = %+v, want %s/%s", problem, pointer, constraint)
+		}
+	}
+	requireProblem(f.rest(http.MethodPost, "/trading/connections", input, http.StatusUnprocessableEntity), "/mode", "enum")
+	connections, err := f.realm.ListTradingConnections(f.ctx)
+	tradingE2EMust(t, err)
+	if len(connections) != 0 {
+		t.Fatal("invalid mode created a connection")
+	}
+	f.rest(http.MethodPut, "/mcp-access/create_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
+	f.mcpLoosening("create_trading_connection", input)
+	input["mode"] = "paper"
+	created := tradingE2EDecode[tradingE2ECreated](t, f.rest(http.MethodPost, "/trading/connections", input, http.StatusCreated))
+	id := created.Connection.ID
+	before, err := f.realm.ListTradingConnections(f.ctx)
+	tradingE2EMust(t, err)
+	credentials := map[string]any{"unexpected": "test-key-marker"}
+	requireProblem(f.rest(http.MethodPut, "/trading/connections/"+id+"/settings", map[string]any{
+		"label": "Must not save", "credentials": credentials,
+	}, http.StatusUnprocessableEntity), "/credentials/unexpected", "forbidden")
+	f.rest(http.MethodPut, "/mcp-access/update_trading_connection", map[string]any{"enabled": true}, http.StatusOK)
+	f.mcpLoosening("update_trading_connection", map[string]any{"connection": id, "credentials": credentials})
+	after, err := f.realm.ListTradingConnections(f.ctx)
+	tradingE2EMust(t, err)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("refused settings changed the saved connection")
+	}
+	for _, invalid := range []any{nil, []any{}, "", "{}", 1} {
+		requireProblem(f.rest(http.MethodPut, "/trading/connections/"+id+"/settings", map[string]any{
+			"label": "Must not save", "credentials": invalid,
+		}, http.StatusUnprocessableEntity), "/credentials", "type")
+	}
+	for _, value := range []any{"", nil} {
+		requireProblem(f.rest(http.MethodPut, "/trading/connections/"+id+"/settings", map[string]any{
+			"label": "Must not save", "credentials": map[string]any{"unexpected": value},
+		}, http.StatusUnprocessableEntity), "/credentials/unexpected", "forbidden")
+	}
+	after, err = f.realm.ListTradingConnections(f.ctx)
+	tradingE2EMust(t, err)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("invalid credential values changed the saved connection")
+	}
+	f.rest(http.MethodPut, "/trading/connections/"+id+"/settings", map[string]any{
+		"label": "Empty credentials", "credentials": map[string]any{},
+	}, http.StatusOK)
+	updated, found, err := f.realm.GetTradingConnection(f.ctx, domain.ExternalID(id))
+	tradingE2EMust(t, err)
+	if !found || updated.Label != "Empty credentials" || updated.Credentials != before[0].Credentials || updated.VenueIdentity != before[0].VenueIdentity {
+		t.Fatalf("empty-object settings = %+v, found=%t", updated, found)
+	}
+	f.mcp("update_trading_connection", map[string]any{
+		"connection": id, "label": "Empty MCP credentials", "credentials": map[string]any{},
+	}, false)
+	f.mcp("update_trading_connection", map[string]any{
+		"connection": id, "label": "Omitted MCP credentials",
+	}, false)
+	f.rest(http.MethodPut, "/trading/connections/"+id+"/settings", map[string]any{
+		"label": "Renamed",
+	}, http.StatusOK)
+	updated, found, err = f.realm.GetTradingConnection(f.ctx, domain.ExternalID(id))
+	tradingE2EMust(t, err)
+	if !found || updated.Label != "Renamed" || updated.Credentials != "{}" {
+		t.Fatalf("valid settings = %+v, found=%t", updated, found)
 	}
 }
 
@@ -1079,9 +1182,952 @@ func TestTradingSendPaperEndToEnd(t *testing.T) {
 	}
 }
 
+type retryTestConnector struct {
+	*testConnector
+	t        *testing.T
+	released chan fwtrading.Snapshot
+}
+
+func (c *retryTestConnector) ReleaseOrder(id string) {
+	snapshot, found, err := c.Lookup(context.Background(), fwtrading.OrderRef{ClientOrderID: id})
+	if err == nil && found {
+		c.released <- snapshot
+	}
+	c.testConnector.ReleaseOrder(id)
+}
+
+func (c *retryTestConnector) Send(ctx context.Context, order fwtrading.Order) (fwtrading.Ack, error) {
+	ack, err := c.testConnector.Send(ctx, order)
+	var refusal *fwtrading.TestExecutionRefusal
+	if errors.As(err, &refusal) && refusal.Code == "test_policy_even_rejected" {
+		// Retry before the worker persists terminal and releases the book entry.
+		retryAck, retryErr := c.testConnector.Send(ctx, order)
+		var retryRefusal *fwtrading.TestExecutionRefusal
+		if !errors.As(retryErr, &retryRefusal) || !reflect.DeepEqual(refusal, retryRefusal) || ack != retryAck {
+			c.t.Errorf("refused connector retry changed outcome: %v -> %v", err, retryErr)
+		}
+	}
+	return ack, err
+}
+
+func TestTestExecutionPipelineEndToEnd(t *testing.T) {
+	for _, surface := range []string{"REST", "MCP"} {
+		t.Run(surface, func(t *testing.T) {
+			quotes := &testQuotes{}
+			clock := newTestRestClock()
+			clock.set(time.Now())
+			var connector fwtrading.Connector
+			provider := TestProvider()
+			provider.Build = func(build fwtrading.BuildContext) (fwtrading.Connector, error) {
+				build.Quotes = quotes
+				build.Schedule = clock.schedule
+				c, err := newTestConnector(build, clock.now)
+				if err != nil {
+					return nil, err
+				}
+				c = &retryTestConnector{testConnector: c.(*testConnector), t: t, released: make(chan fwtrading.Snapshot, 64)}
+				if !build.Connection.ExternalID.IsZero() {
+					connector = c
+				}
+				return c, err
+			}
+			f := newTradingE2E(t, true, provider)
+			created := tradingE2EDecode[tradingE2ECreated](t, f.rest(http.MethodPost, "/trading/connections", map[string]any{
+				"provider": "test", "label": "Test desk", "mode": "paper", "credentials": map[string]any{}, "enabled": true,
+			}, http.StatusCreated))
+			id := created.Connection.ID
+			if !strings.HasPrefix(created.Connection.VenueIdentity, "test:") {
+				t.Fatalf("local identity = %s", created.Connection.VenueIdentity)
+			}
+			path := "/trading/connections/" + id
+			f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "opaque-route-id",
+				"baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, http.StatusOK)
+			f.rest(http.MethodPut, path+"/access", map[string]any{"account": "desk"}, http.StatusOK)
+			f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject", map[string]any{
+				"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+				"balance": map[string]any{"mode": "absolute", "value": "1000"},
+			}, http.StatusCreated)
+			f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject", map[string]any{
+				"type": "correction", "asset": "AAPL", "averageEntryPrice": "100", "realizedPnl": "0",
+				"balance": map[string]any{"mode": "absolute", "value": "0"},
+			}, http.StatusCreated)
+			if surface == "MCP" {
+				f.rest(http.MethodPut, "/mcp-access/send_paper_order", map[string]any{"enabled": true}, http.StatusOK)
+			}
+			setRules := func(rules []any) {
+				f.rest(http.MethodPut, path+"/test-policy", map[string]any{"rules": rules}, http.StatusOK)
+			}
+			execute := []any{map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+				"mode": "execute", "priceVariant": "normal"}}
+			setRules(execute)
+			base, found, err := f.realm.GetAsset(f.ctx, "AAPL")
+			tradingE2EMust(t, err)
+			if !found {
+				t.Fatal("base asset missing")
+			}
+			quote, found, err := f.realm.GetAsset(f.ctx, "USD")
+			tradingE2EMust(t, err)
+			if !found {
+				t.Fatal("quote asset missing")
+			}
+			now := time.Now()
+			quotes.snapshots = []marketdata.QuoteSnapshot{{BaseAssetID: base.EngineAssetID, QuoteAssetID: quote.EngineAssetID,
+				MarketDataQuote: domain.MarketDataQuote{Instance: "source", ExternalSymbol: "AAPL", AsOf: now,
+					ReceivedAt: now, Mark: "100", Bid: "99", Ask: "101"}}}
+			tradingE2EMust(t, f.core.MarketDataSink().Push(marketdata.QuoteUpdate{
+				Base: base.EngineAssetID, Quote: quote.EngineAssetID, AsOf: now, Mark: "100", Bid: "99", Ask: "101"}))
+			type sendResponse struct {
+				ID, Verdict, SignedApproval, KeyID string
+				VenueSend                          struct {
+					Status     string
+					Refusal    *fwtrading.TestExecutionRefusal
+					VenueOrder struct{ ClientOrderID, VenueOrderID string }
+				}
+			}
+			send := func(orderID, price, side, amount string) sendResponse {
+				input := map[string]any{"id": orderID, "account": "desk", "baseAsset": "AAPL", "quoteAsset": "USD",
+					"side": side, "amountKind": "quantity", "amountValue": amount,
+					"destination": map[string]any{"connection": id, "route": map[string]any{}}}
+				if price != "" {
+					input["price"] = price
+				}
+				return tradingE2EDecode[sendResponse](t, f.sendPaper(surface, input, http.StatusCreated, ""))
+			}
+			for _, tc := range []struct{ id, limit, price, side string }{
+				{"test-limit", "105", "105", "buy"}, {"test-market", "", "101", "buy"},
+				{"test-realized-pnl", "110", "110", "sell"},
+			} {
+				result := send(tc.id, tc.limit, tc.side, "1")
+				link := result.VenueSend.VenueOrder
+				if result.Verdict != "accept" || result.SignedApproval == "" ||
+					result.VenueSend.Status != "acknowledged" || result.VenueSend.Refusal != nil ||
+					link.VenueOrderID != "test:"+id+":"+link.ClientOrderID {
+					t.Fatalf("send acknowledgement = %+v", result)
+				}
+				f.wait("test order filled through sink", func() bool {
+					detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
+					tradingE2EMust(t, err)
+					return detail.Order.Status == domain.OrderStatusFilled
+				})
+				f.wait("test book released", func() bool {
+					_, found, err := connector.Lookup(f.ctx, fwtrading.OrderRef{ClientOrderID: link.ClientOrderID})
+					requireTestBookLookup(t, found, err)
+					return !found
+				})
+				detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
+				tradingE2EMust(t, err)
+				if len(detail.Trades) != 1 || detail.Trades[0].Quantity != "1" || detail.Trades[0].Price != tc.price {
+					t.Fatalf("pipeline trade = %+v, want px %s", detail.Trades, tc.price)
+				}
+				wantSource := domain.SourceAPI
+				if surface == "MCP" {
+					wantSource = domain.SourceMCP
+				}
+				if detail.Order.Source != wantSource {
+					t.Fatal("order lost transport source")
+				}
+				raw := f.rest(http.MethodGet, "/orders/"+result.ID, nil, http.StatusOK)
+				if !bytes.Contains(raw, []byte(`"filled"`)) || !bytes.Contains(raw, []byte(`"price":"`+tc.price+`"`)) {
+					t.Fatalf("GET order lost fill: %s", raw)
+				}
+			}
+			for _, asset := range []struct{ code, available, average, pnl string }{{"USD", "904", "1", "0"}, {"AAPL", "1", "103", "7"}} {
+				balance, found, err := f.realm.GetBalance(f.ctx, "desk", asset.code)
+				tradingE2EMust(t, err)
+				if !found || balance.RealizedPnl == "" || balance.AverageEntryPrice == "" {
+					t.Fatalf("engine balance/P&L %s is incomplete: %+v", asset.code, balance)
+				}
+				if !found || !decimal.RequireFromString(balance.Available).Equal(decimal.RequireFromString(asset.available)) ||
+					!decimal.RequireFromString(balance.Held).IsZero() || !decimal.RequireFromString(balance.RealizedPnl).Equal(decimal.RequireFromString(asset.pnl)) ||
+					!decimal.RequireFromString(balance.AverageEntryPrice).Equal(decimal.RequireFromString(asset.average)) {
+					t.Fatalf("engine balance/P&L %s = %+v", asset.code, balance)
+				}
+			}
+			trades := f.rest(http.MethodGet, "/trades?account=desk", nil, http.StatusOK)
+			if !bytes.Contains(trades, []byte(`"price":"105"`)) || !bytes.Contains(trades, []byte(`"price":"101"`)) {
+				t.Fatalf("GET trades = %s", trades)
+			}
+			positions := tradingE2EDecode[struct {
+				Balances []struct{ Asset, Available, Held, AverageEntryPrice, RealizedPnl string }
+			}](t, f.rest(http.MethodGet, "/balances?account=desk", nil, http.StatusOK))
+			foundPosition := false
+			for _, position := range positions.Balances {
+				if position.Asset == "AAPL" {
+					foundPosition = true
+					if position.Available != "1" || position.Held != "0" || position.AverageEntryPrice != "103" || position.RealizedPnl != "7" {
+						t.Fatalf("GET position = %+v", position)
+					}
+				}
+			}
+			if !foundPosition {
+				t.Fatal("GET balances omitted the position")
+			}
+			setRules([]any{map[string]any{
+				"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+				"mode": "split", "fills": 3, "priceVariant": "normal",
+			}})
+			for _, amount := range []string{"1.00", "1", "0.02"} {
+				result := send("test-split-"+amount, "100", "buy", amount)
+				if amount != "1.00" {
+					refusal := result.VenueSend.Refusal
+					if result.VenueSend.Status != "refused" || refusal == nil ||
+						refusal.Code != "test_split_unrepresentable" {
+						t.Fatalf("split %s refusal = %+v", amount, result)
+					}
+					detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
+					tradingE2EMust(t, err)
+					if len(detail.Trades) != 0 || detail.Order.Status != domain.OrderStatusCancelled {
+						t.Fatalf("refused split emitted trades: %+v", detail)
+					}
+					continue
+				}
+				if result.VenueSend.Status != "acknowledged" || result.VenueSend.Refusal != nil {
+					t.Fatalf("split acknowledgement = %+v", result)
+				}
+				f.wait("split filled through sink", func() bool {
+					detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
+					tradingE2EMust(t, err)
+					return detail.Order.Status == domain.OrderStatusFilled
+				})
+				detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
+				tradingE2EMust(t, err)
+				if detail.Order.AmountValue != amount || len(detail.Trades) != 3 {
+					t.Fatalf("split lost precision or trades: %+v", detail)
+				}
+				quantities := make(map[string]int)
+				for _, trade := range detail.Trades {
+					quantities[trade.Quantity]++
+					if trade.Price != "100" || trade.Commission != nil {
+						t.Fatalf("split trade = %+v", trade)
+					}
+				}
+				if !reflect.DeepEqual(quantities, map[string]int{"0.34": 1, "0.33": 2}) {
+					t.Fatalf("split quantities = %v", quantities)
+				}
+				reports := map[domain.ExternalID]*domain.ExecutionReportRequest{}
+				for _, event := range detail.Events {
+					if report := event.Payload.ExecutionReport; report != nil && report.FillQuantity != "" {
+						reports[report.ExternalID] = report
+					}
+				}
+				want := map[string]struct{ quantity, status string }{
+					"0.66": {"0.34", "partially_filled"}, "0.33": {"0.33", "partially_filled"},
+					"0": {"0.33", "filled"},
+				}
+				if len(reports) != len(want) {
+					t.Fatalf("split reports = %+v", reports)
+				}
+				for _, report := range reports {
+					expected, ok := want[report.LeavesQuantity]
+					if !ok || report.FillQuantity != expected.quantity || string(report.OrderStatus) != expected.status {
+						t.Fatalf("split report = %+v", report)
+					}
+				}
+			}
+			setRules([]any{map[string]any{
+				"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+				"mode": "reject_even", "priceVariant": "normal",
+			}})
+			for i := range 2 {
+				result := send(fmt.Sprintf("test-reject-even-%d", i), "100", "buy", "1")
+				if i == 0 {
+					if result.VenueSend.Status != "acknowledged" || result.VenueSend.Refusal != nil {
+						t.Fatalf("odd acknowledgement = %+v", result)
+					}
+					f.wait("odd order filled", func() bool {
+						detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
+						tradingE2EMust(t, err)
+						return detail.Order.Status == domain.OrderStatusFilled
+					})
+				} else {
+					refusal := result.VenueSend.Refusal
+					if result.VenueSend.Status != "refused" || refusal == nil ||
+						refusal.Code != "test_policy_even_rejected" ||
+						refusal.Message != "Test policy rejected every second order" {
+						t.Fatalf("even refusal = %+v", result)
+					}
+					detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
+					tradingE2EMust(t, err)
+					if len(detail.Trades) != 0 || detail.Order.Status != domain.OrderStatusCancelled {
+						t.Fatalf("even refusal emitted trades: %+v", detail)
+					}
+				}
+			}
+			setRules([]any{map[string]any{
+				"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+				"mode": "rest", "priceVariant": "normal", "wait": map[string]any{"kind": "finite", "seconds": 10},
+			}})
+			result := send("test-rest-no-ask", "", "buy", "1")
+			if result.VenueSend.Status != "acknowledged" || result.VenueSend.Refusal != nil {
+				t.Fatalf("finite rest Ack = %+v", result)
+			}
+			timer := clock.next(t)
+			quotes.snapshots[0].Ask = ""
+			quotes.snapshots[0].AsOf = clock.now().Add(10 * time.Second)
+			clock.set(clock.now().Add(10 * time.Second))
+			timer.ticks <- clock.now()
+			f.wait("finite rest without ask cancelled", func() bool {
+				detail, err := f.realm.GetOrder(f.ctx, "test-rest-no-ask")
+				tradingE2EMust(t, err)
+				return detail.Order.Status == domain.OrderStatusCancelled
+			})
+			detail, err := f.realm.GetOrder(f.ctx, "test-rest-no-ask")
+			tradingE2EMust(t, err)
+			if len(detail.Trades) != 0 {
+				t.Fatalf("delayed refusal invented trades: %+v", detail.Trades)
+			}
+			var delayed fwtrading.Snapshot
+			for delayed.VenueOrderID != result.VenueSend.VenueOrder.VenueOrderID {
+				select {
+				case delayed = <-connector.(*retryTestConnector).released:
+				case <-f.ctx.Done():
+					t.Fatal("delayed snapshot was not released")
+				}
+			}
+			if delayed.Status != fwtrading.VenueStatusCancelled || len(delayed.Fills) != 0 || !strings.Contains(delayed.Reason, "has no ask") {
+				t.Fatalf("delayed snapshot = %+v", delayed)
+			}
+			diagnostics := f.health().Diagnostics
+			if len(diagnostics) != 1 || diagnostics[0].Code != "test_quote_side_missing" || diagnostics[0].Detail != delayed.Reason {
+				t.Fatalf("delayed diagnostic = %+v", diagnostics)
+			}
+			history := f.rest(http.MethodGet, "/orders/test-rest-no-ask", nil, http.StatusOK)
+			if bytes.Contains(history, []byte(delayed.Reason)) || bytes.Contains(history, []byte("test_quote_side_missing")) || bytes.Contains(history, []byte(`"reason"`)) {
+				t.Fatalf("delayed reason leaked into history: %s", history)
+			}
+			for _, code := range []string{"test_policy_no_match", "test_quote_side_missing"} {
+				if code == "test_policy_no_match" {
+					setRules([]any{})
+				} else {
+					setRules(execute)
+					quotes.snapshots[0].Ask = ""
+				}
+				result := send(code, "", "buy", "1")
+				refusal := result.VenueSend.Refusal
+				if result.VenueSend.Status != "refused" || refusal == nil || refusal.Code != code ||
+					refusal.BaseAsset != "AAPL" || refusal.QuoteAsset != "USD" || refusal.RuleIndexes == nil {
+					t.Fatalf("typed refusal = %+v", result)
+				}
+				detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
+				tradingE2EMust(t, err)
+				if detail.Order.Status != domain.OrderStatusCancelled || len(detail.Trades) != 0 {
+					t.Fatalf("refusal invented a trade: %+v", detail)
+				}
+			}
+			input := map[string]any{"id": "test-volume", "account": "desk", "baseAsset": "AAPL", "quoteAsset": "USD",
+				"side": "buy", "amountKind": "volume", "amountValue": "10",
+				"destination": map[string]any{"connection": id, "route": map[string]any{}}}
+			code := ""
+			if surface == "MCP" {
+				code = "validation"
+			}
+			raw := f.sendPaper(surface, input, http.StatusUnprocessableEntity, code)
+			if surface == "REST" && !bytes.Contains(raw, []byte(`"pointer":"/amountKind"`)) {
+				t.Fatalf("volume pointer = %s", raw)
+			}
+			if _, err := f.realm.GetOrder(f.ctx, "test-volume"); !errors.Is(err, domain.ErrNotFound) {
+				t.Fatalf("volume created an order: %v", err)
+			}
+		})
+	}
+}
+
+type quietTestConnector struct {
+	*testConnector
+	connected chan<- struct{}
+	partial   bool
+}
+
+func (c *quietTestConnector) Send(ctx context.Context, order fwtrading.Order) (fwtrading.Ack, error) {
+	ack, err := c.testConnector.Send(ctx, order)
+	if err == nil && c.partial {
+		c.mu.Lock()
+		entry := c.book[order.ClientOrderID]
+		entry.snapshot.Fills = entry.snapshot.Fills[:1]
+		entry.snapshot.Fills[0].Final = false
+		entry.snapshot.FilledQuantity = entry.snapshot.Fills[0].CumQuantity
+		entry.snapshot.Status = fwtrading.VenueStatusOpen
+		entry.state = "open"
+		c.mu.Unlock()
+	}
+	return ack, err
+}
+
+func (c *quietTestConnector) Subscribe(ctx context.Context) (<-chan fwtrading.Event, error) {
+	in, err := c.testConnector.Subscribe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan fwtrading.Event)
+	go func() {
+		defer close(out)
+		for event := range in {
+			if event.Kind != fwtrading.EventConnected && !c.partial {
+				continue
+			}
+			select {
+			case out <- event:
+				if event.Kind == fwtrading.EventConnected {
+					close(c.connected)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+func TestTestExecutionLostBookDisabledEndToEnd(t *testing.T) {
+	for _, mode := range []string{"infinite", "split"} {
+		t.Run(mode, func(t *testing.T) {
+			connected := make(chan struct{})
+			provider := TestProvider()
+			provider.Build = func(build fwtrading.BuildContext) (fwtrading.Connector, error) {
+				c, err := newTestConnector(build, time.Now)
+				if err != nil {
+					return nil, err
+				}
+				if build.Connection.Enabled {
+					return &quietTestConnector{testConnector: c.(*testConnector), connected: connected, partial: mode == "split"}, nil
+				}
+				return c, nil
+			}
+			f := newTradingE2E(t, true, provider)
+			created := tradingE2EDecode[tradingE2ECreated](t, f.rest(http.MethodPost, "/trading/connections", map[string]any{
+				"provider": "test", "label": "Restart test", "mode": "paper", "credentials": map[string]any{}, "enabled": true,
+			}, http.StatusCreated))
+			select {
+			case <-connected:
+			case <-f.ctx.Done():
+				t.Fatal("test source did not connect")
+			}
+			id := created.Connection.ID
+			path := "/trading/connections/" + id
+			f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "route-id",
+				"baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, http.StatusOK)
+			f.rest(http.MethodPut, path+"/access", map[string]any{"account": "desk"}, http.StatusOK)
+			rule := map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"}, "mode": "rest",
+				"wait": map[string]any{"kind": "infinite"}}
+			if mode == "split" {
+				rule = map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+					"mode": "split", "fills": 3, "priceVariant": "normal"}
+			}
+			f.rest(http.MethodPut, path+"/test-policy", map[string]any{"rules": []any{rule}}, http.StatusOK)
+			f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject", map[string]any{
+				"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+				"balance": map[string]any{"mode": "absolute", "value": "1000"},
+			}, http.StatusCreated)
+			input := tradingE2ESendInput(id)
+			input["id"], input["amountValue"] = "lost-book", "1.00"
+			input["destination"].(map[string]any)["route"] = map[string]any{}
+			f.sendPaper("REST", input, http.StatusCreated, "")
+			wantTrades := 0
+			if mode == "split" {
+				wantTrades = 1
+			}
+			f.wait("initial partial execution applied", func() bool {
+				detail, err := f.realm.GetOrder(f.ctx, "lost-book")
+				tradingE2EMust(t, err)
+				return len(detail.Trades) == wantTrades
+			})
+			detail, err := f.realm.GetOrder(f.ctx, "lost-book")
+			tradingE2EMust(t, err)
+			before := detail.Trades
+			link, found, err := f.realm.GetVenueOrder(f.ctx, "lost-book")
+			tradingE2EMust(t, err)
+			if domain.OrderStatusTerminal(detail.Order.Status) || len(before) != wantTrades || !found || link.VenueOrderID == "" {
+				t.Fatalf("lost-book setup = %+v", detail)
+			}
+			if mode == "split" && (before[0].Quantity != "0.34" || before[0].Price != "2") {
+				t.Fatalf("partial split = %+v", before)
+			}
+			tradingE2EMust(t, f.realm.SetTradingConnectionEnabled(f.ctx, domain.ExternalID(id), false))
+			f.close()
+			f.start()
+			f.wait("disabled lost-book remainder cancelled", func() bool {
+				detail, err := f.realm.GetOrder(f.ctx, "lost-book")
+				tradingE2EMust(t, err)
+				return detail.Order.Status == domain.OrderStatusCancelled
+			})
+			detail, err = f.realm.GetOrder(f.ctx, "lost-book")
+			tradingE2EMust(t, err)
+			if !reflect.DeepEqual(detail.Trades, before) {
+				t.Fatalf("book loss changed earlier trades: %+v -> %+v", before, detail.Trades)
+			}
+			open, err := f.realm.ListOpenVenueOrders(f.ctx, domain.ExternalID(id))
+			tradingE2EMust(t, err)
+			if len(open) != 0 {
+				t.Fatal("disabled lost-book link remained open")
+			}
+		})
+	}
+}
+
 // TestTradingSendLiveEndToEnd creates a live connection over REST and sends
 // through it on both surfaces against the fake venue: the paper pipeline
 // through a live connection, which the paper send refuses.
+func newTestExecutionScenario(t *testing.T) (*tradingE2E, string, *testQuotes, *testRestClock) {
+	t.Helper()
+	quotes := &testQuotes{}
+	clock := newTestRestClock()
+	clock.set(time.Now())
+	provider := TestProvider()
+	provider.Build = func(build fwtrading.BuildContext) (fwtrading.Connector, error) {
+		build.Quotes = quotes
+		build.Schedule = clock.schedule
+		return newTestConnector(build, clock.now)
+	}
+	f := newTradingE2E(t, true, provider)
+	created := tradingE2EDecode[tradingE2ECreated](t, f.rest(http.MethodPost, "/trading/connections", map[string]any{
+		"provider": "test", "label": "Public scenario", "mode": "paper", "credentials": map[string]any{}, "enabled": true,
+	}, http.StatusCreated))
+	id := created.Connection.ID
+	path := "/trading/connections/" + id
+	f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "opaque-route-id",
+		"baseAsset": "AAPL", "quoteAsset": "USD", "enabled": true}, http.StatusOK)
+	f.rest(http.MethodPut, path+"/access", map[string]any{"account": "desk"}, http.StatusOK)
+	f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject", map[string]any{
+		"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
+		"balance": map[string]any{"mode": "absolute", "value": "1000"},
+	}, http.StatusCreated)
+	f.rest(http.MethodPost, "/accounts/desk/adjustments?missingAccount=reject", map[string]any{
+		"type": "correction", "asset": "AAPL", "averageEntryPrice": "100", "realizedPnl": "0",
+		"balance": map[string]any{"mode": "absolute", "value": "0"},
+	}, http.StatusCreated)
+	base, found, err := f.realm.GetAsset(f.ctx, "AAPL")
+	tradingE2EMust(t, err)
+	if !found {
+		t.Fatal("base asset missing")
+	}
+	quote, found, err := f.realm.GetAsset(f.ctx, "USD")
+	tradingE2EMust(t, err)
+	if !found {
+		t.Fatal("quote asset missing")
+	}
+	now := clock.now()
+	quotes.snapshots = []marketdata.QuoteSnapshot{{BaseAssetID: base.EngineAssetID, QuoteAssetID: quote.EngineAssetID,
+		MarketDataQuote: domain.MarketDataQuote{Instance: "source", ExternalSymbol: "AAPL", AsOf: now,
+			ReceivedAt: now, Mark: "100", Bid: "99", Ask: "101"}}}
+	tradingE2EMust(t, f.core.MarketDataSink().Push(marketdata.QuoteUpdate{
+		Base: base.EngineAssetID, Quote: quote.EngineAssetID, AsOf: now, Mark: "100", Bid: "99", Ask: "101"}))
+	return f, id, quotes, clock
+}
+
+type testExecutionE2EOrder struct {
+	Order  struct{ Status, Source string }
+	Trades []struct{ ID, Quantity, Price string }
+}
+
+func (f *tradingE2E) testExecutionOrder(id string) testExecutionE2EOrder {
+	f.t.Helper()
+	return tradingE2EDecode[testExecutionE2EOrder](f.t, f.rest(http.MethodGet, "/orders/"+id, nil, http.StatusOK))
+}
+
+func (f *tradingE2E) assertTestExecutionFill(id, price string, quantities map[string]int) {
+	f.t.Helper()
+	f.wait("public order filled", func() bool { return f.testExecutionOrder(id).Order.Status == "filled" })
+	detail := f.testExecutionOrder(id)
+	got := make(map[string]int)
+	listed := tradingE2EDecode[struct {
+		Trades []struct{ ID, Quantity, Price string }
+	}](f.t,
+		f.rest(http.MethodGet, "/trades?account=desk", nil, http.StatusOK))
+	for _, trade := range detail.Trades {
+		got[trade.Quantity]++
+		if trade.Price != price || trade.ID == "" {
+			f.t.Fatalf("GET order trade = %+v, want price %s", trade, price)
+		}
+		found := false
+		for _, row := range listed.Trades {
+			if row.ID == trade.ID {
+				found = true
+				if row.Quantity != trade.Quantity || row.Price != trade.Price {
+					f.t.Fatalf("GET trades row = %+v, order trade = %+v", row, trade)
+				}
+			}
+		}
+		if !found {
+			f.t.Fatalf("GET trades omitted order trade %+v", trade)
+		}
+	}
+	if !reflect.DeepEqual(got, quantities) {
+		f.t.Fatalf("GET order fill quantities = %v, want %v", got, quantities)
+	}
+}
+
+func (f *tradingE2E) assertTestExecutionPolicy(id, revision string, rules []any) {
+	f.t.Helper()
+	raw, err := json.Marshal(map[string]any{"connection": id, "revision": revision, "rules": rules})
+	tradingE2EMust(f.t, err)
+	want := tradingE2EDecode[map[string]any](f.t, raw)
+	rest := tradingE2EDecode[map[string]any](f.t,
+		f.rest(http.MethodGet, "/trading/connections/"+id+"/test-policy", nil, http.StatusOK))
+	mcp := tradingE2EStructured[map[string]any](f.t,
+		f.mcp("get_test_execution_policy", map[string]any{"connection": id}, false))
+	if !reflect.DeepEqual(rest, want) || !reflect.DeepEqual(mcp, want) {
+		f.t.Fatalf("policy state: REST=%v MCP=%v, want %v", rest, mcp, want)
+	}
+}
+
+func (f *tradingE2E) sendTestExecution(surface, connection, id, price, side, amount string) []byte {
+	f.t.Helper()
+	input := tradingE2ESendInput(connection)
+	input["id"], input["side"], input["amountValue"] = id, side, amount
+	input["destination"].(map[string]any)["route"] = map[string]any{}
+	if price == "" {
+		delete(input, "price")
+	} else {
+		input["price"] = price
+	}
+	return f.sendPaper(surface, input, http.StatusCreated, "")
+}
+
+func TestTestExecutionPublicPolicyEndToEnd(t *testing.T) {
+	f, id, _, _ := newTestExecutionScenario(t)
+	f.assertTestExecutionPolicy(id, "1", []any{})
+	path := "/trading/connections/" + id + "/test-policy"
+	rule := map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+		"mode": "execute", "priceVariant": "normal"}
+	rules := []any{rule}
+	f.rest(http.MethodPut, path, map[string]any{"rules": rules}, http.StatusOK)
+	f.assertTestExecutionPolicy(id, "2", rules)
+	f.mcp("set_test_execution_policy", map[string]any{"connection": id, "policy": map[string]any{"rules": rules}}, true)
+	f.assertTestExecutionPolicy(id, "2", rules)
+	for _, command := range []string{"set_test_execution_policy", "send_paper_order"} {
+		f.rest(http.MethodPut, "/mcp-access/"+command, map[string]any{"enabled": true}, http.StatusOK)
+	}
+	for i, tc := range []struct{ variant, buy, sell, dollars, pnl string }{
+		{"worst", "101", "99", "998", "-2"},
+		{"best", "99", "101", "1000", "0"},
+		{"normal", "101", "99", "998", "-2"},
+	} {
+		t.Logf("price variant %s", tc.variant)
+		rule["priceVariant"] = tc.variant
+		result := f.mcp("set_test_execution_policy", map[string]any{"connection": id,
+			"policy": map[string]any{"rules": rules}}, false)
+		state := tradingE2EStructured[struct{ Connection, Revision string }](t, result)
+		if state.Connection != id || state.Revision != fmt.Sprint(i+3) {
+			t.Fatalf("MCP replacement state = %+v", state)
+		}
+		f.assertTestExecutionPolicy(id, fmt.Sprint(i+3), rules)
+		for _, order := range []struct{ side, price string }{{"buy", tc.buy}, {"sell", tc.sell}} {
+			orderID := tc.variant + "-" + order.side
+			ack := tradingE2EDecode[struct{ VenueSend struct{ Status string } }](t,
+				f.sendTestExecution("MCP", id, orderID, "", order.side, "1"))
+			if ack.VenueSend.Status != "acknowledged" {
+				t.Fatalf("MCP send = %+v", ack)
+			}
+			f.assertTestExecutionFill(orderID, order.price, map[string]int{"1": 1})
+			if source := f.testExecutionOrder(orderID).Order.Source; source != string(domain.SourceMCP) {
+				t.Fatalf("GET order source = %s", source)
+			}
+		}
+		positions := tradingE2EDecode[struct {
+			Balances []struct{ Asset, Available, Held, RealizedPnl string }
+		}](t, f.rest(http.MethodGet, "/balances?account=desk", nil, http.StatusOK))
+		found := map[string]bool{}
+		for _, position := range positions.Balances {
+			if position.Asset != "USD" && position.Asset != "AAPL" {
+				continue
+			}
+			found[position.Asset] = true
+			available, pnl := tc.dollars, "0"
+			if position.Asset == "AAPL" {
+				available, pnl = "0", tc.pnl
+			}
+			if !decimal.RequireFromString(position.Available).Equal(decimal.RequireFromString(available)) ||
+				!decimal.RequireFromString(position.Held).IsZero() ||
+				!decimal.RequireFromString(position.RealizedPnl).Equal(decimal.RequireFromString(pnl)) {
+				t.Fatalf("GET balance = %+v, want available %s pnl %s", position, available, pnl)
+			}
+			balance, ok, err := f.realm.GetBalance(f.ctx, "desk", position.Asset)
+			tradingE2EMust(t, err)
+			if !ok || !decimal.RequireFromString(balance.Available).Equal(decimal.RequireFromString(available)) ||
+				!decimal.RequireFromString(balance.Held).IsZero() ||
+				!decimal.RequireFromString(balance.RealizedPnl).Equal(decimal.RequireFromString(pnl)) {
+				t.Fatalf("engine balance = %+v, found %t", balance, ok)
+			}
+		}
+		if !found["USD"] || found["AAPL"] != (tc.pnl != "0") {
+			t.Fatalf("GET balances assets = %+v, want AAPL only for nonzero P&L", positions)
+		}
+	}
+	f.mcp("set_test_execution_policy", map[string]any{"connection": id, "policy": map[string]any{"rules": rules}}, false)
+	f.assertTestExecutionPolicy(id, "6", rules)
+}
+
+func TestTestExecutionMissingAskLimitEndToEnd(t *testing.T) {
+	for _, surface := range []string{"REST", "MCP"} {
+		t.Run(surface, func(t *testing.T) {
+			f, id, quotes, _ := newTestExecutionScenario(t)
+			f.rest(http.MethodPut, "/trading/connections/"+id+"/test-policy", map[string]any{"rules": []any{
+				map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+					"mode": "execute", "priceVariant": "normal"},
+			}}, http.StatusOK)
+			if surface == "MCP" {
+				f.rest(http.MethodPut, "/mcp-access/send_paper_order", map[string]any{"enabled": true}, http.StatusOK)
+			}
+			quotes.snapshots[0].Ask = ""
+			f.sendTestExecution(surface, id, "limit-without-ask", "105", "buy", "1")
+			f.assertTestExecutionFill("limit-without-ask", "105", map[string]int{"1": 1})
+		})
+	}
+}
+
+func TestTestExecutionRestDeadlineEndToEnd(t *testing.T) {
+	f, id, quotes, clock := newTestExecutionScenario(t)
+	f.rest(http.MethodPut, "/trading/connections/"+id+"/test-policy", map[string]any{"rules": []any{
+		map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"}, "mode": "rest",
+			"priceVariant": "normal", "wait": map[string]any{"kind": "finite", "seconds": 10}},
+	}}, http.StatusOK)
+	f.sendTestExecution("REST", id, "finite-deadline", "", "buy", "1")
+	timer := clock.next(t)
+	if timer.duration != 10*time.Second {
+		t.Fatalf("rest timer = %s, want 10s", timer.duration)
+	}
+	assertOpen := func() {
+		t.Helper()
+		detail := f.testExecutionOrder("finite-deadline")
+		if detail.Order.Status == "filled" || detail.Order.Status == "cancelled" || len(detail.Trades) != 0 {
+			t.Fatalf("rest executed before deadline: %+v", detail)
+		}
+	}
+	assertOpen()
+	clock.set(clock.now().Add(9 * time.Second))
+	timer.ticks <- clock.now()
+	timer = clock.next(t)
+	if timer.duration != time.Second {
+		t.Fatalf("remaining rest timer = %s, want 1s", timer.duration)
+	}
+	assertOpen()
+	quotes.snapshots[0].Ask = "103"
+	quotes.snapshots[0].AsOf = clock.now().Add(time.Second)
+	clock.set(clock.now().Add(time.Second))
+	timer.ticks <- clock.now()
+	f.assertTestExecutionFill("finite-deadline", "103", map[string]int{"1": 1})
+}
+
+func TestTestExecutionInfiniteRestartEndToEnd(t *testing.T) {
+	f, id, _, clock := newTestExecutionScenario(t)
+	rules := []any{map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+		"mode": "rest", "wait": map[string]any{"kind": "infinite"}}}
+	f.rest(http.MethodPut, "/trading/connections/"+id+"/test-policy", map[string]any{"rules": rules}, http.StatusOK)
+	f.assertTestExecutionPolicy(id, "2", rules)
+	f.sendTestExecution("REST", id, "infinite-restart", "", "buy", "1")
+	clock.set(clock.now().Add(24 * time.Hour))
+	select {
+	case timer := <-clock.armed:
+		timer.ticks <- clock.now()
+		t.Fatalf("infinite rest armed an execution timer for %s", timer.duration)
+	default:
+	}
+	detail := f.testExecutionOrder("infinite-restart")
+	if detail.Order.Status == "filled" || detail.Order.Status == "cancelled" || len(detail.Trades) != 0 {
+		t.Fatalf("infinite rest stopped waiting: %+v", detail)
+	}
+	f.close()
+	f.start()
+	f.wait("enabled lost-book order cancelled", func() bool {
+		return f.testExecutionOrder("infinite-restart").Order.Status == "cancelled"
+	})
+	if detail := f.testExecutionOrder("infinite-restart"); len(detail.Trades) != 0 {
+		t.Fatalf("restart invented trades: %+v", detail)
+	}
+	f.assertTestExecutionPolicy(id, "2", rules)
+	trades := tradingE2EDecode[struct{ Trades []any }](t,
+		f.rest(http.MethodGet, "/trades?account=desk", nil, http.StatusOK))
+	if len(trades.Trades) != 0 {
+		t.Fatalf("restart created trades: %+v", trades)
+	}
+}
+
+func TestTestExecutionSplitTwoEndToEnd(t *testing.T) {
+	for _, surface := range []string{"REST", "MCP"} {
+		t.Run(surface, func(t *testing.T) {
+			f, id, _, _ := newTestExecutionScenario(t)
+			f.rest(http.MethodPut, "/trading/connections/"+id+"/test-policy", map[string]any{"rules": []any{
+				map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+					"mode": "split", "fills": 2, "priceVariant": "normal"},
+			}}, http.StatusOK)
+			if surface == "MCP" {
+				f.rest(http.MethodPut, "/mcp-access/send_paper_order", map[string]any{"enabled": true}, http.StatusOK)
+			}
+			f.sendTestExecution(surface, id, "split-two", "105", "buy", "1.00")
+			f.assertTestExecutionFill("split-two", "105", map[string]int{"0.50": 2})
+		})
+	}
+}
+
+func TestTestExecutionIsolationGrantEndToEnd(t *testing.T) {
+	f, id, _, _ := newTestExecutionScenario(t)
+	venue := f.createLiveREST()
+	f.rest(http.MethodPut, "/trading/connections/"+venue+"/fee-account", map[string]any{"account": "fees"}, http.StatusOK)
+	f.rest(http.MethodPut, "/trading/connections/"+venue+"/access", map[string]any{"account": "desk"}, http.StatusOK)
+	destinations := tradingE2EDecode[tradingE2EDestinations](t, f.rest(http.MethodGet, "/accounts/desk/trading-destinations?mode=paper", nil, http.StatusOK))
+	tradingE2EAssertDestinations(t, destinations, id)
+}
+
+func TestSimulatorAndPaperVenueShareAccountEndToEnd(t *testing.T) {
+	f, simulator, _, _ := newTestExecutionScenario(t)
+	venue := f.createREST()
+	path := "/trading/connections/" + venue
+	f.rest(http.MethodPut, path+"/fee-account", map[string]any{"account": "fees"}, http.StatusOK)
+	f.rest(http.MethodPut, path+"/access", map[string]any{"account": "desk"}, http.StatusOK)
+	for _, surface := range []string{"REST", "MCP"} {
+		var destinations tradingE2EDestinations
+		if surface == "REST" {
+			destinations = tradingE2EDecode[tradingE2EDestinations](t, f.rest(http.MethodGet, "/accounts/desk/trading-destinations?mode=paper", nil, http.StatusOK))
+		} else {
+			destinations = tradingE2EStructured[tradingE2EDestinations](t, f.mcp("list_trading_destinations", map[string]any{"account": "desk", "mode": "paper"}, false))
+		}
+		found := map[string]bool{}
+		for _, destination := range destinations.Destinations {
+			if destination.Mode != "paper" {
+				t.Fatalf("%s mode = %q", surface, destination.Mode)
+			}
+			found[destination.Connection] = true
+		}
+		if len(found) != 2 || !found[simulator] || !found[venue] {
+			t.Fatalf("%s destinations = %+v", surface, destinations)
+		}
+	}
+}
+
+func TestTestExecutionIsolationPublicMessageEndToEnd(t *testing.T) {
+	for _, path := range []string{"account grant", "group grant", "membership"} {
+		t.Run(path, func(t *testing.T) {
+			f, testID, _, _ := newTestExecutionScenario(t)
+			account := strings.Repeat("\U0001F600", 64)
+			f.rest(http.MethodPost, "/accounts", map[string]any{"code": account, "currency": "USD"}, http.StatusCreated)
+			f.rest(http.MethodPut, "/trading/connections/"+testID+"/access", map[string]any{"account": account}, http.StatusOK)
+			venue := f.createLiveREST()
+			venuePath := "/trading/connections/" + venue
+			f.rest(http.MethodPut, venuePath+"/fee-account", map[string]any{"account": "fees"}, http.StatusOK)
+			switch path {
+			case "account grant":
+				f.rest(http.MethodPut, venuePath+"/access", map[string]any{"account": account}, http.StatusOK)
+			case "group grant":
+				f.group("mixed", account)
+				f.rest(http.MethodPut, venuePath+"/access", map[string]any{"accountGroup": "mixed"}, http.StatusOK)
+			case "membership":
+				f.group("mixed")
+				f.rest(http.MethodPut, venuePath+"/access", map[string]any{"accountGroup": "mixed"}, http.StatusOK)
+				f.rest(http.MethodPut, "/accounts/"+account+"/group?missingAccount=reject", map[string]any{"group": "mixed"}, http.StatusOK)
+			}
+			if path != "membership" {
+				f.rest(http.MethodPut, "/mcp-access/grant_trading_access", map[string]any{"enabled": true}, http.StatusOK)
+				input := map[string]any{"connection": venue}
+				if path == "account grant" {
+					input["account"] = account
+				} else {
+					input["accountGroup"] = "mixed"
+				}
+				f.mcpLoosening("grant_trading_access", input)
+			}
+		})
+	}
+}
+
+func TestTestExecutionIsolationEscapedAccountEndToEnd(t *testing.T) {
+	f, testID, _, _ := newTestExecutionScenario(t)
+	account := "\"\\<>& a\u0301" + strings.Repeat("\U0001F600", 56)
+	if len([]rune(account)) != 64 {
+		t.Fatal("escape-heavy account must have exactly 64 code points")
+	}
+	f.rest(http.MethodPost, "/accounts", map[string]any{"code": account, "currency": "USD"}, http.StatusCreated)
+	f.rest(http.MethodPut, "/trading/connections/"+testID+"/access", map[string]any{"account": account}, http.StatusOK)
+	venue := f.createLiveREST()
+	f.rest(http.MethodPut, "/trading/connections/"+venue+"/access", map[string]any{"account": account}, http.StatusOK)
+}
+
+type testExecutionSingleScope struct {
+	backend.EveryAccount
+	account domain.AccountID
+}
+
+func (s testExecutionSingleScope) Features() backend.AccountFeatures {
+	return backend.AccountFeatures{Account: s.account}
+}
+
+func TestTestExecutionIsolationCreatedMessageEndToEnd(t *testing.T) {
+	f, testID, _, _ := newTestExecutionScenario(t)
+	account := strings.Repeat("\U0001F600", 64)
+	f.rest(http.MethodPost, "/accounts", map[string]any{"code": account, "currency": "USD"}, http.StatusCreated)
+	f.rest(http.MethodPut, "/trading/connections/"+testID+"/access", map[string]any{"account": account}, http.StatusOK)
+	f.close()
+	f.builder.SetServiceFactory(func(_ context.Context, n node.Node, md backend.MarketDataRuntime, rt backend.TradingRuntime, signer fwsigning.Service, _ *marketdata.Registry, tools *frameworkmcp.ToolRegistry) (backend.ControlPlane, error) {
+		return backend.New(n, md, signer, engine.LockSettlementPrice, backend.WithTradingRuntime(rt), backend.WithMCPCatalogProvider(tools), backend.WithAccountScope(testExecutionSingleScope{account: domain.AccountID(account)}))
+	})
+	f.start()
+	input := tradingE2ECreateInput("Created with mixed access", "live")
+	input["enabled"] = false
+	f.rest(http.MethodPost, "/trading/connections", input, http.StatusCreated)
+}
+
+func TestTestExecutionPolicyErrorParityEndToEnd(t *testing.T) {
+	f, id, _, _ := newTestExecutionScenario(t)
+	f.rest(http.MethodPut, "/mcp-access/set_test_execution_policy", map[string]any{"enabled": true}, http.StatusOK)
+	path := "/trading/connections/" + id + "/test-policy"
+	rules := []any{map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+		"mode": "execute", "priceVariant": "normal"}}
+	f.rest(http.MethodPut, path, map[string]any{"rules": rules}, http.StatusOK)
+	for _, tc := range []struct {
+		name, pointer, constraint string
+		rule                      map[string]any
+	}{
+		{"fills", "/rules/0/fills", "enum", map[string]any{"mask": map[string]any{"baseAsset": "AAPL", "quoteAsset": "USD"},
+			"mode": "split", "priceVariant": "normal", "fills": 4}},
+		{"mask", "/rules/0/mask/baseAsset", "required", map[string]any{"mask": map[string]any{"baseAsset": "", "quoteAsset": "USD"},
+			"mode": "execute", "priceVariant": "normal"}},
+	} {
+		t.Logf("policy error %s", tc.name)
+		policy := map[string]any{"rules": []any{tc.rule}}
+		raw := f.rest(http.MethodPut, path, policy, http.StatusUnprocessableEntity)
+		problem := tradingE2EDecode[struct {
+			Status int
+			Errors []struct{ Code, Pointer, Constraint string }
+		}](t, raw)
+		if problem.Status != 422 || len(problem.Errors) != 1 || problem.Errors[0].Code != "validation" ||
+			problem.Errors[0].Pointer != tc.pointer || problem.Errors[0].Constraint != tc.constraint {
+			t.Fatalf("policy problem = %s", raw)
+		}
+		f.assertTestExecutionPolicy(id, "2", rules)
+		result := f.mcp("set_test_execution_policy", map[string]any{"connection": id, "policy": policy}, true)
+		mcpBody := tradingE2EStructured[map[string]any](t, result)
+		restBody := tradingE2EDecode[map[string]any](t, raw)
+		if !reflect.DeepEqual(mcpBody, restBody) {
+			t.Fatalf("policy error parity: REST=%v MCP=%v", restBody, mcpBody)
+		}
+		f.assertTestExecutionPolicy(id, "2", rules)
+	}
+	venue := f.createREST()
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		var input any
+		tool := "get_test_execution_policy"
+		arguments := map[string]any{"connection": venue}
+		if method == http.MethodPut {
+			input = map[string]any{"rules": rules}
+			arguments["policy"] = input
+			tool = "set_test_execution_policy"
+		}
+		raw := f.rest(method, "/trading/connections/"+venue+"/test-policy", input, http.StatusConflict)
+		body := tradingE2EDecode[struct {
+			Error struct{ Code, Message string }
+		}](t, raw)
+		if body.Error.Code != "execution_policy_unsupported" || body.Error.Message == "" {
+			t.Fatalf("venue policy error = %s", raw)
+		}
+		result := f.mcp(tool, arguments, true)
+		mcpBody := tradingE2EStructured[map[string]any](t, result)
+		restBody := tradingE2EDecode[map[string]any](t, raw)
+		if !reflect.DeepEqual(mcpBody, restBody) {
+			t.Fatalf("409 policy error parity: REST=%v MCP=%v", restBody, mcpBody)
+		}
+		f.assertTestExecutionPolicy(id, "2", rules)
+	}
+}
+
 func TestTradingSendLiveEndToEnd(t *testing.T) {
 	for _, surface := range []string{"REST", "MCP"} {
 		t.Run(surface, func(t *testing.T) {
@@ -1243,9 +2289,12 @@ func TestTradingSendPaperRefusalsEndToEnd(t *testing.T) {
 				Provider: domain.TradingProviderAlpaca, Label: "Live", Mode: domain.TradingModeLive,
 				VenueIdentity: "live-account", Credentials: tradingCredentials, Enabled: true})
 			tradingE2EMust(t, err)
-			tradingE2EMust(t, f.realm.PutTradingAccess(f.ctx, domain.TradingAccess{Account: "desk", Connection: live.ExternalID}))
+			_, err = f.realm.CreateAccount(f.ctx, domain.Account{Code: "live-desk", Currency: "USD"})
+			tradingE2EMust(t, err)
+			tradingE2EMust(t, f.realm.PutTradingAccess(f.ctx, domain.TradingAccess{Account: "live-desk", Connection: live.ExternalID}))
 			input = tradingE2ESendInput(live.ExternalID.String())
 			input["id"] = "wrong-mode"
+			input["account"] = "live-desk"
 			f.sendPaper(surface, input, http.StatusConflict, "trading_mode_mismatch")
 			second, err := f.realm.CreateTradingConnection(f.ctx, domain.TradingConnection{
 				Provider: domain.TradingProviderAlpaca, Label: "Second", Mode: domain.TradingModePaper,

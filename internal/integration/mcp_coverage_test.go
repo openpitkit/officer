@@ -99,6 +99,14 @@ type setMDErrSource struct {
 	setMDErr error
 }
 
+func (s *setMDErrSource) GetTestExecutionPolicy(context.Context, string) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.ErrNotImplemented
+}
+
+func (s *setMDErrSource) ReplaceTestExecutionPolicy(context.Context, string, domain.TestExecutionPolicy) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.ErrNotImplemented
+}
+
 func (s *setMDErrSource) Status(context.Context) (frameworkmcp.Status, error) {
 	return frameworkmcp.Status{}, nil
 }

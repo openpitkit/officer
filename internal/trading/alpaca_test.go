@@ -62,8 +62,8 @@ func testOrder() fwtrading.Order {
 
 func TestProvidersAndEndpoints(t *testing.T) {
 	providers := FirstPartyProviders()
-	if len(providers) != 4 || providers[3].Type != domain.TradingProviderEtoro {
-		t.Fatal("expected Alpaca, Binance, IB and eToro providers")
+	if len(providers) != 5 || providers[3].Type != domain.TradingProviderEtoro || providers[4].Type != "test" {
+		t.Fatal("expected Alpaca, Binance, IB, eToro and Test providers")
 	}
 	ib := providers[2]
 	if ib.Type != domain.TradingProviderIB || ib.Title != "Interactive Brokers" || !ib.VenueAccounts || !ib.VerifiesSymbols || !ib.SearchesSymbols || ib.UnlinkedFees || ib.Build == nil {
@@ -80,7 +80,7 @@ func TestProvidersAndEndpoints(t *testing.T) {
 		{domain.TradingModePaper, alpaca.PaperRESTURL, alpacaPaperStreamURL},
 		{domain.TradingModeLive, alpaca.LiveRESTURL, alpacaLiveStreamURL},
 	} {
-		connector, err := p.Build(domain.TradingConnection{Mode: tc.mode, Credentials: tradingCredentials})
+		connector, err := p.Build(fwtrading.BuildContext{Connection: domain.TradingConnection{Mode: tc.mode, Credentials: tradingCredentials}})
 		if err != nil {
 			t.Fatal("supported mode refused")
 		}

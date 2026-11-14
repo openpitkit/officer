@@ -65,8 +65,11 @@ func TestProvidersSorted(t *testing.T) {
 	}
 	v := newVenue()
 	for _, typ := range []string{"z", "b", "a", "c"} {
-		must(t, r.Register(trading.Provider{Type: typ, Title: "Provider " + typ,
-			VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, Build: v.build}))
+		must(t, r.Register(trading.Provider{
+			ExecutionPolicy: false,
+			Type:            typ, Title: "Provider " + typ,
+			VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, Build: v.build,
+		}))
 	}
 	providers := r.Providers()
 	if len(providers) != 4 {
@@ -103,15 +106,19 @@ func TestRegistryCapabilities(t *testing.T) {
 				matches := []trading.SymbolMatch{{Symbol: "BTC/USD", Name: "Bitcoin", Class: "crypto", Exchange: "ALPACA", Tradable: true}}
 				query := " bTc/ "
 				if !tc.unknown {
-					must(t, r.Register(trading.Provider{Type: connection.Provider, SearchesSymbols: true,
-						Build: func(got domain.TradingConnection) (trading.Connector, error) {
+					must(t, r.Register(trading.Provider{
+						ExecutionPolicy: false,
+						Type:            connection.Provider, SearchesSymbols: true,
+						Build: func(build trading.BuildContext) (trading.Connector, error) {
+							got := build.Connection
+
 							if !reflect.DeepEqual(got, connection) {
 								t.Error("connection was not passed to builder intact")
 							}
 							if tc.buildErr != nil {
 								return nil, tc.buildErr
 							}
-							raw, err := v.build(got)
+							raw, err := v.build(trading.BuildContext{Connection: got})
 							must(t, err)
 							if !tc.supported {
 								return raw, nil
@@ -129,20 +136,21 @@ func TestRegistryCapabilities(t *testing.T) {
 									}
 									return matches, tc.callErr
 								}}, nil
-						}}))
+						},
+					}))
 				}
 				for i := 0; i < 2; i++ {
 					var supported bool
 					var err error
 					if capability == "account" {
 						var result trading.AccountInfo
-						result, supported, err = r.CheckAccount(ctx, connection)
+						result, supported, err = r.CheckAccount(ctx, trading.BuildContext{Connection: connection})
 						if tc.supported && result != info || !tc.supported && result != (trading.AccountInfo{}) {
 							t.Fatalf("account result=%+v", result)
 						}
 					} else {
 						var result []trading.SymbolMatch
-						result, supported, err = r.SearchSymbols(ctx, connection, query)
+						result, supported, err = r.SearchSymbols(ctx, trading.BuildContext{Connection: connection}, query)
 						if tc.supported && !reflect.DeepEqual(result, matches) || !tc.supported && result != nil {
 							t.Fatalf("search result=%+v", result)
 						}
@@ -166,7 +174,10 @@ func TestRegistryCapabilities(t *testing.T) {
 func TestRuntimeProviders(t *testing.T) {
 	f := newFixture(t)
 	f.newRuntime()
-	must(t, f.registry.Register(trading.Provider{Type: "a", Title: "First", SearchesSymbols: true, Build: f.venue.build}))
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "a", Title: "First", SearchesSymbols: true, Build: f.venue.build,
+	}))
 	providers := f.runtime.Providers()
 	if len(providers) != 2 || providers[0].Type != "a" || providers[1].Type != "fake" || !providers[0].SearchesSymbols {
 		t.Fatalf("runtime providers=%+v", providers)
@@ -179,7 +190,7 @@ func TestRuntimeProviders(t *testing.T) {
 func TestRuntimeCheckAccount(t *testing.T) {
 	f := newFixture(t)
 	readErr, buildErr, venueErr := errors.New("store failure"), errors.New("build failure"), errors.New("venue failure")
-	r, err := trading.NewRuntime(f.registry, connectionErrorStore{Store: f.st, err: readErr}, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
+	r, err := trading.NewRuntime(f.registry, connectionErrorStore{Store: f.st, err: readErr}, nil, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
 	must(t, err)
 	t.Cleanup(r.Stop)
 	if _, err := r.CheckAccount(testCtx, f.connection); !errors.Is(err, trading.ErrUnsupported) {
@@ -188,26 +199,34 @@ func TestRuntimeCheckAccount(t *testing.T) {
 	if _, err := r.CheckAccount(testCtx, domain.TradingConnection{Provider: "unknown"}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown provider account check=%v", err)
 	}
-	must(t, f.registry.Register(trading.Provider{Type: "broken", Build: func(domain.TradingConnection) (trading.Connector, error) { return nil, buildErr }}))
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "broken", Build: func(trading.BuildContext) (trading.Connector, error) { return nil, buildErr },
+	}))
 	if _, err := r.CheckAccount(testCtx, domain.TradingConnection{Provider: "broken"}); !errors.Is(err, buildErr) {
 		t.Fatalf("build error account check=%v", err)
 	}
 	info := trading.AccountInfo{Identity: "venue-account", Status: "ACTIVE"}
 	var expected domain.TradingConnection
 	var callErr error
-	must(t, f.registry.Register(trading.Provider{Type: "fake", Build: func(c domain.TradingConnection) (trading.Connector, error) {
-		if !reflect.DeepEqual(c, expected) {
-			t.Error("account connection was not passed intact")
-		}
-		raw, err := f.venue.build(c)
-		must(t, err)
-		return capabilityConnector{fakeConnector: raw.(*fakeConnector), check: func(ctx context.Context) (trading.AccountInfo, error) {
-			if ctx != testCtx {
-				t.Error("account context was not passed intact")
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "fake", Build: func(build trading.BuildContext) (trading.Connector, error) {
+			c := build.Connection
+
+			if !reflect.DeepEqual(c, expected) {
+				t.Error("account connection was not passed intact")
 			}
-			return info, callErr
-		}}, nil
-	}}))
+			raw, err := f.venue.build(trading.BuildContext{Connection: c})
+			must(t, err)
+			return capabilityConnector{fakeConnector: raw.(*fakeConnector), check: func(ctx context.Context) (trading.AccountInfo, error) {
+				if ctx != testCtx {
+					t.Error("account context was not passed intact")
+				}
+				return info, callErr
+			}}, nil
+		},
+	}))
 	draft := domain.TradingConnection{ExternalID: "not-stored", Provider: "fake", Mode: domain.TradingModeLive, Credentials: "draft credentials"}
 	for _, connection := range []domain.TradingConnection{f.connection, draft} {
 		expected = connection
@@ -235,19 +254,24 @@ func TestRuntimeSearchSymbols(t *testing.T) {
 	matches := []trading.SymbolMatch{{Symbol: "BTC/USD", Tradable: true}}
 	query := " bTc/ "
 	var callErr error
-	must(t, f.registry.Register(trading.Provider{Type: "fake", Build: func(c domain.TradingConnection) (trading.Connector, error) {
-		if !reflect.DeepEqual(c, f.connection) {
-			t.Error("supplied search connection snapshot was not passed intact")
-		}
-		raw, err := f.venue.build(c)
-		must(t, err)
-		return capabilityConnector{fakeConnector: raw.(*fakeConnector), search: func(ctx context.Context, gotQuery string) ([]trading.SymbolMatch, error) {
-			if ctx != testCtx || gotQuery != query {
-				t.Error("search arguments were not passed intact")
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "fake", Build: func(build trading.BuildContext) (trading.Connector, error) {
+			c := build.Connection
+
+			if !reflect.DeepEqual(c, f.connection) {
+				t.Error("supplied search connection snapshot was not passed intact")
 			}
-			return matches, callErr
-		}}, nil
-	}}))
+			raw, err := f.venue.build(trading.BuildContext{Connection: c})
+			must(t, err)
+			return capabilityConnector{fakeConnector: raw.(*fakeConnector), search: func(ctx context.Context, gotQuery string) ([]trading.SymbolMatch, error) {
+				if ctx != testCtx || gotQuery != query {
+					t.Error("search arguments were not passed intact")
+				}
+				return matches, callErr
+			}}, nil
+		},
+	}))
 	for _, enabled := range []bool{true, false} {
 		must(t, f.st.SetTradingConnectionEnabled(testCtx, f.connection.ExternalID, enabled))
 		f.connection.Enabled = enabled
@@ -262,13 +286,16 @@ func TestRuntimeSearchSymbols(t *testing.T) {
 		t.Fatalf("venue error symbol search: result=%+v err=%v", result, err)
 	}
 	buildErr := errors.New("build failure")
-	must(t, f.registry.Register(trading.Provider{Type: "broken", Build: func(domain.TradingConnection) (trading.Connector, error) { return nil, buildErr }}))
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "broken", Build: func(trading.BuildContext) (trading.Connector, error) { return nil, buildErr },
+	}))
 	broken := f.addConnection("broken", "broken", false)
 	if _, err := f.runtime.SearchSymbols(testCtx, broken, query); !errors.Is(err, buildErr) {
 		t.Fatalf("build error symbol search=%v", err)
 	}
 	readErr := errors.New("store failure")
-	r, err := trading.NewRuntime(f.registry, connectionErrorStore{Store: f.st, err: readErr}, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
+	r, err := trading.NewRuntime(f.registry, connectionErrorStore{Store: f.st, err: readErr}, nil, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
 	must(t, err)
 	t.Cleanup(r.Stop)
 	callErr = nil
@@ -287,20 +314,25 @@ func TestRegistryAndFreshSymbolVerification(t *testing.T) {
 	if err := registry.Register(trading.Provider{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("invalid registration=%v", err)
 	}
-	if _, err := registry.Build(domain.TradingConnection{Provider: "unknown"}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := registry.Build(trading.BuildContext{Connection: domain.TradingConnection{Provider: "unknown"}}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown provider=%v", err)
 	}
 	venue := newVenue()
 	connection := domain.TradingConnection{Provider: "verify", Credentials: "{}"}
-	must(t, registry.Register(trading.Provider{Type: "verify", VerifiesSymbols: true,
-		Build: func(c domain.TradingConnection) (trading.Connector, error) {
-			raw, err := venue.build(c)
+	must(t, registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "verify", VerifiesSymbols: true,
+		Build: func(build trading.BuildContext) (trading.Connector, error) {
+			c := build.Connection
+
+			raw, err := venue.build(trading.BuildContext{Connection: c})
 			if err != nil {
 				return nil, err
 			}
 			return verifyingConnector{raw.(*fakeConnector)}, nil
-		}}))
-	result, supported, err := registry.VerifySymbol(testCtx, connection, "AAPL")
+		},
+	}))
+	result, supported, err := registry.VerifySymbol(testCtx, trading.BuildContext{Connection: connection}, "AAPL")
 	must(t, err)
 	if !supported || !result.Exists || !result.Tradable {
 		t.Fatalf("verification=%+v supported=%v", result, supported)
@@ -311,8 +343,11 @@ func TestRegistryAndFreshSymbolVerification(t *testing.T) {
 	if closes != 1 {
 		t.Fatalf("verification connector closes=%d", closes)
 	}
-	must(t, registry.Register(trading.Provider{Type: "verify", Build: venue.build}))
-	_, supported, err = registry.VerifySymbol(testCtx, connection, "AAPL")
+	must(t, registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "verify", Build: venue.build,
+	}))
+	_, supported, err = registry.VerifySymbol(testCtx, trading.BuildContext{Connection: connection}, "AAPL")
 	must(t, err)
 	if supported {
 		t.Fatal("unsupported verifier reported supported")
@@ -322,23 +357,28 @@ func TestRegistryAndFreshSymbolVerification(t *testing.T) {
 func TestRuntimeSymbolVerification(t *testing.T) {
 	f := newFixture(t)
 	readErr := errors.New("store failure")
-	r, err := trading.NewRuntime(f.registry, connectionErrorStore{Store: f.st, err: readErr}, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
+	r, err := trading.NewRuntime(f.registry, connectionErrorStore{Store: f.st, err: readErr}, nil, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
 	must(t, err)
 	t.Cleanup(r.Stop)
 	if _, err := r.VerifySymbol(testCtx, f.connection, "AAPL"); !errors.Is(err, trading.ErrUnsupported) {
 		t.Fatalf("unsupported runtime verification=%v", err)
 	}
-	must(t, f.registry.Register(trading.Provider{Type: "fake", VerifiesSymbols: true,
-		Build: func(c domain.TradingConnection) (trading.Connector, error) {
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "fake", VerifiesSymbols: true,
+		Build: func(build trading.BuildContext) (trading.Connector, error) {
+			c := build.Connection
+
 			if !reflect.DeepEqual(c, f.connection) {
 				t.Error("supplied verification connection snapshot was not passed intact")
 			}
-			raw, err := f.venue.build(c)
+			raw, err := f.venue.build(trading.BuildContext{Connection: c})
 			if err != nil {
 				return nil, err
 			}
 			return verifyingConnector{raw.(*fakeConnector)}, nil
-		}}))
+		},
+	}))
 	must(t, f.st.SetTradingConnectionEnabled(testCtx, f.connection.ExternalID, false))
 	f.connection.Enabled = false
 	result, err := r.VerifySymbol(testCtx, f.connection, "AAPL")
@@ -391,7 +431,7 @@ func TestAlreadyAppliedSinkResultAndLateTerminalFill(t *testing.T) {
 		}
 		return err
 	}
-	r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink, f.feeSkipSink,
+	r, err := trading.NewRuntime(f.registry, f.st, nil, sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(t, err)
 	must(t, r.Start(testCtx))

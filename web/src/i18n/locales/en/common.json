@@ -58,6 +58,8 @@
     "ariaLabel": "Change language"
   },
   "actions": {
+    "expand": "Expand",
+    "collapse": "Collapse",
     "refresh": "Refresh",
     "restartFeeds": "Restart feeds",
     "retry": "Retry",
@@ -409,6 +411,8 @@
     }
   },
   "nav": {
+    "collapseSidebar": "Collapse sidebar",
+    "expandSidebar": "Expand sidebar",
     "dashboard": "Dashboard",
     "accounts": "Accounts",
     "account": "Account",

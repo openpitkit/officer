@@ -25,7 +25,7 @@ import (
 
 // FirstPartyProviders returns the built-in trading factories.
 func FirstPartyProviders() []fwtrading.Provider {
-	return []fwtrading.Provider{AlpacaProvider(), BinanceProvider(), IBProvider(), EtoroProvider()}
+	return []fwtrading.Provider{AlpacaProvider(), BinanceProvider(), IBProvider(), EtoroProvider(), TestProvider()}
 }
 
 // IBProvider trades stocks, spot FX and crypto through TWS/IB Gateway.
@@ -41,9 +41,13 @@ func FirstPartyProviders() []fwtrading.Provider {
 // with a diagnostic. Fees travel on fills, never through a separate FeeReader.
 func IBProvider() fwtrading.Provider {
 	return fwtrading.Provider{
-		Type: domain.TradingProviderIB, Title: "Interactive Brokers",
+		ExecutionPolicy: false,
+		Type:            domain.TradingProviderIB, Title: "Interactive Brokers",
 		VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true,
-		UnlinkedFees: false, Build: NewIBConnector,
+		UnlinkedFees: false,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewIBConnector(ctx.Connection)
+		},
 	}
 }
 
@@ -71,10 +75,13 @@ func IBProvider() fwtrading.Provider {
 // position includes the not-yet-charged fee.
 func AlpacaProvider() fwtrading.Provider {
 	return fwtrading.Provider{
-		Type: domain.TradingProviderAlpaca, Title: "Alpaca",
+		ExecutionPolicy: false,
+		Type:            domain.TradingProviderAlpaca, Title: "Alpaca",
 		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
 		UnlinkedFees: true,
-		Build:        NewAlpacaConnector,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewAlpacaConnector(ctx.Connection)
+		},
 	}
 }
 
@@ -105,10 +112,13 @@ func AlpacaProvider() fwtrading.Provider {
 // There are no unlinked fees.
 func BinanceProvider() fwtrading.Provider {
 	return fwtrading.Provider{
-		Type: domain.TradingProviderBinance, Title: "Binance",
+		ExecutionPolicy: false,
+		Type:            domain.TradingProviderBinance, Title: "Binance",
 		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
 		UnlinkedFees: false,
-		Build:        NewBinanceConnector,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewBinanceConnector(ctx.Connection)
+		},
 	}
 }
 
@@ -147,9 +157,12 @@ func BinanceProvider() fwtrading.Provider {
 // are not reported by eToro (demo probe P7).
 func EtoroProvider() fwtrading.Provider {
 	return fwtrading.Provider{
-		Type: domain.TradingProviderEtoro, Title: "eToro",
+		ExecutionPolicy: false,
+		Type:            domain.TradingProviderEtoro, Title: "eToro",
 		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
 		UnlinkedFees: false,
-		Build:        NewEtoroConnector,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewEtoroConnector(ctx.Connection)
+		},
 	}
 }

@@ -58,6 +58,8 @@
     "ariaLabel": "切换语言"
   },
   "actions": {
+    "expand": "展开",
+    "collapse": "收起",
     "refresh": "刷新",
     "restartFeeds": "重启数据源",
     "retry": "重试",
@@ -409,6 +411,8 @@
     }
   },
   "nav": {
+    "collapseSidebar": "折叠侧边栏",
+    "expandSidebar": "展开侧边栏",
     "dashboard": "仪表盘",
     "accounts": "账户",
     "account": "账户",

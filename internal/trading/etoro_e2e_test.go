@@ -46,19 +46,20 @@ import (
 )
 
 type etoroRuntimeTest struct {
-	t       *testing.T
-	ctx     context.Context
-	caller  domain.Caller
-	dbPath  string
-	st      store.Store
-	realm   store.RealmStore
-	n       node.Node
-	runtime *fwtrading.Runtime
-	server  *httptest.Server
-	streams chan *websocket.Conn
-	stream  *websocket.Conn
-	c       *etoroConnector
-	dest    domain.TradingDestination
+	t        *testing.T
+	ctx      context.Context
+	caller   domain.Caller
+	dbPath   string
+	st       store.Store
+	realm    store.RealmStore
+	n        node.Node
+	runtime  *fwtrading.Runtime
+	registry *fwtrading.Registry
+	server   *httptest.Server
+	streams  chan *websocket.Conn
+	stream   *websocket.Conn
+	c        *etoroConnector
+	dest     domain.TradingDestination
 
 	mu           sync.Mutex
 	posts        []etoroTestRequest
@@ -128,6 +129,24 @@ func (h *etoroRuntimeTest) open() {
 	var err error
 	h.st, err = sqlite.New(h.dbPath, domain.DefaultRealm)
 	h.must(err)
+	h.registry = fwtrading.NewRegistry()
+	// C4 intentionally registers only in this test's registry; C5 owns the
+	// production provider and domain constant.
+	h.must(h.registry.Register(fwtrading.Provider{
+		ExecutionPolicy: false,
+		Type:            "etoro", Title: "eToro", Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			connection := ctx.Connection
+
+			c, err := newEtoroConnector(connection, h.server.URL)
+			if err != nil {
+				return nil, err
+			}
+			c.streamURL = "ws" + strings.TrimPrefix(h.server.URL, "http") + "/stream"
+			h.c = c
+			return c, nil
+		},
+	}))
+	h.must(h.st.BindExecutionPolicyProviders(h.registry.SupportsExecutionPolicy))
 	h.must(h.st.Migrate(h.ctx))
 	h.n, _, err = node.NewLocalNode(h.ctx, domain.DefaultRealm, h.st,
 		engine.NewOpenPitEngineBuildFunc(), func(err error) { h.t.Errorf("fatal node shutdown: %v", err) })
@@ -141,19 +160,7 @@ func (h *etoroRuntimeTest) start() {
 	h.must(err)
 	service, err := backend.New(h.n, nil, signer, engine.LockSettlementPrice)
 	h.must(err)
-	registry := fwtrading.NewRegistry()
-	// C4 intentionally registers only in this test's registry; C5 owns the
-	// production provider and domain constant.
-	h.must(registry.Register(fwtrading.Provider{Type: "etoro", Title: "eToro", Build: func(connection domain.TradingConnection) (fwtrading.Connector, error) {
-		c, err := newEtoroConnector(connection, h.server.URL)
-		if err != nil {
-			return nil, err
-		}
-		c.streamURL = "ws" + strings.TrimPrefix(h.server.URL, "http") + "/stream"
-		h.c = c
-		return c, nil
-	}}))
-	h.runtime, err = fwtrading.NewRuntime(registry, h.realm,
+	h.runtime, err = fwtrading.NewRuntime(h.registry, h.realm, nil,
 		func(ctx context.Context, in domain.ExecutionReportInput) error {
 			h.mu.Lock()
 			h.reports = append(h.reports, in)

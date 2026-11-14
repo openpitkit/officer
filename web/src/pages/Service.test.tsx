@@ -93,6 +93,7 @@ const tradingSnapshot: TradingSnapshot = {
   providers: [],
   connections: [
     {
+      executionPolicy: false,
       id: "alpaca-1",
       provider: "alpaca",
       label: "Alpaca paper",

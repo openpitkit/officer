@@ -166,11 +166,24 @@ func TestConnectionUnavailableDiagnostics(t *testing.T) {
 			id := f.connection.ExternalID
 			switch tc.failure {
 			case "build":
-				must(t, f.registry.Register(trading.Provider{Type: "broken",
-					Build: func(domain.TradingConnection) (trading.Connector, error) { return nil, cause }}))
+				must(t, f.registry.Register(trading.Provider{
+					ExecutionPolicy: false,
+					Type:            "broken",
+					Build:           func(trading.BuildContext) (trading.Connector, error) { return nil, cause },
+				}))
 				id = f.addConnection("broken", "broken", true).ExternalID
 			case "unsupported":
+				runtimeRegistry := trading.NewRegistry()
+				for _, provider := range f.registry.Providers() {
+					must(t, runtimeRegistry.Register(provider))
+				}
+				// Only the store knows the provider removed from the runtime.
+				must(t, f.registry.Register(trading.Provider{
+					Type: "unregistered", ExecutionPolicy: false,
+					Build: f.venue.build,
+				}))
 				id = f.addConnection("unregistered", "unregistered", true).ExternalID
+				f.registry = runtimeRegistry
 			case "subscribe":
 				f.venue.subscribeErr = cause
 			case "nil_channel":

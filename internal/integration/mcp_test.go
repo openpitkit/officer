@@ -38,6 +38,8 @@ import (
 
 // fakeSource is a controllable fake for the Source interface.
 type fakeSource struct {
+	testPolicy    domain.TestExecutionPolicyState
+	testPolicyErr error
 	status        frameworkmcp.Status
 	statusErr     error
 	account       domain.Account
@@ -70,6 +72,14 @@ type fakeSource struct {
 	// CommandEnabled so the fail-open path can be exercised.
 	disabledCommands map[string]bool
 	cmdEnabledErr    error
+}
+
+func (s *fakeSource) GetTestExecutionPolicy(context.Context, string) (domain.TestExecutionPolicyState, error) {
+	return s.testPolicy, s.testPolicyErr
+}
+
+func (s *fakeSource) ReplaceTestExecutionPolicy(context.Context, string, domain.TestExecutionPolicy) (domain.TestExecutionPolicyState, error) {
+	return s.testPolicy, s.testPolicyErr
 }
 
 func operatorCaller() domain.Caller {
@@ -924,6 +934,14 @@ func TestGetAuditEmpty(t *testing.T) {
 // tests.
 type captureNSource struct {
 	lastN int
+}
+
+func (s *captureNSource) GetTestExecutionPolicy(context.Context, string) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.ErrNotImplemented
+}
+
+func (s *captureNSource) ReplaceTestExecutionPolicy(context.Context, string, domain.TestExecutionPolicy) (domain.TestExecutionPolicyState, error) {
+	return domain.TestExecutionPolicyState{}, domain.ErrNotImplemented
 }
 
 func (c *captureNSource) Status(_ context.Context) (frameworkmcp.Status, error) {

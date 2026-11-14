@@ -39,7 +39,13 @@ import (
 // domain.ErrLoosening before anything is read or written.
 func (n *localNode) CreateAccount(
 	ctx context.Context, account domain.Account, caller domain.Caller,
-) (domain.Account, error) {
+) (result domain.Account, resultErr error) {
+	ctx, finish := TradingAccessNotifications(ctx)
+	defer func() {
+		if err := finish(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	if err := guardTightenOnlyAccountCreation(
 		"create account", account.Code, caller,
 	); err != nil {
@@ -134,6 +140,9 @@ func (n *localNode) CreateAccount(
 		)
 	}
 
+	if err := n.publishTradingAccessTransitions(ctx, nil, created.Code, "", caller); err != nil {
+		return created, err
+	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action:          domain.AuditActionCreateAccount,
 		AccountIdentity: created.EngineAccountID,
@@ -699,7 +708,13 @@ func (n *localNode) GetAccountState(
 func (n *localNode) SetAccountGroup(
 	ctx context.Context, account domain.AccountID, groupCode string,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
-) error {
+) (resultErr error) {
+	ctx, finish := TradingAccessNotifications(ctx)
+	defer func() {
+		if err := finish(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	if err := n.beginLiveIdentityPublication(); err != nil {
 		return err
 	}
@@ -730,6 +745,10 @@ func (n *localNode) SetAccountGroup(
 	}
 	if previous.GroupCode == groupCode {
 		return nil
+	}
+	beforeAccess, err := n.captureTradingAccessState(ctx, account, "")
+	if err != nil {
+		return err
 	}
 	routingAccount, err := eng.AccountID(account)
 	if err != nil {
@@ -766,6 +785,7 @@ func (n *localNode) SetAccountGroup(
 
 	engineEntered := false
 	restored := false
+	committed := false
 	// persistFailure names the store step that failed after the engine moved
 	// the account; the fatal hook runs only once the section has ended.
 	persistFailure := ""
@@ -793,9 +813,19 @@ func (n *localNode) SetAccountGroup(
 			if err := n.realm.SetAccountGroup(
 				mutationCtx, account, groupCode,
 			); err != nil {
+				if errors.Is(err, domain.ErrTradingProviderUnavailable) {
+					if _, reverseErr := moveAccountGroup(
+						driver.Accounts(), []param.AccountID{routingAccount}, to, from,
+					); reverseErr != nil {
+						return errors.Join(err, fmt.Errorf("reverse account group: %w", reverseErr))
+					}
+					persistFailure = ""
+					restored = true
+				}
 				return fmt.Errorf("set account group: %w", err)
 			}
 			detail := setAccountGroupDetail(account, current.GroupCode, groupCode)
+			committed = true
 			groupCodes := accountGroupAuditCodes(current.GroupCode, groupCode)
 			entries := make([]store.AuditEntry, 0, len(groupCodes))
 			for _, code := range groupCodes {
@@ -815,6 +845,9 @@ func (n *localNode) SetAccountGroup(
 			return nil
 		},
 	)
+	if committed {
+		runErr = errors.Join(runErr, n.publishTradingAccessTransitions(ctx, beforeAccess, account, "", caller))
+	}
 	switch {
 	case runErr == nil:
 		return nil

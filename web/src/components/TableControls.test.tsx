@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,8 +53,35 @@ describe("TablePagination", () => {
       screen.getByRole("button", { name: "Last page" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("spinbutton", { name: "Go to page" }),
+      screen.getByRole("textbox", { name: "Go to page" }),
     ).toBeInTheDocument();
+  });
+
+  it("rejects whole non-digit page edits and preserves bounds", () => {
+    const onPage = vi.fn();
+    renderWithI18n(
+      <TablePagination
+        page={0}
+        canPrevious={false}
+        canNext
+        knownTotalPages={3}
+        onPrevious={vi.fn()}
+        onNext={vi.fn()}
+        onPage={onPage}
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "Go to page" });
+    fireEvent.change(input, { target: { value: "2" } });
+    for (const value of ["-1", "1.5", "1,5", "1e2", "１２"]) {
+      fireEvent.change(input, { target: { value } });
+      expect(input).toHaveValue("2");
+    }
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onPage).toHaveBeenLastCalledWith(1);
+    expect(input).toHaveValue("");
+    fireEvent.change(input, { target: { value: "99" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onPage).toHaveBeenLastCalledWith(2);
   });
 
   it("does not invent page counts for limited server lists", () => {
@@ -77,7 +104,7 @@ describe("TablePagination", () => {
       screen.queryByRole("button", { name: "Last page" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("spinbutton", { name: "Go to page" }),
+      screen.queryByRole("textbox", { name: "Go to page" }),
     ).not.toBeInTheDocument();
   });
 

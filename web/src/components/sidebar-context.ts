@@ -15,7 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Context and hook for the mobile sidebar drawer, kept apart from the provider
+// Context and hook for the sidebar drawer and icon-only view, kept apart from the provider
 // component so the provider file exports only a component (Fast Refresh).
 
 import {
@@ -26,6 +26,9 @@ import {
 } from "react";
 
 export interface SidebarState {
+  /** Whether navigation and sidebar status plaques show only their icons. */
+  collapsed: boolean;
+  toggleCollapsed: () => void;
   open: boolean;
   toggle: () => void;
   close: () => void;

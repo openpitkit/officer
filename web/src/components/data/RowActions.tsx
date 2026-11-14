@@ -291,7 +291,11 @@ export function EditButton({
   title = "Edit",
   size = 30,
   style,
-}: RowActionClickProps) {
+  disabled = false,
+}: RowActionClickProps & {
+  /** Render the action as unavailable under the installed account scope. */
+  disabled?: boolean;
+}) {
   return (
     <ActionButton
       icon="edit"
@@ -299,6 +303,7 @@ export function EditButton({
       onClick={onClick}
       size={size}
       style={style}
+      disabled={disabled}
     />
   );
 }

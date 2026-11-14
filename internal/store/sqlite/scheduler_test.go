@@ -197,6 +197,9 @@ func TestSchedulerPendingJobsSurviveStoreRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := reopened.BindExecutionPolicyProviders(policyFixtureClassifier); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	runtime, jobs := newScheduledTestRuntime(t, reopened, task)
 	if err := jobs.Recover(ctx, schedulerBase.Add(10*time.Hour)); err != nil {
@@ -601,6 +604,9 @@ func TestSchedulerCompletedDefinitionsSurviveReopenAndRestore(t *testing.T) {
 	}
 	reopened, err := New(path, domain.DefaultRealm)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.BindExecutionPolicyProviders(policyFixtureClassifier); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })

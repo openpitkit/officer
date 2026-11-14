@@ -49,12 +49,14 @@ type StoreProvider interface {
 // operations. Callbacks use the node directly and never acquire mu, so joining
 // them before a restore/reset lane gate cannot deadlock.
 type Runtime struct {
-	mu     sync.Mutex
-	node   node.Node
-	host   node.PnlResetHost
-	worker *scheduler.Scheduler
-	since  atomic.Pointer[time.Time]
-	closed bool
+	mu          sync.Mutex
+	node        node.Node
+	host        node.PnlResetHost
+	worker      *scheduler.Scheduler
+	since       atomic.Pointer[time.Time]
+	closed      bool
+	executionMu sync.Mutex
+	executions  map[domain.ExternalID]testExecutionCall
 }
 
 // New constructs the explicitly installed local task owner without starting it.
@@ -62,7 +64,7 @@ func New(n node.Node, host node.PnlResetHost, st scheduler.Store) (*Runtime, err
 	if n == nil || host == nil || st == nil {
 		return nil, domain.ErrInvalid
 	}
-	r := &Runtime{node: n, host: host}
+	r := &Runtime{node: n, host: host, executions: make(map[domain.ExternalID]testExecutionCall)}
 	now := time.Now().UTC()
 	r.since.Store(&now)
 	worker, err := scheduler.New(st, r.factory)
@@ -77,6 +79,8 @@ type allAccountPnlReset struct{ owner *Runtime }
 
 func (r *Runtime) factory(kind string, args json.RawMessage) (scheduler.Task, error) {
 	switch kind {
+	case testExecutionKind:
+		return r.testExecutionTask(args)
 	case PnlResetKind:
 		// Only this concrete task interprets its JSON arguments. There is no
 		// account filter: this task always owns every account of the realm.
@@ -247,6 +251,9 @@ func (r *Runtime) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
+	r.executionMu.Lock()
+	r.executions = nil
+	r.executionMu.Unlock()
 	return r.worker.Stop()
 }
 

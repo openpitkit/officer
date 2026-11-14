@@ -55,6 +55,59 @@ func TestDescribeErrPnlBoundCurrencyMismatch(t *testing.T) {
 	}
 }
 
+func TestDescribeErrTradingProviderSentinels(t *testing.T) {
+	for _, tc := range []struct {
+		sentinel error
+		code     string
+		message  string
+	}{
+		{domain.ErrTradingProviderUnavailable, "trading_provider_unavailable", "connection details: " + domain.ErrTradingProviderUnavailable.Error()},
+		{domain.ErrExecutionPolicyUnsupported, "execution_policy_unsupported", "execution policy is not supported by this trading provider"},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			err := fmt.Errorf("connection details: %w", tc.sentinel)
+			got := DescribeErr(err)
+			if got.Status != http.StatusConflict || got.Code != tc.code || got.Message != tc.message {
+				t.Fatalf("DescribeErr=%+v", got)
+			}
+		})
+	}
+}
+
+func TestCommittedTradingAccessWarningFailure(t *testing.T) {
+	for _, cause := range []error{domain.ErrInvalid, domain.ErrNotFound, errors.New("delivery failed")} {
+		err := &domain.TradingAccessNotificationError{Cause: cause}
+		got := DescribeErr(err)
+		if got.Status != http.StatusConflict || got.Code != "trading_access_notification_failed" || got.Message != domain.ErrTradingAccessNotification.Error() {
+			t.Fatalf("committed notification failure = %+v", got)
+		}
+		joined := errors.Join(cause, err)
+		got = DescribeErr(joined)
+		if got.Status != http.StatusInternalServerError || got.Code != "trading_access_completion_failed" {
+			t.Fatalf("joined operational failure disguised as notification-only = %+v", got)
+		}
+	}
+}
+
+func TestTradingConnectionPolicyCapabilityWire(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		encoded, err := json.Marshal(ToTradingConnectionDTO(backend.TradingConnectionStatus{ExecutionPolicy: supported}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if string(fields["executionPolicy"]) != fmt.Sprint(supported) {
+			t.Fatalf("capability: %s", encoded)
+		}
+		if _, exists := fields["sourceClass"]; exists {
+			t.Fatalf("obsolete source class: %s", encoded)
+		}
+	}
+}
+
 func TestToTradingConnectionDTOSettings(t *testing.T) {
 	t.Parallel()
 
@@ -594,6 +647,151 @@ func TestDecodeBodyRejectsMemberTypeWithPointer(t *testing.T) {
 	}
 }
 
+func TestDecodeBodyTypeErrorPointer(t *testing.T) {
+	t.Parallel()
+
+	type wait struct {
+		Seconds int `json:"seconds"`
+	}
+	type rule struct {
+		Wait wait `json:"wait"`
+	}
+	type policy struct {
+		Rules []rule `json:"rules"`
+	}
+	type nested struct {
+		A struct {
+			B bool `json:"b"`
+		} `json:"a"`
+	}
+	type member struct {
+		Enabled bool `json:"enabled"`
+	}
+	type numbers struct {
+		IDs []int `json:"ids"`
+	}
+	type byKey struct {
+		Counts map[string]int `json:"counts"`
+	}
+	type escaped struct {
+		Value bool `json:"a.b/c~d"`
+	}
+	tests := []struct {
+		name    string
+		body    string
+		dst     func() any
+		pointer string
+	}{
+		{
+			"scalar in second array element",
+			`{"rules":[{"wait":{"seconds":1}},{"wait":{"seconds":1.5}}]}`,
+			func() any { return &policy{} },
+			"/rules/1/wait/seconds",
+		},
+		{
+			"scalar in first array element",
+			`{"rules":[{"wait":{"seconds":"x"}},{"wait":{"seconds":1}}]}`,
+			func() any { return &policy{} },
+			"/rules/0/wait/seconds",
+		},
+		{
+			"array where object expected, first element",
+			`{"rules":[[1],{"wait":{"seconds":1}}]}`,
+			func() any { return &policy{} },
+			"/rules/0",
+		},
+		{
+			"array where object expected, later element",
+			`{"rules":[{"wait":{"seconds":1}},[1,2]]}`,
+			func() any { return &policy{} },
+			"/rules/1",
+		},
+		{
+			"scalar where object expected, later element",
+			`{"rules":[{"wait":{"seconds":1}},"x"]}`,
+			func() any { return &policy{} },
+			"/rules/1",
+		},
+		{
+			"object where array expected",
+			`{"rules":{"wait":1}}`,
+			func() any { return &policy{} },
+			"/rules",
+		},
+		{
+			"scalar where array expected",
+			`{"rules":"x"}`,
+			func() any { return &policy{} },
+			"/rules",
+		},
+		{
+			"scalar element with insignificant whitespace",
+			"{ \"ids\" : [ 1 , \n \"x\" , 3 ] }",
+			func() any { return &numbers{} },
+			"/ids/1",
+		},
+		{
+			"top-level member",
+			`{"enabled":"yes"}`,
+			func() any { return &member{} },
+			"/enabled",
+		},
+		{
+			"nested object without array",
+			`{"a":{"b":"x"}}`,
+			func() any { return &nested{} },
+			"/a/b",
+		},
+		{
+			"map value",
+			`{"counts":{"k":1,"j":"x"}}`,
+			func() any { return &byKey{} },
+			"/counts/j",
+		},
+		{
+			"key with dot, slash and tilde",
+			`{"a.b/c~d":"x"}`,
+			func() any { return &escaped{} },
+			"/a.b~1c~0d",
+		},
+		{
+			"key the client sent in another case",
+			`{"Enabled":"yes"}`,
+			func() any { return &member{} },
+			"/Enabled",
+		},
+		{
+			"document root",
+			`[1]`,
+			func() any { return &member{} },
+			"",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(
+				http.MethodPut, "/", bytes.NewBufferString(tc.body),
+			)
+			if DecodeBody(rec, req, tc.dst()) {
+				t.Fatal("DecodeBody accepted an invalid member type")
+			}
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d", rec.Code)
+			}
+			var problem ProblemDetails
+			if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
+				t.Fatalf("decode problem: %v", err)
+			}
+			if len(problem.Errors) != 1 ||
+				problem.Errors[0].Pointer != tc.pointer ||
+				problem.Errors[0].Constraint != "type" {
+				t.Fatalf("problem = %+v, want pointer %q", problem, tc.pointer)
+			}
+		})
+	}
+}
+
 func TestDecodeBodyRejectsInvalidUnicode(t *testing.T) {
 	t.Parallel()
 
@@ -958,5 +1156,80 @@ func TestWriteErrValidationNestedPointer(t *testing.T) {
 			"validation metadata = %+v, want nested pointer and format constraint",
 			got,
 		)
+	}
+}
+
+func TestDescribeErrorBodyMatchesREST(t *testing.T) {
+	for _, err := range []error{
+		domain.NewValidationError("/rules/0/mask/baseAsset", "required", "asset is required"),
+		domain.ErrExecutionPolicyUnsupported,
+		domain.NewAccountMissingError("missing"), domain.NewAssetMissingError("MISSING"),
+		domain.ErrHasDependents, domain.ErrDestinationAmbiguous,
+		errors.New("private internal error"),
+	} {
+		t.Run(err.Error(), func(t *testing.T) {
+			carried := WithResponseHeader(err, "Retry-After", "secret-header")
+			status, body := DescribeErrorBody(carried)
+			raw, marshalErr := json.Marshal(body)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			rec := httptest.NewRecorder()
+			WriteErr(rec, carried)
+			if rec.Code != status || rec.Body.String() != string(raw)+"\n" {
+				t.Fatalf("REST=(%d,%s), body=(%d,%s)", rec.Code, rec.Body, status, raw)
+			}
+			if rec.Header().Get("Retry-After") != "secret-header" || bytes.Contains(raw, []byte("secret-header")) {
+				t.Fatalf("headers=%v body=%s", rec.Header(), raw)
+			}
+			media := "application/json; charset=utf-8"
+			if _, ok := body.(ProblemDetails); ok {
+				media = "application/problem+json"
+			}
+			if rec.Header().Get("Content-Type") != media {
+				t.Fatalf("media=%s, want %s", rec.Header().Get("Content-Type"), media)
+			}
+		})
+	}
+}
+
+func TestValidationProblemAuthority(t *testing.T) {
+	for _, cause := range []error{
+		domain.NewValidationError("/rules/0/mask/baseAsset", "required", "asset is required"),
+		fmt.Errorf("replace policy: %w", domain.NewValidationError("/rules/1/quantity", "positive", "quantity must be positive")),
+		domain.ErrInvalid,
+	} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			err := WithResponseHeader(cause, "Retry-After", "17")
+			status, body := DescribeErrorBody(err)
+			var want bytes.Buffer
+			if err := json.NewEncoder(&want).Encode(body); err != nil {
+				t.Fatal(err)
+			}
+			if status != http.StatusUnprocessableEntity {
+				t.Fatalf("status=%d, want 422", status)
+			}
+			for _, writer := range []struct {
+				name  string
+				write func(http.ResponseWriter, error)
+			}{
+				{"WriteErr", WriteErr},
+				{"WriteValidationErr", WriteValidationErr},
+			} {
+				t.Run(writer.name, func(t *testing.T) {
+					rec := httptest.NewRecorder()
+					writer.write(rec, err)
+					if rec.Code != status || !bytes.Equal(rec.Body.Bytes(), want.Bytes()) {
+						t.Fatalf("%s=(%d,%s), DescribeErrorBody=(%d,%s)", writer.name, rec.Code, rec.Body, status, &want)
+					}
+					if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+						t.Fatalf("Content-Type=%q, want application/problem+json", got)
+					}
+					if writer.name == "WriteErr" && rec.Header().Get("Retry-After") != "17" {
+						t.Fatalf("carried header lost: %v", rec.Header())
+					}
+				})
+			}
+		})
 	}
 }

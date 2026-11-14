@@ -273,6 +273,9 @@ func (b *Builder) Build(
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
+	if err := st.BindExecutionPolicyProviders(b.tradingRegistry.SupportsExecutionPolicy); err != nil {
+		return nil, errors.Join(fmt.Errorf("bind execution-policy providers: %w", err), st.Close())
+	}
 	if err := st.Migrate(ctx); err != nil {
 		return nil, errors.Join(fmt.Errorf("migrate store: %w", err), st.Close())
 	}
@@ -333,7 +336,7 @@ func (b *Builder) Build(
 
 	mcpRegistry := frameworkmcp.NewToolRegistry()
 	var service backend.ControlPlane
-	runtime, err := trading.NewRuntime(b.tradingRegistry, realm,
+	runtime, err := trading.NewRuntime(b.tradingRegistry, realm, manager,
 		func(ctx context.Context, in domain.ExecutionReportInput) error {
 			_, _, err := service.ApplyExecutionReport(auth.ContextWithCaller(ctx, auth.SystemCaller()), in)
 			return err

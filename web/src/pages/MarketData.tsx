@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { DeleteConnectionDialog } from "@/components/venues/DeleteConnectionDialog";
 
 import type {
   CredentialStorage,
@@ -88,6 +89,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { NumberStepper } from "@/components/ui/number-stepper";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -895,15 +897,14 @@ function IBContractFields({
       {fields.strike && (
         <div className="flex flex-col gap-y-2">
           <Label htmlFor={`${idPrefix}-strike`}>{t("settings.strike")}</Label>
-          <Input
+          <NumberStepper
             id={`${idPrefix}-strike`}
-            type="text"
-            inputMode="decimal"
             value={contract.strike ?? ""}
-            onChange={(e) => {
-              const value = e.target.value.trim();
+            valueType="price"
+            onChange={(value) => {
               onChange({ strike: value === "" ? undefined : value });
             }}
+            onClear={() => onChange({ strike: undefined })}
             disabled={busy}
           />
         </div>
@@ -961,12 +962,11 @@ function IBContractIdentityFields({
       </div>
       <div className="flex flex-col gap-y-2">
         <Label htmlFor={`${idPrefix}-con-id`}>{t("settings.conId")}</Label>
-        <Input
+        <NumberStepper
           id={`${idPrefix}-con-id`}
-          type="text"
-          inputMode="numeric"
+          integerOnly
           value={contract.conId ?? ""}
-          onChange={(e) => onChange({ conId: updateText(e.target.value) })}
+          onChange={(value) => onChange({ conId: updateText(value) })}
           disabled={busy}
         />
       </div>
@@ -1080,14 +1080,13 @@ function ProviderSettingsFields({
           </div>
           <div className="flex flex-col gap-y-2">
             <Label htmlFor="md-settings-port">{t("settings.port")}</Label>
-            <Input
+            <NumberStepper
               id="md-settings-port"
-              type="number"
-              inputMode="numeric"
-              min={1}
+              integerOnly
+              min="1"
               max={65535}
               value={draft.port ?? ""}
-              onChange={(e) => set("port", e.target.value)}
+              onChange={(value) => set("port", value)}
               disabled={busy}
             />
           </div>
@@ -1095,13 +1094,12 @@ function ProviderSettingsFields({
             <Label htmlFor="md-settings-client-id">
               {t("settings.clientId")}
             </Label>
-            <Input
+            <NumberStepper
               id="md-settings-client-id"
-              type="number"
-              inputMode="numeric"
+              integerOnly
               value={draft.clientId ?? ""}
               placeholder={t("settings.autoClientId")}
-              onChange={(e) => set("clientId", e.target.value)}
+              onChange={(value) => set("clientId", value)}
               disabled={busy}
             />
           </div>
@@ -1666,6 +1664,8 @@ export function InstanceSettingsDialog({
 
 export function InstanceCard({
   instance,
+  expanded,
+  onToggle,
   pairUsageMap,
   busy,
   onEditSettings,
@@ -1681,6 +1681,8 @@ export function InstanceCard({
   onRestart,
 }: {
   instance: MarketDataInstance;
+  expanded: boolean;
+  onToggle: () => void;
   pairUsageMap: PairUsageMap;
   busy: boolean;
   onEditSettings: (instance: MarketDataInstance) => void;
@@ -1891,6 +1893,11 @@ export function InstanceCard({
       <VenueCardHeader
         providerType={instance.provider}
         title={providerTitle(instance)}
+        disclosure={{
+          expanded,
+          controls: `feed-${instance.id}-body`,
+          onToggle,
+        }}
         description={t(`providers.${instance.provider}.description`, {
           defaultValue: "",
         })}
@@ -1921,6 +1928,17 @@ export function InstanceCard({
         links={{ siteUrl, docsUrl, symbolsUrl }}
         actions={
           <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onToggleInstance(instance)}
+              disabled={busy}
+            >
+              {instance.enabled
+                ? t("venues:actions.disable")
+                : t("venues:actions.enable")}
+            </Button>
             {providerHasSettings(instance.provider) && (
               <Button
                 type="button"
@@ -1936,17 +1954,6 @@ export function InstanceCard({
             )}
             <Button
               type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => onToggleInstance(instance)}
-              disabled={busy}
-            >
-              {instance.enabled
-                ? t("venues:actions.disable")
-                : t("venues:actions.enable")}
-            </Button>
-            <Button
-              type="button"
               variant="ghost"
               size="icon"
               aria-label={t("actions.deleteInstance")}
@@ -1958,7 +1965,11 @@ export function InstanceCard({
           </>
         }
       />
-      <CardContent className="flex flex-col gap-y-4">
+      <CardContent
+        id={`feed-${instance.id}-body`}
+        hidden={!expanded}
+        className={expanded ? "flex flex-col gap-y-4" : "hidden"}
+      >
         {!usesInstrumentDialog && canSearch && (
           <SymbolSearchPanel
             id={`md-resolve-${instance.id}`}
@@ -2024,12 +2035,13 @@ export function InstanceCard({
             quoteAdornment={<PairUsageWarning usages={draftPairUsages} />}
             extraField={
               isManual ? (
-                <Input
+                <NumberStepper
                   value={draft.manualPrice}
-                  inputMode="decimal"
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, manualPrice: e.target.value }))
+                  valueType="price"
+                  onChange={(value) =>
+                    setDraft((d) => ({ ...d, manualPrice: value }))
                   }
+                  onClear={() => setDraft((d) => ({ ...d, manualPrice: "" }))}
                   placeholder={t("instrument.manualPrice")}
                   disabled={busy}
                 />
@@ -2215,23 +2227,27 @@ export function InstanceCard({
                       instrument: MarketDataInstance["instruments"][number],
                     ) => (
                       <div className="flex min-w-40 gap-2">
-                        <Input
+                        <NumberStepper
                           value={manualPriceValue(
                             instrument.externalSymbol,
                             instrument.manualPrice,
                           )}
-                          inputMode="decimal"
+                          valueType="price"
                           aria-label={t("instrument.manualPriceFor", {
                             symbol: instrument.externalSymbol,
                           })}
-                          onChange={(e) =>
+                          onChange={(value) =>
                             setManualPriceDraft(
                               instrument.externalSymbol,
-                              e.target.value,
+                              value,
                             )
                           }
+                          onClear={() =>
+                            setManualPriceDraft(instrument.externalSymbol, "")
+                          }
                           disabled={busy}
-                          className="nums h-8"
+                          className="min-w-0 flex-1"
+                          inputClassName="nums h-8"
                         />
                         <Button
                           type="button"
@@ -2355,40 +2371,24 @@ function DeleteInstanceDialog({
 }) {
   const { t } = useTranslation("marketData");
   return (
-    <Dialog open={target !== null} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("deleteInstance.title")}</DialogTitle>
-          <DialogDescription>
-            {t("deleteInstance.description", {
-              label: target ? providerTitle(target) : "",
-            })}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            {t("common:actions.cancel")}
-          </Button>
-          <Button
-            onClick={onSubmit}
-            disabled={busy}
-            className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
-          >
-            <Trash2 />
-            {t("common:actions.delete")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <DeleteConnectionDialog
+      open={target !== null}
+      title={t("deleteInstance.title")}
+      description={t("deleteInstance.description", {
+        label: target ? providerTitle(target) : "",
+      })}
+      busy={busy}
+      onOpenChange={onOpenChange}
+      onSubmit={onSubmit}
+    />
   );
 }
 
 /** Market-data control-plane page. */
 export function MarketData() {
+  const [expandedInstanceId, setExpandedInstanceId] = useState<string | null>(
+    null,
+  );
   const { t } = useTranslation("marketData");
   const { t: tc } = useTranslation();
   const { load, reload } = useMarketData();
@@ -2687,6 +2687,12 @@ export function MarketData() {
             <InstanceCard
               key={instance.id}
               instance={instance}
+              expanded={instance.id === expandedInstanceId}
+              onToggle={() =>
+                setExpandedInstanceId((current) =>
+                  current === instance.id ? null : instance.id,
+                )
+              }
               pairUsageMap={pairUsageMap}
               busy={busy}
               onEditSettings={setSettingsInstance}

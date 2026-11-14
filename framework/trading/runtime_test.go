@@ -30,6 +30,26 @@ import (
 	"go.openpit.dev/officer/framework/trading"
 )
 
+func TestTestSourceNeedsNoExternalSymbolMapping(t *testing.T) {
+	f := newFixture(t, true)
+	must(t, f.st.DeleteTradingInstrument(testCtx, f.dest.Connection, "AAPL"))
+	f.venue.onPreCheck = func(_ context.Context, order trading.Order) error {
+		if order.Symbol != "" || order.BaseAsset != "AAPL" || order.QuoteAsset != "USD" {
+			t.Errorf("test order = %+v", order)
+		}
+		return nil
+	}
+	f.start()
+	order := f.submit("10")
+	must(t, f.runtime.PreCheck(testCtx, order, f.dest))
+	link := f.send(order)
+	f.fill(link, makeFill("10", "10", "0", true))
+	f.flush()
+	if f.detail(order).Order.Status != domain.OrderStatusFilled {
+		t.Fatal("test order did not settle without an external symbol mapping")
+	}
+}
+
 func TestConnectorReceivesInstrumentMappingAssets(t *testing.T) {
 	f := newFixture(t)
 	must(t, f.st.DeleteTradingInstrument(testCtx, f.dest.Connection, "AAPL"))
@@ -558,7 +578,10 @@ func TestDestinationChecksAndPreCheckWritesNothing(t *testing.T) {
 
 func TestVenueAccountAccessMustMatchExactly(t *testing.T) {
 	f := newFixture(t)
-	must(t, f.registry.Register(trading.Provider{Type: "accounts", VenueAccounts: true, Build: f.venue.build}))
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "accounts", VenueAccounts: true, Build: f.venue.build,
+	}))
 	c := f.addConnection("accounts", "multi-account", false)
 	must(t, f.st.PutTradingAccess(testCtx, domain.TradingAccess{Account: "desk", Connection: c.ExternalID, VenueAccount: "allowed"}))
 	f.start()
@@ -584,11 +607,14 @@ func TestUnavailableConnectionIsolation(t *testing.T) {
 			build := badVenue.build
 			cause := errors.New("authentication failed")
 			if failure == "build" {
-				build = func(domain.TradingConnection) (trading.Connector, error) { return nil, cause }
+				build = func(trading.BuildContext) (trading.Connector, error) { return nil, cause }
 			} else {
 				badVenue.subscribeErr = cause
 			}
-			must(t, f.registry.Register(trading.Provider{Type: "broken", Build: build}))
+			must(t, f.registry.Register(trading.Provider{
+				ExecutionPolicy: false,
+				Type:            "broken", Build: build,
+			}))
 			bad := f.addConnection("broken", "broken", true)
 			f.start()
 			order := f.submit("10")
@@ -685,7 +711,10 @@ func TestCallerCancellationAndSingleWorker(t *testing.T) {
 func TestOneSendAcrossConnections(t *testing.T) {
 	f := newFixture(t)
 	other := newVenue()
-	must(t, f.registry.Register(trading.Provider{Type: "other", Build: other.build}))
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "other", Build: other.build,
+	}))
 	connection := f.addConnection("other", "other-connection", true)
 	f.start()
 	order := f.submit("10")
@@ -735,5 +764,25 @@ func TestRuntimeLifecycle(t *testing.T) {
 	f.venue.mu.Unlock()
 	if closes != 1 {
 		t.Fatalf("connector closes=%d", closes)
+	}
+}
+
+func TestRuntimeExecutionPolicyCapability(t *testing.T) {
+	f := newFixture(t)
+	f.newRuntime()
+	must(t, f.registry.Register(trading.Provider{
+		Type: "test", ExecutionPolicy: true, Build: f.venue.build,
+	}))
+	for _, provider := range []string{"fake", "test"} {
+		want, err := f.registry.SupportsExecutionPolicy(provider)
+		must(t, err)
+		got, err := f.runtime.SupportsExecutionPolicy(provider)
+		if err != nil || got != want {
+			t.Fatalf("SupportsExecutionPolicy(%q)=%v, %v; want %v, nil", provider, got, err, want)
+		}
+	}
+	class, err := f.runtime.SupportsExecutionPolicy("unknown")
+	if class || !errors.Is(err, domain.ErrTradingProviderUnavailable) {
+		t.Fatalf("SupportsExecutionPolicy(unknown)=%v, %v; want unavailable error", class, err)
 	}
 }

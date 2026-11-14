@@ -45,6 +45,7 @@ import (
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/node"
+	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
@@ -698,6 +699,9 @@ func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
 		t.Fatalf("sqlite.New: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	if err := store.BindExecutionPolicyProviders(fwtrading.NewRegistry().SupportsExecutionPolicy); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}

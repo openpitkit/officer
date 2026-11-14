@@ -78,6 +78,7 @@ Pit Officer is a single binary with four subcommands: `serve`, `mcp`,
 The subcommands, environment variables, flags, and authorization model are
 in the [configuration reference](docs/configuration.md). See the
 [API notes](docs/api.md) for REST and MCP integration.
+Use the [test trading guide](docs/test_trading.md) to trade without a venue.
 
 ### Local container build
 
@@ -98,6 +99,7 @@ uses golangci-lint and Semgrep, as described in the
 [development notes](docs/development.md#gates).
 
 ```bash
+just install-python-tools # bootstrap the project-local Python environment
 just frontend-ci-install  # npm ci in web/ from the committed lockfile
 just build                # build the SPA, then the pit-officer binary
 just run-serve            # build and serve

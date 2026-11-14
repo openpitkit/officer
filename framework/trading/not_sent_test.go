@@ -80,7 +80,14 @@ func TestSendNotSentBeforeLink(t *testing.T) {
 			order := f.submit("1")
 			cause := errors.New("store failure")
 			st := &notSentStore{Store: f.st, cause: cause}
-			r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+			runtimeRegistry := f.registry
+			if stage == "unknown_provider" {
+				runtimeRegistry = trading.NewRegistry()
+				for _, provider := range f.registry.Providers() {
+					must(t, runtimeRegistry.Register(provider))
+				}
+			}
+			r, err := trading.NewRuntime(runtimeRegistry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, nil)))
 			must(t, err)
 			t.Cleanup(r.Stop)
@@ -99,6 +106,11 @@ func TestSendNotSentBeforeLink(t *testing.T) {
 				must(t, f.st.SetTradingConnectionEnabled(testCtx, dest.Connection, false))
 				want = domain.ErrConflict
 			case "unknown_provider":
+				// Only the store knows the provider removed from the runtime.
+				must(t, f.registry.Register(trading.Provider{
+					Type: "unknown", ExecutionPolicy: false,
+					Build: f.venue.build,
+				}))
 				c := f.addConnection("unknown", "unknown", true)
 				dest.Connection, want = c.ExternalID, domain.ErrInvalid
 			case "worker_unavailable":
@@ -177,7 +189,7 @@ func TestSendNotSentAfterClaimCleanup(t *testing.T) {
 					}
 					return nil
 				}
-				r, err := trading.NewRuntime(f.registry, st, sink, f.adjustmentSink, f.feeSkipSink,
+				r, err := trading.NewRuntime(f.registry, st, nil, sink, f.adjustmentSink, f.feeSkipSink,
 					slog.New(slog.NewJSONHandler(f.logs, nil)))
 				must(t, err)
 				must(t, r.Start(testCtx))
@@ -243,7 +255,7 @@ func TestSendNotSentBeforeHandoff(t *testing.T) {
 				return nil
 			}
 			st := &notSentStore{Store: f.st, detachRead: true}
-			r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+			r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, nil)))
 			must(t, err)
 			t.Cleanup(r.Stop)

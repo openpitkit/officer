@@ -32,6 +32,23 @@ var ErrRejected = errors.New("trading: venue rejected the order")
 // ErrUnsupported means the connector cannot trade this order or instrument.
 var ErrUnsupported = errors.New("trading: not supported by the connector")
 
+// ErrOrderGone confirms the venue has irretrievably lost the order and cannot
+// produce more fills. Reconciliation cancels the remaining Officer reservation.
+var ErrOrderGone = errors.New("trading: venue order is irretrievably gone")
+
+// TestExecutionRefusal is the final policy or quote refusal of a test order.
+// RuleIndexes identifies the matching rules; no match is an empty array.
+type TestExecutionRefusal struct {
+	Code        string `json:"code"`
+	BaseAsset   string `json:"baseAsset"`
+	QuoteAsset  string `json:"quoteAsset"`
+	RuleIndexes []int  `json:"ruleIndexes"`
+	Message     string `json:"message"`
+}
+
+func (r *TestExecutionRefusal) Error() string { return r.Message }
+func (r *TestExecutionRefusal) Unwrap() error { return ErrRejected }
+
 // ErrNotSent means this Send call made no connector send call and left no
 // venue link of its own. The order was not sent by this call. A caller that
 // held the order for this one send may treat it as not sent; an existing link

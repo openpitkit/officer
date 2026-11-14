@@ -30,7 +30,9 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/store/sqlite"
+	apptrading "go.openpit.dev/officer/internal/trading"
 )
 
 // newLocalNode builds a local node that runs the OpenPit engine on a fresh
@@ -45,7 +47,7 @@ func newLocalNode(t *testing.T) (node.Node, store.RealmStore) {
 // newLocalNodeBuiltBy is newLocalNode with every engine of the node, the first
 // one and each rebuild, built by build.
 func newLocalNodeBuiltBy(
-	t *testing.T, build fwengine.BuildFunc,
+	t *testing.T, build fwengine.BuildFunc, providers ...trading.Provider,
 ) (node.Node, store.RealmStore) {
 	t.Helper()
 	ctx := systemCtx()
@@ -60,6 +62,21 @@ func newLocalNodeBuiltBy(
 	)
 	if err != nil {
 		t.Fatalf("sqlite.New: %v", err)
+	}
+	registry := trading.NewRegistry()
+	for _, provider := range apptrading.FirstPartyProviders() {
+		if err := registry.Register(provider); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, provider := range providers {
+		if err := registry.Register(provider); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.BindExecutionPolicyProviders(registry.SupportsExecutionPolicy); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
 	}
 	if err := st.Migrate(ctx); err != nil {
 		_ = st.Close()

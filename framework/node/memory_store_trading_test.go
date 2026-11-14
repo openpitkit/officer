@@ -102,6 +102,32 @@ func (m *memoryRealm) DeleteTradingInstrument(_ context.Context, connection doma
 	return nil
 }
 
+func (m *memoryRealm) DeleteTradingConnection(_ context.Context, id domain.ExternalID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	connection, found := m.tradingConnections[id]
+	if !found {
+		return domain.ErrNotFound
+	}
+	if connection.Enabled {
+		return domain.ErrConflict
+	}
+	delete(m.tradingConnections, id)
+	for key, instrument := range m.tradingInstruments {
+		if instrument.Connection == id {
+			delete(m.tradingInstruments, key)
+		}
+	}
+	access := m.tradingAccess[:0]
+	for _, grant := range m.tradingAccess {
+		if grant.Connection != id {
+			access = append(access, grant)
+		}
+	}
+	m.tradingAccess = access
+	return nil
+}
+
 func (m *memoryRealm) RemoveTradingAccess(_ context.Context, connection domain.ExternalID, account domain.AccountID, accountGroup string) error {
 	subject := domain.TradingAccess{Account: account, AccountGroup: accountGroup, Connection: connection}
 	if err := domain.ValidateTradingAccess(subject); err != nil {
@@ -315,13 +341,30 @@ func (m *memoryRealm) PutTradingAccess(_ context.Context, access domain.TradingA
 	} else if _, ok := m.accounts[access.Account]; !ok {
 		return domain.ErrNotFound
 	}
-	for i, existing := range m.tradingAccess {
+	grants := append([]domain.TradingAccess(nil), m.tradingAccess...)
+	replaced := false
+	for i, existing := range grants {
 		if existing.Connection == access.Connection && existing.SameSubject(access) {
-			m.tradingAccess[i] = access
-			return nil
+			grants[i] = access
+			replaced = true
+			break
 		}
 	}
-	m.tradingAccess = append(m.tradingAccess, access)
+	if !replaced {
+		grants = append(grants, access)
+	}
+	if access.AccountGroup != "" {
+		for _, account := range m.accounts {
+			if account.GroupCode == access.AccountGroup {
+				if err := m.validateTradingAccessModes(account, grants); err != nil {
+					return err
+				}
+			}
+		}
+	} else if err := m.validateTradingAccessModes(m.accounts[access.Account], grants); err != nil {
+		return err
+	}
+	m.tradingAccess = grants
 	return nil
 }
 

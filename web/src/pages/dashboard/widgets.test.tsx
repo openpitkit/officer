@@ -262,6 +262,7 @@ function connection(
   fields: Partial<TradingConnection> = {},
 ): TradingConnection {
   return {
+    executionPolicy: false,
     id: label,
     provider: "alpaca",
     label,

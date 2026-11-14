@@ -81,6 +81,7 @@ func pnlBoundV1Fixture(t *testing.T) string {
 		DROP TABLE scheduler_job;
 		DROP TABLE account_pnl_reset_receipt;
 		DROP TABLE scheduler_execution;
+		DROP TABLE trading_test_policy;
 		ALTER TABLE audit DROP COLUMN account_identity;
 		ALTER TABLE audit DROP COLUMN group_identity;
 		DROP TABLE alert_delivery;

@@ -1223,6 +1223,9 @@ func openSQLiteStoreForTest(t *testing.T, path string, opts ...Option) *sqliteSt
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	if err := raw.BindExecutionPolicyProviders(policyFixtureClassifier); err != nil {
+		t.Fatal(err)
+	}
 	store, ok := raw.(*sqliteStore)
 	if !ok {
 		t.Fatalf("New returned %T, want *sqliteStore", raw)

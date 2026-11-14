@@ -42,7 +42,7 @@ import { getAlertRenderer } from "./registry";
 export function AlertsLauncher() {
   const { t } = useTranslation();
   const client = useApiClient();
-  const { close, setIndicator, menuButtonRef } = useSidebar();
+  const { close, collapsed, setIndicator, menuButtonRef } = useSidebar();
   const { load, reload } = usePolling((signal) => listAlerts(client, signal));
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -50,6 +50,15 @@ export function AlertsLauncher() {
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
   const unread = load.state === "ready" ? load.data.unread : null;
+  const launcherCaption =
+    load.state === "ready"
+      ? t("alerts:unresolved", { count: load.data.total })
+      : load.state === "error"
+        ? t("alerts:loadFailed")
+        : t("states.loading");
+  const launcherLabel =
+    `${t("alerts:title")}: ${launcherCaption}` +
+    (unread === null ? "" : ` - ${t("alerts:unread", { count: unread })}`);
 
   useEffect(() => {
     if (!setIndicator) return;
@@ -99,25 +108,22 @@ export function AlertsLauncher() {
       <DialogTrigger asChild>
         <button
           type="button"
+          title={collapsed ? launcherLabel : undefined}
+          aria-label={collapsed ? launcherLabel : undefined}
           className={cn(
             "mb-3 flex w-full items-center gap-2 rounded-[3px] border p-3 text-left text-xs transition-colors",
+            collapsed && "justify-center gap-0 p-2",
             unread !== null && unread > 0
               ? "border-[var(--warn)] bg-[var(--warn-dim)] text-text"
               : "border-border bg-bg/30 text-muted-lt hover:bg-surface-hover",
           )}
         >
           <Bell className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 flex-1">
+          <span className={collapsed ? "sr-only" : "min-w-0 flex-1"}>
             <span className="block font-bold">{t("alerts:title")}</span>
-            <span className="block text-[10px]">
-              {load.state === "ready"
-                ? t("alerts:unresolved", { count: load.data.total })
-                : load.state === "error"
-                  ? t("alerts:loadFailed")
-                  : t("states.loading")}
-            </span>
+            <span className="block text-[10px]">{launcherCaption}</span>
           </span>
-          {unread !== null && (
+          {!collapsed && unread !== null && (
             <Badge variant={unread > 0 ? "warn" : "neutral"}>
               {formatNumber(unread)}
             </Badge>

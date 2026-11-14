@@ -42,6 +42,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	fwstore "go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/logtest"
 )
 
@@ -49,6 +50,60 @@ import (
 // store and its realm handle.
 func newRealmStore(t *testing.T, realm domain.RealmID) (fwstore.Store, fwstore.RealmStore) {
 	return newRealmStoreWithOptions(t, realm)
+}
+
+func TestBackupSnapshotRetainsTradingClassifier(t *testing.T) {
+	ctx := context.Background()
+	st, err := New(filepath.Join(t.TempDir(), "classifier.db"), domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	registry := trading.NewRegistry()
+	if err := registry.Register(trading.Provider{
+		Type: "snapshot-venue", ExecutionPolicy: false,
+		Build: func(trading.BuildContext) (trading.Connector, error) { return nil, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BindExecutionPolicyProviders(registry.SupportsExecutionPolicy); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		provider string
+		want     error
+	}{{"snapshot-venue", domain.ErrExecutionPolicyUnsupported}, {"snapshot-unknown", domain.ErrTradingProviderUnavailable}} {
+		connection, err := realm.CreateTradingConnection(ctx, domain.TradingConnection{
+			Provider: "snapshot-venue", Label: tc.provider, VenueIdentity: tc.provider,
+			Mode: domain.TradingModePaper, Credentials: "{}",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := realm.(*realmStore).rawDB().ExecContext(ctx,
+			`UPDATE trading_connection SET provider = ? WHERE external_id = ?`, tc.provider, connection.ExternalID.Bytes(),
+		); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, closeSnapshot, err := realm.(*realmStore).backupSnapshot(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, readErr := snapshot.GetTestExecutionPolicy(ctx, connection.ExternalID)
+		if err := closeSnapshot(); err != nil {
+			t.Fatal(err)
+		}
+		if !errors.Is(readErr, tc.want) {
+			t.Fatalf("snapshot %s: %v, want %v", tc.provider, readErr, tc.want)
+		}
+	}
 }
 
 func newRealmStoreWithOptions(
@@ -62,6 +117,9 @@ func newRealmStoreWithOptions(
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	if err := s.BindExecutionPolicyProviders(policyFixtureClassifier); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -3611,6 +3669,7 @@ var backupExportedTables = map[string]bool{
 	"trading_connection":         true,
 	"trading_instrument":         true,
 	"trading_access":             true,
+	"trading_test_policy":        true,
 	"venue_order":                true,
 	"signing_key":                true,
 	"setting":                    true,

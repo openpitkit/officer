@@ -45,6 +45,9 @@ func TestTradingMutationsAuditAndGate(t *testing.T) {
 	for _, operation := range []string{"create", "settings", "enable", "fee account", "clear fee account", "upsert", "delete", "grant", "grant without venue account", "remove", "grant group", "remove group"} {
 		t.Run(operation, func(t *testing.T) {
 			n, realm := newTestNode(t, newFakeEngine())
+			bindMemoryTradingProviders(t, realm.(*memoryRealm).store, map[string]bool{
+				domain.TradingProviderAlpaca: false,
+			})
 			connection := domain.TradingConnection{
 				ExternalID: "connection", Provider: domain.TradingProviderAlpaca,
 				Label: "paper", Mode: domain.TradingModePaper, VenueIdentity: "venue-account",
@@ -217,6 +220,9 @@ func (r *rejectTradingRealm) SetTradingConnectionFeeAccount(context.Context, dom
 func newTradingFeeAccountNode(t *testing.T) (*localNode, store.RealmStore, domain.TradingConnection) {
 	t.Helper()
 	n, realm := newTestNode(t, newFakeEngine())
+	bindMemoryTradingProviders(t, realm.(*memoryRealm).store, map[string]bool{
+		domain.TradingProviderAlpaca: false,
+	})
 	for _, account := range []domain.AccountID{"first", "second", "fees"} {
 		if _, err := realm.CreateAccount(context.Background(), domain.Account{Code: account}); err != nil {
 			t.Fatal(err)
@@ -566,6 +572,12 @@ func TestMemoryGetTradingFeeAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("fees", []domain.AccountID{})
+	if _, err := realm.CreateTradingConnection(ctx, domain.TradingConnection{
+		ExternalID: "other", Provider: domain.TradingProviderAlpaca,
+		Label: "other", Mode: domain.TradingModePaper, VenueIdentity: "other-account", Credentials: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	realm.(*memoryRealm).tradingAccess = []domain.TradingAccess{
 		{Connection: connection.ExternalID, Account: "second"},
 		{Connection: connection.ExternalID, Account: "first", VenueAccount: "a"},
@@ -888,6 +900,25 @@ func TestLocalNode_AgentTradingWideningRefused(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestLocalNodeDeleteTradingConnection(t *testing.T) {
+	ctx := context.Background()
+	n, connection := newAgentTradingNode(t)
+	before := readTradingAgentState(t, n, connection)
+	requireLoosening(t, "delete connection", n.DeleteTradingConnection(ctx, connection, agentCaller))
+	if after := readTradingAgentState(t, n, connection); !reflect.DeepEqual(after, before) {
+		t.Fatalf("agent deletion changed state: before=%+v after=%+v", before, after)
+	}
+	if err := n.SetTradingConnectionEnabled(ctx, connection, false, testCaller); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.DeleteTradingConnection(ctx, connection, testCaller); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := n.GetTradingConnection(ctx, connection); err != nil || found {
+		t.Fatalf("deleted connection: found=%v err=%v", found, err)
 	}
 }
 

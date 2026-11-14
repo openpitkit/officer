@@ -53,6 +53,13 @@ type recordingStore struct {
 	closeErr   error
 }
 
+func (s *recordingStore) BindExecutionPolicyProviders(classifier domain.ExecutionPolicyProviderLookup) error {
+	if s.Store != nil {
+		return s.Store.BindExecutionPolicyProviders(classifier)
+	}
+	return nil
+}
+
 func (s *recordingStore) Migrate(context.Context) error {
 	*s.calls = append(*s.calls, "store.Migrate")
 	return s.migrateErr
@@ -147,8 +154,9 @@ func TestBuildOverSuccess(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := b.RegisterTradingProvider(trading.Provider{
-					Type: "host-trading",
-					Build: func(domain.TradingConnection) (trading.Connector, error) {
+					ExecutionPolicy: false,
+					Type:            "host-trading",
+					Build: func(trading.BuildContext) (trading.Connector, error) {
 						panic("unexpected connector construction")
 					},
 				}); err != nil {

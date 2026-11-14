@@ -139,6 +139,10 @@ var textContentCalls = map[string]textContentCall{
 	"set_trading_fee_account":   {textContentTrading, map[string]any{"connection": "conn", "account": "acc"}},
 	"clear_trading_fee_account": {textContentTrading, map[string]any{"connection": "conn"}},
 	"list_trading_destinations": {textContentTrading, map[string]any{"account": "acc"}},
+	"get_test_execution_policy": {textContentFake, map[string]any{"connection": "conn"}},
+	"set_test_execution_policy": {textContentFake, map[string]any{
+		"connection": "conn", "policy": map[string]any{"rules": []any{}},
+	}},
 }
 
 // TestEveryMCPToolTextCarriesStructuredContent holds, for the whole Officer

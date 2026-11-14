@@ -143,10 +143,13 @@ func (w *worker) applyFill(link domain.VenueOrder, order domain.Order, fill Fill
 		FillQuantity: fill.Quantity, FillPrice: fill.Price,
 		LeavesQuantity: fill.LeavesQuantity, Commission: commission,
 	})
-	if errors.Is(err, domain.ErrAlreadyExists) {
-		return nil
+	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		return err
 	}
-	return err
+	if fill.Final {
+		return w.releaseOrder(link)
+	}
+	return nil
 }
 
 func (w *worker) handleEvent(event Event) {
@@ -308,7 +311,7 @@ func (w *worker) reconcile(link domain.VenueOrder) error {
 		return w.cancelOrder(link)
 	}
 	if domain.OrderStatusTerminal(detail.Order.Status) {
-		return nil
+		return w.releaseOrder(link)
 	}
 	instrument, mapped, err := w.r.store.FindTradingInstrument(ctx, w.connection.ExternalID,
 		detail.Order.BaseAsset, detail.Order.QuoteAsset)
@@ -322,6 +325,9 @@ func (w *worker) reconcile(link domain.VenueOrder) error {
 	lookupCtx, cancel := context.WithTimeout(ctx, connectorTimeout)
 	snapshot, found, err := w.connector.Lookup(lookupCtx, ref)
 	cancel()
+	if errors.Is(err, ErrOrderGone) {
+		return w.cancelOrder(link)
+	}
 	if err != nil {
 		return fmt.Errorf("trading: venue lookup: %w", err)
 	}
@@ -394,6 +400,7 @@ func (w *worker) reconcile(link domain.VenueOrder) error {
 		if !domain.OrderStatusTerminal(detail.Order.Status) {
 			return fmt.Errorf("trading: venue filled but Officer order is still open: %w", domain.ErrUpstream)
 		}
+		return w.releaseOrder(link)
 	case VenueStatusReplaced:
 		w.log(slog.LevelError, link.ClientOrderID,
 			"venue replaced order; Officer does not follow replacements; operator attention required",

@@ -1047,6 +1047,7 @@ function AveragePriceIntentRow({
         <NumberStepper
           id="adjust-average-entry-price"
           value={value}
+          valueType="price"
           spellCheck={false}
           placeholder={t("panel.noChange")}
           inputClassName="h-8 text-right text-xs"
@@ -1240,7 +1241,7 @@ function AmountIntentRow({
         <NumberStepper
           id={`adjust-${id}-value`}
           value={field.value}
-          min={null}
+          valueType="quantity"
           spellCheck={false}
           placeholder={t("panel.noChange")}
           inputClassName="h-8 text-right text-xs"
@@ -2500,7 +2501,7 @@ function AmountField({
           </Select>
           <NumberStepper
             value={field.value}
-            min={null}
+            valueType="quantity"
             spellCheck={false}
             placeholder="0"
             className="flex-1"
@@ -2988,6 +2989,7 @@ function AdjustDialog({
               <NumberStepper
                 id="adj-aep"
                 value={avgPrice}
+                valueType="price"
                 spellCheck={false}
                 placeholder="e.g. 142.50"
                 inputClassName="text-xs"

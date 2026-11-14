@@ -15,8 +15,14 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { AlertTriangle, Info, LogOut } from "lucide-react";
-import { useLayoutEffect, useState } from "react";
+import {
+  AlertTriangle,
+  Info,
+  LogOut,
+  Skull,
+  type LucideIcon,
+} from "lucide-react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 
@@ -44,6 +50,7 @@ import {
 } from "@/components/ui/dialog";
 import { useApiClient } from "@/framework";
 import { checkSession } from "@/lib/panelSession";
+import { cn } from "@/lib/utils";
 
 export function RestartRequiredNavEntry() {
   const { pathname } = useLocation();
@@ -55,7 +62,7 @@ export function RestartRequiredNavEntry() {
 
 function RestartRequiredNavIndicator() {
   const { t } = useTranslation();
-  const { close } = useSidebar();
+  const { close, collapsed } = useSidebar();
   const { load } = useMarketData();
   const restartRequired = load.state === "ready" && load.data.restartRequired;
   if (!restartRequired) {
@@ -65,11 +72,66 @@ function RestartRequiredNavIndicator() {
     <Link
       to="/market-data"
       onClick={close}
-      className="mb-1 flex items-center gap-[var(--dens-nav-gap)] rounded-[3px] border border-[var(--warn)]/40 bg-[var(--warn)]/10 px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-[length:var(--dens-footer-fz)] font-semibold text-[var(--warn)] transition-colors hover:bg-[var(--warn)]/15"
+      title={
+        collapsed
+          ? t("nav.restartRequired") +
+            (load.error === null ? "" : `: ${load.error}`)
+          : undefined
+      }
+      className={cn(
+        "mb-1 flex items-center gap-[var(--dens-nav-gap)] rounded-[3px] border border-[var(--warn)]/40 bg-[var(--warn)]/10 px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-[length:var(--dens-footer-fz)] font-semibold text-[var(--warn)] transition-colors hover:bg-[var(--warn)]/15",
+        collapsed && "justify-center gap-0 px-2",
+      )}
     >
       <AlertTriangle className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
-      <span className="flex-1 text-left">{t("nav.restartRequired")}</span>
-      <CompactStaleState load={load} />
+      <span className={collapsed ? "sr-only" : "flex-1 text-left"}>
+        {t("nav.restartRequired")}
+      </span>
+      {collapsed ? (
+        <span className="sr-only">
+          <CompactStaleState load={load} />
+        </span>
+      ) : (
+        <CompactStaleState load={load} />
+      )}
+    </Link>
+  );
+}
+
+function SidebarPlaqueLink({
+  to,
+  label,
+  icon: Icon,
+  tone,
+  children,
+}: {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  tone: "warn" | "danger";
+  children: ReactNode;
+}) {
+  const { close, collapsed } = useSidebar();
+  return (
+    <Link
+      to={to}
+      onClick={close}
+      title={collapsed ? label : undefined}
+      aria-label={collapsed ? label : undefined}
+      className={cn(
+        "mt-1 block rounded-card transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+        collapsed && "flex justify-center border p-2",
+        collapsed &&
+          (tone === "danger"
+            ? "border-[var(--danger)]/40 bg-[var(--danger)]/10 text-[var(--danger)]"
+            : "border-[var(--warn)]/40 bg-[var(--warn)]/10 text-[var(--warn)]"),
+      )}
+    >
+      {collapsed ? (
+        <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+      ) : (
+        children
+      )}
     </Link>
   );
 }
@@ -80,7 +142,7 @@ function RestartRequiredNavIndicator() {
  * strip only below `md`, where the sidebar is a closed drawer.
  */
 export function NonReleaseNavEntry() {
-  const { close } = useSidebar();
+  const { t } = useTranslation();
   const { nonRelease, showInSidebar } = useNonRelease();
   useLayoutEffect(() => {
     if (!nonRelease) return;
@@ -91,13 +153,14 @@ export function NonReleaseNavEntry() {
     return null;
   }
   return (
-    <Link
+    <SidebarPlaqueLink
       to="/service"
-      onClick={close}
-      className="mt-1 block rounded-card transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+      label={`${t("brand.nonRelease")}: ${t("nonRelease.banner")}`}
+      icon={Skull}
+      tone="danger"
     >
       <NonReleaseBanner />
-    </Link>
+    </SidebarPlaqueLink>
   );
 }
 
@@ -117,21 +180,21 @@ export function SensitiveDataNavEntry() {
 
 function SensitiveDataNavPlaque() {
   const { t } = useTranslation();
-  const { close } = useSidebar();
   const { load } = useCredentialStorage();
   if (!storesPlaintextKeys(load)) {
     return null;
   }
   return (
-    <Link
+    <SidebarPlaqueLink
       to="/service#security"
-      onClick={close}
-      className="mt-1 block rounded-card transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+      label={`${t("sensitiveData.title")}. ${t("sensitiveData.masterKeyLink")}`}
+      icon={AlertTriangle}
+      tone="warn"
     >
       <Notice tone="warn" icon={AlertTriangle} title={t("sensitiveData.title")}>
         <p>{t("sensitiveData.masterKeyLink")}</p>
       </Notice>
-    </Link>
+    </SidebarPlaqueLink>
   );
 }
 
@@ -142,6 +205,7 @@ function SensitiveDataNavPlaque() {
  */
 export function LogoutNavEntry() {
   const { t } = useTranslation();
+  const { collapsed } = useSidebar();
   const client = useApiClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -165,31 +229,56 @@ export function LogoutNavEntry() {
       <button
         type="button"
         disabled={busy}
+        title={collapsed ? t("nav.logOut") : undefined}
         onClick={() => {
           void leave();
         }}
-        className="flex w-full items-center gap-[var(--dens-nav-gap)] rounded-[3px] px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-left text-[length:var(--dens-footer-fz)] text-muted transition-colors hover:bg-surface-hover hover:text-muted-lt disabled:pointer-events-none disabled:opacity-50"
+        className={cn(
+          "flex w-full items-center gap-[var(--dens-nav-gap)] rounded-[3px] px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-left text-[length:var(--dens-footer-fz)] text-muted transition-colors hover:bg-surface-hover hover:text-muted-lt disabled:pointer-events-none disabled:opacity-50",
+          collapsed && "justify-center gap-0 px-2",
+        )}
       >
         <LogOut className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
-        <span className="flex-1">{t("nav.logOut")}</span>
+        <span className={collapsed ? "sr-only" : "flex-1"}>
+          {t("nav.logOut")}
+        </span>
       </button>
-      {error !== null && <ErrorBanner className="mt-1" message={error} />}
+      {error !== null &&
+        (collapsed ? (
+          <div
+            role="alert"
+            title={error}
+            className="mt-1 flex justify-center text-[var(--danger)]"
+          >
+            <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">{error}</span>
+          </div>
+        ) : (
+          <ErrorBanner className="mt-1" message={error} />
+        ))}
     </div>
   );
 }
 
 export function AboutNavEntry() {
   const { t } = useTranslation();
+  const { collapsed } = useSidebar();
 
   return (
     <Dialog>
       <DialogTrigger asChild>
         <button
           type="button"
-          className="mt-1 flex w-full items-center gap-[var(--dens-nav-gap)] rounded-[3px] px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-left text-[length:var(--dens-footer-fz)] text-muted transition-colors hover:bg-surface-hover hover:text-muted-lt"
+          title={collapsed ? t("about.title") : undefined}
+          className={cn(
+            "mt-1 flex w-full items-center gap-[var(--dens-nav-gap)] rounded-[3px] px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-left text-[length:var(--dens-footer-fz)] text-muted transition-colors hover:bg-surface-hover hover:text-muted-lt",
+            collapsed && "justify-center gap-0 px-2",
+          )}
         >
           <Info className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
-          <span className="flex-1">{t("about.title")}</span>
+          <span className={collapsed ? "sr-only" : "flex-1"}>
+            {t("about.title")}
+          </span>
         </button>
       </DialogTrigger>
       <DialogContent className="max-w-xl">

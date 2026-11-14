@@ -90,7 +90,7 @@ describe("isOpenQuantityString", () => {
     ["1 ", false],
     [" 1 ", false],
     ["1e3", false],
-    ["-1", false],
+    ["-1", true],
     ["", false],
   ])("accepts %j: %s", (value, expected) => {
     expect(isOpenQuantityString(value)).toBe(expected);
@@ -134,6 +134,21 @@ describe("smartStep", () => {
 });
 
 describe("stepValue", () => {
+  it("uses exact whole-number smart steps for integer-only fields", () => {
+    expect(stepValue("", 1, { integerOnly: true })).toBe("1");
+    expect(stepValue("1", 1, { integerOnly: true })).toBe("2");
+    expect(stepValue("0", -1, { integerOnly: true, min: null })).toBe("0");
+    expect(stepValue("1", -1, { integerOnly: true, min: "1" })).toBe("1");
+    expect(stepValue("100", 1, { integerOnly: true })).toBe("110");
+    expect(stepValue("9999999999999999", 1, { integerOnly: true })).toBe(
+      "10000000000000999",
+    );
+    for (const invalid of ["1.5", "1,5", "-1", "+1", " 1 "]) {
+      expect(stepValue(invalid, 1, { integerOnly: true })).toBe(invalid);
+    }
+    expect(stepValue("1", -1, { integerOnly: true, min: "0.5" })).toBe("1");
+  });
+
   it("nudges by the magnitude-scaled step", () => {
     expect(stepValue("0.5", 1)).toBe("0.6");
     expect(stepValue("5", 1)).toBe("6");
@@ -190,9 +205,31 @@ describe("subtractDecimalStrings", () => {
     expect(subtractDecimalStrings("0.3", "0.2")).toBe("0.1");
   });
 
-  it("clamps negative subtraction results to zero", () => {
-    expect(subtractDecimalStrings("1", "2")).toBe("0");
-    expect(subtractDecimalStrings("0.1", "0.25")).toBe("0");
+  it("preserves negative results and signed quantities", () => {
+    expect(subtractDecimalStrings("1", "2")).toBe("-1");
+    expect(subtractDecimalStrings("0.1", "0.25")).toBe("-0.15");
+    expect(subtractDecimalStrings("-10", "-2")).toBe("-8");
+    expect(subtractDecimalStrings("-2", "-10")).toBe("8");
+  });
+
+  it("satisfies exact signed subtraction across generated decimal scales", () => {
+    const units = [-900719925474099312345n, -2n, -1n, 0n, 1n, 2n, 900719925474099312345n];
+    function input(value: bigint, scale: number): string {
+      const sign = value < 0n ? "-" : "";
+      const digits = (value < 0n ? -value : value).toString().padStart(scale + 1, "0");
+      return scale === 0 ? sign + digits : `${sign}${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+    }
+    for (const left of units) for (const right of units) {
+      for (const leftScale of [0, 2, 8]) for (const rightScale of [0, 2, 8]) {
+        const result = subtractDecimalStrings(input(left, leftScale), input(right, rightScale));
+        expect(result).not.toBeNull();
+        const [whole, fraction = ""] = result!.split(".");
+        const coefficient = BigInt(whole + fraction);
+        expect(coefficient * 10n ** BigInt(leftScale + rightScale)).toBe(
+          (left * 10n ** BigInt(rightScale) - right * 10n ** BigInt(leftScale)) * 10n ** BigInt(fraction.length),
+        );
+      }
+    }
   });
 
   it("returns null for invalid decimal strings", () => {

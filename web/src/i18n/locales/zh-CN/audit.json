@@ -59,6 +59,7 @@
     }
   },
   "detail": {
+    "delete_trading_connection": "删除交易连接 {{connection}}",
     "alert_delivery": "提醒 {{alert}} 已通过 {{channel}} 发送",
     "alert_delivery_failed": "提醒 {{alert}} 通过 {{channel}} 发送失败",
     "resolve_alert": "提醒 {{alert}} 已通过 {{action}} 处理：{{result}}",
@@ -115,6 +116,7 @@
     "delete_limit": "删除限制 {{policy}}（{{scope}}）",
     "create_trading_connection": "创建交易连接 {{connection}}（{{provider}}，{{connectionMode}}）",
     "update_trading_connection_settings": "更新交易连接 {{connection}} 的设置",
+    "set_test_execution_policy": "替换交易连接 {{connection}} 的测试执行策略：修订版 {{oldRevision}} → {{newRevision}}",
     "enable_trading_connection": "启用交易连接 {{connection}}",
     "disable_trading_connection": "停用交易连接 {{connection}}",
     "upsert_trading_instrument": "保存交易工具 {{connection}}/{{symbol}}",
@@ -175,6 +177,8 @@
     "reset_account_pnl_previous_halt": "账户 {{account}} 的已实现 P&L 已重置为 0；先前值 {{previousPnl}}；重置前 P&L 计算停止的原因：{{previousHalt}}"
   },
   "detailField": {
+    "oldRules": "原规则",
+    "newRules": "新规则",
     "account": "账户",
     "account_group": "账户组",
     "asset": "资产",

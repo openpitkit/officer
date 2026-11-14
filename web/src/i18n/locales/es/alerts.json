@@ -1,4 +1,10 @@
 {
+  "mixedTradingAccess": {
+    "title": "Acceso simulado y real: {{account}}",
+    "detail": "La cuenta {{account}} ahora tiene acceso a cuentas simuladas y reales de centros de negociación. Se incluyen el acceso del grupo y las conexiones desactivadas. La confirmación registra la toma de conocimiento y no modifica el acceso.",
+    "acknowledge": "Confirmar conocimiento",
+    "invalid": "La alerta de acceso mixto contiene datos de cuenta no válidos."
+  },
   "title": "Alertas",
   "description": "Los eventos pendientes permanecen aquí hasta que una decisión se complete. El estado de lectura es personal y se comparte entre sus sesiones.",
   "unresolved": "Pendientes: {{count}}",

@@ -91,3 +91,9 @@ CREATE TABLE alert_delivery (
     PRIMARY KEY(alert_id, channel)
 );
 CREATE INDEX idx_actionable_alert_at ON actionable_alert(at, id);
+
+CREATE TABLE trading_test_policy (
+    connection_id INTEGER PRIMARY KEY REFERENCES trading_connection(id) ON DELETE CASCADE,
+    revision      INTEGER NOT NULL CHECK (revision > 0),
+    rules         TEXT    NOT NULL
+);

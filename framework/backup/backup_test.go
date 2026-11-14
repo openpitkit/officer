@@ -56,6 +56,12 @@ func TestFixtureArchiveDecodes(t *testing.T) {
 		t.Fatalf("fixture formatVersion = %d, want %d", archive.Manifest.FormatVersion, FormatVersion)
 	}
 	data := archive.Data
+	if len(data.TestExecutionPolicies) != 1 || len(data.TradingConnections) != 1 ||
+		data.TestExecutionPolicies[0].Connection != data.TradingConnections[0].ExternalID ||
+		data.TestExecutionPolicies[0].Revision != 7 ||
+		!json.Valid(data.TestExecutionPolicies[0].Rules) {
+		t.Fatalf("fixture test policy lost: %+v", data.TestExecutionPolicies)
+	}
 	if len(data.Assets) != 2 {
 		t.Fatalf("assets = %d, want 2", len(data.Assets))
 	}
@@ -424,6 +430,9 @@ func TestTradingScopeCarriesRequiredParentsAndIsAllOrNothing(t *testing.T) {
 			{Account: "acc-2", Connection: connectionB},
 			{AccountGroup: "grp-2", Connection: connectionB},
 		},
+		TestExecutionPolicies: []TestExecutionPolicy{
+			{Connection: connectionA, Revision: 7, Rules: json.RawMessage(`[]`)},
+		},
 	}
 	scope := Scope{
 		Sections: []Section{SectionTrading},
@@ -439,8 +448,17 @@ func TestTradingScopeCarriesRequiredParentsAndIsAllOrNothing(t *testing.T) {
 	}
 	filtered := FilterData(data, scope)
 	if !reflect.DeepEqual(filtered.TradingConnections, data.TradingConnections) ||
-		!reflect.DeepEqual(filtered.TradingAccess, data.TradingAccess) {
+		!reflect.DeepEqual(filtered.TradingAccess, data.TradingAccess) ||
+		!reflect.DeepEqual(filtered.TestExecutionPolicies, data.TestExecutionPolicies) {
 		t.Fatalf("account selector narrowed trading data: %+v", filtered)
+	}
+	filtered.TestExecutionPolicies[0].Rules[0] = 'x'
+	if string(data.TestExecutionPolicies[0].Rules) != "[]" {
+		t.Fatal("filtered policy aliases source rules")
+	}
+	withoutTrading := FilterData(data, Scope{Sections: []Section{SectionGeneralSettings}})
+	if len(withoutTrading.TestExecutionPolicies) != 0 {
+		t.Fatal("policy escaped trading section")
 	}
 
 	activity := Scope{Sections: []Section{SectionActivityHistory}}.Normalize()

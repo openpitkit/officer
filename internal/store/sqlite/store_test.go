@@ -116,6 +116,9 @@ func newTestStore(t *testing.T, opts ...Option) (fwstore.Store, fwstore.RealmSto
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	if err := s.BindExecutionPolicyProviders(policyFixtureClassifier); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = s.Close() })
 	// These disposable files test store behaviour, not recovery after power loss.
 	// Avoid per-transaction disk journal flushes on Windows test runners.
@@ -2481,8 +2484,8 @@ func TestListRowsVenueAccess(t *testing.T) {
 		descending bool
 		want       string
 	}{
-		{want: "acc-plain,acc-ungrouped,acc-both,acc-own,acc-via-group"},
-		{descending: true, want: "acc-via-group,acc-own,acc-both,acc-ungrouped,acc-plain"},
+		{want: "acc-plain,acc-ungrouped,acc-own,acc-via-group,acc-both"},
+		{descending: true, want: "acc-both,acc-via-group,acc-own,acc-ungrouped,acc-plain"},
 	} {
 		page, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
 			Sort: fwstore.SortSpec{Column: "venueAccess", Descending: tc.descending},

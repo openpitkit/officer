@@ -316,6 +316,11 @@ func TestCatalogParity(t *testing.T) {
 		catalog.CatalogCommand{Name: "clear_trading_fee_account", Title: "Clear trading fee account", AgentDescription: "Clear the Officer account receiving unlinked venue fees; refused for an agent.", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
 		catalog.CatalogCommand{Name: "list_trading_destinations", Title: "List trading destinations", AgentDescription: "List the trading destinations available to an Officer account.", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 	)
+	want = append(want,
+		catalog.CatalogCommand{Name: "get_test_execution_policy", Title: "Get test execution policy", AgentDescription: "Read a test connection's execution policy.", Implemented: true, DefaultEnabled: true},
+		catalog.CatalogCommand{Name: "set_test_execution_policy", Title: "Set test execution policy", AgentDescription: "Replace only a test connection's execution policy.", Mutating: true, Protective: true, Implemented: true},
+	)
+
 	if got := openCatalog().All(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("catalog parity mismatch\nwant: %#v\ngot:  %#v", want, got)
 	}
@@ -362,6 +367,7 @@ func TestImplementedDescriptorOrder(t *testing.T) {
 		"report_fill",
 	}
 	want = append(want, "send_paper_order", "send_live_order", "get_trading", "get_credential_storage", "create_trading_connection", "update_trading_connection", "set_trading_connection_enabled", "check_trading_connection", "set_trading_instrument", "delete_trading_instrument", "verify_trading_symbol", "search_trading_symbols", "grant_trading_access", "revoke_trading_access", "set_trading_fee_account", "clear_trading_fee_account", "list_trading_destinations")
+	want = append(want, "get_test_execution_policy", "set_test_execution_policy")
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("implemented tool order mismatch\nwant: %#v\ngot:  %#v", want, got)
 	}

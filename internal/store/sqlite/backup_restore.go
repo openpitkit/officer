@@ -33,6 +33,7 @@ import (
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/framework/web/httpapi/dto"
 )
 
 // --- Restore: dictionaries --------------------------------------------------
@@ -221,6 +222,9 @@ func (rt *restoreTx) restoreGroups(
 		); err != nil {
 			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
 		}
+		if err := rt.affectTradingGroup(ctx, g.Code); err != nil {
+			return err
+		}
 		rt.applyRuntime(backup.SectionAccountsGroups, 1)
 	}
 	if err := rt.restoreDefaultGroupCurrency(ctx, defaultCurrency); err != nil {
@@ -356,6 +360,7 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 		if err := rt.restorePnlResetReceipts(ctx, byAccount[domain.AccountID(a.Code)]); err != nil {
 			return err
 		}
+		rt.isolationAccounts[domain.AccountID(a.Code)] = true
 		rt.applyRuntime(backup.SectionAccountsGroups, 1)
 	}
 	return nil
@@ -831,12 +836,30 @@ func (rt *restoreTx) openArchivedMarketDataCredentials(
 // --- Restore: trading -------------------------------------------------------
 
 func (rt *restoreTx) restoreTrading(ctx context.Context, data backup.Data) error {
+	archivedPolicies := make(map[domain.ExternalID]bool, len(data.TestExecutionPolicies))
+	for _, policy := range data.TestExecutionPolicies {
+		if archivedPolicies[policy.Connection] {
+			return fmt.Errorf("store: duplicate test policy for connection %s: %w", policy.Connection, domain.ErrInvalid)
+		}
+		archivedPolicies[policy.Connection] = true
+	}
 	for _, archived := range data.TradingConnections {
 		if archived.ExternalID.IsZero() {
 			return fmt.Errorf(
 				"store: restore trading connection %q external id: %w",
 				archived.Label, domain.ErrInvalid,
 			)
+		}
+		classifier, err := rt.store.executionPolicyProviders()
+		if err != nil {
+			return err
+		}
+		class, err := domain.ProviderSupportsExecutionPolicy(classifier, archived.Provider)
+		if err != nil {
+			return err
+		}
+		if class != archivedPolicies[archived.ExternalID] {
+			return fmt.Errorf("store: archived connection %s policy does not match provider capability %t: %w", archived.ExternalID, class, domain.ErrInvalid)
 		}
 		exists, err := rowExists(
 			ctx, rt.tx,
@@ -941,9 +964,15 @@ func (rt *restoreTx) restoreTrading(ctx context.Context, data backup.Data) error
 				connection.ExternalID, err,
 			)
 		}
+		if err := rt.affectTradingConnection(ctx, connection.ExternalID); err != nil {
+			return err
+		}
 		rt.applyRuntime(backup.SectionTrading, 1)
 	}
 
+	if err := rt.restoreTestExecutionPolicies(ctx, data); err != nil {
+		return err
+	}
 	if err := rt.restoreTradingInstruments(ctx, data.TradingInstruments); err != nil {
 		return err
 	}
@@ -954,6 +983,88 @@ func (rt *restoreTx) restoreTrading(ctx context.Context, data backup.Data) error
 		return err
 	}
 	return rt.restoreVenueOrders(ctx, data.VenueOrders)
+}
+
+func (rt *restoreTx) restoreTestExecutionPolicies(ctx context.Context, data backup.Data) error {
+	realm := &realmStore{store: rt.store}
+	for _, archived := range data.TestExecutionPolicies {
+		state, err := decodeStoredTestExecutionPolicy(archived.Revision, string(archived.Rules))
+		if err != nil {
+			return fmt.Errorf("store: restore test policy for connection %s: %w", archived.Connection, err)
+		}
+		canonical := dto.ToTestExecutionPolicyStateDTO(archived.Connection, state)
+		rules, err := json.Marshal(canonical.Rules)
+		if err != nil {
+			return fmt.Errorf("store: encode restored test policy for connection %s: %w", archived.Connection, err)
+		}
+		id, class, err := realm.executionPolicyConnection(ctx, rt.tx, archived.Connection)
+		if err != nil {
+			return err
+		}
+		if !class {
+			return fmt.Errorf("store: restore test policy for venue connection %s: %w", archived.Connection, domain.ErrExecutionPolicyUnsupported)
+		}
+		exists, err := rowExists(ctx, rt.tx,
+			`SELECT 1 FROM trading_test_policy WHERE connection_id = ?`, id)
+		if err != nil {
+			return err
+		}
+		if rt.skip(backup.SectionTrading, exists) {
+			continue
+		}
+		if _, err := rt.tx.ExecContext(ctx,
+			`INSERT INTO trading_test_policy (connection_id, revision, rules) VALUES (?, ?, ?)
+			 ON CONFLICT (connection_id) DO UPDATE SET revision = excluded.revision, rules = excluded.rules`,
+			id, archived.Revision, string(rules),
+		); err != nil {
+			return fmt.Errorf("store: restore test policy for connection %s: %w", archived.Connection, err)
+		}
+		rt.applyRuntime(backup.SectionTrading, 1)
+	}
+
+	// Check the resulting rows even in insert-missing mode, and when only a
+	// child row in the archive addresses an existing connection.
+	affected := make(map[domain.ExternalID]bool)
+	for _, connection := range data.TradingConnections {
+		affected[connection.ExternalID] = true
+	}
+	for _, policy := range data.TestExecutionPolicies {
+		affected[policy.Connection] = true
+	}
+	for _, instrument := range data.TradingInstruments {
+		affected[instrument.Connection] = true
+	}
+	for _, access := range data.TradingAccess {
+		affected[access.Connection] = true
+	}
+	for _, order := range data.VenueOrders {
+		affected[order.Connection] = true
+	}
+	for connection := range affected {
+		id, class, err := realm.executionPolicyConnection(ctx, rt.tx, connection)
+		if errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("store: restore policy validation references missing trading connection %q; include that connection in the %q section: %w",
+				connection, backup.SectionTrading, domain.ErrInvalid)
+		}
+		if err != nil {
+			return err
+		}
+		if class {
+			if _, err := readTestExecutionPolicy(ctx, rt.tx, id, connection); err != nil {
+				return err
+			}
+		} else {
+			exists, err := rowExists(ctx, rt.tx,
+				`SELECT 1 FROM trading_test_policy WHERE connection_id = ?`, id)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return fmt.Errorf("store: venue connection %s has a test policy: %w", connection, domain.ErrExecutionPolicyUnsupported)
+			}
+		}
+	}
+	return nil
 }
 
 func (rt *restoreTx) restoreTradingInstruments(
@@ -1103,6 +1214,17 @@ func (rt *restoreTx) restoreTradingAccess(
 				"store: restore trading access %q/%q: %w",
 				access.SubjectLabel(), access.Connection, err,
 			)
+		}
+		if access.AccountGroup != "" {
+			accounts, err := tradingGroupAccounts(ctx, rt.tx, groupID)
+			if err != nil {
+				return err
+			}
+			for _, account := range accounts {
+				rt.isolationAccounts[account] = true
+			}
+		} else {
+			rt.isolationAccounts[access.Account] = true
 		}
 		rt.applyRuntime(backup.SectionTrading, 1)
 	}

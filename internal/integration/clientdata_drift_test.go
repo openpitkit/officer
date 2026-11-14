@@ -508,6 +508,13 @@ var clientDataAllowlist = []clientDataAllow{
 	},
 	{
 		Surface: driftBackup,
+		Entity:  "trading-connections",
+		Field:   "trading-connections.FeeAccount",
+		Kind:    "optional-sentinel",
+		Why:     "the test connection has no venue fee account; the venue sentinel covers the non-empty field",
+	},
+	{
+		Surface: driftBackup,
 		Entity:  "trading-access",
 		Field:   "trading-access.AccountGroup",
 		Kind:    "optional-sentinel",
@@ -854,6 +861,7 @@ var expectedSchemaTableNames = []string{
 	"trading_access",
 	"trading_connection",
 	"trading_instrument",
+	"trading_test_policy",
 	"venue_order",
 }
 
@@ -1210,6 +1218,13 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"venue_account":    "VenueAccount",
 		},
 	},
+	"trading_test_policy": {
+		backup: map[string]string{
+			"connection_id": "Connection",
+			"revision":      "Revision",
+			"rules":         "Rules",
+		},
+	},
 	"venue_order": {
 		backup: map[string]string{
 			"order_id":        "Order",
@@ -1505,6 +1520,18 @@ func newClientDataDriftRealm(
 		t.Fatalf("sqlite.New: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	if err := st.BindExecutionPolicyProviders(func(provider string) (bool, error) {
+		switch provider {
+		case "drift-test":
+			return true, nil
+		case domain.TradingProviderAlpaca, domain.TradingProviderBinance, domain.TradingProviderIB, domain.TradingProviderEtoro:
+			return false, nil
+		default:
+			return false, fmt.Errorf("drift provider %q: %w", provider, domain.ErrTradingProviderUnavailable)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -1949,6 +1976,21 @@ func seedClientDataDriftRealm(
 	))
 	must(t, "SetSetting", rs.SetSetting(ctx, "no_esign", "0"))
 	must(t, "SetMcpAccess", rs.SetMcpAccess(ctx, "submit_order", true))
+	testConnection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
+		Provider: "drift-test", Label: "Test Sentinel", VenueIdentity: "test-sentinel",
+		Mode: domain.TradingModePaper, Credentials: "{}", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mask, err := domain.ParseInstrumentMask("*", "USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = rs.ReplaceTestExecutionPolicy(ctx, testConnection.ExternalID, domain.TestExecutionPolicy{Rules: []domain.TestExecutionRule{
+		{Mask: mask, Mode: "execute", PriceVariant: "normal"},
+	}})
+	must(t, "ReplaceTestExecutionPolicy", err)
 }
 
 func buildBusinessCSVColumnSpecs() []csvColumnSpec {
@@ -2122,6 +2164,7 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"trading-connections", data.TradingConnections},
 		{"trading-instruments", data.TradingInstruments},
 		{"trading-access", data.TradingAccess},
+		{"test-execution-policies", data.TestExecutionPolicies},
 		{"venue-orders", data.VenueOrders},
 		{"signing-keys", data.SigningKeys},
 		{"settings", data.Settings},

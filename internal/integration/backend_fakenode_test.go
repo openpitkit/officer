@@ -1645,6 +1645,10 @@ func (n *fakeNode) DeleteTradingInstrument(ctx context.Context, connection domai
 	return domain.ErrNotImplemented
 }
 
+func (n *fakeNode) DeleteTradingConnection(ctx context.Context, id domain.ExternalID, caller domain.Caller) error {
+	return domain.ErrNotImplemented
+}
+
 func (n *fakeNode) PutTradingAccess(ctx context.Context, access domain.TradingAccess, requireFeeAccount bool, caller domain.Caller) error {
 	n.recordCall("PutTradingAccess", access.Account, access.AccountGroup)
 	return nil

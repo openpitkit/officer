@@ -1,4 +1,10 @@
 {
+  "mixedTradingAccess": {
+    "title": "Paper and live access: {{account}}",
+    "detail": "Account {{account}} now has access to both paper and live venue accounts. Group access and disabled connections are included. Acknowledgement records awareness and leaves access unchanged.",
+    "acknowledge": "Acknowledge",
+    "invalid": "The mixed-access alert has an invalid account payload."
+  },
   "title": "Alerts",
   "description": "Open events remain here until a decision succeeds. Read state is personal and shared across your sessions.",
   "unresolved": "Unresolved: {{count}}",

@@ -178,20 +178,21 @@
       "submitModeImmediate": "Enviar e liquidar",
       "submitModeImmediateHelp": "Executar o controle pré-negociação, reservar e liquidar agora ao preço da ordem.",
       "submitModeDropCopy": "Drop-copy",
-      "submitModeDropCopyHelp": "Executar todas as políticas sem aplicar rejeições nem bloqueios de conta ou de grupo. É necessário um preço limite positivo.",
+      "submitModeDropCopyHelp": "Executar todas as políticas sem aplicar rejeições nem bloqueios de conta ou de grupo. É necessário um preço limite.",
       "submitModeHold": "Enviar e aguardar",
       "submitModeHoldHelp": "Executar o controle pré-negociação, registrar a trava e aguardar os relatórios de execução.",
       "submitModeRequired": "Selecione um modo de envio.",
       "amountKindRequired": "Selecione um tipo de montante.",
       "sideRequired": "Selecione um lado.",
+      "submitModeVenueHelp": "Executar as verificações pré-negociação, reservar fundos e enviar a ordem aprovada à conexão de negociação selecionada. A execução é registrada a partir dos relatórios dessa conexão.",
       "openApi": "OpenAPI",
       "submitBusy": "Adicionando…",
       "submit": "Adicionar ordem",
       "submitDropCopy": "Enviar drop-copy",
       "dropCopyConfirmTitle": "Enviar sem aprovação pré-negociação obrigatória?",
       "dropCopyConfirmDescription": "Todas as políticas serão executadas e atualizarão o estado, mas as rejeições de políticas e os bloqueios de conta ou de grupo não impedirão esta ordem. Se a conta for desconhecida, ela será criada com as configurações padrão. Nem este envio nem os relatórios de execução posteriores são assinados ou atestados.",
-      "dropCopyPriceRequired": "Informe um preço limite positivo para drop-copy.",
-      "immediatePriceRequired": "Informe um preço limite positivo para liquidar a ordem.",
+      "dropCopyPriceRequired": "Informe um preço limite para drop-copy.",
+      "immediatePriceRequired": "Informe um preço limite para liquidar a ordem.",
       "validationError": "Conta, instrumento e montante são obrigatórios.",
       "missingAccountConfirmTitle": "A conta não existe",
       "missingAccountConfirmDescription": "A conta {{account}} ainda não existe. Criá-la com as configurações padrão (sem grupo, sem moeda) e continuar?",
@@ -353,7 +354,7 @@
       "accountBlocked": "Conta {{account}} bloqueada:",
       "accountBlockedUnnamed": "Conta bloqueada:",
       "done": "Concluído",
-      "leavesInvalid": "A quantidade restante deve ser um número decimal simples, não negativo e sem espaços ao redor."
+      "leavesInvalid": "A quantidade restante deve ser um número decimal simples, sem espaços ao redor."
     }
   },
 

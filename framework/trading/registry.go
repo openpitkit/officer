@@ -21,20 +21,43 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/marketdata"
 )
 
 // Provider describes a connector factory and its destination capabilities.
 type Provider struct {
-	Type          string
-	Title         string
-	VenueAccounts bool
+	ExecutionPolicy bool
+	Type            string
+	Title           string
+	VenueAccounts   bool
 	// UnlinkedFees means fees arrive without an order link and need a fee account.
 	UnlinkedFees    bool
 	VerifiesSymbols bool
 	SearchesSymbols bool
-	Build           func(domain.TradingConnection) (Connector, error)
+	Build           func(BuildContext) (Connector, error)
+}
+
+// QuoteSource supplies the runtime's current market-data snapshots.
+type QuoteSource interface {
+	QuoteSnapshots() []marketdata.QuoteSnapshot
+}
+
+// TestExecutionStore supplies asset identities and validated connection policies.
+type TestExecutionStore interface {
+	GetAsset(context.Context, string) (domain.Asset, bool, error)
+	GetTestExecutionPolicy(context.Context, domain.ExternalID) (domain.TestExecutionPolicyState, error)
+}
+
+// BuildContext carries the connection and its runtime dependencies to a factory.
+type BuildContext struct {
+	Connection domain.TradingConnection
+	Quotes     QuoteSource
+	Store      TestExecutionStore
+	// Schedule uses the host's shared scheduler for process-local deadlines.
+	Schedule func(context.Context, time.Time, func(time.Time)) (func() bool, error)
 }
 
 // Registry maps provider types to factories. Register providers before use;
@@ -76,12 +99,12 @@ func (r *Registry) Providers() []Provider {
 }
 
 // Build constructs one connection's connector without subscribing.
-func (r *Registry) Build(connection domain.TradingConnection) (Connector, error) {
-	p, ok := r.Lookup(connection.Provider)
+func (r *Registry) Build(ctx BuildContext) (Connector, error) {
+	p, ok := r.Lookup(ctx.Connection.Provider)
 	if !ok {
-		return nil, fmt.Errorf("trading: unknown provider %q: %w", connection.Provider, domain.ErrInvalid)
+		return nil, fmt.Errorf("trading: unknown provider %q: %w", ctx.Connection.Provider, domain.ErrInvalid)
 	}
-	c, err := p.Build(connection)
+	c, err := p.Build(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("trading: build connector: %w", err)
 	}
@@ -93,8 +116,8 @@ func (r *Registry) Build(connection domain.TradingConnection) (Connector, error)
 
 // VerifySymbol uses a fresh connector and always closes it. supported=false
 // means the connector does not implement SymbolVerifier.
-func (r *Registry) VerifySymbol(ctx context.Context, connection domain.TradingConnection, external string) (SymbolVerification, bool, error) {
-	c, err := r.Build(connection)
+func (r *Registry) VerifySymbol(ctx context.Context, build BuildContext, external string) (SymbolVerification, bool, error) {
+	c, err := r.Build(build)
 	if err != nil {
 		return SymbolVerification{}, false, err
 	}
@@ -109,8 +132,8 @@ func (r *Registry) VerifySymbol(ctx context.Context, connection domain.TradingCo
 
 // CheckAccount uses a fresh connector and reports supported=false when the
 // provider does not implement account checking.
-func (r *Registry) CheckAccount(ctx context.Context, connection domain.TradingConnection) (AccountInfo, bool, error) {
-	c, err := r.Build(connection)
+func (r *Registry) CheckAccount(ctx context.Context, build BuildContext) (AccountInfo, bool, error) {
+	c, err := r.Build(build)
 	if err != nil {
 		return AccountInfo{}, false, err
 	}
@@ -125,8 +148,8 @@ func (r *Registry) CheckAccount(ctx context.Context, connection domain.TradingCo
 
 // SearchSymbols uses a fresh connector and reports supported=false when the
 // provider does not implement symbol search.
-func (r *Registry) SearchSymbols(ctx context.Context, connection domain.TradingConnection, query string) ([]SymbolMatch, bool, error) {
-	c, err := r.Build(connection)
+func (r *Registry) SearchSymbols(ctx context.Context, build BuildContext, query string) ([]SymbolMatch, bool, error) {
+	c, err := r.Build(build)
 	if err != nil {
 		return nil, false, err
 	}
@@ -137,4 +160,13 @@ func (r *Registry) SearchSymbols(ctx context.Context, connection domain.TradingC
 	}
 	result, err := searcher.SearchSymbols(ctx, query)
 	return result, true, err
+}
+
+// SupportsExecutionPolicy resolves only explicitly registered provider capabilities.
+func (r *Registry) SupportsExecutionPolicy(provider string) (bool, error) {
+	p, ok := r.Lookup(provider)
+	if !ok {
+		return false, fmt.Errorf("trading: provider %q: %w", provider, domain.ErrTradingProviderUnavailable)
+	}
+	return p.ExecutionPolicy, nil
 }

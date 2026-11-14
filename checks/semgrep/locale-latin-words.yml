@@ -98,7 +98,7 @@ rules:
         | P&L | PX | QTY | NTL | MTM | TIF | CCY
         | STK | CASH | OPT | FUT | IND | CRYPTO
         | DAY | GTC | OPG | CLS | IOC | FOK
-        | BTC | USDT | USD | EUR | AAPL | BTCUSDT | EUR_USD | YYYYMMDD
+        | BTC | USDT | USDC | USD | EUR | AAPL | BTCUSDT | EUR_USD | YYYYMMDD
         | v2 | v5 | v20
         # Domain identifiers: wire and configuration names, never translated.
         | rate_limit | order_size_limit | spot_funds_pnl_bounds_kill_switch

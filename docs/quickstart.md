@@ -493,6 +493,8 @@ In the panel, set up an account, an instrument, its market data, and the
 policies. Starting Officer does not do that for you. Nothing trades until you
 add a trading connection.
 
+For paper trading without a venue, follow the [test trading guide](test_trading.md).
+
 Approval signing is off on a fresh Officer. The first-run setup offers to turn
 it on. To turn it on later:
 

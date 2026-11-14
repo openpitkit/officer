@@ -22,6 +22,7 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -499,6 +500,44 @@ func (r *realmStore) exportTradingInstruments(
 		return nil, fmt.Errorf("store: iterate trading instruments for export: %w", err)
 	}
 	return out, nil
+}
+
+func (r *realmStore) exportTestExecutionPolicies(ctx context.Context) (result []backup.TestExecutionPolicy, resultErr error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx,
+		`SELECT c.external_id, p.revision, p.rules
+		 FROM trading_test_policy p
+		 JOIN trading_connection c ON c.id = p.connection_id
+		 ORDER BY c.external_id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: export test policies: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
+	for rows.Next() {
+		var rawID []byte
+		var revision uint64
+		var rules string
+		if err := rows.Scan(&rawID, &revision, &rules); err != nil {
+			return nil, fmt.Errorf("store: scan test policy for export: %w", err)
+		}
+		connection, err := domain.ExternalIDFromBytes(rawID)
+		if err != nil {
+			return nil, fmt.Errorf("store: decode test policy connection for export: %w", err)
+		}
+		if _, err := decodeStoredTestExecutionPolicy(revision, rules); err != nil {
+			return nil, fmt.Errorf("store: export test policy for connection %s: %w", connection, err)
+		}
+		result = append(result, backup.TestExecutionPolicy{
+			Connection: connection, Revision: revision, Rules: json.RawMessage(rules),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate test policies for export: %w", err)
+	}
+	return result, nil
 }
 
 func (r *realmStore) exportTradingAccess(

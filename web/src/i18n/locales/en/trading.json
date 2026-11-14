@@ -1,4 +1,54 @@
 {
+  "testPolicy": {
+    "title": "Test execution policy",
+    "rules": "Execution rules",
+    "rule": "Rule {{number}}",
+    "revision": "Saved revision {{revision}}",
+    "matching": "Rules are checked from top to bottom. The first matching symbol mask wins. An unknown symbol is refused with {{noMatch}}.",
+    "moveUp": "Move rule {{number}} up",
+    "moveDown": "Move rule {{number}} down",
+    "higherPriority": "Higher priority",
+    "lowerPriority": "Lower priority",
+    "marketDataTitle": "Market tests require one direct price source",
+    "marketDataWarning": "A pair with more than one direct market-data record is refused with {{code}}. Keep exactly one enabled market-data instrument for the pair, disable extra rows or instances, then press {{restart}}.",
+    "emptyTitle": "No execution rules",
+    "emptyDescription": "This policy is empty. Orders have no matching rule and are refused.",
+    "baseAsset": "Base asset mask",
+    "quoteAsset": "Quote asset mask",
+    "maskHint": "* - all codes; BTC - only BTC; USD* - USD, USDT, USDC.",
+    "completeField": "Rule {{number}}: complete the field “{{field}}”.",
+    "goToRule": "Go to rule {{number}}",
+    "allInstruments": "For all instruments",
+    "mode": "Execution mode",
+    "modes": {
+      "execute": "Execute once",
+      "split": "Split execution",
+      "reject_even": "Reject every second order",
+      "rest": "Rest the order"
+    },
+    "modeDetails": {
+      "execute": "Execute the full quantity in one fill.",
+      "split": "Request two or three fills for the full quantity.",
+      "reject_even": "Reject every second new order in this mode; execute the others once. The counter is shared by this connection within the saved revision.",
+      "rest": "Keep the order open until its delay expires, or without automatic execution."
+    },
+    "fills": "Number of fills",
+    "wait": "Automatic execution",
+    "afterSeconds": "After N seconds",
+    "finiteDescription": "Choose a delay in seconds before execution.",
+    "withoutExecution": "Without automatic execution",
+    "infiniteDescription": "There is no individual cancel. Any runtime restart loses the book.",
+    "seconds": "Wait in seconds",
+    "priceVariant": "Market-order price variant",
+    "prices": {
+      "normal": "Normal",
+      "best": "Best",
+      "worst": "Worst"
+    },
+    "priceExplanation": "Normal and worst buy at the ask and sell at the bid. Best buys at the bid and sells at the ask. Limit orders always use their own limit price.",
+    "addRule": "Add rule",
+    "removeRule": "Delete rule {{number}}"
+  },
   "nonReleaseConfirm": {
     "title": "Enable trading in a non-release build?",
     "description": "This non-release build is for quick tests only. Enabling this connection lets it send real orders to the venue. The release build will not see the orders this build sends. This build may corrupt its data.",
@@ -36,10 +86,18 @@
     }
   },
   "actions": {
+    "deleteConnection": "Delete trading connection",
     "addConnection": "Add trading connection",
     "check": "Check connection"
   },
+  "deleteConnection": {
+    "title": "Delete trading connection?",
+    "description": "{{label}} and its configuration will be permanently removed. Disable the connection first. Connections with order history cannot be deleted."
+  },
   "create": {
+    "test": {
+      "prepare": "This connection executes test orders locally and needs no keys. After creating it, grant access to a test account, configure symbol masks and their execution rules, then enable the connection."
+    },
     "ib": {
       "install": "Install IB Gateway (or TWS) and log in with your paper trading username.",
       "download": "Download IB Gateway",
@@ -106,7 +164,8 @@
     "notDone": "Not done"
   },
   "check": {
-    "result": "Venue account {{id}} · status {{status}}"
+    "result": "Venue account {{id}} · status {{status}}",
+    "testResult": "Check passed: test execution reaches no venue and needs no keys."
   },
   "settings": {
     "description": "Leave fields blank to keep the stored values.",

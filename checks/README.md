@@ -38,25 +38,22 @@ All rules are active, and `just check-semgrep` (and therefore `just check` /
 `check-debug` / `check-release` / CI) blocks any violation.
 
 `testdata/` holds rule fixtures: deliberate violations and non-violations
-annotated for `semgrep --test`, one file per rule that has one, named after
-it: `default-domain-status.go`, `discarded-close-error.go`, `discarded-error.go`,
-`locale-latin-words.txt`,
-`locale-english-words.txt`, `locale-pnl-spelling.txt`,
-`file-header-site-link.txt`, `panel-access-reuse.tsx`,
-`panel-download-reuse.tsx`, `panel-code-label.tsx`,
-`no-legacy-database-probe.go`, `venue-connector-reuse.go`,
-`no-local-secret-redaction.go`,
-`tailwind-v4-utilities.tsx`, `panel-site-link-reuse.tsx`,
-`integration-test-wall-clock-deadline.go` and
-`test-slog-default-restore.go`. A fixture runs only
-through its own `--test` line in `check-semgrep`, after the tree scan, so a new
-fixture adds its own line there. A rule with a fixture keeps its fixture out of
+annotated for `semgrep --test`, named after the rule with the target language's
+extension, for example `discarded-error.go` or `panel-number-input-reuse.tsx`.
+Subdirectories mirror the rule directory's structure. After the tree scan,
+`check-semgrep` runs `semgrep --test` once over both directories, discovering
+matching fixtures automatically. Adding a rule and its fixture requires no
+justfile change. A rule with a fixture keeps its fixture out of
 its `paths`, so the tree scan does not report the fixture. The directory is
 named `testdata` so the Go tool ignores it, and it is in the justfile's
 `go_dirs`, so `lint-go` gofmt-checks the Go fixtures.
 
 Fix a finding by changing the code, or by narrowing the rule if the finding
 turns out to be a rule bug - never by loosening what the rule means.
+
+`shared-panel-decimal-input` requires decimal fields to use `NumberStepper`.
+Raw `Input` and `input` controls with `inputMode="decimal"` bypass its typed
+and pasted decimal validation and are rejected outside that shared component.
 
 `tailwind-v4-utilities` keeps vertical form spacing on flex-column gaps and
 preserves forced-colors focus outlines with `outline-hidden`. It rejects the

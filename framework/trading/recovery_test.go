@@ -109,7 +109,7 @@ func TestPostClaimRecovery(t *testing.T) {
 					}
 					return nil
 				}
-				r, err := trading.NewRuntime(f.registry, st, sink, f.adjustmentSink, f.feeSkipSink,
+				r, err := trading.NewRuntime(f.registry, st, nil, sink, f.adjustmentSink, f.feeSkipSink,
 					slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 				must(t, err)
 				must(t, r.Start(testCtx))
@@ -201,7 +201,7 @@ func TestClaimReportFailure(t *testing.T) {
 				}
 				return f.sink(ctx, in)
 			}
-			r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink, f.feeSkipSink,
+			r, err := trading.NewRuntime(f.registry, f.st, nil, sink, f.adjustmentSink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			must(t, r.Start(testCtx))
@@ -244,7 +244,7 @@ func (s failingStore) ListTradingConnections(ctx context.Context) ([]domain.Trad
 func TestMarkAttemptFailureIsRecoveredWithoutVenueCall(t *testing.T) {
 	f := newFixture(t)
 	errMark := errors.New("send marker storage failed")
-	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, markErr: errMark}, f.sink, f.adjustmentSink, f.feeSkipSink,
+	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, markErr: errMark}, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(t, err)
 	must(t, r.Start(testCtx))
@@ -270,7 +270,7 @@ func TestMarkAttemptFailureIsRecoveredWithoutVenueCall(t *testing.T) {
 func TestStartStoreFailure(t *testing.T) {
 	f := newFixture(t)
 	failed := errors.New("connection store unavailable")
-	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, listErr: failed}, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
+	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, listErr: failed}, nil, f.sink, f.adjustmentSink, f.feeSkipSink, slog.Default())
 	must(t, err)
 	t.Cleanup(r.Stop)
 	if err := r.Start(testCtx); !errors.Is(err, failed) {

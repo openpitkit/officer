@@ -64,7 +64,7 @@ func TestSendRechecksEligibility(t *testing.T) {
 						}
 						return f.sink(ctx, in)
 					}
-					r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink, f.feeSkipSink,
+					r, err := trading.NewRuntime(f.registry, f.st, nil, sink, f.adjustmentSink, f.feeSkipSink,
 						slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 					must(t, err)
 					must(t, r.Start(testCtx))
@@ -134,7 +134,7 @@ func TestMissingVenueOrderGrace(t *testing.T) {
 			f := newFixture(t)
 			f.venue.sendErr = errors.New("venue request timed out")
 			st := datedLinkStore{Store: f.st, createdAt: time.Now().Add(-tc.age)}
-			r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+			r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			must(t, r.Start(testCtx))
@@ -276,7 +276,7 @@ func TestLookupInstrumentStoreError(t *testing.T) {
 	f.runtime.Stop()
 	_, before := f.venue.counts()
 	storeErr := errors.New("instrument mapping read failed")
-	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, instrumentErr: storeErr},
+	r, err := trading.NewRuntime(f.registry, failingStore{Store: f.st, instrumentErr: storeErr}, nil,
 		f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(t, err)
@@ -504,7 +504,7 @@ func TestInvalidCommissionPendingRetry(t *testing.T) {
 				}
 				return nil
 			}
-			r, err := trading.NewRuntime(f.registry, f.st, sink, f.adjustmentSink, f.feeSkipSink,
+			r, err := trading.NewRuntime(f.registry, f.st, nil, sink, f.adjustmentSink, f.feeSkipSink,
 				slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			must(t, err)
 			must(t, r.Start(testCtx))
@@ -637,7 +637,7 @@ func (s preCheckReadStore) ListTradingAccess(ctx context.Context, _ domain.Accou
 func TestPreCheckStoreReadsUseCallerContext(t *testing.T) {
 	f := newFixture(t)
 	st := preCheckReadStore{Store: f.st, readContext: make(chan context.Context, 1)}
-	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+	r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	must(t, err)
 	must(t, r.Start(testCtx))

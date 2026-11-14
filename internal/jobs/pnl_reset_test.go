@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/scheduler"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"path/filepath"
 	"reflect"
@@ -257,6 +258,9 @@ func resetTaskFixture(t *testing.T) (*Runtime, node.Node, store.RealmStore, *par
 	ctx := context.Background()
 	db, err := sqlite.New(filepath.Join(t.TempDir(), "jobs.db"), domain.DefaultRealm)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.BindExecutionPolicyProviders(trading.NewRegistry().SupportsExecutionPolicy); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(ctx); err != nil {

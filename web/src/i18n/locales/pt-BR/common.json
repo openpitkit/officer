@@ -58,6 +58,8 @@
     "ariaLabel": "Alterar idioma"
   },
   "actions": {
+    "expand": "Expandir",
+    "collapse": "Recolher",
     "refresh": "Atualizar",
     "restartFeeds": "Reiniciar fluxos de dados",
     "retry": "Tentar novamente",
@@ -412,6 +414,8 @@
     }
   },
   "nav": {
+    "collapseSidebar": "Recolher barra lateral",
+    "expandSidebar": "Expandir barra lateral",
     "dashboard": "Painel",
     "accounts": "Contas",
     "account": "Conta",

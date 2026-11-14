@@ -756,8 +756,9 @@ describe("Positions adjustment panel", () => {
     await user.type(amount, "600");
     expect(submit).toBeEnabled();
 
-    await user.type(amount, "x");
-    expect(amount).toHaveValue("600x");
+    await user.clear(amount);
+    await user.type(amount, ".");
+    expect(amount).toHaveValue(".");
     expect(amount).toBeInvalid();
     expect(submit).toBeDisabled();
     expect(createAdjustmentMock).not.toHaveBeenCalled();
@@ -988,10 +989,7 @@ describe("Positions adjustment panel", () => {
     await user.type(scope.getByLabelText("Asset"), "AAPL");
     await user.click(scope.getByRole("button", { name: "Deposit" }));
     await user.type(scope.getByLabelText(/average entry price/i), "150");
-    await user.type(
-      scope.getByLabelText("Available adjustment amount"),
-      "invalid",
-    );
+    await user.type(scope.getByLabelText("Available adjustment amount"), ".");
 
     await user.keyboard("{Enter}");
     expect(scope.getByRole("alert")).toHaveTextContent("Invalid decimal");
@@ -1347,7 +1345,7 @@ describe("Positions business CSV", () => {
     await user.click(screen.getByRole("button", { name: /more filters/i }));
     const dialog = screen.getByRole("dialog", { name: /more filters/i });
     const available = within(dialog).getAllByPlaceholderText("Value")[0];
-    await user.type(available, "word");
+    await user.type(available, ".");
 
     expect(
       within(dialog).getByRole("button", {

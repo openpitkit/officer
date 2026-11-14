@@ -80,7 +80,7 @@ const pageEntries = {
   "signing-keys": { routes: ["signing-keys"], footer: ["signing-keys"] },
   service: {
     routes: ["service"],
-    footer: ["service", "sensitive-data", "non-release", "logout", "about"],
+    footer: ["sensitive-data", "non-release", "service", "logout", "about"],
   },
 } satisfies Record<OfficerDefaultPageId, Partial<Record<string, string[]>>>;
 

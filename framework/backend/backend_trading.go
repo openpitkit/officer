@@ -30,6 +30,7 @@ import (
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
+	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/secret"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
@@ -37,6 +38,7 @@ import (
 
 // TradingProvider exposes capabilities without the connector factory.
 type TradingProvider struct {
+	ExecutionPolicy                                 bool
 	Type, Title                                     string
 	VenueAccounts, VerifiesSymbols, SearchesSymbols bool
 	UnlinkedFees                                    bool
@@ -44,12 +46,13 @@ type TradingProvider struct {
 
 // TradingConnectionStatus contains configuration without credential values.
 type TradingConnectionStatus struct {
-	ExternalID    domain.ExternalID
-	Provider      string
-	Label         string
-	VenueIdentity string
-	Mode          domain.TradingMode
-	Enabled       bool
+	ExecutionPolicy bool
+	ExternalID      domain.ExternalID
+	Provider        string
+	Label           string
+	VenueIdentity   string
+	Mode            domain.TradingMode
+	Enabled         bool
 	// FeeAccount is the connection's fee account; empty when it has none or
 	// when the account scope does not show it to the caller.
 	FeeAccount domain.AccountID
@@ -136,6 +139,8 @@ type VenueSend struct {
 	Error  string
 	// Order is the stored venue link; nil when no link exists.
 	Order *domain.VenueOrder
+	// Refusal carries a test provider's immediate, typed Send refusal.
+	Refusal *trading.TestExecutionRefusal
 }
 
 // DestinationAmbiguousError lists eligible destinations, as returned by
@@ -198,13 +203,21 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 	}
 	for _, p := range s.trading.Providers() {
 		status.Providers = append(status.Providers, TradingProvider{
-			Type: p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
+			ExecutionPolicy: p.ExecutionPolicy,
+			Type:            p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
 			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
 			UnlinkedFees: p.UnlinkedFees,
 		})
 	}
 	states := s.trading.ConnectionStatuses()
 	for _, c := range connections {
+		var executionPolicy bool
+		for _, provider := range status.Providers {
+			if provider.Type == c.Provider {
+				executionPolicy = provider.ExecutionPolicy
+				break
+			}
+		}
 		instruments, err := s.node.ListTradingInstruments(ctx, c.ExternalID)
 		if err != nil {
 			return TradingStatus{}, err
@@ -224,7 +237,8 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			return TradingStatus{}, err
 		}
 		status.Connections = append(status.Connections, TradingConnectionStatus{
-			ExternalID: c.ExternalID, Provider: c.Provider, Label: c.Label,
+			ExecutionPolicy: executionPolicy,
+			ExternalID:      c.ExternalID, Provider: c.Provider, Label: c.Label,
 			VenueIdentity: c.VenueIdentity, Mode: c.Mode, Enabled: c.Enabled,
 			FeeAccount: feeAccount, State: state,
 			Error: redact.Replace(reason),
@@ -252,7 +266,13 @@ func (s *Service) requireNonReleaseTradingConfirmation(caller domain.Caller, con
 // create also writes the scope account's grant (see grantScopeAccountLocked).
 // In a non-release build, enabling requires the operator's confirmation through
 // the panel.
-func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection, nonReleaseConfirmed bool) (domain.TradingConnection, error) {
+func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection, nonReleaseConfirmed bool) (result domain.TradingConnection, resultErr error) {
+	ctx, finish := node.TradingAccessNotifications(ctx)
+	defer func() {
+		if err := finish(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
 	if err := s.requireTradingRuntime(); err != nil {
@@ -297,18 +317,8 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 		return domain.TradingConnection{}, fmt.Errorf(
 			"trading provider cannot identify its venue account: %w: %w", domain.ErrInvalid, trading.ErrUnsupported)
 	}
-	// A provider that refuses the request's credentials before reaching the
-	// venue reports a validation error naming the member, not an upstream one.
-	if pointer := domain.ValidationPointer(err); errors.Is(err, domain.ErrInvalid) &&
-		(pointer == "/credentials" || strings.HasPrefix(pointer, "/credentials/")) {
-		message, redactErr := redactTradingCredentials(c.Credentials, err.Error())
-		if redactErr != nil {
-			return domain.TradingConnection{}, redactErr
-		}
-		return domain.TradingConnection{}, &redactedTradingError{text: message, cause: err}
-	}
 	if err != nil {
-		return domain.TradingConnection{}, tradingUpstreamError("check account for create", c, err)
+		return domain.TradingConnection{}, tradingAccountCheckError("check account for create", c, err)
 	}
 	c.VenueIdentity = info.Identity
 	if err := domain.ValidateTradingConnection(c); err != nil {
@@ -360,13 +370,24 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 			return err
 		}
 	}
-	merged, err := mergeMarketDataCredentials(c.Credentials, credentials)
-	if err != nil {
-		return err
-	}
 	var storedValues, mergedValues map[string]any
 	if err := json.Unmarshal([]byte(c.Credentials), &storedValues); err != nil {
 		return fmt.Errorf("stored trading credentials are not a JSON object: %w", domain.ErrInvalid)
+	}
+	// The market-data merger emits an empty string for two empty objects;
+	// trading must retain its stored JSON object when no fields change.
+	if credentials != "" && storedValues != nil && len(storedValues) == 0 {
+		var updates map[string]any
+		if err := decodeCredentialsJSON(credentials, &updates); err != nil {
+			return fmt.Errorf("trading credentials are not a JSON object: %w", domain.ErrInvalid)
+		}
+		if updates != nil && len(updates) == 0 {
+			credentials = ""
+		}
+	}
+	merged, err := mergeMarketDataCredentials(c.Credentials, credentials)
+	if err != nil {
+		return err
 	}
 	if err := json.Unmarshal([]byte(merged), &mergedValues); err != nil {
 		return fmt.Errorf("merged trading credentials are not a JSON object: %w", domain.ErrInvalid)
@@ -398,7 +419,7 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 	if changed {
 		info, err := s.trading.CheckAccount(ctx, c)
 		if err != nil {
-			return tradingUpstreamError("check account for update", c, err)
+			return tradingAccountCheckError("check account for update", c, err)
 		}
 		if info.Identity != c.VenueIdentity {
 			return fmt.Errorf("the keys reach a different venue account; create a new connection: %w", domain.ErrConflict)
@@ -417,7 +438,13 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 // runtime reconciliation of existing venue orders active. In single-account
 // mode an enable also writes the scope account's grant (see
 // grantScopeAccountLocked), so a connection stored before it trades too.
-func (s *Service) SetTradingConnectionEnabled(ctx context.Context, id string, enabled, nonReleaseConfirmed bool) error {
+func (s *Service) SetTradingConnectionEnabled(ctx context.Context, id string, enabled, nonReleaseConfirmed bool) (resultErr error) {
+	ctx, finish := node.TradingAccessNotifications(ctx)
+	defer func() {
+		if err := finish(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
 	if err := s.requireTradingRuntime(); err != nil {
@@ -548,6 +575,24 @@ func (s *Service) DeleteTradingInstrument(ctx context.Context, connection, exter
 	return s.node.DeleteTradingInstrument(ctx, id, externalSymbol, caller)
 }
 
+// DeleteTradingConnection removes an unused, disabled connection.
+func (s *Service) DeleteTradingConnection(ctx context.Context, connection string) error {
+	s.tradingMu.Lock()
+	defer s.tradingMu.Unlock()
+	if err := s.requireTradingRuntime(); err != nil {
+		return err
+	}
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	id, err := domain.ParseExternalID(strings.TrimSpace(connection))
+	if err != nil {
+		return err
+	}
+	return s.node.DeleteTradingConnection(ctx, id, caller)
+}
+
 // VerifyTradingSymbol asks the venue whether a symbol exists and is tradable.
 // Unsupported providers return Supported=false without changing mappings.
 func (s *Service) VerifyTradingSymbol(ctx context.Context, id, external string) (TradingSymbolVerification, error) {
@@ -602,7 +647,13 @@ func (s *Service) SearchTradingSymbols(ctx context.Context, id, query string) (T
 // holds any other grant, with domain.ErrFeeAccountRequired. After the subject,
 // connection and provider checks, the node refuses a tighten-only caller's
 // grant with domain.ErrLoosening.
-func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAccess) error {
+func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAccess) (resultErr error) {
+	ctx, finish := node.TradingAccessNotifications(ctx)
+	defer func() {
+		if err := finish(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
 	if err := s.requireTradingRuntime(); err != nil {
@@ -909,6 +960,7 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 	result.Send = &VenueSend{Status: "acknowledged"}
 	if sendErr != nil {
 		result.Send.Status, result.Send.Error = "unknown", sendErr.Error()
+		errors.As(sendErr, &result.Send.Refusal)
 		if errors.Is(sendErr, trading.ErrNotSent) {
 			text := redact.Replace(sendErr.Error())
 			reason := domain.NormalizeReason(redact.Replace(domain.NormalizeReason(text)))
@@ -992,6 +1044,19 @@ func (s *Service) restartTradingLocked() error {
 		return fmt.Errorf("backend: restart trading runtime after configuration was saved: %w", err)
 	}
 	return nil
+}
+
+func tradingAccountCheckError(operation string, connection domain.TradingConnection, cause error) error {
+	// A provider can reject local settings before contacting its venue.
+	var validation interface{ ValidationPointer() string }
+	if errors.Is(cause, domain.ErrInvalid) && errors.As(cause, &validation) {
+		message, err := redactTradingCredentials(connection.Credentials, cause.Error())
+		if err != nil {
+			return err
+		}
+		return &redactedTradingError{text: message, cause: cause}
+	}
+	return tradingUpstreamError(operation, connection, cause)
 }
 
 func tradingUpstreamError(operation string, connection domain.TradingConnection, cause error) error {

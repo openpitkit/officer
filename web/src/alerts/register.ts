@@ -20,9 +20,15 @@ import { createElement } from "react";
 
 import { registerNav } from "@/framework/registries/nav";
 import { AlertsLauncher } from "./AlertsLauncher";
+import { registerAlertRenderer } from "./registry";
+import { Summary, Detail } from "./TradingAccessAlert";
 
 /** Standalone registration stays separate from shared Officer defaults. */
 export function registerAlerts(): void {
+  registerAlertRenderer("mixed_trading_access", {
+    summary: (alert) => createElement(Summary, { alert }),
+    Detail,
+  });
   registerNav({
     id: "actionable-alerts",
     to: "#alerts",

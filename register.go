@@ -40,6 +40,7 @@ import (
 	"go.openpit.dev/officer/framework/secret"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
+	fwtrading "go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
 	"go.openpit.dev/officer/internal/access"
@@ -166,12 +167,14 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		sealReports   httpapi.SealReportSource
 		accessService *access.Service
 		alertService  *alerts.Service
+		alertAccounts fwbackend.AccountRowReader
 		backupNode    node.Node
 		// Stays nil when a host replaces the service factory.
 		accountScope *accountmode.Scope
 		resetStore   jobs.StoreProvider
 		resetHost    node.PnlResetHost
 		resetControl fwbackend.AccountPnlResetControl
+		scheduleTask func(context.Context, time.Time, func(time.Time)) (func() bool, error)
 	)
 	b.SetStoreFactory(func() (store.Store, error) {
 		return newStore(cfg)
@@ -222,9 +225,32 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		if !ok {
 			return errors.New("officer: the realm store does not implement alerts.Store")
 		}
-		alertService, err = alerts.New(alertState, cfg.AlertTypes, cfg.AlertChannels)
+		mixedType := mixedTradingAccessType(func(ctx context.Context, account domain.AccountID) (bool, error) {
+			if alertAccounts == nil {
+				return false, errors.New("officer: alert account visibility is not bound")
+			}
+			page, err := alertAccounts.ListAccountRows(ctx, store.AccountListFilter{
+				Code: store.TextMatcher{Fragments: []string{account.String()}, AnchorStart: true, AnchorEnd: true},
+			})
+			if err != nil {
+				return false, err
+			}
+			for _, row := range page.Rows {
+				if row.Account.Code == account {
+					return true, nil
+				}
+			}
+			return false, nil
+		})
+		alertTypes := append([]alerts.Type{mixedType}, cfg.AlertTypes...)
+		alertService, err = alerts.New(alertState, alertTypes, cfg.AlertChannels)
 		if err != nil {
 			return fmt.Errorf("officer: build alert service: %w", err)
+		}
+		if host, ok := n.(node.TradingAccessObserverHost); ok {
+			if err := host.InstallTradingAccessObserver(publishMixedTradingAccess(alertService)); err != nil {
+				return fmt.Errorf("officer: attach trading access alert producer: %w", err)
+			}
 		}
 		if cfg.AlertServiceReady != nil {
 			if err := cfg.AlertServiceReady(alertService); err != nil {
@@ -253,6 +279,11 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		}
 	}
 	for _, provider := range apptrading.FirstPartyProviders() {
+		build := provider.Build
+		provider.Build = func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			ctx.Schedule = scheduleTask
+			return build(ctx)
+		}
 		if err := b.RegisterTradingProvider(provider); err != nil {
 			return fmt.Errorf("officer: register trading provider: %w", err)
 		}
@@ -308,6 +339,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 			if err != nil {
 				return nil, err
 			}
+			scheduleTask = runtime.Schedule
 			// Standalone operators configure a realm-wide schedule even when
 			// the panel is presenting just one account. Manual resets retain scope.
 			control, err := fwbackend.NewAccountPnlResetControl(svc, resetHost, runtime, fwbackend.EveryAccount{})
@@ -356,7 +388,8 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		return config
 	})
 	b.AddToolRegistrar(mcptools.RegisterTools)
-	b.AddToolRegistrar(func(reg *frameworkmcp.ToolRegistry, _ frameworkmcp.Source) {
+	b.AddToolRegistrar(func(reg *frameworkmcp.ToolRegistry, source frameworkmcp.Source) {
+		alertAccounts = source
 		if resetControl != nil {
 			mcptools.RegisterAccountPnlResetTools(reg, resetControl)
 		}

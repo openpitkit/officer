@@ -420,6 +420,26 @@ Please see https://officer.openpit.dev and the OWNERS file for details.
 }
 
 @layer utilities {
+  /* Keep the navigation scrollbar visible on systems with overlay scrollbars. */
+  .sidebar-scroll {
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  [data-collapsed="true"] .sidebar-scroll {
+    scrollbar-gutter: stable both-edges;
+  }
+  .sidebar-scroll::-webkit-scrollbar {
+    width: 10px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-track {
+    background: var(--surface-2);
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: var(--muted);
+    border: 2px solid var(--surface-2);
+    border-radius: 6px;
+  }
   /* Tabular figures for aligned numeric columns in tables and status cards. */
   .nums {
     font-variant-numeric: tabular-nums;

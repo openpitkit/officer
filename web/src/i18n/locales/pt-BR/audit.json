@@ -59,6 +59,7 @@
     }
   },
   "detail": {
+    "delete_trading_connection": "Exclusão da conexão de negociação {{connection}}",
     "alert_delivery": "Alerta {{alert}} entregue por {{channel}}",
     "alert_delivery_failed": "Falha na entrega do alerta {{alert}} por {{channel}}",
     "resolve_alert": "Alerta {{alert}} resolvido por {{action}}: {{result}}",
@@ -115,6 +116,7 @@
     "delete_limit": "Exclusão do limite {{policy}} ({{scope}})",
     "create_trading_connection": "Criação da conexão de negociação {{connection}} ({{provider}}, {{connectionMode}})",
     "update_trading_connection_settings": "Atualização das configurações da conexão de negociação {{connection}}",
+    "set_test_execution_policy": "Substituição da política de execução de teste da conexão de negociação {{connection}}: revisão {{oldRevision}} → {{newRevision}}",
     "enable_trading_connection": "Ativação da conexão de negociação {{connection}}",
     "disable_trading_connection": "Desativação da conexão de negociação {{connection}}",
     "upsert_trading_instrument": "Gravação do instrumento {{connection}}/{{symbol}}",
@@ -175,6 +177,8 @@
     "reset_account_pnl_previous_halt": "P&L realizado da conta {{account}} reposto para 0; valor anterior {{previousPnl}}; motivo da interrupção do cálculo de P&L antes da reposição: {{previousHalt}}"
   },
   "detailField": {
+    "oldRules": "regras anteriores",
+    "newRules": "novas regras",
     "account": "conta",
     "account_group": "grupo de contas",
     "asset": "ativo",

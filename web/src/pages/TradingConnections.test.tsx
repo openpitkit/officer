@@ -44,13 +44,25 @@ import type {
   TradingProvider,
   TradingSnapshot,
   TradingSymbolVerification,
+  TestExecutionPolicy,
+  TestExecutionPolicyState,
 } from "@/api/types";
 import { SidebarProvider } from "@/components/SidebarContext";
-import { ApiError, AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework";
+import {
+  ApiError,
+  AUTOCOMPLETE_SUGGESTION_LIMIT,
+  createApiClient,
+  createOfficerApi,
+} from "@/framework";
 import i18n from "@/i18n";
+import enTrading from "@/i18n/locales/en/trading.json";
+import esTrading from "@/i18n/locales/es/trading.json";
+import ptTrading from "@/i18n/locales/pt-BR/trading.json";
+import ruTrading from "@/i18n/locales/ru/trading.json";
+import zhTrading from "@/i18n/locales/zh-CN/trading.json";
 import { setAccountScope } from "@/lib/accountScope";
 import { TradingConnections } from "@/pages/TradingConnections";
-import { accountRow, renderWithApi } from "@/test/apiClient";
+import { accountRow, jsonResponse, renderWithApi } from "@/test/apiClient";
 import { holdPolling } from "@/test/polling";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -125,6 +137,7 @@ vi.mock("@/components/venues", async (importOriginal) => {
 });
 
 const provider: TradingProvider = {
+  executionPolicy: false,
   type: "alpaca",
   title: "Alpaca",
   venueAccounts: false,
@@ -141,10 +154,13 @@ const api = {
   fetchMarketData: vi.fn(),
   createTradingConnection: vi.fn(),
   updateTradingConnectionSettings: vi.fn(),
+  fetchTestExecutionPolicy: vi.fn(),
+  updateTestExecutionPolicy: vi.fn(),
   setTradingConnectionEnabled: vi.fn(),
   checkTradingConnection: vi.fn(),
   upsertTradingInstrument: vi.fn(),
   deleteTradingInstrument: vi.fn(),
+  deleteTradingConnection: vi.fn(),
   verifyTradingSymbol: vi.fn(),
   searchTradingSymbols: vi.fn(),
   grantTradingAccess: vi.fn(),
@@ -172,6 +188,7 @@ function connection(
   overrides: Partial<TradingConnection> = {},
 ): TradingConnection {
   return {
+    executionPolicy: false,
     id: "alpaca-1",
     provider: "alpaca",
     label: "Alpaca paper",
@@ -236,8 +253,12 @@ function renderTrading() {
   );
 }
 
-async function card(label = "Alpaca paper") {
-  return within(await screen.findByRole("region", { name: label }));
+async function card(label = "Alpaca paper", expand = true) {
+  const region = within(await screen.findByRole("region", { name: label }));
+  const toggle = region.getByRole("button", { name: label });
+  if (expand && toggle.getAttribute("aria-expanded") === "false")
+    await userEvent.click(toggle);
+  return region;
 }
 
 async function openCreateConnection(user: ReturnType<typeof userEvent.setup>) {
@@ -355,6 +376,67 @@ beforeEach(async () => {
 });
 
 describe("Trading connections", () => {
+  it("starts collapsed, opens one connection and preserves a hidden draft", async () => {
+    snapshot.connections.push(
+      connection({ id: "alpaca-2", label: "Other paper" }),
+    );
+    const user = userEvent.setup();
+    renderTrading();
+    const first = within(
+      await screen.findByRole("region", { name: "Alpaca paper" }),
+    );
+    const second = within(screen.getByRole("region", { name: "Other paper" }));
+    const toggle = first.getByRole("button", { name: "Alpaca paper" });
+    const otherToggle = second.getByRole("button", { name: "Other paper" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(otherToggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    const draft = first.getByPlaceholderText("External symbol");
+    await user.type(draft, "BTC/USD");
+    await user.click(otherToggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(draft).not.toBeVisible();
+    expect(otherToggle).toHaveAttribute("aria-expanded", "true");
+    await user.click(toggle);
+    expect(draft).toBeVisible();
+    expect(draft).toHaveValue("BTC/USD");
+    expect(otherToggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("deletes a connection after confirmation and keeps a refusal in the dialog", async () => {
+    const user = userEvent.setup();
+    api.deleteTradingConnection.mockRejectedValueOnce(
+      new ApiError("Disable the connection first", "conflict", 409),
+    );
+    api.deleteTradingConnection.mockImplementationOnce(async (id: string) => {
+      snapshot = {
+        ...snapshot,
+        connections: snapshot.connections.filter((item) => item.id !== id),
+      };
+    });
+    renderTrading();
+    await user.click(
+      await screen.findByRole("button", { name: "Delete trading connection" }),
+    );
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Delete trading connection?" }),
+    );
+    expect(api.deleteTradingConnection).not.toHaveBeenCalled();
+    await user.click(dialog.getByRole("button", { name: "Delete" }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent(
+      "Disable the connection first",
+    );
+    await user.click(dialog.getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Alpaca paper" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(api.deleteTradingConnection.mock.calls).toEqual([
+      ["alpaca-1"],
+      ["alpaca-1"],
+    ]);
+  });
   it("confirms non-release trading only after the server refusal", async () => {
     const user = userEvent.setup();
     api.setTradingConnectionEnabled.mockRejectedValueOnce(
@@ -778,8 +860,8 @@ describe("Trading connections", () => {
     ];
     renderTrading();
     const paper = await card();
-    const live = await card("Alpaca live");
-    const unavailable = await card("Alpaca unavailable");
+    const live = await card("Alpaca live", false);
+    const unavailable = await card("Alpaca unavailable", false);
     // Alpaca's paper docs cover paper trading only: a live card links the
     // docs for live credentials instead.
     expect(live.getByRole("link", { name: "Provider site" })).toHaveAttribute(
@@ -880,6 +962,24 @@ describe("Trading connections", () => {
     ).toHaveLength(1);
   });
 
+  it("orders collapsed connection actions as toggle, settings, delete", async () => {
+    renderTrading();
+    const scope = await card("Alpaca paper", false);
+    expect(
+      scope
+        .getAllByRole("button")
+        .map(
+          (button) =>
+            button.getAttribute("aria-label") ?? button.textContent?.trim(),
+        ),
+    ).toEqual([
+      "Alpaca paper",
+      "Enable",
+      "Edit settings",
+      "Delete trading connection",
+    ]);
+  });
+
   it("shows a missing provider error with its name and omits the connection card", async () => {
     snapshot.connections = [connection({ provider: "missing-venue" })];
     renderTrading();
@@ -893,6 +993,37 @@ describe("Trading connections", () => {
       screen.queryByRole("button", { name: "Edit settings" }),
     ).not.toBeInTheDocument();
   });
+
+  it.each(["missing-venue"])(
+    "isolates a restored connection without source metadata for %s",
+    async (missingProvider) => {
+      snapshot.connections.push(
+        connection({
+          id: "restored-custom",
+          provider: missingProvider,
+          label: "Restored custom connection",
+          executionPolicy: undefined,
+          state: "unavailable",
+          error: "Custom provider is unavailable",
+        }),
+      );
+      renderTrading();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Custom provider is unavailable",
+      );
+      expect(
+        await screen.findByRole("region", { name: "Alpaca paper" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("region", { name: "Restored custom connection" }),
+      ).not.toBeInTheDocument();
+      expect(api.fetchTestExecutionPolicy).not.toHaveBeenCalled();
+      expect(
+        screen.queryByText("executionPolicy.undefined"),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("checks a disabled connection and shows its venue identity and status", async () => {
     const user = userEvent.setup();
@@ -916,6 +1047,38 @@ describe("Trading connections", () => {
         callsBeforeCheck,
       ),
     );
+  });
+
+  it("checks a test connection without showing the fresh identity or venue status", async () => {
+    const user = userEvent.setup();
+    snapshot.connections = [
+      connection({ executionPolicy: true, venueIdentity: "test:stored" }),
+    ];
+    api.fetchTestExecutionPolicy.mockResolvedValue({
+      connection: "alpaca-1",
+      revision: "1",
+      rules: [],
+    });
+    api.checkTradingConnection.mockResolvedValue({
+      venueIdentity: "test:fresh-check",
+      venueStatus: "",
+    });
+    renderTrading();
+    const scope = await card();
+    await user.click(
+      within(scope.getByRole("region", { name: "Check connection" })).getByRole(
+        "button",
+        { name: "Check connection" },
+      ),
+    );
+    expect(api.checkTradingConnection).toHaveBeenCalledExactlyOnceWith(
+      "alpaca-1",
+    );
+    expect(await scope.findByRole("status")).toHaveTextContent(
+      "Check passed: test execution reaches no venue and needs no keys.",
+    );
+    expect(screen.queryByText(/test:fresh-check/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/· status/)).not.toBeInTheDocument();
   });
 
   it("shows the server error when a connection check fails", async () => {
@@ -2089,7 +2252,7 @@ describe("Trading connections", () => {
     );
     renderTrading();
     const first = await card();
-    const second = await card("Second connection");
+    const second = await card("Second connection", false);
     await user.type(
       first.getByRole("textbox", { name: "Resolve symbol at this venue" }),
       "BTC",
@@ -2098,6 +2261,7 @@ describe("Trading connections", () => {
     await user.click(await first.findByRole("button", { name: "BTC/USD" }));
     await user.click(first.getByRole("button", { name: "Verify symbol" }));
     expect(await first.findByText("First card refused")).toBeInTheDocument();
+    await card("Second connection");
     expect(
       second.getByRole("textbox", { name: "Resolve symbol at this venue" }),
     ).toHaveValue("");
@@ -2118,7 +2282,9 @@ describe("Trading connections", () => {
       second.queryByText("No matching symbols at this venue"),
     ).not.toBeInTheDocument();
     expect(first.queryByText("Second search refused")).not.toBeInTheDocument();
+    await card();
     expect(first.getByRole("button", { name: "BTC/USD" })).toBeInTheDocument();
+    await card("Second connection");
     api.verifyTradingSymbol.mockRejectedValueOnce(
       new ApiError("Second card refused", "upstream", 502),
     );
@@ -2126,6 +2292,7 @@ describe("Trading connections", () => {
     await user.click(second.getByRole("button", { name: "Verify symbol" }));
     expect(await second.findByText("Second card refused")).toBeInTheDocument();
     expect(first.queryByText("Second card refused")).not.toBeInTheDocument();
+    await card();
     await user.type(first.getByPlaceholderText("External symbol"), "2");
     expect(first.queryByText("First card refused")).not.toBeInTheDocument();
     expect(api.searchTradingSymbols.mock.calls).toEqual([
@@ -2777,6 +2944,7 @@ describe("Trading connections", () => {
     api.fetchAssets.mockImplementation(async ({ code }: { code: string }) => {
       if (code === "U") return [{ code: "USD", title: "", assetClass: "" }];
       if (code === "US") return [{ code: "USDT", title: "", assetClass: "" }];
+      if (code === "USD") return [{ code: "USD", title: "", assetClass: "" }];
       throw new Error(`Unexpected asset query: ${code}`);
     });
     renderTrading();
@@ -2996,7 +3164,7 @@ describe("Trading connections", () => {
     ];
     renderTrading();
     const scope = await card();
-    const other = await card("Other paper");
+    const other = await card("Other paper", false);
     const form = within(scope.getByRole("form", { name: "Grant access" }));
     const reason =
       "Set a fee account first. A group can hold several accounts, and Alpaca charges fees that are not tied to orders; Officer needs one account to book them on.";
@@ -3009,7 +3177,7 @@ describe("Trading connections", () => {
     await user.click(form.getByRole("button", { name: "Set fee account" }));
     expect(scope.getByRole("combobox", { name: "Fee account" })).toHaveFocus();
     expect(
-      other.getByRole("combobox", { name: "Fee account" }),
+      other.getByLabelText("Fee account", { selector: "input" }),
     ).not.toHaveFocus();
     await user.click(form.getByRole("button", { name: "Account" }));
     expect(form.queryByText(reason)).not.toBeInTheDocument();
@@ -3049,7 +3217,7 @@ describe("Trading connections", () => {
     ];
     renderTrading();
     const scope = await card();
-    const other = await card("Other paper");
+    const other = await card("Other paper", false);
     const form = within(scope.getByRole("form", { name: "Grant access" }));
     await user.type(form.getByRole("combobox", { name: "Account" }), "beta");
     expect(form.getByRole("button", { name: "Grant access" })).toBeDisabled();
@@ -3063,7 +3231,7 @@ describe("Trading connections", () => {
     await user.click(form.getByRole("button", { name: "Set fee account" }));
     expect(scope.getByRole("combobox", { name: "Fee account" })).toHaveFocus();
     expect(
-      other.getByRole("combobox", { name: "Fee account" }),
+      other.getByLabelText("Fee account", { selector: "input" }),
     ).not.toHaveFocus();
     expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
     const fee = within(scope.getByRole("form", { name: "Fee account" }));
@@ -3648,7 +3816,7 @@ describe("Trading connections", () => {
     );
     renderTrading();
     const first = await card();
-    const second = await card("Other paper");
+    const second = await card("Other paper", false);
     await user.click(
       within(first.getByRole("region", { name: "Check connection" })).getByRole(
         "button",
@@ -3660,13 +3828,15 @@ describe("Trading connections", () => {
     ).toBeDisabled();
     expect(first.getByRole("button", { name: "Edit settings" })).toBeEnabled();
     expect(
-      second.getByRole("button", { name: "Check connection" }),
+      second.getByRole("button", { name: "Check connection", hidden: true }),
     ).toBeEnabled();
     expect(second.getByRole("button", { name: "Edit settings" })).toBeEnabled();
     await act(async () => {
       finishCheck({ venueIdentity: "first-checked", venueStatus: "ACTIVE" });
     });
-    expect(await first.findByRole("status")).toHaveTextContent("first-checked");
+    expect(await first.findByRole("status")).toHaveTextContent(
+      "Venue account first-checked · status ACTIVE",
+    );
     expect(second.queryByRole("status")).not.toBeInTheDocument();
     expect(
       within(first.getByRole("list", { name: "Setup checklist" })).getAllByText(
@@ -3675,10 +3845,9 @@ describe("Trading connections", () => {
       ),
     ).toHaveLength(1);
     expect(
-      within(second.getByRole("list", { name: "Setup checklist" })).queryByText(
-        "Done",
-        { exact: true },
-      ),
+      within(
+        second.getByRole("list", { name: "Setup checklist", hidden: true }),
+      ).queryByText("Done", { exact: true }),
     ).not.toBeInTheDocument();
   });
 
@@ -3984,6 +4153,669 @@ describe("Trading connections while accounts are hidden", () => {
   });
 });
 
+describe("Test execution policy", () => {
+  const connectionId = "test/desk #1";
+  const transport = vi.fn<typeof fetch>();
+  let state: TestExecutionPolicyState;
+  let putProblem: object | null;
+
+  beforeEach(() => {
+    snapshot = {
+      providers: [
+        provider,
+        {
+          ...provider,
+          type: "test",
+          title: "Test",
+          executionPolicy: true,
+          unlinkedFees: false,
+        },
+      ],
+      connections: [
+        connection(),
+        connection({
+          id: connectionId,
+          label: "Test desk",
+          provider: "test",
+          executionPolicy: true,
+          secrets: {},
+        }),
+      ],
+    };
+    state = {
+      connection: connectionId,
+      revision: "1",
+      rules: [
+        {
+          mask: { baseAsset: "A*", quoteAsset: "USD" },
+          mode: "execute",
+          priceVariant: "normal",
+        },
+        {
+          mask: { baseAsset: "MSFT", quoteAsset: "EUR" },
+          mode: "rest",
+          priceVariant: "best",
+          wait: { kind: "finite", seconds: 10 },
+        },
+      ],
+    };
+    putProblem = null;
+    transport.mockImplementation(async (_input, init) => {
+      if (init?.method === "PUT") {
+        if (putProblem !== null) return jsonResponse(putProblem, 422);
+        const policy = JSON.parse(init.body as string) as TestExecutionPolicy;
+        state = { connection: connectionId, revision: "2", ...policy };
+      }
+      return jsonResponse(state);
+    });
+    const realApi = createOfficerApi(
+      createApiClient({ baseUrl: "/app/api/v1", fetch: transport }),
+    );
+    api.fetchTestExecutionPolicy.mockImplementation(
+      realApi.fetchTestExecutionPolicy,
+    );
+    api.updateTestExecutionPolicy.mockImplementation(
+      realApi.updateTestExecutionPolicy,
+    );
+  });
+
+  async function loadedPolicy() {
+    renderTrading();
+    await card("Test desk");
+    const section = within(
+      await screen.findByRole("region", { name: "Test execution policy" }),
+    );
+    await section.findByRole("group", { name: "Rule 1" });
+    for (const expand of section.getAllByRole("button", { name: "Expand" }))
+      await userEvent.click(expand);
+    return section;
+  }
+
+  function putRequests() {
+    return transport.mock.calls.filter(([, init]) => init?.method === "PUT");
+  }
+
+  it.each(["0", "9223372037"])(
+    "marks invalid execution delay %s and clears it through the standard control",
+    async (value) => {
+      const user = userEvent.setup();
+      const section = await loadedPolicy();
+      const rule = within(section.getByRole("group", { name: "Rule 2" }));
+      const seconds = rule.getByRole("textbox", { name: "Wait in seconds" });
+      await user.clear(seconds);
+      await user.type(seconds, value);
+      expect(seconds).toBeInvalid();
+      await user.click(section.getByRole("button", { name: "Save" }));
+      expect(section.getByRole("alert")).toHaveTextContent(
+        "Rule 2: complete the field “Wait in seconds”.",
+      );
+      expect(putRequests()).toHaveLength(0);
+      await user.click(
+        within(seconds.parentElement!).getByRole("button", {
+          name: "Clear field",
+        }),
+      );
+      expect(seconds).toHaveValue("");
+      expect(seconds).toBeValid();
+    },
+  );
+
+  it("keeps finite wait seconds integer-only through paste and stepping", async () => {
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    const rule = within(section.getByRole("group", { name: "Rule 2" }));
+    const seconds = rule.getByRole("textbox", { name: "Wait in seconds" });
+    expect(seconds).toHaveAttribute("inputmode", "numeric");
+    await user.clear(seconds);
+    await user.type(seconds, "1");
+    for (const invalid of ["1,25", "1.25", "-2"]) {
+      await user.tripleClick(seconds);
+      await user.paste(invalid);
+      expect(seconds).toHaveValue("1");
+    }
+    await user.keyboard("{ArrowDown}");
+    expect(seconds).toHaveValue("1");
+    await user.keyboard("{ArrowUp}");
+    expect(seconds).toHaveValue("2");
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putRequests()).toHaveLength(1));
+    expect(
+      JSON.parse(putRequests()[0][1]!.body as string).rules[1].wait,
+    ).toEqual({ kind: "finite", seconds: 2 });
+  });
+
+  it("shows execution rules only for a provider that supports them", async () => {
+    const section = await loadedPolicy();
+    const venue = await card("Alpaca paper", false);
+    expect(
+      venue.queryByRole("region", { name: "Test execution policy" }),
+    ).not.toBeInTheDocument();
+    expect(api.fetchTestExecutionPolicy).toHaveBeenCalledExactlyOnceWith(
+      connectionId,
+      expect.any(AbortSignal),
+    );
+    expect(
+      section.getByText(/Rules are checked from top to bottom/),
+    ).toHaveTextContent("test_policy_no_match");
+    expect(
+      section.getByText(/Keep exactly one enabled market-data instrument/),
+    ).toHaveTextContent("test_quote_ambiguous");
+    expect(
+      section.getByText(/Keep exactly one enabled market-data instrument/),
+    ).toHaveTextContent("Restart feeds");
+    expect(section.getByRole("link", { name: "Market Data" })).toHaveAttribute(
+      "href",
+      "/market-data",
+    );
+    const testCard = await card("Test desk");
+    expect(testCard.getByText("Paper")).toBeInTheDocument();
+    expect(
+      testCard.getByText("Test", { selector: "span" }),
+    ).toBeInTheDocument();
+    expect(
+      testCard.queryByLabelText("External symbol"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("starts saved rules collapsed and preserves expansion when the connection is closed", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const scope = await card("Test desk");
+    const section = within(
+      await scope.findByRole("region", { name: "Test execution policy" }),
+    );
+    const first = within(await section.findByRole("group", { name: "Rule 1" }));
+    const second = within(section.getByRole("group", { name: "Rule 2" }));
+    expect(first.getByRole("button", { name: "Expand" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(first.getByLabelText("Base asset mask")).not.toBeVisible();
+    expect(
+      first.getByRole("button", { name: "Move rule 1 down" }),
+    ).toBeVisible();
+    expect(
+      second.getByRole("button", { name: "Move rule 2 up" }),
+    ).toBeVisible();
+    await user.click(first.getByRole("button", { name: "Expand" }));
+    const toggle = scope.getByRole("button", { name: "Test desk" });
+    await user.click(toggle);
+    await user.click(toggle);
+    expect(first.getByLabelText("Base asset mask")).toBeVisible();
+    expect(second.getByLabelText("Base asset mask")).not.toBeVisible();
+    await user.type(first.getByLabelText("Base asset mask"), "X");
+    expect(
+      first.queryByRole("button", { name: "Collapse" }),
+    ).not.toBeInTheDocument();
+    await user.click(section.getByRole("button", { name: "Add rule" }));
+    const added = within(section.getByRole("group", { name: "Rule 3" }));
+    expect(added.getByLabelText("Base asset mask")).toBeVisible();
+    expect(
+      added.queryByRole("button", { name: "Collapse" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("moves rules by priority and persists their new order", async () => {
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    const original = structuredClone(state.rules);
+    expect(
+      section.getByRole("button", { name: "Move rule 1 up" }),
+    ).toBeDisabled();
+    expect(
+      section.getByRole("button", { name: "Move rule 2 down" }),
+    ).toBeDisabled();
+    await user.click(section.getByRole("button", { name: "Move rule 2 up" }));
+    expect(
+      within(section.getByRole("group", { name: "Rule 1" })).getByLabelText(
+        "Base asset mask",
+      ),
+    ).toHaveValue("MSFT");
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(state.rules).toEqual([original[1], original[0]]),
+    );
+    await user.click(section.getByRole("button", { name: "Move rule 1 down" }));
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(state.rules).toEqual(original));
+  });
+
+  it("saves exactly one PUT with the whole edited rule list in order", async () => {
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    const first = within(section.getByRole("group", { name: "Rule 1" }));
+    await user.clear(first.getByLabelText("Base asset mask"));
+    await user.type(first.getByLabelText("Base asset mask"), "B*");
+    await user.clear(first.getByLabelText("Quote asset mask"));
+    await user.type(first.getByLabelText("Quote asset mask"), "GBP");
+    await user.click(first.getByRole("radio", { name: "Split execution" }));
+    await user.click(
+      within(first.getByRole("group", { name: "Number of fills" })).getByRole(
+        "button",
+        { name: "3" },
+      ),
+    );
+    await user.click(first.getByRole("button", { name: "Worst" }));
+    const second = within(section.getByRole("group", { name: "Rule 2" }));
+    await user.clear(second.getByLabelText("Base asset mask"));
+    await user.type(second.getByLabelText("Base asset mask"), "IBM");
+    await user.clear(second.getByLabelText("Wait in seconds"));
+    await user.type(second.getByLabelText("Wait in seconds"), "25");
+    await user.click(second.getByRole("button", { name: "Normal" }));
+    await user.click(section.getByRole("button", { name: "Add rule" }));
+    const third = within(section.getByRole("group", { name: "Rule 3" }));
+    await user.type(third.getByLabelText("Base asset mask"), "GOOG");
+    await user.type(third.getByLabelText("Quote asset mask"), "USD");
+    await user.click(
+      third.getByRole("radio", { name: "Reject every second order" }),
+    );
+    await user.click(third.getByRole("button", { name: "Best" }));
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await section.findByText("Saved revision 2");
+    expect(putRequests()).toHaveLength(1);
+    expect(putRequests()[0][0]).toBe(
+      "/app/api/v1/trading/connections/test%2Fdesk%20%231/test-policy",
+    );
+    expect(JSON.parse(putRequests()[0][1]!.body as string)).toEqual({
+      rules: [
+        {
+          mask: { baseAsset: "B*", quoteAsset: "GBP" },
+          mode: "split",
+          fills: 3,
+          priceVariant: "worst",
+        },
+        {
+          mask: { baseAsset: "IBM", quoteAsset: "EUR" },
+          mode: "rest",
+          wait: { kind: "finite", seconds: 25 },
+          priceVariant: "normal",
+        },
+        {
+          mask: { baseAsset: "GOOG", quoteAsset: "USD" },
+          mode: "reject_even",
+          priceVariant: "best",
+        },
+      ],
+    });
+    expect(section.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("points to another incomplete rule before saving infinite rest", async () => {
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    await user.click(section.getByRole("button", { name: "Add rule" }));
+    const third = within(section.getByRole("group", { name: "Rule 3" }));
+    await user.type(third.getByLabelText("Base asset mask"), "BTC");
+    await user.type(third.getByLabelText("Quote asset mask"), "USD");
+    await user.click(section.getByRole("button", { name: "Add rule" }));
+    const fourth = within(section.getByRole("group", { name: "Rule 4" }));
+    await user.type(fourth.getByLabelText("Base asset mask"), "AAA");
+    await user.type(fourth.getByLabelText("Quote asset mask"), "XXX");
+    await user.click(fourth.getByRole("radio", { name: "Rest the order" }));
+    await user.click(
+      fourth.getByRole("radio", { name: "Without automatic execution" }),
+    );
+    await user.click(section.getByRole("button", { name: "Save" }));
+    expect(await section.findByRole("alert")).toHaveTextContent(
+      "Rule 3: complete the field “Market-order price variant”.",
+    );
+    expect(putRequests()).toHaveLength(0);
+    await user.click(section.getByRole("button", { name: "Go to rule 3" }));
+    await user.click(third.getByRole("button", { name: "Normal" }));
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await section.findByText("Saved revision 2");
+    expect(state.rules[3]).toEqual({
+      mask: { baseAsset: "AAA", quoteAsset: "XXX" },
+      mode: "rest",
+      wait: { kind: "infinite" },
+    });
+  });
+
+  it("infinite rest neither shows nor sends priceVariant", async () => {
+    state.rules = [state.rules[1]];
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    await user.click(
+      section.getByRole("radio", { name: "Without automatic execution" }),
+    );
+    expect(
+      section.queryByRole("group", { name: "Market-order price variant" }),
+    ).not.toBeInTheDocument();
+    expect(section.queryByLabelText("Wait in seconds")).not.toBeInTheDocument();
+    expect(
+      section.getByText(
+        "There is no individual cancel. Any runtime restart loses the book.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putRequests()).toHaveLength(1));
+    expect(JSON.parse(putRequests()[0][1]!.body as string)).toEqual({
+      rules: [
+        {
+          mask: { baseAsset: "MSFT", quoteAsset: "EUR" },
+          mode: "rest",
+          wait: { kind: "infinite" },
+        },
+      ],
+    });
+    await section.findByText("Saved revision 2");
+    expect(
+      section.queryByRole("group", { name: "Market-order price variant" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("blocks an incomplete mask before PUT, scrolls to the error and keeps the operator input", async () => {
+    putProblem = {
+      type: "about:blank",
+      title: "Unprocessable Content",
+      status: 422,
+      detail: "base asset mask: asset is required",
+      errors: [
+        {
+          code: "validation",
+          constraint: "required",
+          pointer: "/rules/0/mask/baseAsset",
+        },
+      ],
+    };
+    state.rules.push({
+      mask: { baseAsset: "IBM", quoteAsset: "GBP" },
+      mode: "split",
+      fills: 3,
+      priceVariant: "normal",
+    });
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    const first = within(section.getByRole("group", { name: "Rule 1" }));
+    await user.clear(first.getByLabelText("Base asset mask"));
+    await user.clear(first.getByLabelText("Quote asset mask"));
+    await user.type(first.getByLabelText("Quote asset mask"), "JPY");
+    await user.click(first.getByRole("button", { name: "Worst" }));
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+    scrollIntoView.mockClear();
+    await user.click(section.getByRole("button", { name: "Save" }));
+    const alert = await section.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Rule 1: complete the field “Base asset mask”.",
+    );
+    const actionRow = section.getByRole("button", {
+      name: "Save",
+    }).parentElement;
+    expect(actionRow).toContainElement(
+      section.getByRole("button", { name: "Add rule" }),
+    );
+    expect(alert.parentElement?.nextElementSibling).toBe(actionRow);
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({
+      block: "nearest",
+    });
+    expect(scrollIntoView.mock.contexts[0]).toBe(alert.parentElement);
+    expect(first.getByLabelText("Base asset mask")).toHaveValue("");
+    expect(first.getByLabelText("Quote asset mask")).toHaveValue("JPY");
+    expect(first.getByRole("button", { name: "Worst" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(section.getAllByLabelText("Base asset mask")).toHaveLength(3);
+    expect(section.getByText("Saved revision 1")).toBeInTheDocument();
+    expect(putRequests()).toHaveLength(0);
+    expect(api.fetchTestExecutionPolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])(
+    "reconciles an ambiguous policy error without another PUT (committed=%s)",
+    async (committed) => {
+      const user = userEvent.setup();
+      const section = await loadedPolicy();
+      const first = within(section.getByRole("group", { name: "Rule 1" }));
+      await user.clear(first.getByLabelText("Base asset mask"));
+      await user.type(first.getByLabelText("Base asset mask"), "IBM");
+      transport.mockImplementation(async (_input, init) => {
+        if (init?.method === "PUT") {
+          if (committed) {
+            state = {
+              connection: connectionId,
+              revision: "2",
+              ...(JSON.parse(init.body as string) as TestExecutionPolicy),
+            };
+          }
+          return jsonResponse(
+            { error: { code: "internal", message: "Audit write failed" } },
+            500,
+          );
+        }
+        return jsonResponse(state);
+      });
+      await user.click(section.getByRole("button", { name: "Save" }));
+      await waitFor(() =>
+        expect(api.fetchTestExecutionPolicy).toHaveBeenCalledTimes(2),
+      );
+      expect(
+        await section.findByText(`Saved revision ${committed ? "2" : "1"}`),
+      ).toBeVisible();
+      expect(await section.findByRole("alert")).toHaveTextContent(
+        "Audit write failed",
+      );
+      expect(first.getByLabelText("Base asset mask")).toHaveValue("IBM");
+      expect(state.rules[0].mask.baseAsset).toBe(committed ? "IBM" : "A*");
+      expect(putRequests()).toHaveLength(1);
+    },
+  );
+
+  it("retries only the policy read after an ambiguous write and failed reconciliation", async () => {
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    let failRead = true;
+    transport.mockImplementation(async (_input, init) => {
+      if (init?.method === "PUT") {
+        state = { ...state, revision: "2", rules: [] };
+        return jsonResponse(
+          { error: { code: "internal", message: "Audit write failed" } },
+          500,
+        );
+      }
+      if (failRead) throw new Error("Policy read failed");
+      return jsonResponse(state);
+    });
+    await user.click(section.getByRole("button", { name: "Save" }));
+    const retry = await section.findByRole("button", { name: "Retry" });
+    expect(section.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(
+      section
+        .getAllByRole("alert")
+        .map((alert) => alert.textContent)
+        .join(" "),
+    ).toContain("Audit write failed");
+    expect(
+      section
+        .getAllByRole("alert")
+        .map((alert) => alert.textContent)
+        .join(" "),
+    ).toContain("Policy read failed");
+    expect(section.getByText("Saved revision 1")).toBeVisible();
+    expect(section.getAllByLabelText("Base asset mask")).toHaveLength(2);
+    failRead = false;
+    await user.click(retry);
+    await section.findByText("Saved revision 2");
+    expect(section.queryByLabelText("Base asset mask")).not.toBeInTheDocument();
+    expect(await section.findByRole("alert")).toHaveTextContent(
+      "Audit write failed",
+    );
+    expect(section.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(putRequests()).toHaveLength(1);
+    expect(api.fetchTestExecutionPolicy).toHaveBeenCalledTimes(3);
+  });
+
+  it("fills both masks with the all-instruments action and saves them", async () => {
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    await user.click(section.getByRole("button", { name: "Add rule" }));
+    const third = within(section.getByRole("group", { name: "Rule 3" }));
+    expect(third.getByLabelText("Base asset mask")).toHaveValue("");
+    expect(third.getByLabelText("Quote asset mask")).toHaveValue("");
+    await user.click(
+      third.getByRole("button", { name: "For all instruments" }),
+    );
+    expect(third.getByLabelText("Base asset mask")).toHaveValue("*");
+    expect(third.getByLabelText("Quote asset mask")).toHaveValue("*");
+    await user.click(third.getByRole("button", { name: "Normal" }));
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await section.findByText("Saved revision 2");
+    expect(state.rules[2]).toEqual({
+      mask: { baseAsset: "*", quoteAsset: "*" },
+      mode: "execute",
+      priceVariant: "normal",
+    });
+  });
+
+  it.each([
+    "/rules/3/priceVariant",
+    "/rules/3/unknownField",
+    "/rules/3/toString",
+    "/rules/30/priceVariant",
+  ])(
+    "retains the exact later-row pointer %s without guessing its field",
+    async (pointer) => {
+      state.rules.push(
+        structuredClone(state.rules[0]),
+        structuredClone(state.rules[0]),
+      );
+      const saved = structuredClone(state);
+      putProblem = {
+        detail: "price variant is required",
+        errors: [{ code: "validation", constraint: "required", pointer }],
+      };
+      const user = userEvent.setup();
+      const section = await loadedPolicy();
+      const fourth = within(section.getByRole("group", { name: "Rule 4" }));
+      await user.click(section.getByRole("button", { name: "Save" }));
+      expect(await section.findByRole("alert")).toHaveTextContent(
+        "price variant is required",
+      );
+      expect(section.getByText(`${pointer} (required)`)).toBeVisible();
+      const fieldMessage =
+        "Market-order price variant: price variant is required";
+      if (pointer === "/rules/3/priceVariant") {
+        expect(fourth.getByText(fieldMessage)).toBeVisible();
+        for (let index = 1; index <= 3; index++) {
+          expect(
+            within(
+              section.getByRole("group", { name: `Rule ${index}` }),
+            ).queryByText(fieldMessage),
+          ).not.toBeInTheDocument();
+        }
+      } else {
+        expect(section.queryByText(fieldMessage)).not.toBeInTheDocument();
+      }
+      expect(state).toEqual(saved);
+      expect(section.getByText("Saved revision 1")).toBeVisible();
+      if (pointer === "/rules/3/priceVariant") {
+        await user.click(
+          section.getByRole("button", { name: "Delete rule 1" }),
+        );
+      } else if (pointer === "/rules/3/unknownField") {
+        await user.click(section.getByRole("button", { name: "Add rule" }));
+      } else {
+        await user.click(fourth.getByRole("button", { name: "Worst" }));
+      }
+      expect(section.queryByRole("alert")).not.toBeInTheDocument();
+      expect(
+        section.queryByText(`${pointer} (required)`),
+      ).not.toBeInTheDocument();
+      expect(section.queryByText(fieldMessage)).not.toBeInTheDocument();
+    },
+  );
+
+  it("shows visible mode, fills and wait labels beside their controls", async () => {
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    const first = within(section.getByRole("group", { name: "Rule 1" }));
+    expect(first.getByText("Execution mode", { exact: true })).toBeVisible();
+    await user.click(first.getByRole("radio", { name: "Split execution" }));
+    expect(first.getByText("Number of fills", { exact: true })).toBeVisible();
+    const second = within(section.getByRole("group", { name: "Rule 2" }));
+    expect(
+      second.getByText("Automatic execution", { exact: true }),
+    ).toBeVisible();
+  });
+
+  it("shows an empty rule set without a default rule and saves it empty", async () => {
+    state.rules = [];
+    const user = userEvent.setup();
+    renderTrading();
+    await card("Test desk");
+    const section = within(
+      await screen.findByRole("region", { name: "Test execution policy" }),
+    );
+    await section.findByText("No execution rules");
+    expect(
+      section.getByText(
+        "This policy is empty. Orders have no matching rule and are refused.",
+      ),
+    ).toBeInTheDocument();
+    expect(section.queryByLabelText("Base asset mask")).not.toBeInTheDocument();
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await section.findByText("Saved revision 2");
+    expect(JSON.parse(putRequests()[0][1]!.body as string)).toEqual({
+      rules: [],
+    });
+  });
+
+  it("removes a rule and saves the remaining rules in their original order", async () => {
+    const user = userEvent.setup();
+    const section = await loadedPolicy();
+    const remaining = state.rules[1];
+    await user.click(section.getByRole("button", { name: "Delete rule 1" }));
+    expect(section.getAllByLabelText("Base asset mask")).toHaveLength(1);
+    expect(section.getByLabelText("Base asset mask")).toHaveValue("MSFT");
+    await user.click(section.getByRole("button", { name: "Save" }));
+    await section.findByText("Saved revision 2");
+    expect(JSON.parse(putRequests()[0][1]!.body as string)).toEqual({
+      rules: [remaining],
+    });
+  });
+
+  it("shows a GET decode error without inventing a policy and can retry", async () => {
+    transport.mockResolvedValueOnce(
+      jsonResponse({ connection: connectionId, revision: "1" }),
+    );
+    const user = userEvent.setup();
+    renderTrading();
+    await card("Test desk");
+    const section = within(
+      await screen.findByRole("region", { name: "Test execution policy" }),
+    );
+    expect(await section.findByRole("alert")).toHaveTextContent(
+      "Invalid test execution policy",
+    );
+    expect(
+      section.queryByRole("button", { name: "Save" }),
+    ).not.toBeInTheDocument();
+    expect(section.queryByLabelText("Base asset mask")).not.toBeInTheDocument();
+    await user.click(section.getByRole("button", { name: "Retry" }));
+    await section.findByRole("group", { name: "Rule 1" });
+    expect(section.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("has every policy and simulator guide locale key in all five catalogs", () => {
+    function leaves(value: unknown, prefix: string): string[] {
+      if (typeof value === "string") return [prefix];
+      if (value === null || typeof value !== "object")
+        throw new Error(`Invalid locale value: ${prefix}`);
+      return Object.entries(value).flatMap(([key, child]) =>
+        leaves(child, `${prefix}.${key}`),
+      );
+    }
+    const keys = (catalog: typeof enTrading) =>
+      [
+        ...leaves(catalog.testPolicy, "testPolicy"),
+        ...leaves(catalog.create.test, "create.test"),
+      ].sort();
+    for (const catalog of [esTrading, ptTrading, ruTrading, zhTrading]) {
+      expect(keys(catalog)).toEqual(keys(enTrading));
+    }
+  });
+});
+
 describe("IB trading connections", () => {
   const ibProvider: TradingProvider = {
     ...provider,
@@ -4031,7 +4863,7 @@ describe("IB trading connections", () => {
       renderTrading();
       const dialog = await openIBCreate(user);
       expect(dialog.getByLabelText("Host")).toHaveValue("127.0.0.1");
-      expect(dialog.getByLabelText("Port")).toHaveValue(4002);
+      expect(dialog.getByLabelText("Port")).toHaveValue("4002");
       expect(dialog.getByLabelText("Client ID")).toHaveAttribute(
         "placeholder",
         i18n.t("marketData:settings.autoClientId"),
@@ -4074,13 +4906,13 @@ describe("IB trading connections", () => {
     const dialog = await openIBCreate(user);
     const port = dialog.getByLabelText("Port");
     await user.click(dialog.getByRole("button", { name: "Live" }));
-    expect(port).toHaveValue(4001);
+    expect(port).toHaveValue("4001");
     await user.click(dialog.getByRole("button", { name: "Paper" }));
-    expect(port).toHaveValue(4002);
+    expect(port).toHaveValue("4002");
     await user.clear(port);
     await user.type(port, "7496");
     await user.click(dialog.getByRole("button", { name: "Live" }));
-    expect(port).toHaveValue(7496);
+    expect(port).toHaveValue("7496");
     await user.click(dialog.getByRole("button", { name: "Create" }));
     expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
       provider: "ib",
@@ -4111,9 +4943,6 @@ describe("IB trading connections", () => {
     ["Port", ""],
     ["Port", "0"],
     ["Port", "65536"],
-    ["Port", "1.5"],
-    ["Client ID", "-1"],
-    ["Client ID", "1.5"],
     ["Client ID", "9007199254740992"],
     ["Host", "   "],
     ["Label", ""],
@@ -4127,6 +4956,21 @@ describe("IB trading connections", () => {
       dialog.getByRole("button", { name: "Create" }).closest("form")!,
     );
     expect(api.createTradingConnection).not.toHaveBeenCalled();
+  });
+
+  it("rejects IB port and client ID edits as whole values", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const dialog = await openIBCreate(user);
+    for (const field of ["Port", "Client ID"]) {
+      const input = dialog.getByLabelText(field);
+      const before = (input as HTMLInputElement).value;
+      for (const value of ["-1", "1.5", "1,5", "1e2"]) {
+        fireEvent.change(input, { target: { value } });
+        expect(input).toHaveValue(before);
+      }
+    }
+    expect(dialog.getByRole("button", { name: "Create" })).toBeEnabled();
   });
 
   it("shows Auto for an IB connection without a stored client ID", async () => {
@@ -4151,8 +4995,8 @@ describe("IB trading connections", () => {
       screen.getByRole("dialog", { name: "Edit settings" }),
     );
     expect(dialog.getByLabelText("Host")).toHaveValue("gateway.local");
-    expect(dialog.getByLabelText("Port")).toHaveValue(7497);
-    expect(dialog.getByLabelText("Client ID")).toHaveValue(12);
+    expect(dialog.getByLabelText("Port")).toHaveValue("7497");
+    expect(dialog.getByLabelText("Client ID")).toHaveValue("12");
     expect(dialog.queryByLabelText("API key")).not.toBeInTheDocument();
     expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
     fireEvent.change(dialog.getByLabelText("Port"), {
@@ -4199,7 +5043,6 @@ describe("IB trading connections", () => {
   it.each([
     ["Host", ""],
     ["Port", "65536"],
-    ["Client ID", "-1"],
     ["Label", ""],
   ])("holds invalid IB settings %s", async (field, value) => {
     const user = userEvent.setup();
@@ -4932,6 +5775,206 @@ describe("Trading provider credential fields", () => {
       screen.getByRole("dialog", { name: `Add ${title} connection` }),
     );
   }
+
+  it.each([
+    ["trading_access_notification_failed", 409, false],
+    ["trading_access_notification_failed", 409, true],
+    ["trading_access_completion_failed", 500, false],
+    ["trading_access_completion_failed", 500, true],
+  ] as const)(
+    "re-reads a saved Test connection after %s (%i) and prevents another create (reload fails=%s)",
+    async (code, status, reloadFails) => {
+      setAccountScope({
+        accounts: false,
+        account: "main",
+        accountPnlReset: false,
+      });
+      snapshot = {
+        providers: [
+          { ...provider, type: "test", title: "Test", executionPolicy: true },
+        ],
+        connections: [],
+      };
+      const message =
+        code === "trading_access_notification_failed"
+          ? "access change was saved, but its mixed paper/live warning could not be published or delivered; review current access and alerts before retrying"
+          : "access change was saved, but operation completion failed; review current access, alerts and service status before retrying";
+      const transport = vi.fn<typeof fetch>(async (_input, init) => {
+        const body = JSON.parse(init!.body as string) as { label: string };
+        snapshot = {
+          ...snapshot,
+          connections: [
+            ...snapshot.connections,
+            connection({
+              id: "test-created",
+              label: body.label,
+              provider: "test",
+              executionPolicy: true,
+              secrets: {},
+            }),
+          ],
+        };
+        return jsonResponse({ error: { code, message } }, status);
+      });
+      const realApi = createOfficerApi(
+        createApiClient({ baseUrl: "/app/api/v1", fetch: transport }),
+      );
+      api.createTradingConnection.mockImplementation(
+        realApi.createTradingConnection,
+      );
+      let failReload = reloadFails;
+      api.fetchTrading.mockImplementation(async () => {
+        if (failReload && transport.mock.calls.length !== 0) {
+          throw new Error("Saved connection read failed");
+        }
+        return snapshot;
+      });
+      api.fetchTestExecutionPolicy.mockResolvedValue({
+        connection: "test-created",
+        revision: "1",
+        rules: [],
+      });
+      const user = userEvent.setup();
+      renderTrading();
+      const dialog = await openProviderCreate(user, "Test");
+      await user.clear(dialog.getByLabelText("Label"));
+      await user.type(dialog.getByLabelText("Label"), "Test saved");
+      const reads = api.fetchTrading.mock.calls.length;
+      await user.click(dialog.getByRole("button", { name: "Create" }));
+      expect(await dialog.findByRole("alert")).toHaveTextContent(message);
+      await waitFor(() =>
+        expect(api.fetchTrading.mock.calls.length).toBeGreaterThan(reads),
+      );
+      expect(dialog.getByRole("button", { name: "Create" })).toBeDisabled();
+      await user.type(dialog.getByLabelText("Label"), "{Enter}");
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(dialog.getAllByText(message)).toHaveLength(1);
+      await user.click(dialog.getByRole("button", { name: "Cancel" }));
+      if (reloadFails) {
+        expect(
+          await screen.findByText("Saved connection read failed"),
+        ).toBeVisible();
+        failReload = false;
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+      }
+      expect(
+        await screen.findByRole("region", { name: "Test saved" }),
+      ).toBeVisible();
+      expect(snapshot.connections).toHaveLength(1);
+    },
+  );
+
+  it("creates a test connection with only a label, no keys or trading mode", async () => {
+    const user = userEvent.setup();
+    credentialStorage = storage(false);
+    snapshot = {
+      providers: [
+        { ...provider, type: "test", title: "Test", executionPolicy: true },
+      ],
+      connections: [],
+    };
+    api.createTradingConnection.mockResolvedValue(
+      connection({
+        id: "test-new",
+        provider: "test",
+        executionPolicy: true,
+        label: "Test desk",
+        secrets: {},
+      }),
+    );
+    renderTrading();
+    const dialog = await openProviderCreate(user, "Test");
+    expect(dialog.queryByText(unknownCredentials)).not.toBeInTheDocument();
+    expect(
+      dialog.queryByText("Keys will be stored unencrypted"),
+    ).not.toBeInTheDocument();
+    expect(dialog.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      dialog.queryByRole("button", { name: "Live" }),
+    ).not.toBeInTheDocument();
+    expect(
+      dialog.queryByRole("button", { name: "Paper" }),
+    ).not.toBeInTheDocument();
+    expect(dialog.getAllByRole("listitem")).toHaveLength(1);
+    expect(
+      dialog.getByText(
+        "This connection executes test orders locally and needs no keys. After creating it, grant access to a test account, configure symbol masks and their execution rules, then enable the connection.",
+      ),
+    ).toBeVisible();
+    expect(dialog.queryByRole("link")).not.toBeInTheDocument();
+    const create = dialog.getByRole("button", { name: "Create" });
+    expect(create).toBeEnabled();
+    await user.clear(dialog.getByLabelText("Label"));
+    expect(create).toBeDisabled();
+    await user.type(dialog.getByLabelText("Label"), "Test desk");
+    expect(create).toBeEnabled();
+    await user.click(create);
+    expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+      provider: "test",
+      label: "Test desk",
+      mode: "paper",
+      credentials: {},
+      enabled: false,
+    });
+  });
+
+  it("keeps the unsealed-keys warning and Live option for a venue provider", async () => {
+    const user = userEvent.setup();
+    credentialStorage = storage(false);
+    renderTrading();
+    const dialog = await openProviderCreate(user, "Alpaca");
+    expect(dialog.getByRole("alert")).toHaveTextContent(
+      "Keys will be stored unencrypted",
+    );
+    await user.click(dialog.getByRole("button", { name: "Live" }));
+    expect(dialog.getByRole("button", { name: "Live" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("hides credential warnings and the keep-values hint in test settings", async () => {
+    const user = userEvent.setup();
+    credentialStorage = storage(false);
+    snapshot = {
+      providers: [
+        { ...provider, type: "test", title: "Test", executionPolicy: true },
+      ],
+      connections: [
+        connection({
+          id: "test-1",
+          provider: "test",
+          executionPolicy: true,
+          label: "Test desk",
+          secrets: {},
+        }),
+      ],
+    };
+    api.fetchTestExecutionPolicy.mockResolvedValue({
+      connection: "test-1",
+      revision: "1",
+      rules: [],
+    });
+    renderTrading();
+    const scope = await card("Test desk");
+    await user.click(scope.getByRole("button", { name: "Edit settings" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByText(unknownCredentials)).not.toBeInTheDocument();
+    expect(
+      dialog.queryByText("Keys will be stored unencrypted"),
+    ).not.toBeInTheDocument();
+    expect(
+      dialog.queryByText("Leave fields blank to keep the stored values."),
+    ).not.toBeInTheDocument();
+    expect(dialog.queryByRole("alert")).not.toBeInTheDocument();
+    await user.clear(dialog.getByLabelText("Label"));
+    await user.type(dialog.getByLabelText("Label"), "Renamed test desk");
+    await user.click(dialog.getByRole("button", { name: "Save" }));
+    expect(api.updateTradingConnectionSettings).toHaveBeenCalledExactlyOnceWith(
+      "test-1",
+      { label: "Renamed test desk" },
+    );
+  });
 
   it.each([
     {

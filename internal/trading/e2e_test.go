@@ -174,6 +174,15 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	must(err)
 	closeStore := st.Close
 	t.Cleanup(func() { must(closeStore()) })
+	registry := fwtrading.NewRegistry()
+	provider := AlpacaProvider()
+	provider.Build = func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+		c := ctx.Connection
+
+		return newAlpacaConnector(c, server.URL, "ws"+strings.TrimPrefix(server.URL, "http")+"/stream")
+	}
+	must(registry.Register(provider))
+	must(st.BindExecutionPolicyProviders(registry.SupportsExecutionPolicy))
 	must(st.Migrate(ctx))
 	n, _, err := node.NewLocalNode(ctx, domain.DefaultRealm, st,
 		engine.NewOpenPitEngineBuildFunc(), func(err error) { t.Errorf("fatal node shutdown: %v", err) })
@@ -211,19 +220,13 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	}))
 	must(realm.PutTradingAccess(ctx, domain.TradingAccess{Account: "desk", Connection: connection.ExternalID}))
 	dest := domain.TradingDestination{Connection: connection.ExternalID, Route: `{"timeInForce":"day"}`}
-	registry := fwtrading.NewRegistry()
-	provider := AlpacaProvider()
-	provider.Build = func(c domain.TradingConnection) (fwtrading.Connector, error) {
-		return newAlpacaConnector(c, server.URL, "ws"+strings.TrimPrefix(server.URL, "http")+"/stream")
-	}
-	must(registry.Register(provider))
 	reportSink := func(ctx context.Context, in domain.ExecutionReportInput) error {
 		_, _, err := service.ApplyExecutionReport(auth.ContextWithCaller(ctx, auth.SystemCaller()), in)
 		return err
 	}
 	start := func() (*fwtrading.Runtime, *websocket.Conn) {
 		t.Helper()
-		runtime, err := fwtrading.NewRuntime(registry, realm, reportSink,
+		runtime, err := fwtrading.NewRuntime(registry, realm, nil, reportSink,
 			func(context.Context, domain.AccountID, domain.ExternalID, domain.AdjustmentRequest) error {
 				t.Error("venue fee arrived before the app restart")
 				return fmt.Errorf("unexpected fee before restart")

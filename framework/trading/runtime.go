@@ -55,6 +55,7 @@ type FeeSkipSink func(ctx context.Context, connection domain.ExternalID, feeID, 
 // Store is the runtime's subset of store.RealmStore. Its trading methods retain
 // that interface's not-found, conflict and already-exists contracts.
 type Store interface {
+	TestExecutionStore
 	GetTradingConnection(context.Context, domain.ExternalID) (domain.TradingConnection, bool, error)
 	// GetTradingFeeAccounts atomically reads the fee account and the distinct
 	// accounts that can send through the connection: direct grantees and the
@@ -84,6 +85,7 @@ type Store interface {
 type Runtime struct {
 	registry *Registry
 	store    Store
+	quotes   QuoteSource
 	sink     ReportSink
 	adjust   AdjustmentSink
 	feeSkip  FeeSkipSink
@@ -163,15 +165,20 @@ type taskResult struct {
 }
 
 // NewRuntime requires a registry, durable store, both core sinks, a fee skip
-// sink and a logger.
-func NewRuntime(registry *Registry, st Store, sink ReportSink, adjust AdjustmentSink, feeSkip FeeSkipSink, logger *slog.Logger) (*Runtime, error) {
+// sink and a logger. Quotes may be nil; only a connector that needs quotes
+// rejects nil when its Build is called.
+func NewRuntime(registry *Registry, st Store, quotes QuoteSource, sink ReportSink, adjust AdjustmentSink, feeSkip FeeSkipSink, logger *slog.Logger) (*Runtime, error) {
 	if registry == nil || st == nil || sink == nil || adjust == nil || feeSkip == nil || logger == nil {
 		return nil, fmt.Errorf("trading: registry, store, report sink, adjustment sink, fee skip sink and logger required: %w", domain.ErrInvalid)
 	}
 	return &Runtime{
-		registry: registry, store: st, sink: sink, adjust: adjust, feeSkip: feeSkip, logger: logger,
+		registry: registry, store: st, quotes: quotes, sink: sink, adjust: adjust, feeSkip: feeSkip, logger: logger,
 		feeSkips: make(map[domain.ExternalID]map[string]struct{}),
 	}, nil
+}
+
+func (r *Runtime) buildContext(connection domain.TradingConnection) BuildContext {
+	return BuildContext{Connection: connection, Quotes: r.quotes, Store: r.store}
 }
 
 // Start starts workers for enabled connections and connections with outstanding
@@ -230,7 +237,7 @@ func (r *Runtime) start(ctx context.Context) error {
 		for _, link := range open[c.ExternalID] {
 			w.pending[link.ClientOrderID] = struct{}{}
 		}
-		w.connector, err = r.registry.Build(c)
+		w.connector, err = r.registry.Build(r.buildContext(c))
 		if err != nil {
 			// Every rebuild, including the one that saving credentials
 			// makes, fails for an unregistered provider, so its
@@ -467,9 +474,14 @@ func (r *Runtime) submit(ctx context.Context, t task) (link domain.VenueOrder, e
 // Providers returns the registered connector providers sorted by Type.
 func (r *Runtime) Providers() []Provider { return r.registry.Providers() }
 
+// SupportsExecutionPolicy reports the registered provider's policy capability.
+func (r *Runtime) SupportsExecutionPolicy(provider string) (bool, error) {
+	return r.registry.SupportsExecutionPolicy(provider)
+}
+
 // CheckAccount checks a stored or draft connection without a running worker.
 func (r *Runtime) CheckAccount(ctx context.Context, connection domain.TradingConnection) (AccountInfo, error) {
-	result, supported, err := r.registry.CheckAccount(ctx, connection)
+	result, supported, err := r.registry.CheckAccount(ctx, r.buildContext(connection))
 	if err != nil {
 		return AccountInfo{}, err
 	}
@@ -481,7 +493,7 @@ func (r *Runtime) CheckAccount(ctx context.Context, connection domain.TradingCon
 
 // SearchSymbols searches the supplied connection snapshot without a worker.
 func (r *Runtime) SearchSymbols(ctx context.Context, connection domain.TradingConnection, query string) ([]SymbolMatch, error) {
-	result, supported, err := r.registry.SearchSymbols(ctx, connection, query)
+	result, supported, err := r.registry.SearchSymbols(ctx, r.buildContext(connection), query)
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +506,7 @@ func (r *Runtime) SearchSymbols(ctx context.Context, connection domain.TradingCo
 // VerifySymbol builds a fresh connector; unsupported verification returns
 // ErrUnsupported. It does not depend on a running worker or enabled sends.
 func (r *Runtime) VerifySymbol(ctx context.Context, connection domain.TradingConnection, external string) (SymbolVerification, error) {
-	result, supported, err := r.registry.VerifySymbol(ctx, connection, external)
+	result, supported, err := r.registry.VerifySymbol(ctx, r.buildContext(connection), external)
 	if err != nil {
 		return SymbolVerification{}, err
 	}
@@ -603,21 +615,23 @@ func (w *worker) checkDestination(ctx context.Context, order domain.Order, dest 
 	if !allowed {
 		return Order{}, fmt.Errorf("trading: account %q has no access to connection %s and venue account %q: %w", order.Account, c.ExternalID, dest.VenueAccount, domain.ErrForbidden)
 	}
-	instrument, found, err := w.r.store.FindTradingInstrument(ctx, dest.Connection, order.BaseAsset, order.QuoteAsset)
-	if err != nil {
-		return Order{}, err
-	}
-	if !found {
-		return Order{}, fmt.Errorf("trading: instrument %s/%s: %w", order.BaseAsset, order.QuoteAsset, domain.ErrNotFound)
-	}
-	if !instrument.Enabled {
-		return Order{}, fmt.Errorf("trading: instrument %s/%s disabled: %w", order.BaseAsset, order.QuoteAsset, domain.ErrConflict)
-	}
 	mapped := Order{
-		Symbol: instrument.ExternalSymbol, Side: order.Side,
-		BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
+		Side: order.Side, BaseAsset: order.BaseAsset, QuoteAsset: order.QuoteAsset,
 		AmountKind: order.AmountKind, Quantity: order.AmountValue,
 		LimitPrice: order.Price, VenueAccount: dest.VenueAccount, Route: dest.Route,
+	}
+	if !p.ExecutionPolicy {
+		instrument, found, err := w.r.store.FindTradingInstrument(ctx, dest.Connection, order.BaseAsset, order.QuoteAsset)
+		if err != nil {
+			return Order{}, err
+		}
+		if !found {
+			return Order{}, fmt.Errorf("trading: instrument %s/%s: %w", order.BaseAsset, order.QuoteAsset, domain.ErrNotFound)
+		}
+		if !instrument.Enabled {
+			return Order{}, fmt.Errorf("trading: instrument %s/%s disabled: %w", order.BaseAsset, order.QuoteAsset, domain.ErrConflict)
+		}
+		mapped.Symbol = instrument.ExternalSymbol
 	}
 	if checker, ok := w.connector.(PreChecker); ok {
 		checkCtx, cancel := context.WithTimeout(ctx, connectorTimeout)
@@ -761,10 +775,26 @@ func (w *worker) cancelOrder(link domain.VenueOrder) error {
 		ExternalID: reportID(link.ClientOrderID, "done"), Order: link.Order,
 		OrderStatus: domain.OrderStatusCancelled, LeavesQuantity: "0",
 	})
-	if errors.Is(err, domain.ErrAlreadyExists) {
+	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		return err
+	}
+	return w.releaseOrder(link)
+}
+
+func (w *worker) releaseOrder(link domain.VenueOrder) error {
+	releaser, ok := w.connector.(interface{ ReleaseOrder(string) })
+	if !ok {
 		return nil
 	}
-	return err
+	detail, err := w.r.store.GetOrder(context.WithoutCancel(w.r.ctx), link.Order)
+	if err != nil {
+		return err
+	}
+	if !domain.OrderStatusTerminal(detail.Order.Status) {
+		return fmt.Errorf("trading: terminal order could not be confirmed: %w", domain.ErrUpstream)
+	}
+	releaser.ReleaseOrder(link.ClientOrderID)
+	return nil
 }
 
 func (w *worker) log(level slog.Level, coid, message string, err error) {

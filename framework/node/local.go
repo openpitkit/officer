@@ -75,14 +75,15 @@ func (e *engineRebuildError) Unwrap() error {
 // window is open, new mutating requests are rejected rather than queued behind
 // the rebuild.
 type localNode struct {
-	engineMu      sync.RWMutex
-	engine        engine.Engine
-	build         engine.BuildFunc
-	db            store.Store
-	realm         store.RealmStore
-	realmID       domain.RealmID
-	fatal         func(error)
-	pnlResetOwner PnlResetSchedulerOwner
+	engineMu              sync.RWMutex
+	engine                engine.Engine
+	build                 engine.BuildFunc
+	db                    store.Store
+	realm                 store.RealmStore
+	realmID               domain.RealmID
+	fatal                 func(error)
+	pnlResetOwner         PnlResetSchedulerOwner
+	tradingAccessObserver func(context.Context, domain.Account, domain.Caller) error
 
 	mutate     sync.Mutex
 	reportMu   sync.Mutex
@@ -529,6 +530,12 @@ func (n *localNode) RestoreBackup(
 	opts backup.RestoreOptions,
 	caller domain.Caller,
 ) (restoredSummary backup.RestoreSummary, restoredSink marketdata.Sink, resultErr error) {
+	ctx, finish := TradingAccessNotifications(ctx)
+	defer func() {
+		if err := finish(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	normalizedScope := effectiveRestoreScope(
 		opts.Scope, archive.Manifest.Sections,
 	)
@@ -594,6 +601,10 @@ func (n *localNode) RestoreBackup(
 		defer n.endMutation()
 	}
 
+	beforeAccess, err := n.captureTradingAccessState(ctx, "", "")
+	if err != nil {
+		return backup.RestoreSummary{}, n.currentMarketDataSink(), err
+	}
 	beforeMode, err := n.storedSpotFundsLimitMode(ctx)
 	if err != nil {
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),
@@ -754,13 +765,20 @@ func (n *localNode) RestoreBackup(
 					)
 			}
 		}
-		return backup.RestoreSummary{}, n.currentMarketDataSink(),
-			failAfterCommit(
-				"audit committed backup restore",
-				fmt.Errorf("audit restore backup: %w", err),
+		cause := fmt.Errorf("audit restore backup: %w", err)
+		if runtimeScope {
+			notificationErr := n.publishTradingAccessTransitions(ctx, beforeAccess, "", "", caller)
+			return summary, n.currentMarketDataSink(), errors.Join(
+				failAfterCommit("audit committed backup restore", cause), notificationErr,
 			)
+		}
+		return backup.RestoreSummary{}, n.currentMarketDataSink(),
+			failAfterCommit("audit committed backup restore", cause)
 	}
 
+	if err := n.publishTradingAccessTransitions(ctx, beforeAccess, "", "", caller); err != nil {
+		return summary, n.currentMarketDataSink(), err
+	}
 	return summary, n.currentMarketDataSink(), nil
 }
 

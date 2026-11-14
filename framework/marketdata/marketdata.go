@@ -32,6 +32,40 @@ import (
 // source AsOf is older than this is displayed as absent.
 const FreshnessTTL = 70 * time.Second
 
+// QuoteStale reports whether the source quote age has reached FreshnessTTL.
+// Equality is stale; a future asOf is fresh.
+func QuoteStale(asOf, now time.Time) bool {
+	return now.Sub(asOf) >= FreshnessTTL
+}
+
+// InverseQuote constructs the inverse quote using the instrument's swapped asset
+// codes and inverted bid/ask sides. It preserves AsOf, ReceivedAt, Instance and
+// ExternalSymbol, and returns false when the quote cannot be inverted.
+func InverseQuote(quote domain.MarketDataQuote, instrument domain.MarketDataInstrument) (domain.MarketDataQuote, bool) {
+	inverted, ok := InvertQuote(QuoteUpdate{
+		AsOf:  quote.AsOf,
+		Base:  instrument.BaseAssetID,
+		Quote: instrument.QuoteAssetID,
+		Mark:  quote.Mark,
+		Bid:   quote.Bid,
+		Ask:   quote.Ask,
+	})
+	if !ok {
+		return domain.MarketDataQuote{}, false
+	}
+	return domain.MarketDataQuote{
+		AsOf:           inverted.AsOf,
+		ReceivedAt:     quote.ReceivedAt,
+		Instance:       quote.Instance,
+		ExternalSymbol: quote.ExternalSymbol,
+		BaseAsset:      instrument.QuoteAsset,
+		QuoteAsset:     instrument.BaseAsset,
+		Mark:           inverted.Mark,
+		Bid:            inverted.Bid,
+		Ask:            inverted.Ask,
+	}, true
+}
+
 // QuoteUpdate is one quote normalized to an opaque asset key, ready for the
 // sink. Connectors return Base and Quote verbatim from Subscription; they never
 // derive them from a provider symbol. Price fields are exact decimal strings

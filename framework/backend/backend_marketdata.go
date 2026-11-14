@@ -475,28 +475,11 @@ func marketDataInverseQuote(
 	if quote == nil || !syntheticInverse {
 		return nil
 	}
-	inverted, ok := marketdata.InvertQuote(marketdata.QuoteUpdate{
-		AsOf:  quote.AsOf,
-		Base:  instrument.BaseAssetID,
-		Quote: instrument.QuoteAssetID,
-		Mark:  quote.Mark,
-		Bid:   quote.Bid,
-		Ask:   quote.Ask,
-	})
+	inverted, ok := marketdata.InverseQuote(*quote, instrument)
 	if !ok {
 		return nil
 	}
-	return &domain.MarketDataQuote{
-		AsOf:           inverted.AsOf,
-		ReceivedAt:     quote.ReceivedAt,
-		Instance:       quote.Instance,
-		ExternalSymbol: quote.ExternalSymbol,
-		BaseAsset:      instrument.QuoteAsset,
-		QuoteAsset:     instrument.BaseAsset,
-		Mark:           inverted.Mark,
-		Bid:            inverted.Bid,
-		Ask:            inverted.Ask,
-	}
+	return &inverted
 }
 
 func marketDataRestartRequired(
@@ -1042,7 +1025,7 @@ func marketDataInstrumentStale(
 	if quote == nil {
 		return true
 	}
-	return now.Sub(quote.AsOf) >= MarketDataFreshnessTTL
+	return marketdata.QuoteStale(quote.AsOf, now)
 }
 
 type marketDataQuoteKey struct {

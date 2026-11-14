@@ -153,6 +153,7 @@ const tradingSnapshot: TradingSnapshot = {
   providers: [],
   connections: [
     {
+      executionPolicy: false,
       id: "alpaca-1",
       provider: "alpaca",
       label: "Alpaca paper",
@@ -787,6 +788,7 @@ describe("DeleteAccountConfirm", () => {
 const accessSnapshot: TradingSnapshot = {
   providers: [
     {
+      executionPolicy: false,
       type: "alpaca",
       title: "Alpaca",
       venueAccounts: false,
@@ -795,6 +797,7 @@ const accessSnapshot: TradingSnapshot = {
       unlinkedFees: true,
     },
     {
+      executionPolicy: false,
       type: "mock",
       title: "Mock",
       venueAccounts: false,
@@ -874,11 +877,18 @@ async function nextMembershipPoll() {
 }
 
 describe("Trading connection access", () => {
-  it("sits before delete on every account row", () => {
+  it("places venue and position actions beside their counts", () => {
     renderAccounts();
     for (const code of ["desk-default", "desk-alpha"]) {
       const remove = screen.getByRole("button", { name: `Delete ${code}` });
-      expect(remove.previousElementSibling).toHaveAccessibleName(VENUE_ACCESS);
+      const row = remove.closest("tr")!;
+      const access = within(row).getByRole("button", { name: VENUE_ACCESS });
+      const positions = within(row).getByRole("button", {
+        name: "Positions - spot limits for this account",
+      });
+      expect(access.closest("td")).not.toBe(remove.closest("td"));
+      expect(positions.closest("td")).not.toBe(remove.closest("td"));
+      expect(access.closest("td")).not.toBe(positions.closest("td"));
     }
   });
 
@@ -1491,8 +1501,16 @@ describe("Venue access column and filter", () => {
       screen.getByRole("columnheader", { name: /venues/i }),
     ).toBeInTheDocument();
     // desk-alpha has access only through equity-desks; the list row says so.
-    expect(listRow("Delete desk-alpha").getByText("yes")).toBeInTheDocument();
-    expect(listRow("Delete desk-default").getByText("no")).toBeInTheDocument();
+    expect(
+      listRow("Delete desk-alpha").getByLabelText(
+        "Includes access inherited from the account group.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      listRow("Delete desk-default").queryByLabelText(
+        "Includes access inherited from the account group.",
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("shows group venue access, the default group without it", () => {
@@ -1570,7 +1588,7 @@ describe("Venue access column and filter", () => {
     expect(url.searchParams.get("venue")).toBe("none");
   });
 
-  it("hides the column and field without connections but keeps an applied filter and its chip", async () => {
+  it("keeps the access action without connections and retains an applied filter and its chip", async () => {
     useTradingMock.mockReturnValue(
       ready({ ...tradingSnapshot, connections: [] }),
     );
@@ -1578,7 +1596,7 @@ describe("Venue access column and filter", () => {
     renderAccounts("/accounts?venue=connection:deleted");
     expect(
       screen.queryByRole("columnheader", { name: /venues/i }),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
     expect(screen.queryByText("yes")).not.toBeInTheDocument();
     expect(lastAccountFilters()).toEqual(
       expect.objectContaining({ venue: "connection:deleted" }),
@@ -1592,7 +1610,7 @@ describe("Venue access column and filter", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("says why the column and field are missing when trading fails to load", async () => {
+  it("keeps access actions and explains unknown access when trading fails to load", async () => {
     useTradingMock.mockReturnValue({
       load: { state: "error", data: null, error: "trading unavailable" },
       reload: vi.fn(),
@@ -1606,7 +1624,7 @@ describe("Venue access column and filter", () => {
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("columnheader", { name: /venues/i }),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /more filters/i }));
     expect(
       within(
@@ -3046,50 +3064,25 @@ describe("Accounts business CSV", () => {
 
   it("disables account advanced search while a numeric value is invalid", async () => {
     const user = userEvent.setup();
-    renderAccounts();
+    renderAccounts("/accounts?positionCountMode=eq&positionCountMin=1.5");
 
     await user.click(screen.getByRole("button", { name: /more filters/i }));
     const dialog = screen.getByRole("dialog", { name: /find by fields/i });
     const positionCount = within(dialog).getAllByPlaceholderText("Value")[0];
-    await user.type(positionCount, "word");
-
-    expect(
-      within(dialog).getByRole("button", {
-        name: /apply advanced filter/i,
-      }),
-    ).toBeDisabled();
-
-    expect(
-      screen.getByRole("dialog", { name: /find by fields/i }),
-    ).toBeInTheDocument();
+    expect(positionCount).toHaveValue("1.5");
     expect(positionCount).toBeInvalid();
-    expect(positionCount).toHaveProperty(
-      "validationMessage",
-      "Enter a valid number.",
-    );
-    expect(lastAccountFilters()).not.toEqual(
-      expect.objectContaining({
-        positionCountMode: "eq",
-        positionCountMin: expect.any(String),
-      }),
-    );
-    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
-
-    await user.clear(positionCount);
-    await user.type(positionCount, "1.5");
     expect(
-      within(dialog).getByRole("button", {
-        name: /apply advanced filter/i,
-      }),
+      within(dialog).getByRole("button", { name: /apply advanced filter/i }),
     ).toBeDisabled();
-
+    await user.click(positionCount);
+    await user.keyboard("{ArrowUp}");
+    expect(positionCount).toHaveValue("1.5");
     await user.clear(positionCount);
-    await user.type(positionCount, "-1");
+    await user.type(positionCount, "2");
+    expect(positionCount).toBeValid();
     expect(
-      within(dialog).getByRole("button", {
-        name: /apply advanced filter/i,
-      }),
-    ).toBeDisabled();
+      within(dialog).getByRole("button", { name: /apply advanced filter/i }),
+    ).toBeEnabled();
   });
 
   it("maps less-than count filters to the visible value", async () => {
@@ -3106,6 +3099,47 @@ describe("Accounts business CSV", () => {
       ),
     );
   });
+
+  it.each(["/accounts", "/accounts?tab=groups"])(
+    "admits only integer count filters on %s",
+    async (path) => {
+      const user = userEvent.setup();
+      renderAccounts(path);
+      await user.click(screen.getByRole("button", { name: /more filters/i }));
+      const dialog = screen.getByRole("dialog", { name: /find by fields/i });
+      const counts = within(dialog).getAllByPlaceholderText("Value");
+      expect(counts).toHaveLength(path.includes("groups") ? 2 : 1);
+      for (const count of counts) {
+        expect(count).toHaveAttribute("inputmode", "numeric");
+        await user.type(count, "1");
+        for (const invalid of ["1,25", "1.25", "-2"]) {
+          await user.tripleClick(count);
+          await user.paste(invalid);
+          expect(count).toHaveValue("1");
+        }
+        await user.keyboard("{ArrowUp}");
+        expect(count).toHaveValue("2");
+      }
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: /apply advanced filter/i,
+        }),
+      );
+      await waitFor(() =>
+        expect(
+          path.includes("groups") ? lastGroupFilters() : lastAccountFilters(),
+        ).toEqual(
+          expect.objectContaining({
+            positionCountMode: "eq",
+            positionCountMin: "2",
+            ...(path.includes("groups")
+              ? { accountCountMode: "eq", accountCountMin: "2" }
+              : {}),
+          }),
+        ),
+      );
+    },
+  );
 
   it.each([
     [

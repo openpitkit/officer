@@ -84,9 +84,13 @@ func (rt *restoreTx) prune(ctx context.Context, scope backup.Scope, data backup.
 }
 
 func (rt *restoreTx) pruneTrading(ctx context.Context) error {
+	if err := rt.affectTradingAccounts(ctx, `SELECT code FROM account`); err != nil {
+		return err
+	}
 	for _, table := range []string{
 		"venue_order",
 		"trading_access",
+		"trading_test_policy",
 		"trading_instrument",
 		"trading_connection",
 	} {
@@ -167,6 +171,7 @@ func (rt *restoreTx) pruneAccountsGroups(
 		if keepAccounts[p.a] {
 			continue
 		}
+		rt.isolationAccounts[domain.AccountID(p.a)] = true
 		if _, err := rt.tx.ExecContext(
 			ctx, `DELETE FROM account WHERE code = ?`, p.a,
 		); err != nil {
@@ -191,6 +196,9 @@ func (rt *restoreTx) pruneAccountsGroups(
 		}
 		if !accounts.matchesAll && !inScopeGroups[code] {
 			continue
+		}
+		if err := rt.affectTradingGroup(ctx, code); err != nil {
+			return err
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx, `DELETE FROM account_group WHERE code = ?`, code,

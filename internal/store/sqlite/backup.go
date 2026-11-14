@@ -143,6 +143,10 @@ func (r *realmStore) captureBackup(ctx context.Context, scope backup.Scope, afte
 func (r *realmStore) backupSnapshot(
 	ctx context.Context,
 ) (*realmStore, func() error, error) {
+	classifier, err := r.store.executionPolicyProviders()
+	if err != nil {
+		return nil, nil, err
+	}
 	db, err := r.db()
 	if err != nil {
 		return nil, nil, err
@@ -175,6 +179,9 @@ func (r *realmStore) backupSnapshot(
 			fmt.Errorf("store: open backup snapshot: %w", err),
 			removeSnapshot(),
 		)
+	}
+	if err := raw.BindExecutionPolicyProviders(classifier); err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("store: bind backup snapshot classifier: %w", err), raw.Close(), removeSnapshot())
 	}
 	snapshotStore, ok := raw.(*sqliteStore)
 	if !ok {
@@ -286,6 +293,9 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.TradingAccess, err = r.exportTradingAccess(ctx); err != nil {
 		return backup.Data{}, err
 	}
+	if data.TestExecutionPolicies, err = r.exportTestExecutionPolicies(ctx); err != nil {
+		return backup.Data{}, err
+	}
 	if data.VenueOrders, err = r.exportVenueOrders(ctx); err != nil {
 		return backup.Data{}, err
 	}
@@ -370,12 +380,12 @@ func (r *realmStore) RestoreBackup(
 	// Re-narrow the archive to the restore scope so a caller may restore a subset
 	// of a full archive; the archive already filtered to its own scope at export.
 	data := backup.FilterData(archive.Data, scope)
-	accounts := make(map[domain.AccountID]bool, len(data.Accounts))
+	archiveAccounts := make(map[domain.AccountID]bool, len(data.Accounts))
 	for _, account := range data.Accounts {
-		accounts[domain.AccountID(account.Code)] = true
+		archiveAccounts[domain.AccountID(account.Code)] = true
 	}
 	for _, receipt := range data.AccountPnlResetReceipts {
-		if !accounts[receipt.Account] {
+		if !archiveAccounts[receipt.Account] {
 			return backup.RestoreSummary{}, fmt.Errorf("reset receipt requires accounts_groups account %q in archive: %w", receipt.Account, domain.ErrInvalid)
 		}
 	}
@@ -484,9 +494,17 @@ func (r *realmStore) RestoreBackup(
 		tradingProviderRequiresFeeAccount: opts.TradingProviderRequiresFeeAccount,
 		disableTradingConnections:         opts.DisableTradingConnections,
 		summary:                           &summary,
+		isolationAccounts:                 make(map[domain.AccountID]bool),
 	}
 
 	if err := rt.run(ctx, scope, data); err != nil {
+		return backup.RestoreSummary{}, err
+	}
+	accounts := make([]domain.AccountID, 0, len(rt.isolationAccounts))
+	for account := range rt.isolationAccounts {
+		accounts = append(accounts, account)
+	}
+	if err := r.validateTradingAccessModes(ctx, tx, accounts); err != nil {
 		return backup.RestoreSummary{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -521,6 +539,7 @@ type restoreTx struct {
 	tradingProviderRequiresFeeAccount func(provider string) (bool, error)
 	disableTradingConnections         bool
 	summary                           *backup.RestoreSummary
+	isolationAccounts                 map[domain.AccountID]bool
 }
 
 // applyRuntime records n runtime rows written to section. The node classifies
@@ -623,6 +642,7 @@ func archiveCarriesTrading(data backup.Data) bool {
 	return len(data.TradingConnections) > 0 ||
 		len(data.TradingInstruments) > 0 ||
 		len(data.TradingAccess) > 0 ||
+		len(data.TestExecutionPolicies) > 0 ||
 		len(data.VenueOrders) > 0
 }
 

@@ -54,14 +54,15 @@ var (
 // one realm and rejects any other realm id. Safe for concurrent use: all
 // mutations go through database/sql which pools a single connection.
 type sqliteStore struct {
-	db                  atomic.Pointer[sql.DB]
-	enumCodes           atomic.Pointer[enumDictionaries]
-	configuredMasterKey *secret.MasterKey
-	sealer              atomic.Pointer[secret.MasterKey]
-	dialect             sqliteDialect
-	path                string
-	realm               domain.RealmID
-	preMigrationCopy    bool
+	executionPolicyLookup domain.ExecutionPolicyProviderLookup
+	db                    atomic.Pointer[sql.DB]
+	enumCodes             atomic.Pointer[enumDictionaries]
+	configuredMasterKey   *secret.MasterKey
+	sealer                atomic.Pointer[secret.MasterKey]
+	dialect               sqliteDialect
+	path                  string
+	realm                 domain.RealmID
+	preMigrationCopy      bool
 
 	// accessSnapshot is the access state the live database last committed;
 	// Migrate publishes the first one.
@@ -77,6 +78,28 @@ type sqliteStore struct {
 
 	mu        sync.Mutex
 	reachable bool
+}
+
+func (s *sqliteStore) BindExecutionPolicyProviders(classifier domain.ExecutionPolicyProviderLookup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if classifier == nil {
+		return errors.New("store: nil execution-policy provider lookup")
+	}
+	if s.executionPolicyLookup != nil {
+		return errors.New("store: execution-policy provider lookup already bound")
+	}
+	s.executionPolicyLookup = classifier
+	return nil
+}
+
+func (s *sqliteStore) executionPolicyProviders() (domain.ExecutionPolicyProviderLookup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.executionPolicyLookup == nil {
+		return nil, errors.New("store: execution-policy provider lookup is not bound")
+	}
+	return s.executionPolicyLookup, nil
 }
 
 // Option customizes a SQLite store instance.

@@ -24,11 +24,13 @@ import (
 	"strings"
 	"testing"
 
+	"go.openpit.dev/officer/engine"
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/trading"
 )
 
 // tightenOnlyEntry classifies one mutating MCP command against the
@@ -49,6 +51,10 @@ type tightenOnlyEntry struct {
 // tightenOnlyClassification holds one entry per mutating command of the
 // Officer MCP catalogue, keyed by command name.
 var tightenOnlyClassification = map[string]tightenOnlyEntry{
+	"set_test_execution_policy": {
+		reason: "Only the policy of a visible test-class connection is replaced through Service.ReplaceTestExecutionPolicy; credentials, enable, instruments, grants and fee accounts retain their existing tighten-only refusals.",
+		proof:  TestMCPTestPolicyLimitI9,
+	},
 	"set_limit": {
 		reason: "The core refuses a barrier looser than the one it replaces or " +
 			"overrides, and the first order-size barrier while a rate-limit barrier " +
@@ -461,7 +467,13 @@ func tradingControlPlaneTools(
 ) (*backend.Service, node.Node, frameworkmcp.Source, domain.ExternalID) {
 	t.Helper()
 	ctx := systemCtx()
-	target, _ := newLocalNode(t)
+	target, _ := newLocalNodeBuiltBy(t, engine.NewOpenPitEngineBuildFunc(), trading.Provider{
+		Type: "venue", ExecutionPolicy: false,
+		Build: func(trading.BuildContext) (trading.Connector, error) {
+			t.Fatal("control-plane fixture must not build a connector")
+			return nil, nil
+		},
+	})
 	service := newOfficerService(t, target, nil, nil, backend.WithTradingRuntime(scopeTradingRuntime{}))
 	for _, code := range []string{"USD", "AAPL", "MSFT"} {
 		if _, err := service.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {

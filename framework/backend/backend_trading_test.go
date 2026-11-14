@@ -41,6 +41,7 @@ type tradingTestRuntime struct {
 	states                                     map[domain.ExternalID]trading.ConnectionStatus
 	identity                                   string
 	checkErr, restartErr, verifyErr, searchErr error
+	classifyErr                                error
 	checks                                     []domain.TradingConnection
 	restarts                                   int
 	verified, searched                         string
@@ -49,6 +50,16 @@ type tradingTestRuntime struct {
 }
 
 func (rt *tradingTestRuntime) Providers() []trading.Provider { return rt.providers }
+
+func (rt *tradingTestRuntime) SupportsExecutionPolicy(provider string) (bool, error) {
+	if rt.classifyErr != nil {
+		return false, rt.classifyErr
+	}
+	if len(rt.providers) != 1 || rt.providers[0].Type != provider {
+		return false, fmt.Errorf("test provider %q: %w", provider, domain.ErrTradingProviderUnavailable)
+	}
+	return rt.providers[0].ExecutionPolicy, nil
+}
 func (rt *tradingTestRuntime) ConnectionStatuses() map[domain.ExternalID]trading.ConnectionStatus {
 	return rt.states
 }
@@ -249,7 +260,10 @@ func tradingTestConnection() domain.TradingConnection {
 func newTradingTestService(t *testing.T, opts ...Option) (*Service, *tradingTestNode, *tradingTestRuntime) {
 	t.Helper()
 	n := &tradingTestNode{}
-	rt := &tradingTestRuntime{identity: "venue-1", providers: []trading.Provider{{Type: "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}}}
+	rt := &tradingTestRuntime{identity: "venue-1", providers: []trading.Provider{{
+		ExecutionPolicy: false,
+		Type:            "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true,
+	}}}
 	s, err := New(n, nil, nil, testLockSettlementPrice, append([]Option{WithTradingRuntime(rt)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
@@ -490,6 +504,32 @@ func TestTradingUpdate(t *testing.T) {
 				t.Fatal("update lost stored settings or omitted credential keys")
 			}
 		})
+	}
+}
+
+func TestTradingUpdateEmptyCredentialObjectsKeepStoredJSON(t *testing.T) {
+	for _, stored := range []string{"{}", "{ }"} {
+		for _, update := range []string{"", "{}", "{ }"} {
+			for name, caller := range map[string]domain.Caller{"api": tradingTestOperators["api"], "mcp": tradingTestAgent} {
+				t.Run(name+"/"+stored+"/"+update, func(t *testing.T) {
+					s, n, rt := newTradingTestService(t)
+					connection := tradingTestConnection()
+					connection.Credentials = stored
+					n.connections = []domain.TradingConnection{connection}
+					ctx := auth.ContextWithCaller(context.Background(), caller)
+					if err := s.UpdateTradingConnectionSettings(ctx, "connection-1", "Renamed", update); err != nil {
+						t.Fatal(err)
+					}
+					connection.Label = "Renamed"
+					if n.connections[0] != connection {
+						t.Fatalf("empty update changed stored credentials: %+v", n.connections[0])
+					}
+					if len(rt.checks) != 0 || rt.restarts != 0 || len(n.writes) != 1 {
+						t.Fatalf("empty update: checks=%d restarts=%d writes=%v", len(rt.checks), rt.restarts, n.writes)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -852,8 +892,32 @@ func TestTradingStatus(t *testing.T) {
 	if !reflect.DeepEqual(got.Connections[0].Access, wantAccess) {
 		t.Fatalf("status access = %+v, want every grant with the granted account's group %+v", got.Connections[0].Access, wantAccess)
 	}
-	if len(got.Providers) != 1 || got.Providers[0] != (TradingProvider{Type: "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true}) {
+	if len(got.Providers) != 1 || got.Providers[0] != (TradingProvider{
+		ExecutionPolicy: false,
+		Type:            "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true,
+	}) {
 		t.Fatal("provider capabilities were not mapped")
+	}
+}
+
+func TestTradingStatusPolicyCapabilities(t *testing.T) {
+	for _, class := range []bool{true, false} {
+		t.Run(fmt.Sprint(class), func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			rt.providers[0].ExecutionPolicy = class
+			known := tradingTestConnection()
+			unknown := known
+			unknown.ExternalID = "unknown-connection"
+			unknown.Provider = "test"
+			n.connections = []domain.TradingConnection{known, unknown}
+			got, err := s.GetTrading(systemCtx())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Providers[0].ExecutionPolicy != class || got.Connections[0].ExecutionPolicy != class || got.Connections[1].ExecutionPolicy {
+				t.Fatalf("source classes: %+v", got)
+			}
+		})
 	}
 }
 
@@ -1516,7 +1580,8 @@ func TestTradingScopeAccountGrant(t *testing.T) {
 	newService := func(t *testing.T, n node.Node, scope AccountScope, venueAccounts bool) (*Service, *tradingTestRuntime) {
 		t.Helper()
 		rt := &tradingTestRuntime{identity: "venue-1", providers: []trading.Provider{{
-			Type: "venue", Title: "Venue", VenueAccounts: venueAccounts, UnlinkedFees: true,
+			ExecutionPolicy: false,
+			Type:            "venue", Title: "Venue", VenueAccounts: venueAccounts, UnlinkedFees: true,
 		}}}
 		s, err := New(n, nil, nil, testLockSettlementPrice, WithTradingRuntime(rt), WithAccountScope(scope))
 		if err != nil {

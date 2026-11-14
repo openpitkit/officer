@@ -1,4 +1,6 @@
 {
+  "mixedTradingAccess": "Esta cuenta tiene acceso a cuentas simuladas y reales de centros de negociación, incluido el acceso del grupo y las conexiones desactivadas. Compruebe el modo del destino antes de enviar órdenes.",
+  "inheritedVenueAccess": "Incluye el acceso heredado del grupo de la cuenta.",
   "page": {
     "title": "Cuentas",
     "description": "Cuentas de operador guardadas en el plano de control y aplicadas al motor. Bloquee una cuenta o un grupo para detener las órdenes mediante el interruptor de emergencia."
@@ -164,10 +166,10 @@
       "currency": "Moneda de la cuenta.",
       "pnl": "Esta columna muestra el P&L exacto de la cuenta que informa Spot Funds.",
       "positions": "Esta columna muestra cuántas filas de posiciones se guardan para la cuenta.",
-      "venueAccess": "Esta columna muestra si la cuenta tiene acceso al menos a una conexión de negociación, propio o a través de su grupo.",
+      "venueAccess": "Número de conexiones de negociación a las que la cuenta tiene acceso directo o a través de su grupo, incluidas las desactivadas. Cada conexión se cuenta una sola vez.",
       "status": "Esta columna muestra si la cuenta está activa o bloqueada.",
       "notes": "Esta columna muestra las notas del operador guardadas en la cuenta.",
-      "actions": "Esta columna contiene las acciones de fila para posiciones, negociación, políticas, auditoría, acceso a conexiones de negociación y eliminación."
+      "actions": "Acciones de negociación, políticas, auditoría y eliminación. Las posiciones y el acceso a conexiones de negociación se abren desde sus propias columnas."
     },
     "status": {
       "blocked": "bloqueada",
@@ -203,7 +205,8 @@
       "viewBlockDetails": "Ver detalles del bloqueo",
       "block": "Bloquear",
       "unblock": "Desbloquear",
-      "deleteTitle": "Eliminar cuenta"
+      "deleteTitle": "Eliminar cuenta",
+      "managementUnavailable": "La identidad, el grupo y la eliminación de cuentas se gestionan en el modo de varias cuentas."
     },
     "empty": {
       "title": "No hay cuentas",

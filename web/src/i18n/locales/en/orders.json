@@ -178,20 +178,21 @@
       "submitModeImmediate": "Submit and settle",
       "submitModeImmediateHelp": "Run pre-trade, reserve, and settle at the order price now.",
       "submitModeDropCopy": "Drop copy",
-      "submitModeDropCopyHelp": "Run every policy but enforce no rejects or account and group blocks. A positive limit price is required.",
+      "submitModeDropCopyHelp": "Run every policy but enforce no rejects or account and group blocks. A limit price is required.",
       "submitModeHold": "Submit and wait",
       "submitModeHoldHelp": "Run pre-trade, record the lock, and wait for execution reports.",
       "submitModeRequired": "Select a submit mode.",
       "amountKindRequired": "Select an amount kind.",
       "sideRequired": "Select a side.",
+      "submitModeVenueHelp": "Run pre-trade checks, reserve funds, and send the approved order to the selected trading connection. Execution is recorded from the connection's reports.",
       "openApi": "OpenAPI",
       "submitBusy": "Adding…",
       "submit": "Add Order",
       "submitDropCopy": "Submit drop-copy",
       "dropCopyConfirmTitle": "Submit without enforced pre-trade approval?",
       "dropCopyConfirmDescription": "Every policy will run and update state, but policy rejects and account or group blocks will not stop this order. If the account is unknown, it will be created with default settings. Neither this submit nor later execution reports are signed or attested.",
-      "dropCopyPriceRequired": "Enter a positive limit price for drop-copy.",
-      "immediatePriceRequired": "Enter a positive limit price to settle the order.",
+      "dropCopyPriceRequired": "Enter a limit price for drop-copy.",
+      "immediatePriceRequired": "Enter a limit price to settle the order.",
       "validationError": "Account, instrument, and amount are required.",
       "missingAccountConfirmTitle": "Account does not exist",
       "missingAccountConfirmDescription": "Account {{account}} does not exist yet. Create it with default settings (no group, no currency) and continue?",
@@ -353,7 +354,7 @@
       "accountBlocked": "Account {{account}} blocked:",
       "accountBlockedUnnamed": "Account blocked:",
       "done": "Done",
-      "leavesInvalid": "Leaves quantity must be a plain non-negative decimal without surrounding spaces."
+      "leavesInvalid": "Leaves quantity must be a plain decimal without surrounding spaces."
     }
   },
 

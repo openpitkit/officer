@@ -1,4 +1,54 @@
 {
+  "testPolicy": {
+    "title": "测试执行策略",
+    "rules": "执行规则",
+    "rule": "规则 {{number}}",
+    "revision": "已保存的修订 {{revision}}",
+    "matching": "按从上到下的顺序检查规则，使用第一个匹配的交易品种掩码。未知交易品种将被拒绝，错误为 {{noMatch}}。",
+    "moveUp": "上移规则 {{number}}",
+    "moveDown": "下移规则 {{number}}",
+    "higherPriority": "提高优先级",
+    "lowerPriority": "降低优先级",
+    "marketDataTitle": "市价测试需要唯一的直接价格来源",
+    "marketDataWarning": "某个交易对存在多条直接行情记录时，将以 {{code}} 拒绝。请为该交易对仅保留一个已启用的行情工具，禁用多余的行或实例，然后点击“{{restart}}”。",
+    "emptyTitle": "没有执行规则",
+    "emptyDescription": "此策略为空。订单没有匹配的规则，将被拒绝。",
+    "baseAsset": "基础资产掩码",
+    "quoteAsset": "报价资产掩码",
+    "maskHint": "* - 所有代码；BTC - 仅 BTC；USD* - USD、USDT、USDC。",
+    "completeField": "规则 {{number}}：请填写“{{field}}”字段。",
+    "goToRule": "转到规则 {{number}}",
+    "allInstruments": "适用于所有交易品种",
+    "mode": "执行模式",
+    "modes": {
+      "execute": "一次成交",
+      "split": "拆分成交",
+      "reject_even": "每两个订单拒绝一个",
+      "rest": "保持订单未完成"
+    },
+    "modeDetails": {
+      "execute": "以一笔成交执行全部数量。",
+      "split": "请求以两笔或三笔成交执行全部数量。",
+      "reject_even": "此模式的每两个新订单拒绝一个，其余订单各成交一次。该计数器在已保存修订内由此连接共享。",
+      "rest": "保持订单未完成，直到等待时间结束，或不自动执行。"
+    },
+    "fills": "成交笔数",
+    "wait": "自动执行",
+    "afterSeconds": "等待指定秒数后",
+    "finiteDescription": "请选择执行前等待的秒数。",
+    "withoutExecution": "不自动执行",
+    "infiniteDescription": "不支持单独撤单。执行进程的任何重启都会丢失订单簿。",
+    "seconds": "等待秒数",
+    "priceVariant": "市价订单价格方案",
+    "prices": {
+      "normal": "普通",
+      "best": "最优",
+      "worst": "最差"
+    },
+    "priceExplanation": "普通和最差方案按卖价买入、买价卖出。最优方案按买价买入、卖价卖出。限价订单始终使用自身的限价。",
+    "addRule": "添加规则",
+    "removeRule": "删除规则 {{number}}"
+  },
   "nonReleaseConfirm": {
     "title": "在非正式版本中启用交易？",
     "description": "此非正式版本仅供快速测试。启用此连接将允许它向交易场所发送真实订单。正式版本不会看到此构建版本发送的订单。此构建版本可能损坏自身的数据。",
@@ -36,10 +86,18 @@
     }
   },
   "actions": {
+    "deleteConnection": "删除交易连接",
     "addConnection": "添加交易连接",
     "check": "检查连接"
   },
+  "deleteConnection": {
+    "title": "删除交易连接？",
+    "description": "将永久删除 {{label}} 及其配置。请先禁用连接。存在订单历史的连接无法删除。"
+  },
   "create": {
+    "test": {
+      "prepare": "此连接在本地执行测试订单，无需密钥。创建后，请为测试账户授予访问权限，配置交易品种掩码及其执行规则，然后启用连接。"
+    },
     "ib": {
       "install": "安装 IB Gateway（或 TWS），并使用您的模拟交易用户名登录。",
       "download": "下载 IB Gateway",
@@ -106,7 +164,8 @@
     "notDone": "未完成"
   },
   "check": {
-    "result": "交易场所账户 {{id}} · 状态 {{status}}"
+    "result": "交易场所账户 {{id}} · 状态 {{status}}",
+    "testResult": "检查通过：测试执行不连接任何交易场所，也不需要密钥。"
   },
   "settings": {
     "description": "将字段留空以保留已保存的值。",

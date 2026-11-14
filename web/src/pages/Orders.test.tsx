@@ -559,7 +559,7 @@ describe("Orders account pre-fill", () => {
     await user.click(screen.getByRole("button", { name: /more filters/i }));
     const dialog = screen.getByRole("dialog", { name: /more filters/i });
     const amount = within(dialog).getAllByPlaceholderText("Value")[0];
-    await user.type(amount, "word");
+    await user.type(amount, ".");
 
     expect(
       within(dialog).getByRole("button", {
@@ -693,10 +693,10 @@ async function expectPriceRequired(
   expect(price).toHaveAttribute("placeholder", "required");
   expect(within(dialog).getByText(hint)).toBeInTheDocument();
   expect(submit).toBeDisabled();
-  await user.type(price, "0");
+  await user.type(price, ".");
   expect(submit).toBeDisabled();
   await user.clear(price);
-  await user.type(price, "10");
+  await user.type(price, "-10");
   expect(submit).toBeEnabled();
 }
 
@@ -944,7 +944,7 @@ describe("Orders side & amount-kind toggles", () => {
       within(dialog).getByLabelText("Limit price (required to settle)"),
     ];
     for (const field of fields) {
-      await user.type(field, "A");
+      await user.type(field, "1");
     }
 
     const clears = within(dialog).getAllByRole("button", {
@@ -1068,7 +1068,7 @@ describe("Orders submit mode", () => {
     const content = within(dialog).getByRole("tabpanel", { name: "Drop copy" });
     expect(
       within(content).getByText(
-        "Run every policy but enforce no rejects or account and group blocks. A positive limit price is required.",
+        "Run every policy but enforce no rejects or account and group blocks. A limit price is required.",
       ),
     ).toBeInTheDocument();
     const price = within(content).getByLabelText(
@@ -1103,19 +1103,19 @@ describe("Orders submit mode", () => {
     expect(first).toHaveFocus();
     expect(first).toHaveAttribute("aria-selected", "false");
     await user.keyboard("{ArrowRight}");
-    const dropCopy = within(dialog).getByRole("tab", { name: "Drop copy" });
-    await waitFor(() => expect(dropCopy).toHaveFocus());
-    expect(dropCopy).toHaveAttribute("aria-selected", "false");
-    expect(within(dialog).queryByLabelText("Account")).not.toBeInTheDocument();
-    await user.keyboard("{Enter}");
-    expect(dropCopy).toHaveAttribute("aria-selected", "true");
-    await user.keyboard("{ArrowRight}");
     const hold = within(dialog).getByRole("tab", { name: "Submit and wait" });
     await waitFor(() => expect(hold).toHaveFocus());
     expect(hold).toHaveAttribute("aria-selected", "false");
-    expect(dropCopy).toHaveAttribute("aria-selected", "true");
-    await user.keyboard(" ");
+    expect(within(dialog).queryByLabelText("Account")).not.toBeInTheDocument();
+    await user.keyboard("{Enter}");
     expect(hold).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{ArrowRight}");
+    const venue = within(dialog).getByRole("tab", { name: "Send to venue" });
+    await waitFor(() => expect(venue).toHaveFocus());
+    expect(venue).toHaveAttribute("aria-selected", "false");
+    expect(hold).toHaveAttribute("aria-selected", "true");
+    await user.keyboard(" ");
+    expect(venue).toHaveAttribute("aria-selected", "true");
   });
 
   it("does not pre-select a submit tab or mount fields", async () => {
@@ -1124,6 +1124,12 @@ describe("Orders submit mode", () => {
     const dialog = await openDialog(user, false);
     const tabs = within(dialog).getAllByRole("tab");
     expect(tabs).toHaveLength(4);
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Submit and settle",
+      "Submit and wait",
+      "Send to venue",
+      "Drop copy",
+    ]);
     for (const tab of tabs) {
       expect(tab).toHaveAttribute("aria-selected", "false");
     }
@@ -1376,7 +1382,7 @@ describe("Orders submit mode", () => {
     expect(createOrderMock.mock.calls[0][1]).toBe("create");
   });
 
-  it("requires a positive limit price to submit and settle", async () => {
+  it("requires a provided decimal limit price to submit and settle", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
     const dialog = await openDialog(user);
@@ -1490,29 +1496,32 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
-    await user.type(within(dialog).getByLabelText("Amount"), "100x");
+    await user.type(within(dialog).getByLabelText("Amount"), ".");
     await user.click(within(dialog).getByRole("button", { name: /buy/i }));
     await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     await user.click(
       within(dialog).getByRole("tab", { name: /submit and settle/i }),
     );
 
-    expect(within(dialog).getByLabelText("Amount")).toHaveValue("100x");
+    expect(within(dialog).getByLabelText("Amount")).toHaveValue(".");
     expect(
       within(dialog).getByRole("button", { name: /add order/i }),
     ).toBeDisabled();
     expect(createOrderMock).not.toHaveBeenCalled();
   });
 
-  it("requires a positive amount and a positive provided limit price", async () => {
+  it("forwards signed amounts and prices and displays the API refusal", async () => {
     const user = userEvent.setup();
+    createOrderMock.mockRejectedValue(
+      new ApiError("Signed amount refused by API", "validation", 400),
+    );
     renderOrders("/orders");
     const dialog = await openDialog(user);
 
     await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
-    await user.type(within(dialog).getByLabelText("Amount"), "0");
+    await user.type(within(dialog).getByLabelText("Amount"), ".");
     await user.click(within(dialog).getByRole("button", { name: /buy/i }));
     await user.click(within(dialog).getByRole("button", { name: /quantity/i }));
     // The price is optional on hold; immediate requires it (tested apart).
@@ -1524,22 +1533,36 @@ describe("Orders submit mode", () => {
     expect(submit).toBeDisabled();
 
     await user.clear(within(dialog).getByLabelText("Amount"));
-    await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.type(within(dialog).getByLabelText("Amount"), "-100,25");
     expect(submit).toBeEnabled();
 
     await user.type(
       within(dialog).getByLabelText("Limit price (optional)"),
-      "0",
+      ".",
     );
     expect(submit).toBeDisabled();
 
     await user.clear(within(dialog).getByLabelText("Limit price (optional)"));
     await user.type(
       within(dialog).getByLabelText("Limit price (optional)"),
-      "10",
+      "-10,000000000000000001",
     );
     expect(submit).toBeEnabled();
-    expect(createOrderMock).not.toHaveBeenCalled();
+    await user.click(submit);
+    await waitFor(() =>
+      expect(createOrderMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amountValue: "-100.25",
+          price: "-10.000000000000000001",
+          mode: "hold",
+        }),
+        "reject",
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Signed amount refused by API",
+    );
   });
 
   it("shows create-order enrichment warnings in the detail dialog", async () => {
@@ -1718,32 +1741,34 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     expect(within(detail).getByLabelText("Leaves quantity")).toHaveValue("");
   });
 
-  it("cancels with raw signed leaves without stepper nudging", async () => {
-    const user = userEvent.setup();
-    renderOrders("/orders");
+  it.each(["+1.500", "-1.500"])(
+    "cancels with raw signed leaves %s",
+    async (value) => {
+      const user = userEvent.setup();
+      renderOrders("/orders");
 
-    await submitWorkflowOrder(user);
+      await submitWorkflowOrder(user);
 
-    const detail = await screen.findByRole("dialog", {
-      name: "Order ord-alpha-1",
-    });
-    await user.click(
-      within(detail).getByRole("button", { name: "Cancel order" }),
-    );
-    const leaves = within(detail).getByLabelText("Leaves quantity");
-    await user.type(leaves, "+1.500");
-    await user.keyboard("{ArrowUp}{ArrowDown}");
-    expect(leaves).toHaveValue("+1.500");
-    await user.click(
-      within(detail).getByRole("button", { name: "Cancel order" }),
-    );
+      const detail = await screen.findByRole("dialog", {
+        name: "Order ord-alpha-1",
+      });
+      await user.click(
+        within(detail).getByRole("button", { name: "Cancel order" }),
+      );
+      const leaves = within(detail).getByLabelText("Leaves quantity");
+      await user.type(leaves, value);
+      expect(leaves).toHaveValue(value);
+      await user.click(
+        within(detail).getByRole("button", { name: "Cancel order" }),
+      );
 
-    await waitFor(() =>
-      expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
-        leavesQuantity: "+1.500",
-      }),
-    );
-  });
+      await waitFor(() =>
+        expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
+          leavesQuantity: value,
+        }),
+      );
+    },
+  );
 
   it("cancels with no leaves instead of inventing a replacement", async () => {
     const user = userEvent.setup();
@@ -2417,8 +2442,10 @@ describe("Execution report leaves contract", () => {
     };
   }
 
-  async function openReport(user: ReturnType<typeof userEvent.setup>) {
-    const order = alphaFourOrder();
+  async function openReport(
+    user: ReturnType<typeof userEvent.setup>,
+    order = alphaFourOrder(),
+  ) {
     useOrdersMock.mockReturnValue(readyPage<Order>([order]));
     fetchOrderDetailMock.mockResolvedValueOnce({
       order,
@@ -2511,15 +2538,13 @@ describe("Execution report leaves contract", () => {
       [screen.getByLabelText("Fill quantity"), " 2", "2"],
       [screen.getByLabelText("Fill price"), " 12", "12"],
       [screen.getByLabelText("Lock price (optional)"), " 12", "12"],
-      [screen.getByLabelText("Leaves quantity"), " 0", "0"],
     ] as const;
 
     for (const [field, invalidValue, validValue] of fields) {
       await user.clear(field);
-      await user.type(field, invalidValue);
+      await user.paste(invalidValue);
 
-      expect(field).toHaveValue(invalidValue);
-      expect(submit).toBeDisabled();
+      expect(field).toHaveValue("");
       expect(submitExecutionReportMock).not.toHaveBeenCalled();
 
       await user.clear(field);
@@ -2527,6 +2552,11 @@ describe("Execution report leaves contract", () => {
       expect(field).toHaveValue(validValue);
       expect(submit).toBeEnabled();
     }
+    const leaves = screen.getByLabelText("Leaves quantity");
+    await user.clear(leaves);
+    await user.paste(" 0");
+    expect(leaves).toHaveValue("");
+    expect(submit).toBeDisabled();
   });
 
   it("refuses a commission-only fill draft the API would reject", async () => {
@@ -2545,18 +2575,28 @@ describe("Execution report leaves contract", () => {
     expect(submitExecutionReportMock).not.toHaveBeenCalled();
   });
 
-  it("refuses leaves the report contract would not record", async () => {
+  it("forwards signed leaves and displays the API refusal", async () => {
     const user = userEvent.setup();
+    submitExecutionReportMock.mockRejectedValue(
+      new ApiError("Signed leaves refused by API", "validation", 400),
+    );
     await openReport(user);
     await selectStatus(user, "Accepted");
 
     const leaves = screen.getByLabelText("Leaves quantity");
     await user.type(leaves, "-1");
-    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
-
-    await user.clear(leaves);
-    await user.type(leaves, "1");
-    expect(screen.getByRole("button", { name: "Submit" })).toBeEnabled();
+    const submit = screen.getByRole("button", { name: "Submit" });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "accepted",
+        leavesQuantity: "-1",
+      }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Signed leaves refused by API",
+    );
   });
 
   it("explains malformed leaves while Submit is disabled", async () => {
@@ -2568,11 +2608,11 @@ describe("Execution report leaves contract", () => {
     const submit = screen.getByRole("button", { name: "Submit" });
     expect(submit).toBeEnabled();
 
-    await user.type(leaves, " 1 ");
+    await user.type(leaves, ".");
 
     expect(
       screen.getByText(
-        "Leaves quantity must be a plain non-negative decimal without surrounding spaces.",
+        "Leaves quantity must be a plain decimal without surrounding spaces.",
       ),
     ).toBeInTheDocument();
     expect(submit).toBeDisabled();
@@ -2588,7 +2628,7 @@ describe("Execution report leaves contract", () => {
     expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
     expect(
       screen.queryByText(
-        "Leaves quantity must be a plain non-negative decimal without surrounding spaces.",
+        "Leaves quantity must be a plain decimal without surrounding spaces.",
       ),
     ).not.toBeInTheDocument();
     const submit = screen.getByRole("button", { name: "Submit" });
@@ -2836,6 +2876,31 @@ describe("Execution report leaves contract", () => {
     ).toBeDisabled();
   });
 
+  it("calculates and forwards negative remaining quantities", async () => {
+    const user = userEvent.setup();
+    await openReport(user, { ...alphaFourOrder(), leavesQuantity: "-10" });
+
+    const quantity = screen.getByLabelText("Fill quantity");
+    expect(quantity).toHaveValue("-10");
+    await user.clear(quantity);
+    await user.type(quantity, "-2");
+    await user.click(
+      screen.getByRole("button", { name: "Calculate leaves quantity" }),
+    );
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("-8");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "filled",
+        quantity: "-2",
+        price: "12",
+        leavesQuantity: "-8",
+        lockPrice: "12",
+      }),
+    );
+  });
+
   it("seeds fill quantity from remaining leaves and calculates zero", async () => {
     const user = userEvent.setup();
     await openReport(user);
@@ -2846,7 +2911,7 @@ describe("Execution report leaves contract", () => {
     expect(submit).toBeDisabled();
     expect(
       screen.queryByText(
-        "Leaves quantity must be a plain non-negative decimal without surrounding spaces.",
+        "Leaves quantity must be a plain decimal without surrounding spaces.",
       ),
     ).not.toBeInTheDocument();
 
@@ -2918,15 +2983,19 @@ describe("Execution report leaves contract", () => {
     expect(submit).toBeEnabled();
 
     const quantity = screen.getByLabelText("Fill quantity");
-    await user.type(quantity, "x");
+    await user.clear(quantity);
+    await user.type(quantity, ".");
 
-    expect(quantity).toHaveValue("2x");
+    expect(quantity).toHaveValue(".");
     expect(submit).toBeDisabled();
     expect(submitExecutionReportMock).not.toHaveBeenCalled();
   });
 
-  it("requires positive fill economics while allowing zero leaves and commission", async () => {
+  it("forwards signed fill economics and displays the API refusal", async () => {
     const user = userEvent.setup();
+    submitExecutionReportMock.mockRejectedValue(
+      new ApiError("Signed fill refused by API", "validation", 400),
+    );
     await openReport(user);
 
     await user.click(
@@ -2941,29 +3010,44 @@ describe("Execution report leaves contract", () => {
     expect(submit).toBeEnabled();
 
     await user.clear(quantity);
-    await user.type(quantity, "0");
+    await user.type(quantity, ".");
     expect(submit).toBeDisabled();
     await user.clear(quantity);
-    await user.type(quantity, "2");
+    await user.type(quantity, "-2");
     expect(submit).toBeEnabled();
 
     await user.clear(price);
-    await user.type(price, "0");
+    await user.type(price, ".");
     expect(submit).toBeDisabled();
     await user.clear(price);
-    await user.type(price, "12");
+    await user.type(price, "-12");
     expect(submit).toBeEnabled();
 
     await user.clear(lockPrice);
-    await user.type(lockPrice, "0");
+    await user.type(lockPrice, ".");
     expect(submit).toBeDisabled();
     await user.clear(lockPrice);
+    await user.type(lockPrice, "-11");
     expect(submit).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Fee" }));
     await user.type(screen.getByLabelText("Commission amount"), "0");
     await user.type(screen.getByLabelText("Commission currency"), "USD");
     expect(submit).toBeEnabled();
+    await user.click(submit);
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "filled",
+        quantity: "-2",
+        price: "-12",
+        lockPrice: "-11",
+        leavesQuantity: "0",
+        commission: { amount: "0", currency: "USD" },
+      }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Signed fill refused by API",
+    );
   });
 
   it("reflects the server's post-report state, not the requested one", async () => {
@@ -3693,6 +3777,161 @@ describe("Orders verify envelope toolbar", () => {
 });
 
 describe("Orders venue sending", () => {
+  it.each(["row", "detail", "event"])(
+    "clones the target and its mode from the %s despite different saved preferences",
+    async (source) => {
+      const user = userEvent.setup();
+      const order = {
+        ...sampleOrder,
+        venueConnection: alpacaDestination.connection,
+      };
+      useOrdersMock.mockReturnValue(readyPage([order]));
+      fetchOrderDetailMock.mockResolvedValue({
+        order,
+        events: [
+          {
+            id: "submitted",
+            order: order.id,
+            at: order.at,
+            type: "submitted",
+            source: "panel",
+          },
+        ],
+        trades: [],
+        venueOrder: linkedVenueOrder,
+      });
+      fetchTradingDestinationsMock.mockResolvedValue([
+        { ...alpacaDestination, connection: "other", label: "Other Alpaca" },
+        alpacaDestination,
+      ]);
+      setStoredPreference("pit-officer-orders-submit-tab", "hold");
+      setStoredPreference("pit-officer-orders-venue-mode", "live");
+      renderOrders("/orders");
+      const cloneName = `Clone order ${order.id}`;
+      if (source === "row") {
+        await user.click(
+          await screen.findByRole("button", { name: cloneName }),
+        );
+      } else {
+        await user.click(await screen.findByText(order.id));
+        const detail = await screen.findByRole("dialog", {
+          name: `Order ${order.id}`,
+        });
+        const buttons = within(detail).getAllByRole("button", {
+          name: cloneName,
+        });
+        await user.click(
+          source === "event" ? buttons[0] : buttons[buttons.length - 1],
+        );
+      }
+      const dialog = await screen.findByRole("dialog", { name: "Add order" });
+      await waitFor(() =>
+        expect(fetchTradingDestinationsMock).toHaveBeenCalledWith(
+          "desk-alpha",
+          "paper",
+          expect.any(AbortSignal),
+        ),
+      );
+      expect(
+        within(dialog).getByRole("tab", { name: "Send to venue" }),
+      ).toHaveAttribute("aria-selected", "true");
+      expect(
+        await within(dialog).findByRole("combobox", { name: "Target" }),
+      ).toHaveTextContent("Primary Alpaca");
+      expect(
+        within(dialog).getByRole("button", { name: "Paper" }),
+      ).toHaveAttribute("aria-pressed", "true");
+    },
+  );
+
+  it("does not replace a missing cloned target with the only available alternative", async () => {
+    const user = userEvent.setup();
+    useOrdersMock.mockReturnValue(
+      readyPage([
+        { ...sampleOrder, venueConnection: alpacaDestination.connection },
+      ]),
+    );
+    fetchTradingDestinationsMock.mockResolvedValue([
+      { ...alpacaDestination, connection: "other", label: "Other Alpaca" },
+    ]);
+    renderOrders("/orders");
+    await user.click(
+      await screen.findByRole("button", {
+        name: `Clone order ${sampleOrder.id}`,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add order" });
+    const target = await within(dialog).findByRole("combobox", {
+      name: "Target",
+    });
+    expect(target).toHaveTextContent("Choose a target");
+    expect(
+      within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+    ).toBeDisabled();
+    expect(sendPaperOrderMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "42.5", "-42.5"])(
+    "sends simulator orders with limit price %j and no venue parameters",
+    async (price) => {
+      const user = userEvent.setup();
+      fetchTradingDestinationsMock.mockResolvedValue([
+        {
+          ...alpacaDestination,
+          provider: "test",
+          connection: "simulator",
+          label: "Execution Simulator",
+        },
+      ]);
+      sendPaperOrderMock.mockRejectedValue(
+        new ApiError("Request inspected", "upstream", 502),
+      );
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFields(user, dialog);
+      await enablePaperSending(user, dialog);
+      if (price.startsWith("-")) {
+        await user.clear(within(dialog).getByLabelText("Amount"));
+        await user.type(within(dialog).getByLabelText("Amount"), "-100");
+      }
+      if (price)
+        await user.type(
+          within(dialog).getByLabelText("Limit price (optional)"),
+          price,
+        );
+      expect(
+        within(dialog).getByRole("link", { name: "OpenAPI" }),
+      ).toHaveAttribute("href", "/docs");
+      expect(
+        within(dialog).getByText(/Run pre-trade checks, reserve funds/),
+      ).toBeVisible();
+      expect(
+        within(dialog).queryByRole("combobox", { name: "Time in force" }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(dialog).queryByText(/Sending to test is not supported/),
+      ).not.toBeInTheDocument();
+      const submit = within(dialog).getByRole("button", {
+        name: "Submit PAPER order",
+      });
+      await waitFor(() => expect(submit).toBeEnabled());
+      await user.click(submit);
+      await waitFor(() =>
+        expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            amountValue: price.startsWith("-") ? "-100" : "10",
+            destination: {
+              connection: "simulator",
+              venueAccount: alpacaDestination.venueAccount,
+              route: {},
+            },
+          }),
+          expect.any(AbortSignal),
+        ),
+      );
+    },
+  );
+
   it.each([
     ["GTC", "GTC - Good till cancelled"],
     ["IOC", "IOC - Immediate or cancel"],
@@ -4330,8 +4569,14 @@ describe("Orders venue sending", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("starts a cloned order with no inherited target or TIF", async () => {
+  it("retains the cloned target among several destinations while resetting TIF", async () => {
     const user = userEvent.setup();
+    fetchOrderDetailMock.mockResolvedValue({
+      order: sampleOrder,
+      events: [],
+      trades: [],
+      venueOrder: linkedVenueOrder,
+    });
     let resolveCloneDestinations!: (destinations: TradingDestination[]) => void;
     fetchTradingDestinationsMock
       .mockResolvedValueOnce([alpacaDestination])
@@ -4379,7 +4624,10 @@ describe("Orders venue sending", () => {
       expect(fetchTradingDestinationsMock).toHaveBeenCalledTimes(2),
     );
     await act(async () => {
-      resolveCloneDestinations([alpacaDestination]);
+      resolveCloneDestinations([
+        { ...alpacaDestination, connection: "other", label: "Other Alpaca" },
+        alpacaDestination,
+      ]);
       await Promise.resolve();
     });
 

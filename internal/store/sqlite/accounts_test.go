@@ -28,7 +28,65 @@ import (
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
+
+func TestAccountVenueCountSortPagesEffectiveDistinctConnections(t *testing.T) {
+	ctx, rs, first := seedTradingFixtures(t)
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []domain.AccountID{"count-a-three", "count-b-one", "count-c-two"} {
+		if _, err := rs.CreateAccount(ctx, domain.Account{Code: code}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	connections := []domain.ExternalID{first.ExternalID}
+	for _, id := range []domain.ExternalID{"second", "third"} {
+		c, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{ExternalID: id, Provider: domain.TradingProviderAlpaca, Label: id.String(), VenueIdentity: id.String(), Mode: domain.TradingModePaper, Credentials: `{}`, Enabled: false})
+		if err != nil {
+			t.Fatal(err)
+		}
+		connections = append(connections, c.ExternalID)
+	}
+	for _, account := range []domain.AccountID{"count-a-three", "count-c-two"} {
+		if err := rs.SetAccountGroup(ctx, account, "desk"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, access := range []domain.TradingAccess{
+		{AccountGroup: "desk", Connection: connections[0]},
+		{AccountGroup: "desk", Connection: connections[1]},
+		{Account: "count-a-three", Connection: connections[0]},
+		{Account: "count-a-three", Connection: connections[2]},
+		{Account: "count-b-one", Connection: connections[0]},
+		{Account: "count-c-two", Connection: connections[0]},
+		{Account: "count-c-two", Connection: connections[1]},
+	} {
+		if err := rs.PutTradingAccess(ctx, access); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, descending := range []bool{false, true} {
+		want := []domain.AccountID{"count-b-one", "count-c-two", "count-a-three"}
+		if descending {
+			want = []domain.AccountID{"count-a-three", "count-c-two", "count-b-one"}
+		}
+		for offset, code := range want {
+			page, err := rs.ListAccountRows(ctx, fwstore.AccountListFilter{
+				Code: fwstore.TextMatcher{Fragments: []string{"count-"}, AnchorStart: true},
+				Sort: fwstore.SortSpec{Column: "venueAccess", Descending: descending},
+				Page: fwstore.PageSpec{Limit: 1, Offset: offset},
+			})
+			if err != nil {
+				t.Fatalf("count sort descending=%v offset=%d: %v", descending, offset, err)
+			}
+			if page.Total != 3 || len(page.Rows) != 1 || page.Rows[0].Account.Code != code || !page.Rows[0].VenueAccess {
+				t.Fatalf("count sort descending=%v offset=%d page=%+v, want one row %s and total 3", descending, offset, page, code)
+			}
+		}
+	}
+}
 
 func TestAccountBlockFirstCauseWinsAndUnblockClears(t *testing.T) {
 	ctx := context.Background()

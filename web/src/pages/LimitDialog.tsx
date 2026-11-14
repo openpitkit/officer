@@ -196,7 +196,6 @@ function DurationPicker({
           spellCheck={false}
           className="w-28"
           placeholder={t("duration.amountPlaceholder")}
-          allowSignedInput={false}
           onChange={(amount) => update({ ...parts, amount })}
           onClear={() => update({ ...parts, amount: "" })}
           clearLabel={tc("filters.clearField")}
@@ -858,8 +857,11 @@ export function LimitDialog({
                               id={`kind-${kind}`}
                               value={form.values[kind] ?? ""}
                               spellCheck={false}
-                              min={isSpotFundsPnl ? null : "0"}
-                              allowSignedInput={isSpotFundsPnl}
+                              min={kind === "max_orders" ? "0" : null}
+                              integerOnly={kind === "max_orders"}
+                              valueType={
+                                kind === "max_quantity" ? "quantity" : undefined
+                              }
                               onChange={(value) => setValue(kind, value)}
                               onClear={() => setValue(kind, "")}
                               clearLabel={tc("filters.clearField")}

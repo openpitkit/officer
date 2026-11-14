@@ -146,10 +146,12 @@ const (
 	AuditDetailDeleteLimit                     AuditDetailCode = "delete_limit"
 	AuditDetailCreateTradingConnection         AuditDetailCode = "create_trading_connection"
 	AuditDetailUpdateTradingConnectionSettings AuditDetailCode = "update_trading_connection_settings"
+	AuditDetailSetTestExecutionPolicy          AuditDetailCode = "set_test_execution_policy"
 	AuditDetailEnableTradingConnection         AuditDetailCode = "enable_trading_connection"
 	AuditDetailDisableTradingConnection        AuditDetailCode = "disable_trading_connection"
 	AuditDetailUpsertTradingInstrument         AuditDetailCode = "upsert_trading_instrument"
 	AuditDetailDeleteTradingInstrument         AuditDetailCode = "delete_trading_instrument"
+	AuditDetailDeleteTradingConnection         AuditDetailCode = "delete_trading_connection"
 	AuditDetailSetTradingFeeAccount            AuditDetailCode = "set_trading_fee_account"
 	AuditDetailClearTradingFeeAccount          AuditDetailCode = "clear_trading_fee_account"
 	AuditDetailVenueFeeSkipped                 AuditDetailCode = "venue_fee_skipped"
@@ -264,10 +266,12 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 	AuditDetailDeleteLimit:                     "Limit deleted: {{policy}} ({{scope}})",
 	AuditDetailCreateTradingConnection:         "Trading connection {{connection}} created ({{provider}}, {{connectionMode}})",
 	AuditDetailUpdateTradingConnectionSettings: "Trading connection {{connection}} settings updated",
+	AuditDetailSetTestExecutionPolicy:          "Trading connection {{connection}} test execution policy replaced: revision {{oldRevision}} → {{newRevision}}",
 	AuditDetailEnableTradingConnection:         "Trading connection {{connection}} enabled",
 	AuditDetailDisableTradingConnection:        "Trading connection {{connection}} disabled",
 	AuditDetailUpsertTradingInstrument:         "Instrument {{connection}}/{{symbol}} saved",
 	AuditDetailDeleteTradingInstrument:         "Instrument {{connection}}/{{symbol}} deleted",
+	AuditDetailDeleteTradingConnection:         "Trading connection {{connection}} deleted",
 	AuditDetailSetTradingFeeAccount:            "Fee account set for trading connection {{connection}}",
 	AuditDetailClearTradingFeeAccount:          "Fee account cleared for trading connection {{connection}}",
 	AuditDetailVenueFeeSkipped:                 "Venue fee skipped: connection {{connection}}, fee {{fee}}: {{reason}}",
@@ -325,6 +329,8 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 // auditDetailFieldNames lists every name a detail tail may carry. The panel
 // labels each through its audit:detailField catalog entry.
 var auditDetailFieldNames = map[string]bool{
+	"oldRules":             true,
+	"newRules":             true,
 	"account":              true,
 	"account_group":        true,
 	"asset":                true,

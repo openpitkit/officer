@@ -61,7 +61,7 @@ func (r *realmStore) CredentialsSealed() bool {
 
 func (r *realmStore) CreateTradingConnection(
 	ctx context.Context, connection domain.TradingConnection,
-) (domain.TradingConnection, error) {
+) (created domain.TradingConnection, err error) {
 	if err := domain.ValidateTradingConnection(connection); err != nil {
 		return connection, err
 	}
@@ -83,7 +83,20 @@ func (r *realmStore) CreateTradingConnection(
 	if err != nil {
 		return connection, err
 	}
-	_, err = db.ExecContext(
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return connection, fmt.Errorf("store: begin create trading connection: %w", err)
+	}
+	defer rollbackTransaction(&err, tx)
+	classifier, err := r.store.executionPolicyProviders()
+	if err != nil {
+		return connection, err
+	}
+	class, err := domain.ProviderSupportsExecutionPolicy(classifier, connection.Provider)
+	if err != nil {
+		return connection, err
+	}
+	inserted, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO trading_connection
 		 (external_id, provider, label, mode, venue_identity, credentials, enabled)
@@ -111,6 +124,20 @@ func (r *realmStore) CreateTradingConnection(
 			)
 		}
 		return connection, fmt.Errorf("store: create trading connection: %w", err)
+	}
+	if class {
+		id, err := inserted.LastInsertId()
+		if err != nil {
+			return connection, fmt.Errorf("store: created trading connection id: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO trading_test_policy (connection_id, revision, rules) VALUES (?, 1, '[]')`, id,
+		); err != nil {
+			return connection, fmt.Errorf("store: create test policy: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return connection, fmt.Errorf("store: commit create trading connection: %w", err)
 	}
 	connection.ExternalID = xid
 	return connection, nil
@@ -302,6 +329,42 @@ func (r *realmStore) DeleteTradingInstrument(
 		return fmt.Errorf("store: delete trading instrument: %w", err)
 	}
 	return notFoundIfNoRows(res, "trading instrument", externalSymbol)
+}
+
+// DeleteTradingConnection retains every connection referenced by venue orders.
+func (r *realmStore) DeleteTradingConnection(ctx context.Context, id domain.ExternalID) (err error) {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin delete trading connection: %w", err)
+	}
+	defer rollbackTransaction(&err, tx)
+	connectionID, err := resolveTradingConnectionID(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	var enabled, hasOrders bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT enabled, EXISTS(SELECT 1 FROM venue_order WHERE connection_id = ?)
+   FROM trading_connection WHERE id = ?`, connectionID, connectionID).Scan(&enabled, &hasOrders); err != nil {
+		return fmt.Errorf("store: check trading connection deletion: %w", err)
+	}
+	if enabled {
+		return fmt.Errorf("disable the trading connection before deleting it: %w", domain.ErrConflict)
+	}
+	if hasOrders {
+		return fmt.Errorf("trading connection has order history and cannot be deleted: %w", domain.ErrConflict)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM trading_connection WHERE id = ?`, connectionID); err != nil {
+		return fmt.Errorf("store: delete trading connection: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit delete trading connection: %w", err)
+	}
+	return nil
 }
 
 func (r *realmStore) RemoveTradingAccess(
@@ -513,7 +576,7 @@ func scanTradingInstrument(
 
 func (r *realmStore) PutTradingAccess(
 	ctx context.Context, access domain.TradingAccess,
-) error {
+) (err error) {
 	if err := domain.ValidateTradingAccess(access); err != nil {
 		return err
 	}
@@ -521,8 +584,13 @@ func (r *realmStore) PutTradingAccess(
 	if err != nil {
 		return err
 	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackTransaction(&err, tx)
 	accountID, groupID, err := resolveSubjectIDs(
-		ctx, db, access.Account, access.AccountGroup,
+		ctx, tx, access.Account, access.AccountGroup,
 	)
 	if errors.Is(err, domain.ErrInvalid) {
 		if access.AccountGroup != "" {
@@ -533,13 +601,13 @@ func (r *realmStore) PutTradingAccess(
 	if err != nil {
 		return err
 	}
-	connectionID, err := resolveTradingConnectionID(ctx, db, access.Connection)
+	connectionID, err := resolveTradingConnectionID(ctx, tx, access.Connection)
 	if err != nil {
 		return err
 	}
 	// The conflict target repeats the uq_trading_access expressions verbatim;
 	// SQLite matches an upsert to a unique index only on identical expressions.
-	_, err = db.ExecContext(
+	_, err = tx.ExecContext(
 		ctx,
 		`INSERT INTO trading_access
 		 (account_id, account_group_id, connection_id, venue_account)
@@ -552,7 +620,17 @@ func (r *realmStore) PutTradingAccess(
 	if err != nil {
 		return fmt.Errorf("store: put trading access: %w", err)
 	}
-	return nil
+	accounts := []domain.AccountID{access.Account}
+	if access.AccountGroup != "" {
+		accounts, err = tradingGroupAccounts(ctx, tx, groupID)
+		if err != nil {
+			return err
+		}
+	}
+	if err := r.validateTradingAccessModes(ctx, tx, accounts); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *realmStore) ListTradingAccess(

@@ -27,6 +27,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/node"
+	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
@@ -53,6 +54,9 @@ func openMissingAccountNode(t *testing.T, path string) (node.Node, func()) {
 		t.Fatalf("sqlite.New: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	if err := st.BindExecutionPolicyProviders(fwtrading.NewRegistry().SupportsExecutionPolicy); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}

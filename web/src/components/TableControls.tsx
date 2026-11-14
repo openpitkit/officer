@@ -31,6 +31,7 @@ import type { BusinessCsvEntity, BusinessCsvExportFilters } from "@/api/types";
 import { BusinessCsvExportDialog } from "@/components/BusinessCsvDialogs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { isUnsignedIntegerEdit } from "@/lib/numberStep";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -68,6 +69,7 @@ export function TablePagination({
   page,
 }: TablePaginationProps) {
   const { t } = useTranslation("common");
+  const [pageDraft, setPageDraft] = useState("");
   if (!canPrevious && !canNext) {
     return null;
   }
@@ -193,7 +195,16 @@ export function TablePagination({
             <ChevronsRight className="h-3.5 w-3.5" />
           </Button>
           <Input
-            type="number"
+            type="text"
+            inputMode="numeric"
+            value={pageDraft}
+            onChange={(event) => {
+              if (isUnsignedIntegerEdit(event.target.value)) {
+                setPageDraft(event.target.value);
+              } else {
+                event.currentTarget.value = pageDraft;
+              }
+            }}
             min={1}
             max={knownTotalPages}
             className="h-8 w-14 text-xs"
@@ -207,7 +218,7 @@ export function TablePagination({
               if (Number.isInteger(value) && value > 0) {
                 jump(value);
               }
-              event.currentTarget.value = "";
+              setPageDraft("");
             }}
           />
         </>

@@ -96,6 +96,67 @@ func TestTradingVenueIdentityStorage(t *testing.T) {
 	}
 }
 
+func TestDeleteTradingConnection(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	id := connection.ExternalID
+	if err := rs.DeleteTradingConnection(ctx, id); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("enabled connection: %v", err)
+	}
+	if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
+		Connection: id, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.PutTradingAccess(ctx, domain.TradingAccess{Connection: id, Account: "acc-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.SetTradingConnectionEnabled(ctx, id, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.DeleteTradingConnection(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := rs.GetTradingConnection(ctx, id); err != nil || found {
+		t.Fatalf("deleted connection: found=%v err=%v", found, err)
+	}
+	if instruments, err := rs.ListTradingInstruments(ctx, id); err != nil || len(instruments) != 0 {
+		t.Fatalf("instruments=%v err=%v", instruments, err)
+	}
+	if access, err := rs.ListTradingAccess(ctx, "acc-1"); err != nil || len(access) != 0 {
+		t.Fatalf("access=%v err=%v", access, err)
+	}
+	if err := rs.DeleteTradingConnection(ctx, id); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("repeat delete: %v", err)
+	}
+	// Deletion frees the provider identity and label, so the same venue can be configured again.
+	connection.Enabled = false
+	connection.ExternalID = ""
+	if _, err := rs.CreateTradingConnection(ctx, connection); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteTradingConnectionPreservesOrderHistory(t *testing.T) {
+	ctx, rs, connection := seedTradingFixtures(t)
+	order := createTradingOrder(t, ctx, rs)
+	link := domain.VenueOrder{Order: order.ExternalID, Connection: connection.ExternalID, Route: "{}", ClientOrderID: "delete-guard"}
+	if _, err := rs.CreateVenueOrder(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.SetTradingConnectionEnabled(ctx, connection.ExternalID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.DeleteTradingConnection(ctx, connection.ExternalID); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("used connection: %v", err)
+	}
+	if _, found, err := rs.GetTradingConnection(ctx, connection.ExternalID); err != nil || !found {
+		t.Fatalf("connection lost: found=%v err=%v", found, err)
+	}
+	if _, found, err := rs.GetVenueOrder(ctx, order.ExternalID); err != nil || !found {
+		t.Fatalf("order link lost: found=%v err=%v", found, err)
+	}
+}
+
 func TestUpdateTradingConnectionSettings(t *testing.T) {
 	ctx, rs, original := seedTradingFixtures(t)
 	const credentials = `{"key":"replacement-secret"}`
@@ -843,8 +904,8 @@ func TestTradingAccessPutListReplaceAndUnknown(t *testing.T) {
 	ctx, rs, connection := seedTradingFixtures(t)
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
 		ExternalID: "connection-a", Provider: domain.TradingProviderAlpaca,
-		Label: "Alpaca live", VenueIdentity: "live-account",
-		Mode: domain.TradingModeLive, Credentials: "{}",
+		Label: "Second Alpaca paper", VenueIdentity: "second-paper-account",
+		Mode: domain.TradingModePaper, Credentials: "{}",
 	})
 	if err != nil {
 		t.Fatal(err)

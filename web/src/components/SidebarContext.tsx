@@ -15,8 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Open/closed state for the mobile (<md) off-canvas sidebar drawer.
-// Irrelevant at md+ where the sidebar is permanently visible.
+// Independent state for the mobile drawer and the icon-only sidebar view.
 
 import { useCallback, useRef, useState, type ReactNode } from "react";
 
@@ -24,13 +23,27 @@ import { SidebarContext } from "@/components/sidebar-context";
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [indicator, setIndicator] = useState<ReactNode>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const toggle = useCallback(() => setOpen((v) => !v), []);
   const close = useCallback(() => setOpen(false), []);
+  const toggleCollapsed = useCallback(
+    () => setCollapsed((value) => !value),
+    [],
+  );
   return (
     <SidebarContext.Provider
-      value={{ open, toggle, close, indicator, setIndicator, menuButtonRef }}
+      value={{
+        open,
+        toggle,
+        close,
+        collapsed,
+        toggleCollapsed,
+        indicator,
+        setIndicator,
+        menuButtonRef,
+      }}
     >
       {children}
     </SidebarContext.Provider>

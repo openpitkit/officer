@@ -746,6 +746,7 @@ export interface Overview {
 
 /** Venue environment used by a trading connection. */
 export type TradingMode = "paper" | "live";
+
 /** Runtime state of a configured trading connection: `running` sends and
  *  receives venue updates; `degraded` sends while its venue stream is failing
  *  and reconnecting; `unavailable` cannot reach the venue and refuses sends;
@@ -758,6 +759,7 @@ export type TradingConnectionState =
 
 /** Trading venue capabilities advertised by Officer. */
 export interface TradingProvider {
+  executionPolicy: boolean;
   type: string;
   title: string;
   /** Whether the provider supports selecting a venue account. */
@@ -800,6 +802,8 @@ export type TradingAccessSubject =
 
 /** Configured venue connection with instrument mappings and access bindings. */
 export interface TradingConnection {
+  /** Absent when the connection's provider metadata is unavailable. */
+  executionPolicy?: boolean;
   id: string;
   provider: string;
   label: string;
@@ -827,6 +831,37 @@ export interface TradingConnection {
 export interface TradingSnapshot {
   providers: TradingProvider[];
   connections: TradingConnection[];
+}
+
+/** Test execution requested for matching orders; the server validates it. */
+export type TestExecutionMode = "execute" | "split" | "reject_even" | "rest";
+
+/** Market-order price side selection; limit orders keep their limit price. */
+export type TestPriceVariant = "normal" | "best" | "worst";
+
+/** A finite delay requires seconds; infinite rest has no automatic execution. */
+export type TestExecutionWait =
+  | { kind: "finite"; seconds?: number }
+  | { kind: "infinite" };
+
+/** One rule in the whole policy replacement, using Officer asset-code masks. */
+export interface TestExecutionRule {
+  mask: { baseAsset: string; quoteAsset: string };
+  mode: TestExecutionMode;
+  priceVariant?: TestPriceVariant;
+  fills?: number;
+  wait?: TestExecutionWait;
+}
+
+/** Ordered display list, with no matching priority implied by its order. */
+export interface TestExecutionPolicy {
+  rules: TestExecutionRule[];
+}
+
+/** Authoritative policy returned by GET and PUT, with its persisted revision. */
+export interface TestExecutionPolicyState extends TestExecutionPolicy {
+  connection: string;
+  revision: string;
 }
 
 /** How stored credentials sit at rest, decided by the core for the whole

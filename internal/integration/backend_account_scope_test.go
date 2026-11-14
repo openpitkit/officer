@@ -161,7 +161,8 @@ func (scopeTradingRuntime) Restart() error { return nil }
 
 func (scopeTradingRuntime) Providers() []trading.Provider {
 	return []trading.Provider{{
-		Type: "venue", Title: "Venue", VenueAccounts: true, UnlinkedFees: true,
+		ExecutionPolicy: false,
+		Type:            "venue", Title: "Venue", VenueAccounts: true, UnlinkedFees: true,
 	}}
 }
 

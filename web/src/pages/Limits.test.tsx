@@ -850,7 +850,7 @@ describe("LimitDialog framework controls", () => {
     const maxOrders = within(dialog).getByLabelText("max orders");
     const maxOrdersControls = within(maxOrders.parentElement as HTMLElement);
 
-    expect(maxOrders).toHaveAttribute("inputmode", "decimal");
+    expect(maxOrders).toHaveAttribute("inputmode", "numeric");
     expect(
       maxOrdersControls.getByRole("button", { name: "Increase" }),
     ).toBeInTheDocument();
@@ -863,6 +863,14 @@ describe("LimitDialog framework controls", () => {
       maxOrdersControls.getByRole("button", { name: "Clear field" }),
     );
     expect(maxOrders).toHaveValue("");
+    await user.type(maxOrders, "1");
+    for (const invalid of ["1,25", "1.25", "-2"]) {
+      await user.tripleClick(maxOrders);
+      await user.paste(invalid);
+      expect(maxOrders).toHaveValue("1");
+    }
+    await user.keyboard("{ArrowUp}");
+    expect(maxOrders).toHaveValue("2");
 
     await chooseInDialog(user, dialog, 0, "Order size limit");
     await user.click(within(dialog).getAllByRole("combobox")[0]);
@@ -1709,7 +1717,7 @@ describe("Limits with accounts hidden", () => {
     const dialog = await openAddDialog(user);
     await chooseInDialog(user, dialog, 1, "Account");
     await user.type(within(dialog).getByLabelText("max orders"), "5");
-    await user.type(within(dialog).getByLabelText("window"), "1");
+    await user.type(within(dialog).getByLabelText("window"), "1,25");
     await user.click(
       within(dialog).getByRole("button", { name: "Add policy" }),
     );
@@ -1722,7 +1730,7 @@ describe("Limits with accounts hidden", () => {
           account: "main",
           accountGroup: "",
           asset: "",
-          values: { max_orders: "5", window: "1s" },
+          values: { max_orders: "5", window: "1.25s" },
         },
         "reject",
       ),

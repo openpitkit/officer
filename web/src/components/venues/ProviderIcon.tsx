@@ -285,7 +285,7 @@ export function ProviderIcon({ type, className }: ProviderIconProps) {
   if (type === "finnhub") {
     return <FinnhubIcon className={className} />;
   }
-  if (type === "mock") {
+  if (type === "mock" || type === "test") {
     return <FlaskConical className={className} />;
   }
   if (type === "byo") {

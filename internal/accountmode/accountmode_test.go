@@ -34,6 +34,7 @@ import (
 	"go.openpit.dev/officer/framework/businesscsv"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
+	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
@@ -857,6 +858,9 @@ func newTestNode(t *testing.T) node.Node {
 	st, err := sqlite.New(filepath.Join(t.TempDir(), "officer.db"), domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("sqlite.New: %v", err)
+	}
+	if err := st.BindExecutionPolicyProviders(fwtrading.NewRegistry().SupportsExecutionPolicy); err != nil {
+		t.Fatal(err)
 	}
 	if err := st.Migrate(ctx); err != nil {
 		_ = st.Close()

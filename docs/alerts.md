@@ -41,6 +41,12 @@ types, unknown actions, malformed payloads and invalid action inputs are refused
 Producers call `Service.Publish` with a stable event ID, type, timestamp, source
 and payload and an explicitly stamped trusted caller context.
 
+A type can supply `Visible` to restrict reads and decisions under the caller's
+account scope. Hidden events contribute neither totals nor unread counts; detail,
+read marks and decisions return not-found without exposing payload, actions or
+delivery metadata. Types without that callback remain realm-wide. Publication and
+trusted configured channel delivery are independent of reader visibility.
+
 Register additional enabled delivery channels through `Config.AlertChannels`.
 Officer installs the panel channel automatically. Publication stores the event
 before attempting delivery. The panel channel writes a durable inbox receipt;
@@ -64,7 +70,40 @@ controls and passes validated form values to the supplied `resolve` operation.
 It uses the server's action list. Unknown renderers show an explicit error;
 there is no generic JSON editor or invented business decision.
 
-The default composition registers no concrete business types or synthetic events.
+The standalone composition registers `mixed_trading_access`. Its payload contains
+only the Officer account code and title. A successful grant, account creation,
+group move or restore publishes it on a transition from non-mixed access to
+effective paper and live access. Effective access includes inherited grants and
+disabled connections. Reads, no-op writes and changes to an already mixed account
+do not publish; a later transition into mixed access publishes again. Failed
+mutations and internal restore rollback do not publish.
+
+The only action is `acknowledge`, taking an empty object. It records awareness
+through the normal attributed resolution and changes no grants, connections or
+orders. The persistent current-access warning remains until access is no longer
+mixed, independently of alert acknowledgement. Custom node hosts may implement
+`node.TradingAccessObserverHost` to attach the producer; shared web defaults retain
+host-owned alerts composition.
+
+The mutation boundary serializes before/after inspection and captures transition
+identities. Synchronous publication and delivery run after all administrative
+locks and reservations are released. Restore finishes trading restart, signer
+reload and manual quote publication first. Cancellation after commit or a failed
+access audit does not skip the warning. A
+publication failure reports `trading_access_notification_failed` after the access
+has been committed. All newly mixed accounts in a group change or restore are
+attempted even when one publication fails. There is no outbox or automatic mutation
+replay. The event ID is created once per publication; delivery failure preserves
+the stored event and its failed-channel receipts.
+Independent operational failures joined with warning failures report
+`trading_access_completion_failed`, rather than warning-only guidance. The restore
+summary is retained when restore commits and warning delivery fails.
+
+The mixed-access type uses the installed control plane's exact scoped account
+read, including when a host replaces the backend factory. Hidden accounts remain
+hidden to standalone token-mode MCP agents in single-account mode. A missing or
+failed visibility binding fails closed. Visible accounts and multi-account mode
+retain normal warning reads and acknowledgement.
 
 Normal all-section backups preserve open events, every principal's read marks
 and delivery outcomes. These live under `activity_history`, like orders and

@@ -67,6 +67,7 @@ import (
 	"go.openpit.dev/officer/framework/secret"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
 	"go.openpit.dev/officer/internal/access"
@@ -75,6 +76,7 @@ import (
 	"go.openpit.dev/officer/internal/apitest"
 	"go.openpit.dev/officer/internal/nonrelease"
 	"go.openpit.dev/officer/internal/store/sqlite"
+	apptrading "go.openpit.dev/officer/internal/trading"
 	"go.openpit.dev/officer/mcptools"
 )
 
@@ -113,6 +115,18 @@ func TestManualReportRefusesVenueLinkCreatedAfterServiceEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	registry := trading.NewRegistry()
+	if err := registry.Register(trading.Provider{
+		Type: "venue", ExecutionPolicy: false,
+		Build: func(trading.BuildContext) (trading.Connector, error) {
+			return nil, errors.New("unexpected connector build")
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BindExecutionPolicyProviders(registry.SupportsExecutionPolicy); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -191,6 +205,17 @@ func TestRegisterTradingComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registry := trading.NewRegistry()
+	for _, provider := range apptrading.FirstPartyProviders() {
+		if err := registry.Register(provider); err != nil {
+			_ = st.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := st.BindExecutionPolicyProviders(registry.SupportsExecutionPolicy); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
 	if err := st.Migrate(ctx); err != nil {
 		_ = st.Close()
 		t.Fatal(err)
@@ -230,11 +255,12 @@ func TestRegisterTradingComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.Providers) != 4 ||
+	if len(status.Providers) != 5 ||
 		status.Providers[0].Type != domain.TradingProviderAlpaca ||
 		status.Providers[1].Type != domain.TradingProviderBinance ||
 		status.Providers[2].Type != domain.TradingProviderEtoro ||
 		status.Providers[3].Type != domain.TradingProviderIB ||
+		status.Providers[4].Type != "test" ||
 		len(status.Connections) != 1 || status.Connections[0].State != "unavailable" {
 		t.Fatal("trading runtime was not wired into the control plane before Start")
 	}
@@ -1689,6 +1715,13 @@ func TestRegisterReleasedAgentTokenOnMCP(t *testing.T) {
 type nodeProbeStore struct {
 	store.Store
 	realmCalls, closeCalls int
+}
+
+func (s *nodeProbeStore) BindExecutionPolicyProviders(classifier domain.ExecutionPolicyProviderLookup) error {
+	if s.Store != nil {
+		return s.Store.BindExecutionPolicyProviders(classifier)
+	}
+	return nil
 }
 
 func (s *nodeProbeStore) ForRealm(ctx context.Context, realm domain.RealmID) (store.RealmStore, error) {

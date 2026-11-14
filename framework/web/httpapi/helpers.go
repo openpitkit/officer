@@ -168,10 +168,21 @@ func decodeBody(
 	return true
 }
 
+// Bounds of a JSON Pointer built from a request body: the most segments and the
+// most bytes it may carry before the pointer is omitted.
+const (
+	maxJSONPointerDepth = 32
+	maxJSONPointerBytes = 1024
+)
+
 func decodeBodyValidation(err error, raw []byte, dst any) (string, string, string) {
+	if errors.Is(err, domain.ErrInvalid) {
+		return err.Error(), domain.ValidationPointer(err), domain.ValidationConstraint(err)
+	}
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) {
-		return "request member has an invalid type", jsonPointer(typeErr.Field), "type"
+		return "request member has an invalid type",
+			typeErrorPointer(raw, typeErr.Offset), "type"
 	}
 	const unknownFieldPrefix = "json: unknown field "
 	msg := err.Error()
@@ -200,10 +211,96 @@ func unknownJSONPointer(raw []byte, dst any, field string) string {
 		return ""
 	}
 	pointer := jsonPointerSegments(matches[0])
-	if len(pointer) > 1024 {
+	if len(pointer) > maxJSONPointerBytes {
 		return ""
 	}
 	return pointer
+}
+
+// jsonPointerFrame is one open object or array while typeErrorPointer walks
+// the tokens of a request body; current names the child being read.
+type jsonPointerFrame struct {
+	object    bool
+	expectKey bool
+	index     int
+	key       string
+}
+
+func (f *jsonPointerFrame) current() string {
+	if f.object {
+		return f.key
+	}
+	return strconv.Itoa(f.index)
+}
+
+// typeErrorPointer returns the JSON Pointer of the value that
+// json.UnmarshalTypeError rejected, found by the error's byte offset in raw.
+// It does not read UnmarshalTypeError.Field: the encoding/json of Go 1.25
+// leaves array indices out of it and Go 1.27 includes them, while Offset
+// means the same on both - the end of a rejected scalar, or the position just
+// after the opening delimiter of a rejected object or array. The pointer names
+// the keys as the client sent them. It returns "" for a rejected document root,
+// for a value that is not found at the offset, and for a pointer beyond the
+// bounds of unknownJSONPointer.
+func typeErrorPointer(raw []byte, offset int64) string {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var stack []jsonPointerFrame
+	valueEnded := func() {
+		if len(stack) == 0 {
+			return
+		}
+		top := &stack[len(stack)-1]
+		if top.object {
+			top.expectKey = true
+		} else {
+			top.index++
+		}
+	}
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return ""
+		}
+		delim, isDelim := token.(json.Delim)
+		if len(stack) > 0 && !isDelim {
+			if top := &stack[len(stack)-1]; top.object && top.expectKey {
+				key, ok := token.(string)
+				if !ok {
+					return ""
+				}
+				top.key, top.expectKey = key, false
+				continue
+			}
+		}
+		if isDelim && (delim == ']' || delim == '}') {
+			if len(stack) == 0 {
+				return ""
+			}
+			stack = stack[:len(stack)-1]
+			valueEnded()
+			continue
+		}
+		if decoder.InputOffset() == offset {
+			if len(stack) == 0 || len(stack) > maxJSONPointerDepth {
+				return ""
+			}
+			segments := make([]string, len(stack))
+			for index := range stack {
+				segments[index] = stack[index].current()
+			}
+			pointer := jsonPointerSegments(segments)
+			if len(pointer) > maxJSONPointerBytes {
+				return ""
+			}
+			return pointer
+		}
+		if isDelim {
+			stack = append(stack, jsonPointerFrame{object: delim == '{', expectKey: delim == '{'})
+		} else {
+			valueEnded()
+		}
+	}
 }
 
 func findUnknownJSONFields(
@@ -213,7 +310,7 @@ func findUnknownJSONFields(
 	path []string,
 	matches *[][]string,
 ) {
-	if len(*matches) > 1 || len(path) >= 32 {
+	if len(*matches) > 1 || len(path) >= maxJSONPointerDepth {
 		return
 	}
 	for target.Kind() == reflect.Pointer {
@@ -432,6 +529,12 @@ func DescribeErr(err error) PublicError {
 	// else the refusal wraps.
 	case errors.Is(err, domain.ErrLoosening):
 		return PublicError{http.StatusForbidden, "loosening_refused", err.Error()}
+	case domain.OnlyTradingAccessNotification(err):
+		slog.Error("trading access warning failed after committed change", "error", err)
+		return PublicError{http.StatusConflict, "trading_access_notification_failed", domain.ErrTradingAccessNotification.Error()}
+	case errors.Is(err, domain.ErrTradingAccessNotification):
+		slog.Error("trading access operation completion failed after committed change", "error", err)
+		return PublicError{http.StatusInternalServerError, "trading_access_completion_failed", "access change was saved, but operation completion failed; review current access, alerts and service status before retrying"}
 	case errors.As(err, &pnlCurrencyMismatch):
 		return PublicError{http.StatusConflict, "pnl_bound_currency_mismatch", pnlCurrencyMismatch.Error()}
 	case errors.Is(err, domain.ErrTooLarge):
@@ -444,6 +547,10 @@ func DescribeErr(err error) PublicError {
 		return PublicError{http.StatusForbidden, "non_release_confirmation_required", domain.ErrNonReleaseConfirmation.Error()}
 	case errors.Is(err, domain.ErrTradingModeMismatch):
 		return PublicError{http.StatusConflict, "trading_mode_mismatch", domain.ErrTradingModeMismatch.Error()}
+	case errors.Is(err, domain.ErrTradingProviderUnavailable):
+		return PublicError{http.StatusConflict, "trading_provider_unavailable", err.Error()}
+	case errors.Is(err, domain.ErrExecutionPolicyUnsupported):
+		return PublicError{http.StatusConflict, "execution_policy_unsupported", domain.ErrExecutionPolicyUnsupported.Error()}
 	case errors.Is(err, domain.ErrFeeAccountRequired):
 		return PublicError{http.StatusConflict, "fee_account_required", domain.ErrFeeAccountRequired.Error()}
 	case errors.Is(err, domain.ErrAccountsNotManaged):
@@ -534,32 +641,40 @@ func DescribeErr(err error) PublicError {
 // has_dependents and the blocked target for currency_change_blocked.
 func WriteErr(w http.ResponseWriter, err error) {
 	setCarriedHeaders(w.Header(), err)
+	status, body := DescribeErrorBody(err)
+	writeErrorBody(w, status, body)
+}
+
+// DescribeErrorBody returns the public REST status and body without response headers.
+func DescribeErrorBody(err error) (status int, body any) {
 	public := DescribeErr(err)
 	switch public.Code {
 	case "validation":
-		WriteValidationErr(w, err)
+		problem := validationProblem(err)
+		return problem.Status, problem
 	case "destination_ambiguous":
-		writeDestinationAmbiguousErr(w, public, err)
+		body = describeDestinationAmbiguousErr(public, err)
 	case "account_missing":
-		writeAccountMissingErr(w, public, err)
+		body = describeAccountMissingErr(public, err)
 	case "asset_missing":
 		// DescribeErr reports this code only when err holds the typed error.
 		var assetMissing domain.AssetMissingError
 		errors.As(err, &assetMissing)
-		WriteJSON(w, public.Status, map[string]any{
+		body = map[string]any{
 			"error": map[string]any{
 				"code":    public.Code,
 				"message": public.Message,
 				"asset":   assetMissing.Asset,
 			},
-		})
+		}
 	case "has_dependents":
-		writeHasDependentsErr(w, public, err)
+		body = describeHasDependentsErr(public, err)
 	case "currency_change_blocked":
-		writeCurrencyChangeBlockedErr(w, public, err)
+		body = describeCurrencyChangeBlockedErr(public, err)
 	default:
-		WriteErrMsg(w, public.Status, public.Code, public.Message)
+		body = errorMessageBody(public.Code, public.Message)
 	}
+	return public.Status, body
 }
 
 // WithResponseHeader returns err carrying the HTTP response header name with
@@ -637,6 +752,7 @@ type TradingDTO struct {
 
 // TradingProviderDTO is one trading provider and the capabilities it offers.
 type TradingProviderDTO struct {
+	ExecutionPolicy bool   `json:"executionPolicy"`
 	Type            string `json:"type"`
 	Title           string `json:"title"`
 	VenueAccounts   bool   `json:"venueAccounts"`
@@ -648,20 +764,21 @@ type TradingProviderDTO struct {
 // TradingConnectionDTO is one trading connection with its runtime state, the
 // presence of its secrets, its instruments and its grants.
 type TradingConnectionDTO struct {
-	ID            string                 `json:"id"`
-	Provider      string                 `json:"provider"`
-	Label         string                 `json:"label"`
-	Mode          domain.TradingMode     `json:"mode"`
-	Enabled       bool                   `json:"enabled"`
-	VenueIdentity string                 `json:"venueIdentity"`
-	FeeAccount    string                 `json:"feeAccount"`
-	State         string                 `json:"state"`
-	Error         string                 `json:"error,omitempty"`
-	Diagnostics   []DiagnosticDTO        `json:"diagnostics"`
-	Secrets       map[string]bool        `json:"secrets"`
-	Settings      map[string]any         `json:"settings,omitempty"`
-	Instruments   []TradingInstrumentDTO `json:"instruments"`
-	Access        []TradingAccessDTO     `json:"access"`
+	ExecutionPolicy bool                   `json:"executionPolicy"`
+	ID              string                 `json:"id"`
+	Provider        string                 `json:"provider"`
+	Label           string                 `json:"label"`
+	Mode            domain.TradingMode     `json:"mode"`
+	Enabled         bool                   `json:"enabled"`
+	VenueIdentity   string                 `json:"venueIdentity"`
+	FeeAccount      string                 `json:"feeAccount"`
+	State           string                 `json:"state"`
+	Error           string                 `json:"error,omitempty"`
+	Diagnostics     []DiagnosticDTO        `json:"diagnostics"`
+	Secrets         map[string]bool        `json:"secrets"`
+	Settings        map[string]any         `json:"settings,omitempty"`
+	Instruments     []TradingInstrumentDTO `json:"instruments"`
+	Access          []TradingAccessDTO     `json:"access"`
 }
 
 // TradingInstrumentDTO is one instrument of a trading connection.
@@ -691,7 +808,8 @@ func ToTradingDTO(status backend.TradingStatus) TradingDTO {
 	}
 	for _, p := range status.Providers {
 		out.Providers = append(out.Providers, TradingProviderDTO{
-			Type: p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
+			ExecutionPolicy: p.ExecutionPolicy,
+			Type:            p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
 			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
 			UnlinkedFees: p.UnlinkedFees,
 		})
@@ -706,7 +824,8 @@ func ToTradingDTO(status backend.TradingStatus) TradingDTO {
 // diagnostics the backend reports; no diagnostics give an empty JSON array.
 func ToTradingConnectionDTO(c backend.TradingConnectionStatus) TradingConnectionDTO {
 	out := TradingConnectionDTO{
-		ID: c.ExternalID.String(), Provider: c.Provider, Label: c.Label,
+		ExecutionPolicy: c.ExecutionPolicy,
+		ID:              c.ExternalID.String(), Provider: c.Provider, Label: c.Label,
 		Mode: c.Mode, Enabled: c.Enabled, VenueIdentity: c.VenueIdentity,
 		FeeAccount: c.FeeAccount.String(), State: c.State, Error: c.Error,
 		Diagnostics: ToDiagnosticDTOs(c.Diagnostics),
@@ -800,18 +919,18 @@ func ToCredentialStorageDTO(storage backend.CredentialStorage) CredentialStorage
 	}
 }
 
-func writeDestinationAmbiguousErr(w http.ResponseWriter, public PublicError, err error) {
+func describeDestinationAmbiguousErr(public PublicError, err error) any {
 	var destinations []backend.TradingDestinationStatus
 	var typed *backend.DestinationAmbiguousError
 	if errors.As(err, &typed) {
 		destinations = typed.Candidates
 	}
-	WriteJSON(w, public.Status, map[string]any{
+	return map[string]any{
 		"error": map[string]any{
 			"code": public.Code, "message": public.Message,
 			"candidates": ToTradingDestinationDTOs(destinations),
 		},
-	})
+	}
 }
 
 // ProblemError identifies one invalid request member. Pointer is a JSON
@@ -852,24 +971,30 @@ func WriteValidationProblem(w http.ResponseWriter, detail, pointer, constraint s
 }
 
 func writeProblem(w http.ResponseWriter, status int, detail string, item ProblemError) {
+	writeErrorBody(w, status, problemDetails(status, detail, item))
+}
+
+func problemDetails(status int, detail string, item ProblemError) ProblemDetails {
 	title := http.StatusText(status)
 	if status == http.StatusUnprocessableEntity {
 		title = "Unprocessable Content"
 	}
+	return ProblemDetails{Type: "about:blank", Title: title, Status: status, Detail: detail, Errors: []ProblemError{item}}
+}
+
+func writeErrorBody(w http.ResponseWriter, status int, body any) {
+	if _, ok := body.(ProblemDetails); !ok {
+		WriteJSON(w, status, body)
+		return
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(ProblemDetails{
-		Type:   "about:blank",
-		Title:  title,
-		Status: status,
-		Detail: detail,
-		Errors: []ProblemError{item},
-	}); err != nil {
+	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Error("write problem response", "error", err)
 	}
 }
 
-func writeHasDependentsErr(w http.ResponseWriter, public PublicError, err error) {
+func describeHasDependentsErr(public PublicError, err error) any {
 	var typed domain.HasDependentsError
 	if !errors.As(err, &typed) {
 		typed = domain.HasDependentsError{}
@@ -881,36 +1006,36 @@ func writeHasDependentsErr(w http.ResponseWriter, public PublicError, err error)
 			"count": dep.Count,
 		})
 	}
-	WriteJSON(w, public.Status, map[string]any{
+	return map[string]any{
 		"error": map[string]any{
 			"code":       public.Code,
 			"message":    public.Message,
 			"dependents": dependents,
 		},
-	})
+	}
 }
 
-// writeAccountMissingErr reports a request that named an unknown account and
+// describeAccountMissingErr reports a request that named an unknown account and
 // asked to reject it. The account code travels as its own envelope field so a
 // client matches on structure rather than on the human-readable message.
-func writeAccountMissingErr(w http.ResponseWriter, public PublicError, err error) {
+func describeAccountMissingErr(public PublicError, err error) any {
 	var typed domain.AccountMissingError
 	if !errors.As(err, &typed) {
 		typed = domain.AccountMissingError{}
 	}
-	WriteJSON(w, public.Status, map[string]any{
+	return map[string]any{
 		"error": map[string]any{
 			"code":    public.Code,
 			"message": public.Message,
 			"account": typed.Account.String(),
 		},
-	})
+	}
 }
 
-// writeCurrencyChangeBlockedErr adds the blocked target to the error body.
+// describeCurrencyChangeBlockedErr adds the blocked target to the error body.
 // DescribeErr reports currency_change_blocked only for a typed
 // CurrencyChangeBlockedError of the account or account group scope.
-func writeCurrencyChangeBlockedErr(w http.ResponseWriter, public PublicError, err error) {
+func describeCurrencyChangeBlockedErr(public PublicError, err error) any {
 	var typed domain.CurrencyChangeBlockedError
 	errors.As(err, &typed)
 	errorBody := map[string]any{
@@ -932,28 +1057,31 @@ func writeCurrencyChangeBlockedErr(w http.ResponseWriter, public PublicError, er
 	if errors.Is(typed, domain.ErrCurrencyValuedLimit) {
 		errorBody["constraint"] = "currency_valued_limit"
 	}
-	WriteJSON(w, public.Status, map[string]any{"error": errorBody})
+	return map[string]any{"error": errorBody}
 }
 
 // WriteValidationErr writes a syntactically valid request constraint failure.
 func WriteValidationErr(w http.ResponseWriter, err error) {
-	WriteValidationProblem(
-		w,
-		err.Error(),
-		domain.ValidationPointer(err),
-		domain.ValidationConstraint(err),
-	)
+	body := validationProblem(err)
+	writeErrorBody(w, body.Status, body)
+}
+
+func validationProblem(err error) ProblemDetails {
+	return problemDetails(http.StatusUnprocessableEntity, err.Error(), ProblemError{
+		Code:       "validation",
+		Constraint: domain.ValidationConstraint(err),
+		Pointer:    domain.ValidationPointer(err),
+	})
 }
 
 // WriteErrMsg writes the legacy error envelope for non-validation errors. It
 // always honors the status and code chosen by the caller.
 func WriteErrMsg(w http.ResponseWriter, status int, code, message string) {
-	WriteJSON(w, status, map[string]any{
-		"error": map[string]string{
-			"code":    code,
-			"message": message,
-		},
-	})
+	WriteJSON(w, status, errorMessageBody(code, message))
+}
+
+func errorMessageBody(code, message string) map[string]any {
+	return map[string]any{"error": map[string]string{"code": code, "message": message}}
 }
 
 // WriteJSON encodes v as JSON with the given status code.

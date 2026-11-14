@@ -1,4 +1,6 @@
 {
+  "mixedTradingAccess": "Esta conta tem acesso a contas simuladas e reais de plataformas de negociação, incluindo acesso do grupo e conexões desativadas. Verifique o modo do destino antes de enviar ordens.",
+  "inheritedVenueAccess": "Inclui o acesso herdado do grupo da conta.",
   "page": {
     "title": "Contas",
     "description": "Contas do operador mantidas no plano de controle e aplicadas ao motor. Bloqueie uma conta ou um grupo para interromper as ordens por meio do interruptor de emergência."
@@ -164,10 +166,10 @@
       "currency": "Moeda da conta.",
       "pnl": "Esta coluna mostra o P&L exato da conta informado pelo Spot Funds.",
       "positions": "Esta coluna mostra quantas linhas de posições estão salvas para a conta.",
-      "venueAccess": "Esta coluna mostra se a conta tem acesso a pelo menos uma conexão de negociação, próprio ou por meio do grupo.",
+      "venueAccess": "Número de conexões de negociação às quais a conta tem acesso direto ou por meio do grupo, incluindo conexões desativadas. Cada conexão é contada uma única vez.",
       "status": "Esta coluna mostra se a conta está ativa ou bloqueada.",
       "notes": "Esta coluna mostra as notas do operador salvas na conta.",
-      "actions": "Esta coluna contém as ações de linha para posições, negociação, políticas, auditoria, acesso a conexões de negociação e exclusão."
+      "actions": "Ações de negociação, políticas, auditoria e exclusão. As posições e o acesso a conexões de negociação são abertos nas próprias colunas."
     },
     "status": {
       "blocked": "bloqueada",
@@ -203,7 +205,8 @@
       "viewBlockDetails": "Ver detalhes do bloqueio",
       "block": "Bloquear",
       "unblock": "Desbloquear",
-      "deleteTitle": "Excluir conta"
+      "deleteTitle": "Excluir conta",
+      "managementUnavailable": "A identificação, o grupo e a exclusão de contas são gerenciados no modo de várias contas."
     },
     "empty": {
       "title": "Nenhuma conta",

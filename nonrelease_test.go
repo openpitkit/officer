@@ -37,9 +37,11 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/nonrelease"
 	"go.openpit.dev/officer/internal/store/sqlite"
+	apptrading "go.openpit.dev/officer/internal/trading"
 )
 
 func TestNonReleaseGateConcurrentChoice(t *testing.T) {
@@ -550,6 +552,15 @@ func openNonReleaseTestStore(t *testing.T, cfg Config, migrate bool) (store.Stor
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	registry := trading.NewRegistry()
+	for _, provider := range apptrading.FirstPartyProviders() {
+		if err := registry.Register(provider); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.BindExecutionPolicyProviders(registry.SupportsExecutionPolicy); err != nil {
+		t.Fatal(err)
+	}
 	if migrate {
 		if err := st.Migrate(context.Background()); err != nil {
 			t.Fatal(err)

@@ -46,6 +46,8 @@ func (r *memoryRealm) ExportBackup(
 func (r *memoryRealm) RestoreBackup(
 	ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 ) (backup.RestoreSummary, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if opts.Mode == "" {
 		return backup.RestoreSummary{}, domain.ErrInvalid
 	}
@@ -62,6 +64,12 @@ func (r *memoryRealm) RestoreBackup(
 	// the committed delta requires an engine replacement.
 	writesRuntime := opts.Scope.All || backup.TouchesRuntime(opts.Scope.Normalize())
 	if writesRuntime {
+		for _, restored := range data.Accounts {
+			account := domain.Account{Code: domain.AccountID(restored.Code), GroupCode: restored.GroupCode}
+			if err := r.validateTradingAccessModes(account, r.tradingAccess); err != nil {
+				return backup.RestoreSummary{}, err
+			}
+		}
 		previousAccounts := r.accounts
 		previousGroups := r.groups
 		// Runtime sections replace data except assets, which restore by code to

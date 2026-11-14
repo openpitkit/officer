@@ -1206,6 +1206,11 @@ func (r *realmStore) CreateAccount(
 		}
 		return domain.Account{}, fmt.Errorf("store: create account: %w", err)
 	}
+	if account.GroupCode != "" {
+		if err := r.validateTradingAccessModes(ctx, tx, []domain.AccountID{account.Code}); err != nil {
+			return domain.Account{}, err
+		}
+	}
 	created, err = scanAccountRow(tx.QueryRowContext(
 		ctx, accountSelect+` WHERE a.code = ?`, account.Code.String(),
 	))
@@ -1429,23 +1434,34 @@ func validateTypedAccountBlock(block domain.AccountBlock) error {
 // empty group code clears it.
 func (r *realmStore) SetAccountGroup(
 	ctx context.Context, code domain.AccountID, groupCode string,
-) error {
+) (err error) {
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	groupID, err := optionalGroupID(ctx, db, groupCode)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	res, err := db.ExecContext(
+	defer rollbackTransaction(&err, tx)
+	groupID, err := optionalGroupID(ctx, tx, groupCode)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(
 		ctx, `UPDATE account SET group_id = ? WHERE code = ?`,
 		groupID, code.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("store: set account group: %w", err)
 	}
-	return notFoundIfNoRows(res, "account", code.String())
+	if err := notFoundIfNoRows(res, "account", code.String()); err != nil {
+		return err
+	}
+	if err := r.validateTradingAccessModes(ctx, tx, []domain.AccountID{code}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SetAccountCurrency sets or clears the account-level currency asset.
@@ -1777,7 +1793,7 @@ func accountListOrderBy(sort fwstore.SortSpec) string {
 		"positionCount": "position_count",
 		"status":        accountEffectiveBlockedExpr,
 		"title":         "a.title",
-		"venueAccess":   "venue_access",
+		"venueAccess":   "(SELECT COUNT(DISTINCT venue_link.connection_id) FROM trading_access venue_link WHERE " + accountVenueLinks.match + ")",
 	}
 	column := columns[sort.Column]
 	if column == "" {

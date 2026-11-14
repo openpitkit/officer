@@ -28,6 +28,7 @@ import (
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	fwstore "go.openpit.dev/officer/framework/store"
+	fwtrading "go.openpit.dev/officer/framework/trading"
 )
 
 type blockLifecycleOperation string
@@ -162,6 +163,9 @@ func (s *blockLifecycleStore) open(
 	opened, err := New(s.path, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("New(%s): %v", s.path, err)
+	}
+	if err := opened.BindExecutionPolicyProviders(fwtrading.NewRegistry().SupportsExecutionPolicy); err != nil {
+		t.Fatal(err)
 	}
 	if migrate {
 		if err := opened.Migrate(ctx); err != nil {

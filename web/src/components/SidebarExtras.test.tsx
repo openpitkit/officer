@@ -29,6 +29,7 @@ import { NonReleaseContext } from "@/components/non-release-context";
 import {
   AboutNavEntry,
   LogoutNavEntry,
+  NonReleaseNavEntry,
   RestartRequiredNavEntry,
   SensitiveDataNavEntry,
 } from "@/components/SidebarExtras";
@@ -44,8 +45,9 @@ vi.mock("@/api/useCredentialStorage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/api/useCredentialStorage")>()),
   useCredentialStorage: vi.fn(),
 }));
+const sidebarState = vi.hoisted(() => ({ collapsed: false, close: vi.fn() }));
 vi.mock("@/components/sidebar-context", () => ({
-  useSidebar: () => ({ close: vi.fn() }),
+  useSidebar: () => sidebarState,
 }));
 
 const useMarketDataMock = vi.mocked(useMarketData);
@@ -82,6 +84,7 @@ function LocationProbe() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sidebarState.collapsed = false;
   storage({ plaintextTradingKeys: true });
   useMarketDataMock.mockReturnValue({
     load: {
@@ -123,6 +126,33 @@ describe("SidebarExtras page request ownership", () => {
 });
 
 describe("SensitiveDataNavEntry", () => {
+  it("keeps both status plaques as labelled icons when collapsed", () => {
+    sidebarState.collapsed = true;
+    render(
+      <NonReleaseContext.Provider
+        value={{ nonRelease: true, showInSidebar: vi.fn() }}
+      >
+        <MemoryRouter initialEntries={["/accounts"]}>
+          <SensitiveDataNavEntry />
+          <NonReleaseNavEntry />
+        </MemoryRouter>
+      </NonReleaseContext.Provider>,
+    );
+    const sensitive = screen.getByRole("link", { name: /^Sensitive data/ });
+    const nonRelease = screen.getByRole("link", { name: /^non-release:/ });
+    expect(sensitive).toHaveAttribute("href", "/service#security");
+    expect(nonRelease).toHaveAttribute("href", "/service");
+    for (const plaque of [sensitive, nonRelease]) {
+      expect(plaque).toHaveAttribute(
+        "title",
+        plaque.getAttribute("aria-label"),
+      );
+      expect(plaque.querySelector("svg")).toBeInTheDocument();
+      expect(plaque).toHaveTextContent("");
+      expect(plaque.querySelector("p")).not.toBeInTheDocument();
+    }
+  });
+
   it.each([
     ["trading keys", { plaintextTradingKeys: true }],
     ["market-data keys", { plaintextMarketDataKeys: true }],

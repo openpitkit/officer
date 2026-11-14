@@ -1,4 +1,10 @@
 {
+  "mixedTradingAccess": {
+    "title": "Acesso simulado e real: {{account}}",
+    "detail": "A conta {{account}} agora tem acesso a contas simuladas e reais de plataformas de negociação. O acesso do grupo e as conexões desativadas estão incluídos. A confirmação registra a ciência e não altera o acesso.",
+    "acknowledge": "Confirmar ciência",
+    "invalid": "O alerta de acesso misto contém dados de conta inválidos."
+  },
   "title": "Alertas",
   "description": "Os eventos pendentes permanecem aqui até que uma decisão seja concluída. O estado de leitura é pessoal e compartilhado entre suas sessões.",
   "unresolved": "Pendentes: {{count}}",

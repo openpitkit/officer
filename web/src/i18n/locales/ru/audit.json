@@ -59,6 +59,7 @@
     }
   },
   "detail": {
+    "delete_trading_connection": "Удаление торгового подключения {{connection}}",
     "alert_delivery": "Оповещение {{alert}} доставлено через канал {{channel}}",
     "alert_delivery_failed": "Ошибка доставки оповещения {{alert}} через канал {{channel}}",
     "resolve_alert": "Оповещение {{alert}} решено действием {{action}}: {{result}}",
@@ -115,6 +116,7 @@
     "delete_limit": "Удаление лимита {{policy}} ({{scope}})",
     "create_trading_connection": "Создание торгового подключения {{connection}} ({{provider}}, {{connectionMode}})",
     "update_trading_connection_settings": "Обновление настроек торгового подключения {{connection}}",
+    "set_test_execution_policy": "Замена политики тестового исполнения торгового подключения {{connection}}: ревизия {{oldRevision}} → {{newRevision}}",
     "enable_trading_connection": "Включение торгового подключения {{connection}}",
     "disable_trading_connection": "Отключение торгового подключения {{connection}}",
     "upsert_trading_instrument": "Сохранение инструмента {{connection}}/{{symbol}}",
@@ -175,6 +177,8 @@
     "reset_account_pnl_previous_halt": "Реализованный P&L счёта {{account}} сброшен в 0; предыдущее значение {{previousPnl}}; причина остановки расчёта P&L до сброса: {{previousHalt}}"
   },
   "detailField": {
+    "oldRules": "предыдущие правила",
+    "newRules": "новые правила",
     "account": "счёт",
     "account_group": "группа счетов",
     "asset": "актив",

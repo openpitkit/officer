@@ -17,6 +17,7 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { AccountTradingAccessWarning } from "@/components/AccountVenueAccess";
 
 import type { TradingAccessSubject, TradingSnapshot } from "@/api/types";
 import { useAccountState } from "@/api/useAccounts";
@@ -171,6 +172,13 @@ function AccessDialog({
         }}
       >
         {children}
+        {load.state === "ready" && (
+          <AccountTradingAccessWarning
+            snapshot={load.data}
+            subject={subject}
+            group={group}
+          />
+        )}
         {/* A failed background poll keeps the last rows; say they are stale. */}
         <StaleState load={load} reload={trading.reload} />
       </VenueAccessDialog>
@@ -224,6 +232,9 @@ function AccountAccessDialog({
       trading={trading}
       onClose={onClose}
     >
+      {load.state === "loading" && (
+        <p className="text-xs text-muted">{t("tradingCheck.checking")}</p>
+      )}
       {load.state === "error" && (
         <ErrorBanner
           message={t("venueAccessGroupCheckFailed", { error: load.error })}

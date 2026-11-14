@@ -14,10 +14,29 @@
       "market_data_settings",
       "general_settings",
       "activity_history",
+      "trading_settings",
       "audit_log"
     ]
   },
   "data": {
+    "tradingConnections": [
+      {
+        "externalId": "ZmZmZmZmZmZmZmZmZmZmZg",
+        "provider": "fixture-test",
+        "label": "Test fixture",
+        "mode": "paper",
+        "venueIdentity": "fixture",
+        "credentials": "e30=",
+        "enabled": false
+      }
+    ],
+    "testExecutionPolicies": [
+      {
+        "connection": "ZmZmZmZmZmZmZmZmZmZmZg",
+        "revision": 7,
+        "rules": [{"mask":{"baseAsset":"*","quoteAsset":"USD"},"mode":"execute","priceVariant":"normal"}]
+      }
+    ],
     "assetClasses": [
       {
         "Code": "equity",

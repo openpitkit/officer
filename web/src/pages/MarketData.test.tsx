@@ -160,6 +160,8 @@ function renderCard(
 ) {
   const props = {
     instance,
+    expanded: true,
+    onToggle: vi.fn(),
     pairUsageMap: {},
     busy: false,
     onEditSettings: vi.fn(),
@@ -199,6 +201,41 @@ beforeEach(async () => {
 });
 
 describe("MarketData video guides", () => {
+  it("orders collapsed feed actions as toggle, settings, delete", () => {
+    renderCard(ibInstance(), { expanded: false });
+    expect(
+      screen
+        .getAllByRole("button")
+        .map(
+          (button) =>
+            button.getAttribute("aria-label") ?? button.textContent?.trim(),
+        ),
+    ).toEqual(["IB Gateway", "Disable", "Edit settings", "Delete source"]);
+  });
+
+  it("starts collapsed and opens one feed at a time", async () => {
+    const first = ibInstance();
+    const second = ibInstance({ id: "ib-2", label: "Second feed" });
+    fetchMarketDataMock.mockResolvedValue({
+      ...status(first),
+      instances: [first, second],
+    });
+    const user = userEvent.setup();
+    renderMarketDataPage();
+    const firstToggle = await screen.findByRole("button", {
+      name: "IB Gateway",
+    });
+    const secondToggle = screen.getByRole("button", { name: "Second feed" });
+    expect(firstToggle).toHaveAttribute("aria-expanded", "false");
+    expect(secondToggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(firstToggle);
+    expect(firstToggle).toHaveAttribute("aria-expanded", "true");
+    await user.click(secondToggle);
+    expect(firstToggle).toHaveAttribute("aria-expanded", "false");
+    expect(secondToggle).toHaveAttribute("aria-expanded", "true");
+    await user.click(secondToggle);
+    expect(secondToggle).toHaveAttribute("aria-expanded", "false");
+  });
   it("shows the price source guide with no instances", async () => {
     fetchMarketDataMock.mockResolvedValue({
       ...status(ibInstance()),
@@ -341,6 +378,7 @@ describe("MD instrument block texts", () => {
     fetchMarketDataMock.mockResolvedValue(status(instance));
     renderMarketDataPage();
     const row = (await screen.findByText("BTCUSDT")).closest("tr")!;
+    await user.click(screen.getByRole("button", { name: "Binance" }));
 
     await user.click(
       within(row).getByRole("button", { name: "Delete instrument" }),
@@ -632,11 +670,12 @@ describe("provider references", () => {
     const clientId = screen.getByLabelText("Client ID");
     expect(submit).toBeEnabled();
 
-    await user.type(clientId, "1.5");
-    expect(submit).toBeDisabled();
-    await user.clear(clientId);
-    await user.type(clientId, "-1");
-    expect(submit).toBeDisabled();
+    await user.click(clientId);
+    for (const invalid of ["1.5", "-1", "1,5", "1e2"]) {
+      await user.paste(invalid);
+      expect(clientId).toHaveValue("");
+      expect(submit).toBeEnabled();
+    }
     await user.clear(clientId);
     await user.type(clientId, "9007199254740992");
     expect(submit).toBeDisabled();
@@ -723,7 +762,7 @@ describe("manual market-data numeric guards", () => {
     await user.type(screen.getByPlaceholderText("Base"), "AAPL");
     expect(add).toBeEnabled();
 
-    await user.type(screen.getByPlaceholderText("Manual price"), "bad");
+    await user.type(screen.getByPlaceholderText("Manual price"), ".");
     expect(add).toBeDisabled();
     await user.clear(screen.getByPlaceholderText("Manual price"));
     await user.type(screen.getByPlaceholderText("Manual price"), "-10.5");
@@ -756,7 +795,7 @@ describe("manual market-data numeric guards", () => {
     const send = screen.getByRole("button", { name: "Send price" });
     expect(send).toBeEnabled();
     await user.clear(mark);
-    await user.type(mark, "bad");
+    await user.type(mark, ".");
     expect(send).toBeDisabled();
     expect(onUpsertInstrument).not.toHaveBeenCalled();
   });
@@ -803,8 +842,13 @@ describe("IB feed resolver", () => {
     await user.type(within(dialog).getByLabelText("Currency"), "usd");
     expect(add).toBeEnabled();
 
-    await user.type(within(dialog).getByLabelText("Con ID"), "1.5");
-    expect(add).toBeDisabled();
+    const conId = within(dialog).getByLabelText("Con ID");
+    await user.click(conId);
+    for (const invalid of ["1.5", "-1", "1,5", "1e2"]) {
+      await user.paste(invalid);
+      expect(conId).toHaveValue("");
+      expect(add).toBeEnabled();
+    }
     await user.clear(within(dialog).getByLabelText("Con ID"));
     await user.type(within(dialog).getByLabelText("Con ID"), "265598");
     expect(add).toBeEnabled();
@@ -821,7 +865,7 @@ describe("IB feed resolver", () => {
     await user.click(within(dialog).getByLabelText("Security type"));
     await user.click(screen.getByRole("option", { name: /Option/ }));
     focusSpy.mockRestore();
-    await user.type(within(dialog).getByLabelText("Strike"), "bad");
+    await user.type(within(dialog).getByLabelText("Strike"), ".");
     expect(add).toBeDisabled();
     expect(onUpsertIBInstrument).not.toHaveBeenCalled();
   });
@@ -1280,7 +1324,9 @@ describe("IB feed resolver", () => {
 
 describe("IB instrument persistence (full-map send)", () => {
   async function waitForCard() {
-    await screen.findByText("IB Gateway");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "IB Gateway" }),
+    );
   }
 
   it("issues instrument upsert then a settings PUT carrying the full prior contracts map plus the new key", async () => {
@@ -1464,8 +1510,10 @@ describe("IB advanced section removed", () => {
     const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeEnabled();
     await user.clear(clientId);
-    await user.type(clientId, "1.5");
-    expect(save).toBeDisabled();
+    await user.click(clientId);
+    await user.paste("1.5");
+    expect(clientId).toHaveValue("");
+    expect(save).toBeEnabled();
     expect(onSave).not.toHaveBeenCalled();
   });
 });

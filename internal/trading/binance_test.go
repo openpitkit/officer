@@ -156,9 +156,9 @@ func TestBinanceProvider(t *testing.T) {
 	if p.Build == nil {
 		t.Fatal("Binance provider must have a constructor")
 	}
-	connector, err := p.Build(domain.TradingConnection{
+	connector, err := p.Build(fwtrading.BuildContext{Connection: domain.TradingConnection{
 		Mode: domain.TradingModePaper, Credentials: binanceTestCredentials,
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

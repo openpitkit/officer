@@ -474,6 +474,14 @@ type TradingAccess struct {
 	VenueAccount string `json:"venueAccount,omitempty"`
 }
 
+// TestExecutionPolicy is the complete stored policy of a test connection.
+type TestExecutionPolicy struct {
+	Connection domain.ExternalID `json:"connection"`
+	Revision   uint64            `json:"revision"`
+	// Rules is the stored shared DTO array, validated by the receiving store.
+	Rules json.RawMessage `json:"rules"`
+}
+
 // VenueOrder is one portable Officer-order-to-venue-order link.
 type VenueOrder struct {
 	// Order is the Officer order's opaque public handle.
@@ -609,6 +617,8 @@ type Data struct {
 	TradingInstruments []TradingInstrument `json:"tradingInstruments,omitempty"`
 	// TradingAccess is the set of account and group grants of connections.
 	TradingAccess []TradingAccess `json:"tradingAccess,omitempty"`
+	// TestExecutionPolicies are per-connection revisioned test rule sets.
+	TestExecutionPolicies []TestExecutionPolicy `json:"testExecutionPolicies,omitempty"`
 	// VenueOrders link Officer orders to the venue orders sent for them.
 	VenueOrders []VenueOrder `json:"venueOrders,omitempty"`
 	// Audit is the append-only audit trail (by external id). Restore preserves
@@ -1005,6 +1015,11 @@ func FilterData(data Data, scope Scope) Data {
 		out.TradingInstruments = append([]TradingInstrument(nil),
 			data.TradingInstruments...)
 		out.TradingAccess = append([]TradingAccess(nil), data.TradingAccess...)
+		out.TestExecutionPolicies = make([]TestExecutionPolicy, 0, len(data.TestExecutionPolicies))
+		for _, policy := range data.TestExecutionPolicies {
+			policy.Rules = append(json.RawMessage(nil), policy.Rules...)
+			out.TestExecutionPolicies = append(out.TestExecutionPolicies, policy)
+		}
 		out.VenueOrders = append([]VenueOrder(nil), data.VenueOrders...)
 	}
 	if scope.Included(SectionAuditLog) {

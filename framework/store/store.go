@@ -1208,6 +1208,9 @@ var ErrResetCommitted = errors.New("store: database reset committed")
 // The bundled SQLite connector is single-realm: it serves one fixed realm and
 // rejects a non-matching realm id with an error wrapping domain.ErrInvalid.
 type Store interface {
+	// BindExecutionPolicyProviders installs the capability lookup once for every realm handle.
+	// Nil and repeated bindings are rejected; Reset preserves the binding.
+	BindExecutionPolicyProviders(domain.ExecutionPolicyProviderLookup) error
 	// ForRealm returns the data-access handle bound to realm. The single-realm
 	// connector accepts only its bound realm id and returns an error wrapping
 	// domain.ErrInvalid for any other id.
@@ -1245,6 +1248,13 @@ type Store interface {
 // and domain.ErrConflict. A reference to an unknown dictionary code is reported
 // as an error wrapping domain.ErrInvalid.
 type RealmStore interface {
+	// GetTestExecutionPolicy reads and validates a test connection's stored policy.
+	// An unbound lookup, an unavailable provider, an unsupported policy or a missing
+	// policy is an explicit error; an unknown connection wraps domain.ErrNotFound.
+	GetTestExecutionPolicy(context.Context, domain.ExternalID) (domain.TestExecutionPolicyState, error)
+	// ReplaceTestExecutionPolicy replaces the complete validated rule set and
+	// increments its revision. Both states come from the write transaction.
+	ReplaceTestExecutionPolicy(context.Context, domain.ExternalID, domain.TestExecutionPolicy) (oldState, newState domain.TestExecutionPolicyState, err error)
 	// --- Assets (dictionary, addressed by code) ---
 
 	// CreateAsset persists a new asset, assigning a collision-free engine asset
@@ -1868,6 +1878,10 @@ type RealmStore interface {
 
 	// ListTradingConnections returns every connection, ordered by external id.
 	ListTradingConnections(ctx context.Context) ([]domain.TradingConnection, error)
+
+	// DeleteTradingConnection removes a disabled connection and its configuration.
+	// Any venue-order history prevents deletion with domain.ErrConflict.
+	DeleteTradingConnection(ctx context.Context, id domain.ExternalID) error
 
 	// UpdateTradingConnectionSettings replaces label and credentials, sealing
 	// credentials when a master key is configured, storing plaintext otherwise.

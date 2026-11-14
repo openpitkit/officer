@@ -25,7 +25,6 @@ set dotenv-load
 set dotenv-path := ".github/ci-versions.env"
 set windows-shell := ["cmd.exe", "/c"]
 
-python := env_var_or_default("PYTHON", if os_family() == "windows" { "python" } else { "python3" })
 just_helper := "scripts/just_helpers.py"
 officer_binary := if os_family() == "windows" { "pit-officer.exe" } else { "pit-officer" }
 go_toolchain := "go" + env_var("CI_GO")
@@ -45,6 +44,8 @@ export PYTHONUTF8 := "1"
 venv_dir := justfile_directory() / ".venv"
 venv_bin := if os_family() == "windows" { venv_dir / "Scripts" } else { venv_dir / "bin" }
 venv_python := if os_family() == "windows" { venv_bin / "python.exe" } else { venv_bin / "python" }
+python := env_var_or_default("PYTHON", venv_python)
+bootstrap_python := if path_exists(venv_python) == "true" { python } else { env_var_or_default("PYTHON", if os_family() == "windows" { "python" } else { "python3" }) }
 semgrep := if os_family() == "windows" { venv_bin / "semgrep.exe" } else { venv_bin / "semgrep" }
 # Every node, npm and npx a recipe runs is the runtime ensure-node installs here.
 node_dir := justfile_directory() / ".tmp" / "node"
@@ -57,26 +58,26 @@ build: build-release
 
 # Check that the C toolchain required by cgo is available.
 check-cgo-toolchain:
-    {{ python }} {{ just_helper }} check-cgo-toolchain
+    "{{ python }}" {{ just_helper }} check-cgo-toolchain
 
 # Build the pit-officer binary with debug compiler flags.
 build-debug: check-cgo-toolchain frontend-install build-js
-    {{ python }} {{ just_helper }} go build "-gcflags=all=-N -l" "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" -o {{ officer_binary }} ./cmd/pit-officer
+    "{{ python }}" {{ just_helper }} go build "-gcflags=all=-N -l" "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" -o {{ officer_binary }} ./cmd/pit-officer
 
 # Build the optimized pit-officer binary.
 build-release: check-cgo-toolchain frontend-install build-js
-    {{ python }} {{ just_helper }} go build "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" -o {{ officer_binary }} ./cmd/pit-officer
+    "{{ python }}" {{ just_helper }} go build "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" -o {{ officer_binary }} ./cmd/pit-officer
 
 # Build all Go packages (no frontend; uses the committed web/dist placeholder).
 build-go: build-go-release
 
 # Build all Go packages with debug compiler flags.
 build-go-debug:
-    {{ python }} {{ just_helper }} go build "-gcflags=all=-N -l" {{ go_packages }}
+    "{{ python }}" {{ just_helper }} go build "-gcflags=all=-N -l" {{ go_packages }}
 
 # Build all Go packages optimized.
 build-go-release:
-    {{ python }} {{ just_helper }} go build {{ go_packages }}
+    "{{ python }}" {{ just_helper }} go build {{ go_packages }}
 
 # Build the SPA using already-installed frontend dependencies.
 build-js: ensure-node
@@ -175,19 +176,19 @@ check-js-dry: lint-js test-js
 
 # Run go vet across all packages.
 vet:
-    {{ python }} {{ just_helper }} go vet -all {{ go_packages }}
+    "{{ python }}" {{ just_helper }} go vet -all {{ go_packages }}
 
 # Update Go module metadata.
 tidy:
-    {{ python }} {{ just_helper }} go mod tidy -go={{ go_version }}
+    "{{ python }}" {{ just_helper }} go mod tidy -go={{ go_version }}
 
 # Vendor the pinned swagger-ui-dist files that /docs serves.
 vendor-swagger-ui:
-    {{ python }} {{ just_helper }} vendor-swagger-ui
+    "{{ python }}" {{ just_helper }} vendor-swagger-ui
 
 # Create the Python tools venv only when a tool is not at its pinned version.
 install-python-tools:
-    {{ python }} {{ just_helper }} install-python-tools
+    "{{ bootstrap_python }}" {{ just_helper }} install-python-tools
 
 # No per-rule timeout: a stall under machine load makes the gate slower, never
 # skips a file and never fails the scan; semgrep-scan still fails on every
@@ -195,24 +196,7 @@ install-python-tools:
 # Run the Semgrep invariant rule set over the whole tree.
 check-semgrep: install-python-tools
     {{ python }} {{ just_helper }} semgrep-scan {{ semgrep }} --config checks/semgrep/ --error --timeout 0 --metrics=off --disable-version-check .
-    {{ semgrep }} --test --config checks/semgrep/account-restriction.yml --metrics=off --disable-version-check checks/semgrep/testdata/account-restriction.go
-    {{ semgrep }} --test --config checks/semgrep/discarded-close-error.yml --metrics=off --disable-version-check checks/semgrep/testdata/discarded-close-error.go
-    {{ semgrep }} --test --config checks/semgrep/discarded-error.yml --metrics=off --disable-version-check checks/semgrep/testdata/discarded-error.go
-    {{ semgrep }} --test --config checks/semgrep/default-domain-status.yml --metrics=off --disable-version-check checks/semgrep/testdata/default-domain-status.go
-    {{ semgrep }} --test --config checks/semgrep/locale-latin-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-latin-words.txt
-    {{ semgrep }} --test --config checks/semgrep/locale-english-words.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-english-words.txt
-    {{ semgrep }} --test --config checks/semgrep/locale-pnl-spelling.yml --metrics=off --disable-version-check checks/semgrep/testdata/locale-pnl-spelling.txt
-    {{ semgrep }} --test --config checks/semgrep/file-header-site-link.yml --metrics=off --disable-version-check checks/semgrep/testdata/file-header-site-link.txt
-    {{ semgrep }} --test --config checks/semgrep/panel-access-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-access-reuse.tsx
-    {{ semgrep }} --test --config checks/semgrep/panel-download-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-download-reuse.tsx
-    {{ semgrep }} --test --config checks/semgrep/panel-code-label.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-code-label.tsx
-    {{ semgrep }} --test --config checks/semgrep/no-legacy-database-probe.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-legacy-database-probe.go
-    {{ semgrep }} --test --config checks/semgrep/venue-connector-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/venue-connector-reuse.go
-    {{ semgrep }} --test --config checks/semgrep/no-local-secret-redaction.yml --metrics=off --disable-version-check checks/semgrep/testdata/no-local-secret-redaction.go
-    {{ semgrep }} --test --config checks/semgrep/tailwind-v4-utilities.yml --metrics=off --disable-version-check checks/semgrep/testdata/tailwind-v4-utilities.tsx
-    {{ semgrep }} --test --config checks/semgrep/panel-site-link-reuse.yml --metrics=off --disable-version-check checks/semgrep/testdata/panel-site-link-reuse.tsx
-    {{ semgrep }} --test --config checks/semgrep/integration-test-wall-clock-deadline.yml --metrics=off --disable-version-check checks/semgrep/testdata/integration-test-wall-clock-deadline.go
-    {{ semgrep }} --test --config checks/semgrep/test-slog-default-restore.yml --metrics=off --disable-version-check checks/semgrep/testdata/test-slog-default-restore.go
+    {{ semgrep }} --test --config checks/semgrep/ --metrics=off --disable-version-check checks/semgrep/testdata/
 
 # Lint all.
 [parallel]
@@ -229,35 +213,35 @@ lint-all-release-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout) l
 
 # Lint Go sources.
 lint-go:
-    {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
-    {{ python }} {{ just_helper }} check-public-packages
-    {{ python }} {{ just_helper }} go mod tidy -go={{ go_version }} -diff
-    {{ python }} {{ just_helper }} go vet -all {{ go_packages }}
-    {{ python }} {{ just_helper }} go-tool golangci-lint run --timeout=5m {{ go_packages }}
+    "{{ python }}" {{ just_helper }} check-gofmt {{ go_dirs }}
+    "{{ python }}" {{ just_helper }} check-public-packages
+    "{{ python }}" {{ just_helper }} go mod tidy -go={{ go_version }} -diff
+    "{{ python }}" {{ just_helper }} go vet -all {{ go_packages }}
+    "{{ python }}" {{ just_helper }} go-tool golangci-lint run --timeout=5m {{ go_packages }}
 
 # Lint Go sources against a local Pit checkout.
 lint-go-dev pit_checkout="../pit": (lint-go-release-dev pit_checkout)
 
 # Lint Go sources against a debug local Pit checkout.
 lint-go-debug-dev pit_checkout="../pit": (dylib-debug-dev pit_checkout)
-    {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
-    {{ python }} {{ just_helper }} check-public-packages
+    "{{ python }}" {{ just_helper }} check-gofmt {{ go_dirs }}
+    "{{ python }}" {{ just_helper }} check-public-packages
     go mod tidy -go={{ go_version }} -diff
     just _go-dev-mode debug {{ quote(pit_checkout) }} "vet" "-all" {{ go_packages }}
     just _go-tool-dev-mode debug {{ quote(pit_checkout) }} "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
 
 # Lint Go sources against an optimized local Pit checkout.
 lint-go-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
-    {{ python }} {{ just_helper }} check-gofmt {{ go_dirs }}
-    {{ python }} {{ just_helper }} check-public-packages
+    "{{ python }}" {{ just_helper }} check-gofmt {{ go_dirs }}
+    "{{ python }}" {{ just_helper }} check-public-packages
     go mod tidy -go={{ go_version }} -diff
     just _go-dev-mode release {{ quote(pit_checkout) }} "vet" "-all" {{ go_packages }}
     just _go-tool-dev-mode release {{ quote(pit_checkout) }} "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
 
 # Check formatting and lint Python sources.
 lint-python: install-python-tools
-    {{ venv_python }} -m ruff check --quiet .
-    {{ venv_python }} -m ruff format --check --quiet .
+    "{{ venv_python }}" -m ruff check --quiet .
+    "{{ venv_python }}" -m ruff format --check --quiet .
 
 # Check formatting, lint, and typecheck JS/TypeScript sources.
 lint-js: ensure-node
@@ -288,18 +272,18 @@ test-all-release-dev pit_checkout="../pit": (test-go-release-dev pit_checkout) (
 
 # Test the release tooling without cutting a release.
 test-python:
-    {{ python }} -m unittest discover -s scripts -p '*_test.py'
+    "{{ python }}" -m unittest discover -s scripts -p '*_test.py'
 
 # Run all Go tests.
 test-go: test-go-release
 
 # Run all Go tests with debug compiler flags.
 test-go-debug:
-    {{ python }} {{ just_helper }} go test "-gcflags=all=-N -l" -count=1 {{ go_packages }}
+    "{{ python }}" {{ just_helper }} go test "-gcflags=all=-N -l" -count=1 {{ go_packages }}
 
 # Run all optimized Go tests.
 test-go-release:
-    {{ python }} {{ just_helper }} go test -count=1 {{ go_packages }}
+    "{{ python }}" {{ just_helper }} go test -count=1 {{ go_packages }}
 
 # Run all Go tests against a local Pit checkout.
 test-go-dev pit_checkout="../pit": (test-go-release-dev pit_checkout)
@@ -315,7 +299,7 @@ test-go-release-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
 # Run all Go tests with the race detector.
 [unix]
 test-go-race:
-    {{ python }} {{ just_helper }} go test -race -count=1 {{ go_packages }}
+    "{{ python }}" {{ just_helper }} go test -race -count=1 {{ go_packages }}
 [windows]
 test-go-race:
     @echo Skipping Go race tests on Windows: Go ThreadSanitizer is not compatible with the CGo toolchain.
@@ -349,19 +333,19 @@ fmt-js: ensure-node
 
 # Format Python sources.
 fmt-python: install-python-tools
-    {{ venv_python }} -m ruff format --quiet .
+    "{{ venv_python }}" -m ruff format --quiet .
 
 # Run pit-officer in local stdio MCP mode.
 run-mcp: build-release
-    {{ python }} {{ just_helper }} run-officer mcp
+    "{{ python }}" {{ just_helper }} run-officer mcp
 
 # Run pit-officer in local stdio MCP mode with debug compiler flags.
 run-mcp-debug: build-debug
-    {{ python }} {{ just_helper }} run-officer mcp
+    "{{ python }}" {{ just_helper }} run-officer mcp
 
 # Run pit-officer in serve mode (MCP over HTTP + dashboard).
 run-serve: build-release
-    {{ python }} {{ just_helper }} run-officer serve
+    "{{ python }}" {{ just_helper }} run-officer serve
 
 # Move the existing database aside and initialize a fresh serve configuration.
 run-serve-reset init_config="examples/setup/simple.json": build-release
@@ -369,7 +353,7 @@ run-serve-reset init_config="examples/setup/simple.json": build-release
 
 # Run pit-officer in serve mode with debug compiler flags.
 run-serve-debug: build-debug
-    {{ python }} {{ just_helper }} run-officer serve
+    "{{ python }}" {{ just_helper }} run-officer serve
 
 # Reset and initialize serve with debug compiler flags.
 run-serve-reset-debug init_config="examples/setup/simple.json": build-debug
@@ -377,11 +361,11 @@ run-serve-reset-debug init_config="examples/setup/simple.json": build-debug
 
 # Print the running serve URL and open it (no rebuild; serve must be up).
 dashboard:
-    {{ python }} {{ just_helper }} run-officer dashboard
+    "{{ python }}" {{ just_helper }} run-officer dashboard
 
 # Install or update the project-local Node.js runtime pinned by CI_NODE.
 ensure-node:
-    {{ python }} {{ just_helper }} ensure-node "{{ node_dir }}"
+    "{{ python }}" {{ just_helper }} ensure-node "{{ node_dir }}"
 
 # Install frontend dependencies only (no build).
 frontend-install: ensure-node
@@ -397,7 +381,7 @@ docker-build tag="pit-officer:local":
 
 # Start a local image for one platform; wait until it is healthy and /healthz answers 200.
 docker-start-check image platform:
-    {{ python }} {{ just_helper }} docker-start-check {{ quote(image) }} {{ quote(platform) }}
+    "{{ python }}" {{ just_helper }} docker-start-check {{ quote(image) }} {{ quote(platform) }}
 
 # Push the current HEAD to the dry-run branch and start the release dry run.
 release-dry:
@@ -406,30 +390,30 @@ release-dry:
 
 # On a clean release branch: run the gate, commit the notes as RELEASE_NOTES.md and tag the next major, minor or patch version; pushes nothing.
 release kind notes_file:
-    {{ python }} {{ just_helper }} release {{ quote(kind) }} {{ quote(notes_file) }}
+    "{{ python }}" {{ just_helper }} release {{ quote(kind) }} {{ quote(notes_file) }}
 
 # Print the version `just release <kind>` cuts from HEAD.
 release-version kind:
-    {{ python }} {{ just_helper }} release-version {{ quote(kind) }}
+    "{{ python }}" {{ just_helper }} release-version {{ quote(kind) }}
 
 # Require committed release notes and matching MCP metadata for this version.
 check-release-notes version:
-    {{ python }} {{ just_helper }} check-release-notes {{ quote(version) }}
+    "{{ python }}" {{ just_helper }} check-release-notes {{ quote(version) }}
 
 # Require the MCP server and every package to match the release version.
 check-release-version version:
-    {{ python }} {{ just_helper }} check-release-version {{ quote(version) }}
+    "{{ python }}" {{ just_helper }} check-release-version {{ quote(version) }}
 
 # Build the native OpenPit runtime library from a local Pit checkout.
 dylib-dev pit_checkout="../pit": (dylib-release-dev pit_checkout)
 
 # Build the native OpenPit runtime library from a local Pit checkout in debug mode.
 dylib-debug-dev pit_checkout="../pit":
-    {{ python }} {{ just_helper }} dylib-dev debug {{ quote(pit_checkout) }}
+    "{{ python }}" {{ just_helper }} dylib-dev debug {{ quote(pit_checkout) }}
 
 # Build the native OpenPit runtime library from a local Pit checkout optimized.
 dylib-release-dev pit_checkout="../pit":
-    {{ python }} {{ just_helper }} dylib-dev release {{ quote(pit_checkout) }}
+    "{{ python }}" {{ just_helper }} dylib-dev release {{ quote(pit_checkout) }}
 
 # Build the pit-officer binary against a local Pit checkout.
 build-dev pit_checkout="../pit": (build-release-dev pit_checkout)
@@ -475,15 +459,15 @@ test-release-dev pit_checkout="../pit": (test-all-release-dev pit_checkout)
 
 # Run pit-officer in stdio MCP mode against a local Pit checkout.
 run-mcp-dev pit_checkout="../pit": (build-release-dev pit_checkout)
-    {{ python }} {{ just_helper }} run-officer-dev release {{ quote(pit_checkout) }} mcp
+    "{{ python }}" {{ just_helper }} run-officer-dev release {{ quote(pit_checkout) }} mcp
 
 # Run pit-officer in stdio MCP mode against a debug local Pit checkout.
 run-mcp-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
-    {{ python }} {{ just_helper }} run-officer-dev debug {{ quote(pit_checkout) }} mcp
+    "{{ python }}" {{ just_helper }} run-officer-dev debug {{ quote(pit_checkout) }} mcp
 
 # Run pit-officer in serve mode against a local Pit checkout.
 run-serve-dev pit_checkout="../pit": (build-release-dev pit_checkout)
-    {{ python }} {{ just_helper }} run-officer-dev release {{ quote(pit_checkout) }} serve
+    "{{ python }}" {{ just_helper }} run-officer-dev release {{ quote(pit_checkout) }} serve
 
 # Reset and initialize serve against a local Pit checkout.
 run-serve-reset-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-release-dev pit_checkout)
@@ -491,7 +475,7 @@ run-serve-reset-dev pit_checkout="../pit" init_config="examples/setup/simple.jso
 
 # Run pit-officer in serve mode against a debug local Pit checkout.
 run-serve-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
-    {{ python }} {{ just_helper }} run-officer-dev debug {{ quote(pit_checkout) }} serve
+    "{{ python }}" {{ just_helper }} run-officer-dev debug {{ quote(pit_checkout) }} serve
 
 # Reset and initialize debug serve against a local Pit checkout.
 run-serve-reset-debug-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-debug-dev pit_checkout)
@@ -502,7 +486,7 @@ _go-dev pit_checkout +go_args:
 
 # Run a Go command with a temporary workspace using the local OpenPit binding.
 _go-dev-mode mode pit_checkout +go_args:
-    {{ python }} {{ just_helper }} go-dev {{ mode }} {{ quote(pit_checkout) }} {{ go_args }}
+    "{{ python }}" {{ just_helper }} go-dev {{ mode }} {{ quote(pit_checkout) }} {{ go_args }}
 
 # Run a Go-adjacent tool with a temporary workspace using the local OpenPit binding.
 _go-tool-dev pit_checkout +tool_args:
@@ -510,8 +494,8 @@ _go-tool-dev pit_checkout +tool_args:
 
 # Run a Go-adjacent tool with a temporary workspace using the local OpenPit binding.
 _go-tool-dev-mode mode pit_checkout +tool_args:
-    {{ python }} {{ just_helper }} go-tool-dev {{ mode }} {{ quote(pit_checkout) }} {{ tool_args }}
+    "{{ python }}" {{ just_helper }} go-tool-dev {{ mode }} {{ quote(pit_checkout) }} {{ tool_args }}
 
 # Seed a running Officer instance with demo accounts, balances, orders, and trades.
 seed:
-    {{ python }} {{ justfile_directory() }}/tools/seed/seed.py
+    "{{ python }}" {{ justfile_directory() }}/tools/seed/seed.py

@@ -27,6 +27,7 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
@@ -1213,7 +1214,8 @@ type sendVenueOrderResponseDTO struct {
 }
 
 type venueSendDTO struct {
-	Status     string         `json:"status"`
-	Error      string         `json:"error,omitempty"`
-	VenueOrder *venueOrderDTO `json:"venueOrder,omitempty"`
+	Status     string                        `json:"status"`
+	Error      string                        `json:"error,omitempty"`
+	VenueOrder *venueOrderDTO                `json:"venueOrder,omitempty"`
+	Refusal    *trading.TestExecutionRefusal `json:"refusal,omitempty"`
 }

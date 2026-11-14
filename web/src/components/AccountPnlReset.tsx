@@ -35,6 +35,7 @@ import { ErrorBanner } from "@/components/PageStates";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { DateTimeField } from "@/components/data/FilterOperators";
 import { Input } from "@/components/ui/input";
+import { NumberStepper } from "@/components/ui/number-stepper";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -450,13 +451,12 @@ function ScheduleEditor({
                     <Label htmlFor="pnl-reset-count">
                       {t("pnlReset.count")}
                     </Label>
-                    <Input
+                    <NumberStepper
                       id="pnl-reset-count"
-                      type="number"
-                      min={1}
-                      step={1}
+                      integerOnly
+                      min="1"
                       value={count}
-                      onChange={(event) => setCount(event.target.value)}
+                      onChange={setCount}
                       disabled={fieldsDisabled}
                     />
                   </div>

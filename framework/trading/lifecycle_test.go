@@ -59,7 +59,10 @@ func TestRuntimeStartAfterStop(t *testing.T) {
 func TestRuntimeRestartPicksUpConnection(t *testing.T) {
 	f := newFixture(t)
 	v := newVenue()
-	must(t, f.registry.Register(trading.Provider{Type: "later", Build: v.build}))
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "later", Build: v.build,
+	}))
 	f.start()
 	c := f.addConnection("later", "created after start", true)
 	dest := domain.TradingDestination{Connection: c.ExternalID, Route: "{}"}
@@ -190,7 +193,7 @@ func (s *startupStore) EarliestVenueOrderTime(ctx context.Context, id domain.Ext
 func TestRuntimeRestartUsesBaseContext(t *testing.T) {
 	f := newFixture(t)
 	st := &startupStore{Store: f.st}
-	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink, slog.New(slog.NewJSONHandler(f.logs, nil)))
+	r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink, slog.New(slog.NewJSONHandler(f.logs, nil)))
 	must(t, err)
 	t.Cleanup(r.Stop)
 	type contextKey struct{}
@@ -219,7 +222,7 @@ func TestRuntimeStartReadFailures(t *testing.T) {
 			c := f.addConnection("fake", "disabled", false)
 			must(t, f.st.SetTradingConnectionEnabled(testCtx, c.ExternalID, false))
 			st := &startupStore{Store: f.st, fail: fail}
-			r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink, slog.New(slog.NewJSONHandler(f.logs, nil)))
+			r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink, slog.New(slog.NewJSONHandler(f.logs, nil)))
 			must(t, err)
 			t.Cleanup(r.Stop)
 			if err := r.Start(testCtx); !errors.Is(err, errStartupRead) {
@@ -242,7 +245,7 @@ func TestRuntimeRestartReadFailure(t *testing.T) {
 	f := newFixture(t)
 	f.addConnection("fake", "secondary", false)
 	st := &startupStore{Store: f.st}
-	r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+	r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 		slog.New(slog.NewJSONHandler(f.logs, nil)))
 	must(t, err)
 	t.Cleanup(r.Stop)
@@ -331,7 +334,7 @@ func TestRuntimeSendStoppedDuringDestinationRead(t *testing.T) {
 		defer releaseCaller()
 		caller := &stoppedSendContext{Context: testCtx, release: release}
 		st := &stoppedSendStore{Store: f.st, caller: caller, entered: make(chan struct{})}
-		r, err := trading.NewRuntime(f.registry, st, f.sink, f.adjustmentSink, f.feeSkipSink,
+		r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink,
 			slog.New(slog.NewJSONHandler(f.logs, nil)))
 		must(t, err)
 		t.Cleanup(r.Stop)
@@ -380,11 +383,14 @@ func TestRuntimeConnectionStatuses(t *testing.T) {
 			cause := errors.New("authentication failed")
 			build := v.build
 			if failure == "build" {
-				build = func(domain.TradingConnection) (trading.Connector, error) { return nil, cause }
+				build = func(trading.BuildContext) (trading.Connector, error) { return nil, cause }
 			} else {
 				v.subscribeErr = cause
 			}
-			must(t, f.registry.Register(trading.Provider{Type: "broken", Build: build}))
+			must(t, f.registry.Register(trading.Provider{
+				ExecutionPolicy: false,
+				Type:            "broken", Build: build,
+			}))
 			bad := f.addConnection("broken", "unavailable", true)
 			disabled := f.addConnection("fake", "disabled without links", false)
 			must(t, f.st.SetTradingConnectionEnabled(testCtx, disabled.ExternalID, false))
@@ -442,11 +448,16 @@ func TestRuntimeCallsDuringStart(t *testing.T) {
 	releaseBuild := func() { once.Do(func() { close(release) }) }
 	defer releaseBuild()
 	v := newVenue()
-	must(t, f.registry.Register(trading.Provider{Type: "slow", Build: func(c domain.TradingConnection) (trading.Connector, error) {
-		close(entered)
-		<-release
-		return v.build(c)
-	}}))
+	must(t, f.registry.Register(trading.Provider{
+		ExecutionPolicy: false,
+		Type:            "slow", Build: func(build trading.BuildContext) (trading.Connector, error) {
+			c := build.Connection
+
+			close(entered)
+			<-release
+			return v.build(trading.BuildContext{Connection: c})
+		},
+	}))
 	f.addConnection("slow", "slow construction", false)
 	started := make(chan error, 1)
 	go func() { started <- f.runtime.Start(testCtx) }()

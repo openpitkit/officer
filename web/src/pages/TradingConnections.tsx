@@ -17,7 +17,21 @@
 
 import { useEffect, useId, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
-import { RefreshCw, Settings } from "lucide-react";
+import { Link } from "react-router-dom";
+import {
+  AlertTriangle,
+  ArrowUp,
+  ArrowDown,
+  Check,
+  Clock,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
+  Settings,
+  Split,
+  Trash2,
+  X,
+} from "lucide-react";
 
 import type {
   CredentialStorage,
@@ -29,6 +43,10 @@ import type {
   TradingMode,
   TradingProvider,
   TradingSymbolVerification,
+  TestExecutionMode,
+  TestExecutionPolicyState,
+  TestExecutionRule,
+  TestPriceVariant,
 } from "@/api/types";
 import { useCredentialStorage } from "@/api/useCredentialStorage";
 import type { LoadState } from "@/api/usePolling";
@@ -36,6 +54,10 @@ import { useTrading } from "@/api/useTrading";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ClearableInput } from "@/components/ClearableInput";
 import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
+import { ChoiceCards } from "@/components/ChoiceCards";
+import { Notice } from "@/components/Notice";
+import { AssetCodeField } from "@/components/AssetCodeField";
+import { DeleteConnectionDialog } from "@/components/venues/DeleteConnectionDialog";
 import { Segmented } from "@/components/data";
 import {
   AccessBlockedHint,
@@ -96,6 +118,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { NumberStepper } from "@/components/ui/number-stepper";
 import { Label } from "@/components/ui/label";
 import {
   ApiError,
@@ -207,6 +230,12 @@ const TRADING_PROVIDER_GUIDES: Record<
     steps?: Record<TradingMode, TradingGuideStep[]>;
   }
 > = {
+  test: {
+    steps: {
+      paper: [{ textKey: "create.test.prepare", links: [] }],
+      live: [],
+    },
+  },
   ib: {
     siteUrl: "https://www.interactivebrokers.com",
     docsUrl: { paper: IB_DOCS_URL, live: IB_DOCS_URL },
@@ -396,6 +425,7 @@ const TRADING_PROVIDER_CREDENTIAL_FIELDS = new Map<
   string,
   TradingCredentialField[]
 >([
+  ["test", []],
   ["alpaca", API_KEY_SECRET_FIELDS],
   ["binance", API_KEY_SECRET_FIELDS],
   [
@@ -467,14 +497,13 @@ function IBConnectionFields({
       </div>
       <div className="flex flex-col gap-y-2">
         <Label htmlFor={`${id}-port`}>{t("marketData:settings.port")}</Label>
-        <Input
+        <NumberStepper
           id={`${id}-port`}
-          type="number"
-          inputMode="numeric"
-          min={1}
+          integerOnly
+          min="1"
           max={65535}
           value={draft.port}
-          onChange={(event) => onChange({ port: event.target.value })}
+          onChange={(port) => onChange({ port })}
           disabled={busy}
         />
       </div>
@@ -482,13 +511,12 @@ function IBConnectionFields({
         <Label htmlFor={`${id}-client-id`}>
           {t("marketData:settings.clientId")}
         </Label>
-        <Input
+        <NumberStepper
           id={`${id}-client-id`}
-          type="number"
-          inputMode="numeric"
+          integerOnly
           value={draft.clientId}
           placeholder={t("marketData:settings.autoClientId")}
-          onChange={(event) => onChange({ clientId: event.target.value })}
+          onChange={(clientId) => onChange({ clientId })}
           disabled={busy}
         />
       </div>
@@ -507,11 +535,13 @@ function AddTradingConnectionDialog({
   credentialStorage,
   onClose,
   onCreated,
+  reload,
 }: {
   provider: TradingProvider;
   credentialStorage: LoadState<CredentialStorage>;
   onClose: () => void;
   onCreated: (connectionId: string) => void;
+  reload: () => void;
 }) {
   const { t } = useTranslation("trading");
   const { t: tc } = useTranslation();
@@ -520,6 +550,7 @@ function AddTradingConnectionDialog({
   const id = useId();
   const fields = TRADING_PROVIDER_CREDENTIAL_FIELDS.get(provider.type);
   const [label, setLabel] = useState(provider.title);
+  const [createdWithError, setCreatedWithError] = useState(false);
   const [mode, setMode] = useState<TradingMode>("paper");
   const [credentialDraft, setCredentialDraft] = useState<
     Record<string, string>
@@ -556,7 +587,7 @@ function AddTradingConnectionDialog({
   }, [error]);
 
   const submit = async () => {
-    if (busy || !ready) return;
+    if (busy || createdWithError || !ready) return;
     setBusy(true);
     setError("");
     try {
@@ -581,6 +612,14 @@ function AddTradingConnectionDialog({
       onCreated(connection.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      if (
+        err instanceof ApiError &&
+        (err.code === "trading_access_notification_failed" ||
+          err.code === "trading_access_completion_failed")
+      ) {
+        setCreatedWithError(true);
+        reload();
+      }
     } finally {
       setBusy(false);
     }
@@ -624,20 +663,24 @@ function AddTradingConnectionDialog({
               onChange={(event) => setLabel(event.target.value)}
             />
           </div>
-          <fieldset className="flex flex-col gap-y-2" disabled={busy}>
-            <Label asChild>
-              <legend>{t("create.mode")}</legend>
-            </Label>
-            <Segmented
-              value={mode}
-              onChange={(value) => changeMode(value as TradingMode)}
-              options={[
-                { value: "paper", label: t("mode.paper") },
-                { value: "live", label: t("mode.live") },
-              ]}
-            />
-          </fieldset>
-          <UnsealedKeysWarning storage={credentialStorage} />
+          {provider.executionPolicy !== true && (
+            <fieldset className="flex flex-col gap-y-2" disabled={busy}>
+              <Label asChild>
+                <legend>{t("create.mode")}</legend>
+              </Label>
+              <Segmented
+                value={mode}
+                onChange={(value) => changeMode(value as TradingMode)}
+                options={[
+                  { value: "paper", label: t("mode.paper") },
+                  { value: "live", label: t("mode.live") },
+                ]}
+              />
+            </fieldset>
+          )}
+          {fields?.length !== 0 && (
+            <UnsealedKeysWarning storage={credentialStorage} />
+          )}
           <div className="flex flex-col gap-y-3">
             <h2 className="text-sm font-bold">
               {t("create.prepareAccount", { provider: provider.title })}
@@ -724,7 +767,7 @@ function AddTradingConnectionDialog({
             >
               {tc("actions.cancel")}
             </Button>
-            <Button type="submit" disabled={busy || !ready}>
+            <Button type="submit" disabled={busy || createdWithError || !ready}>
               {tc("actions.create")}
             </Button>
           </DialogFooter>
@@ -822,7 +865,10 @@ function ConnectionSettingsDialog({
         if (!open && !busy) onClose();
       }}
     >
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto"
+        {...(fields?.length === 0 ? { "aria-describedby": undefined } : {})}
+      >
         <form
           className="flex flex-col gap-y-4"
           onSubmit={(event) => {
@@ -832,7 +878,9 @@ function ConnectionSettingsDialog({
         >
           <DialogHeader>
             <DialogTitle>{tc("actions.editSettings")}</DialogTitle>
-            <DialogDescription>{t("settings.description")}</DialogDescription>
+            {fields?.length !== 0 && (
+              <DialogDescription>{t("settings.description")}</DialogDescription>
+            )}
           </DialogHeader>
           {error && <ErrorBanner message={error} />}
           {!isIB && !fields && (
@@ -859,7 +907,9 @@ function ConnectionSettingsDialog({
             />
           ) : (
             <>
-              <UnsealedKeysWarning storage={credentialStorage} />
+              {fields?.length !== 0 && (
+                <UnsealedKeysWarning storage={credentialStorage} />
+              )}
               {fields?.map((field) => (
                 <div key={field.key} className="flex flex-col gap-y-2">
                   <Label htmlFor={`${id}-${field.key}`}>
@@ -907,6 +957,7 @@ function ConnectionSettingsDialog({
 }
 
 function ConnectionCheckSection({
+  executionPolicy,
   checkSection,
   busy,
   checking,
@@ -914,6 +965,7 @@ function ConnectionCheckSection({
   check,
   checkError,
 }: {
+  executionPolicy: TradingConnection["executionPolicy"];
   checkSection: Ref<HTMLElement>;
   busy: boolean;
   checking: boolean;
@@ -940,10 +992,12 @@ function ConnectionCheckSection({
       </Button>
       {check && (
         <p role="status" className="text-xs">
-          {t("check.result", {
-            id: check.venueIdentity,
-            status: check.venueStatus,
-          })}
+          {executionPolicy === true
+            ? t("check.testResult")
+            : t("check.result", {
+                id: check.venueIdentity,
+                status: check.venueStatus,
+              })}
         </p>
       )}
       {checkError && <ErrorBanner message={checkError} />}
@@ -1601,17 +1655,695 @@ function ConnectionInstrumentsSection({
   );
 }
 
+type TestRuleDraft = {
+  key: string;
+  saved: boolean;
+  expanded: boolean;
+  mask: TestExecutionRule["mask"];
+  mode: TestExecutionMode;
+  priceVariant?: TestPriceVariant;
+  fills?: number;
+  waitKind: "finite" | "infinite" | null;
+  seconds: string;
+};
+
+function testRuleDraft(rule: TestExecutionRule, key: string): TestRuleDraft {
+  return {
+    key,
+    saved: true,
+    expanded: false,
+    mask: { ...rule.mask },
+    mode: rule.mode,
+    priceVariant: rule.priceVariant,
+    fills: rule.fills,
+    waitKind: rule.wait === undefined ? null : rule.wait.kind,
+    seconds:
+      rule.wait?.kind === "finite" && rule.wait.seconds !== undefined
+        ? String(rule.wait.seconds)
+        : "",
+  };
+}
+
+function testRuleFromDraft(draft: TestRuleDraft): TestExecutionRule {
+  const rule: TestExecutionRule = { mask: { ...draft.mask }, mode: draft.mode };
+  if (!(draft.mode === "rest" && draft.waitKind === "infinite")) {
+    if (draft.priceVariant !== undefined)
+      rule.priceVariant = draft.priceVariant;
+  }
+  if (draft.mode === "split" && draft.fills !== undefined)
+    rule.fills = draft.fills;
+  if (draft.mode === "rest" && draft.waitKind !== null) {
+    rule.wait =
+      draft.waitKind === "infinite"
+        ? { kind: "infinite" }
+        : {
+            kind: "finite",
+            ...(draft.seconds === "" ? {} : { seconds: Number(draft.seconds) }),
+          };
+  }
+  return rule;
+}
+
+function validExecutionDelay(seconds: string): boolean {
+  return /^[1-9][0-9]*$/.test(seconds) && Number(seconds) <= 9223372036;
+}
+
+function ConnectionTestPolicySection({
+  connectionId,
+}: {
+  connectionId: string;
+}) {
+  const { t } = useTranslation("trading");
+  const { t: tc } = useTranslation();
+  const { fetchTestExecutionPolicy, updateTestExecutionPolicy } =
+    useOfficerApi();
+  const id = useId();
+  const nextRuleKey = useRef(0);
+  const [state, setState] = useState<TestExecutionPolicyState | null>(null);
+  const [rules, setRules] = useState<TestRuleDraft[]>([]);
+  const [error, setError] = useState("");
+  const [errorDetails, setErrorDetails] = useState<ApiError["errors"]>();
+  const [readError, setReadError] = useState("");
+  const [needsRead, setNeedsRead] = useState(false);
+  const [busy, setBusy] = useState(true);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const errorBanner = useRef<HTMLDivElement>(null);
+  const ruleRows = useRef<(HTMLLIElement | null)[]>([]);
+  const [invalidRule, setInvalidRule] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (error !== "") errorBanner.current?.scrollIntoView({ block: "nearest" });
+  }, [error]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchTestExecutionPolicy(connectionId, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setState(loaded);
+        setRules(
+          loaded.rules.map((rule) =>
+            testRuleDraft(rule, String(nextRuleKey.current++)),
+          ),
+        );
+        setError("");
+        setErrorDetails(undefined);
+        setReadError("");
+        setNeedsRead(false);
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          setError(err instanceof Error ? err.message : String(err));
+          setErrorDetails(undefined);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setBusy(false);
+      });
+    return () => controller.abort();
+  }, [connectionId, fetchTestExecutionPolicy, loadAttempt]);
+
+  const editRule = (index: number, patch: Partial<TestRuleDraft>) => {
+    setError("");
+    setErrorDetails(undefined);
+    setRules((current) =>
+      current.map((rule, position) =>
+        position === index
+          ? {
+              ...rule,
+              ...patch,
+              ...(Object.keys(patch).some((key) => key !== "expanded")
+                ? { saved: false, expanded: true }
+                : {}),
+            }
+          : rule,
+      ),
+    );
+  };
+  const moveRule = (index: number, offset: number) => {
+    setError("");
+    setErrorDetails(undefined);
+    setRules((current) => {
+      const reordered = [...current];
+      const target = index + offset;
+      [reordered[index], reordered[target]] = [
+        reordered[target],
+        reordered[index],
+      ];
+      return reordered;
+    });
+  };
+  const applySavedRules = (savedRules: TestExecutionRule[]) => {
+    setRules((current) =>
+      savedRules.map((rule, index) => ({
+        ...testRuleDraft(
+          rule,
+          index < current.length
+            ? current[index].key
+            : String(nextRuleKey.current++),
+        ),
+        ...(index < current.length
+          ? { key: current[index].key, expanded: current[index].expanded }
+          : {}),
+      })),
+    );
+  };
+  const reconcilePolicy = async () => {
+    setBusy(true);
+    setNeedsRead(true);
+    setReadError("");
+    try {
+      const saved = await fetchTestExecutionPolicy(connectionId);
+      if (saved.revision !== state?.revision) {
+        applySavedRules(saved.rules);
+      }
+      setState(saved);
+      setNeedsRead(false);
+    } catch (err) {
+      setReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = async () => {
+    if (busy || needsRead) return;
+    setInvalidRule(null);
+    for (const [index, rule] of rules.entries()) {
+      const field = !rule.mask.baseAsset.trim()
+        ? "baseAsset"
+        : !rule.mask.quoteAsset.trim()
+          ? "quoteAsset"
+          : rule.mode === "split" && rule.fills === undefined
+            ? "fills"
+            : rule.mode === "rest" && rule.waitKind === null
+              ? "wait"
+              : rule.mode === "rest" &&
+                  rule.waitKind === "finite" &&
+                  !validExecutionDelay(rule.seconds)
+                ? "seconds"
+                : !(rule.mode === "rest" && rule.waitKind === "infinite") &&
+                    rule.priceVariant === undefined
+                  ? "priceVariant"
+                  : null;
+      if (field !== null) {
+        editRule(index, { expanded: true });
+        setError(
+          t("testPolicy.completeField", {
+            number: index + 1,
+            field: t(`testPolicy.${field}`),
+          }),
+        );
+        setErrorDetails(undefined);
+        setInvalidRule(index);
+        return;
+      }
+    }
+    setBusy(true);
+    setError("");
+    setErrorDetails(undefined);
+    setReadError("");
+    try {
+      const saved = await updateTestExecutionPolicy(connectionId, {
+        rules: rules.map(testRuleFromDraft),
+      });
+      setState(saved);
+      applySavedRules(saved.rules);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setErrorDetails(err instanceof ApiError ? err.errors : undefined);
+      if (
+        !(err instanceof ApiError) ||
+        err.status === undefined ||
+        err.status < 400 ||
+        err.status === 408 ||
+        err.status >= 500
+      ) {
+        await reconcilePolicy();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section
+      aria-labelledby={`${id}-title`}
+      className="flex flex-col gap-4 border-t border-border pt-4"
+    >
+      <h4 id={`${id}-title`} className="text-sm font-medium">
+        {t("testPolicy.title")}
+      </h4>
+      <p className="text-xs text-muted">
+        {t("testPolicy.matching", { noMatch: "test_policy_no_match" })}{" "}
+        {t("testPolicy.marketDataTitle")}.{" "}
+        {t("testPolicy.marketDataWarning", {
+          code: "test_quote_ambiguous",
+          restart: tc("actions.restartFeeds"),
+        })}{" "}
+        <Link to="/market-data" className="text-accent underline">
+          {tc("nav.marketData")}
+        </Link>
+      </p>
+      {state === null && error !== "" && <ErrorBanner message={error} />}
+      {state === null ? (
+        busy ? (
+          <p className="text-xs text-muted">{tc("states.loading")}</p>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setBusy(true);
+              setError("");
+              setErrorDetails(undefined);
+              setLoadAttempt((attempt) => attempt + 1);
+            }}
+          >
+            {tc("actions.retry")}
+          </Button>
+        )
+      ) : (
+        <>
+          <p className="text-xs text-muted">
+            {t("testPolicy.revision", { revision: state.revision })}
+          </p>
+          {rules.length === 0 && (
+            <Notice
+              tone="warn"
+              icon={AlertTriangle}
+              title={t("testPolicy.emptyTitle")}
+            >
+              {t("testPolicy.emptyDescription")}
+            </Notice>
+          )}
+          <ol
+            className="flex flex-col gap-4"
+            aria-label={t("testPolicy.rules")}
+          >
+            {rules.map((rule, index) => (
+              <li
+                key={rule.key}
+                ref={(element) => {
+                  ruleRows.current[index] = element;
+                }}
+                tabIndex={-1}
+              >
+                <fieldset
+                  disabled={busy || needsRead}
+                  aria-label={t("testPolicy.rule", { number: index + 1 })}
+                  className="flex flex-col gap-4 rounded-card border border-border p-4"
+                >
+                  <legend className="px-1 text-sm font-medium">
+                    {rule.mask.baseAsset}/{rule.mask.quoteAsset} -{" "}
+                    {t(`testPolicy.modes.${rule.mode}`)}
+                  </legend>
+                  <div className="flex gap-2">
+                    {rule.saved && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        aria-expanded={rule.expanded}
+                        aria-controls={`${id}-${rule.key}-body`}
+                        onClick={() =>
+                          editRule(index, { expanded: !rule.expanded })
+                        }
+                      >
+                        {rule.expanded ? <ChevronUp /> : <ChevronDown />}
+                        {tc(
+                          rule.expanded ? "actions.collapse" : "actions.expand",
+                        )}
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy || needsRead || index === 0}
+                      aria-label={t("testPolicy.moveUp", { number: index + 1 })}
+                      onClick={() => moveRule(index, -1)}
+                    >
+                      <ArrowUp />
+                      {t("testPolicy.higherPriority")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy || needsRead || index === rules.length - 1}
+                      aria-label={t("testPolicy.moveDown", {
+                        number: index + 1,
+                      })}
+                      onClick={() => moveRule(index, 1)}
+                    >
+                      <ArrowDown />
+                      {t("testPolicy.lowerPriority")}
+                    </Button>
+                  </div>
+                  <div
+                    id={`${id}-${rule.key}-body`}
+                    hidden={rule.saved && !rule.expanded}
+                    className={
+                      rule.saved && !rule.expanded
+                        ? "hidden"
+                        : "flex flex-col gap-4"
+                    }
+                  >
+                    {errorDetails?.map((detail) => {
+                      const prefix = `/rules/${index}/`;
+                      if (!detail.pointer.startsWith(prefix)) return null;
+                      const fields: Record<string, string> = {
+                        "mask/baseAsset": "baseAsset",
+                        "mask/quoteAsset": "quoteAsset",
+                        mode: "mode",
+                        priceVariant: "priceVariant",
+                        fills: "fills",
+                        wait: "wait",
+                        "wait/kind": "wait",
+                        "wait/seconds": "seconds",
+                      };
+                      const member = detail.pointer.slice(prefix.length);
+                      if (!Object.hasOwn(fields, member)) return null;
+                      const field = fields[member];
+                      return (
+                        <p
+                          key={detail.pointer}
+                          className="text-xs text-[var(--danger)]"
+                        >
+                          {t(`testPolicy.${field}`)}: {error}
+                        </p>
+                      );
+                    })}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <AssetCodeField
+                        id={`${id}-${index}-base`}
+                        label={t("testPolicy.baseAsset")}
+                        disabled={busy}
+                        value={rule.mask.baseAsset}
+                        onChange={(baseAsset) =>
+                          editRule(index, { mask: { ...rule.mask, baseAsset } })
+                        }
+                      />
+                      <AssetCodeField
+                        id={`${id}-${index}-quote`}
+                        label={t("testPolicy.quoteAsset")}
+                        disabled={busy}
+                        value={rule.mask.quoteAsset}
+                        onChange={(quoteAsset) =>
+                          editRule(index, {
+                            mask: { ...rule.mask, quoteAsset },
+                          })
+                        }
+                      />
+                    </div>
+                    <p className="text-xs text-muted">
+                      {t("testPolicy.maskHint")}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() =>
+                        editRule(index, {
+                          mask: { baseAsset: "*", quoteAsset: "*" },
+                        })
+                      }
+                    >
+                      {t("testPolicy.allInstruments")}
+                    </Button>
+                    <div className="flex flex-col gap-2">
+                      <p className="text-xs font-medium">
+                        {t("testPolicy.mode")}
+                      </p>
+                      <ChoiceCards<TestExecutionMode>
+                        label={t("testPolicy.mode")}
+                        value={rule.mode}
+                        disabled={busy}
+                        onChange={(mode) => editRule(index, { mode })}
+                        options={[
+                          {
+                            value: "execute",
+                            title: t("testPolicy.modes.execute"),
+                            description: t("testPolicy.modeDetails.execute"),
+                            icon: Check,
+                          },
+                          {
+                            value: "split",
+                            title: t("testPolicy.modes.split"),
+                            description: t("testPolicy.modeDetails.split"),
+                            icon: Split,
+                          },
+                          {
+                            value: "reject_even",
+                            title: t("testPolicy.modes.reject_even"),
+                            description: t(
+                              "testPolicy.modeDetails.reject_even",
+                            ),
+                            icon: X,
+                          },
+                          {
+                            value: "rest",
+                            title: t("testPolicy.modes.rest"),
+                            description: t("testPolicy.modeDetails.rest"),
+                            icon: Clock,
+                          },
+                        ]}
+                      />
+                    </div>
+                    {rule.mode === "split" && (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-xs font-medium">
+                          {t("testPolicy.fills")}
+                        </p>
+                        <Segmented
+                          ariaLabel={t("testPolicy.fills")}
+                          value={
+                            rule.fills === undefined
+                              ? undefined
+                              : String(rule.fills)
+                          }
+                          disabled={busy}
+                          options={[
+                            { value: "2", label: "2" },
+                            { value: "3", label: "3" },
+                          ]}
+                          onChange={(value) =>
+                            editRule(index, { fills: Number(value) })
+                          }
+                        />
+                      </div>
+                    )}
+                    {rule.mode === "rest" && (
+                      <>
+                        <div className="flex flex-col gap-2">
+                          <p className="text-xs font-medium">
+                            {t("testPolicy.wait")}
+                          </p>
+                          <ChoiceCards<"finite" | "infinite">
+                            label={t("testPolicy.wait")}
+                            value={rule.waitKind}
+                            disabled={busy}
+                            onChange={(waitKind) =>
+                              editRule(index, { waitKind })
+                            }
+                            options={[
+                              {
+                                value: "finite",
+                                title: t("testPolicy.afterSeconds"),
+                                description: t("testPolicy.finiteDescription"),
+                                icon: Clock,
+                              },
+                              {
+                                value: "infinite",
+                                title: t("testPolicy.withoutExecution"),
+                                description: t(
+                                  "testPolicy.infiniteDescription",
+                                ),
+                                icon: X,
+                              },
+                            ]}
+                          />
+                        </div>
+                        {rule.waitKind === "finite" && (
+                          <div className="flex flex-col gap-y-2">
+                            <Label htmlFor={`${id}-${index}-seconds`}>
+                              {t("testPolicy.seconds")}
+                            </Label>
+                            <NumberStepper
+                              id={`${id}-${index}-seconds`}
+                              integerOnly
+                              min="1"
+                              disabled={busy}
+                              value={rule.seconds}
+                              onChange={(seconds) =>
+                                editRule(index, { seconds })
+                              }
+                              onClear={() => editRule(index, { seconds: "" })}
+                              clearLabel={t("common:filters.clearField")}
+                              customValidity={
+                                rule.seconds === "" ||
+                                validExecutionDelay(rule.seconds)
+                                  ? ""
+                                  : t("testPolicy.completeField", {
+                                      number: index + 1,
+                                      field: t("testPolicy.seconds"),
+                                    })
+                              }
+                            />
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {!(
+                      rule.mode === "rest" && rule.waitKind === "infinite"
+                    ) && (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-xs font-medium">
+                          {t("testPolicy.priceVariant")}
+                        </p>
+                        <Segmented
+                          ariaLabel={t("testPolicy.priceVariant")}
+                          value={rule.priceVariant}
+                          disabled={busy}
+                          options={(["normal", "best", "worst"] as const).map(
+                            (value) => ({
+                              value,
+                              label: t(`testPolicy.prices.${value}`),
+                            }),
+                          )}
+                          onChange={(value) =>
+                            editRule(index, {
+                              priceVariant: value as TestPriceVariant,
+                            })
+                          }
+                        />
+                        <p className="text-xs text-muted">
+                          {t("testPolicy.priceExplanation")}
+                        </p>
+                      </div>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      aria-label={t("testPolicy.removeRule", {
+                        number: index + 1,
+                      })}
+                      onClick={() => {
+                        setError("");
+                        setErrorDetails(undefined);
+                        setRules((current) =>
+                          current.filter((_, position) => position !== index),
+                        );
+                      }}
+                    >
+                      {tc("actions.delete")}
+                    </Button>
+                  </div>
+                </fieldset>
+              </li>
+            ))}
+          </ol>
+          {error !== "" && (
+            <div ref={errorBanner}>
+              <ErrorBanner message={error} />
+              {invalidRule !== null && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const row = ruleRows.current[invalidRule];
+                    row?.scrollIntoView({ block: "center" });
+                    row?.focus({ preventScroll: true });
+                  }}
+                >
+                  {t("testPolicy.goToRule", { number: invalidRule + 1 })}
+                </Button>
+              )}
+              {errorDetails?.map((detail) => (
+                <p
+                  key={detail.pointer}
+                  className="mt-1 text-xs text-[var(--danger)]"
+                >
+                  {detail.pointer}
+                  {detail.constraint === undefined
+                    ? ""
+                    : ` (${detail.constraint})`}
+                </p>
+              ))}
+              {readError !== "" && <ErrorBanner message={readError} />}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {needsRead && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => void reconcilePolicy()}
+              >
+                {tc("actions.retry")}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy || needsRead}
+              onClick={() => {
+                setError("");
+                setErrorDetails(undefined);
+                setRules((current) => [
+                  ...current,
+                  {
+                    key: String(nextRuleKey.current++),
+                    saved: false,
+                    expanded: true,
+                    mask: { baseAsset: "", quoteAsset: "" },
+                    mode: "execute",
+                    waitKind: null,
+                    seconds: "",
+                  },
+                ]);
+              }}
+            >
+              {t("testPolicy.addRule")}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy || needsRead}
+              onClick={() => void save()}
+            >
+              {tc("actions.save")}
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function ConnectionCard({
   connection,
   provider,
   credentialStorage,
   focusOnMount,
+  expanded,
+  onToggle,
   reload,
 }: {
   connection: TradingConnection;
   provider: TradingProvider;
   credentialStorage: LoadState<CredentialStorage>;
   focusOnMount: boolean;
+  expanded: boolean;
+  onToggle: () => void;
   reload: () => void;
 }) {
   const { t } = useTranslation("trading");
@@ -1626,6 +2358,8 @@ function ConnectionCard({
   const [confirmingNonRelease, setConfirmingNonRelease] = useState(false);
   const [checkError, setCheckError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [check, setCheck] = useState<TradingConnectionCheck | null>(null);
   const [subjectKind, setSubjectKind] = useState<AccessSubjectKind>("account");
   const [subjectInput, setSubjectInput] = useState("");
@@ -1791,12 +2525,16 @@ function ConnectionCard({
       done: check !== null,
       target: checkSection,
     },
-    {
-      key: "instruments",
-      label: t("instruments.title"),
-      done: connection.instruments.length > 0,
-      target: instrumentSection,
-    },
+    ...(connection.executionPolicy === true
+      ? []
+      : [
+          {
+            key: "instruments",
+            label: t("instruments.title"),
+            done: connection.instruments.length > 0,
+            target: instrumentSection,
+          },
+        ]),
     // Hidden accounts take no access step: the server grants the default
     // account itself, and only a venue account still has to be named. The
     // list then holds only the default account's own grants and its group's.
@@ -1883,6 +2621,7 @@ function ConnectionCard({
         providerType={connection.provider}
         title={connection.label}
         titleId={`${id}-title`}
+        disclosure={{ expanded, controls: `${id}-body`, onToggle }}
         badges={
           <>
             <Badge variant="neutral">{provider.title}</Badge>
@@ -1911,17 +2650,6 @@ function ConnectionCard({
         actions={
           <>
             <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              disabled={busy}
-              aria-label={tc("actions.editSettings")}
-              title={tc("actions.editSettings")}
-              onClick={() => setSettingsOpen(true)}
-            >
-              <Settings />
-            </Button>
-            <Button
               ref={enableButton}
               variant="outline"
               size="sm"
@@ -1949,10 +2677,38 @@ function ConnectionCard({
             >
               {tv(connection.enabled ? "actions.disable" : "actions.enable")}
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={tc("actions.editSettings")}
+              title={tc("actions.editSettings")}
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={t("actions.deleteConnection")}
+              onClick={() => {
+                setDeleteError("");
+                setDeleting(true);
+              }}
+            >
+              <Trash2 />
+            </Button>
           </>
         }
       />
-      <CardContent className="flex flex-col gap-y-6">
+      <CardContent
+        id={`${id}-body`}
+        hidden={!expanded}
+        className={expanded ? "flex flex-col gap-y-6" : "hidden"}
+      >
         <div className="flex flex-col gap-y-1 text-xs">
           <dl className="flex flex-wrap gap-2">
             <dt className="text-muted">{tv("venueAccount")}</dt>
@@ -2036,7 +2792,14 @@ function ConnectionCard({
         {feeLookup?.code === feeAccountCode && "error" in feeLookup && (
           <ErrorBanner message={feeLookup.error} />
         )}
+        {connection.executionPolicy === true && (
+          <ConnectionTestPolicySection
+            key={connection.id}
+            connectionId={connection.id}
+          />
+        )}
         <ConnectionCheckSection
+          executionPolicy={connection.executionPolicy}
           checkSection={checkSection}
           busy={busy}
           checking={checking}
@@ -2044,19 +2807,21 @@ function ConnectionCard({
           check={check}
           checkError={checkError}
         />
-        <ConnectionInstrumentsSection
-          connection={connection}
-          provider={provider}
-          id={id}
-          instrumentSection={instrumentSection}
-          busy={busy}
-          run={run}
-          callVenue={callVenue}
-          error={error}
-          setError={setError}
-          deleteSymbol={deleteSymbol}
-          setDeleteSymbol={setDeleteSymbol}
-        />
+        {connection.executionPolicy !== true && (
+          <ConnectionInstrumentsSection
+            connection={connection}
+            provider={provider}
+            id={id}
+            instrumentSection={instrumentSection}
+            busy={busy}
+            run={run}
+            callVenue={callVenue}
+            error={error}
+            setError={setError}
+            deleteSymbol={deleteSymbol}
+            setDeleteSymbol={setDeleteSymbol}
+          />
+        )}
         {showsAccounts ? (
           <ConnectionAccessSection
             accessSection={accessSection}
@@ -2131,6 +2896,30 @@ function ConnectionCard({
           reload={reload}
         />
       )}
+      <DeleteConnectionDialog
+        open={deleting}
+        title={t("deleteConnection.title")}
+        description={t("deleteConnection.description", {
+          label: connection.label,
+        })}
+        busy={busy}
+        error={deleteError}
+        onOpenChange={setDeleting}
+        onSubmit={() => {
+          setBusy(true);
+          setDeleteError("");
+          void api
+            .deleteTradingConnection(connection.id)
+            .then(() => {
+              setDeleting(false);
+              reload();
+            })
+            .catch((err: unknown) =>
+              setDeleteError(err instanceof Error ? err.message : String(err)),
+            )
+            .finally(() => setBusy(false));
+        }}
+      />
       <AlertDialog
         open={confirmingNonRelease}
         onOpenChange={setConfirmingNonRelease}
@@ -2191,6 +2980,9 @@ export function TradingConnections() {
   const [focusConnectionId, setFocusConnectionId] = useState<string | null>(
     null,
   );
+  const [expandedConnectionId, setExpandedConnectionId] = useState<
+    string | null
+  >(null);
   const snapshot = load.state === "ready" ? load.data : null;
   return (
     <Page
@@ -2226,12 +3018,17 @@ export function TradingConnections() {
             );
             if (!provider)
               return (
-                <ErrorBanner
-                  key={connection.id}
-                  message={t("missingProvider", {
-                    provider: connection.provider,
-                  })}
-                />
+                <div key={connection.id} className="flex flex-col gap-2">
+                  <p className="text-xs font-medium">
+                    {t("missingProvider", { provider: connection.provider })}
+                  </p>
+                  <ErrorBanner
+                    message={
+                      connection.error ||
+                      t("missingProvider", { provider: connection.provider })
+                    }
+                  />
+                </div>
               );
             return (
               <ConnectionCard
@@ -2240,6 +3037,12 @@ export function TradingConnections() {
                 provider={provider}
                 credentialStorage={credentialStorage}
                 focusOnMount={connection.id === focusConnectionId}
+                expanded={connection.id === expandedConnectionId}
+                onToggle={() =>
+                  setExpandedConnectionId((current) =>
+                    current === connection.id ? null : connection.id,
+                  )
+                }
                 reload={reload}
               />
             );
@@ -2269,14 +3072,16 @@ export function TradingConnections() {
           }}
         />
       )}
-      {snapshot && selectedProvider && (
+      {selectedProvider && (
         <AddTradingConnectionDialog
           key={selectedProvider.type}
           provider={selectedProvider}
           credentialStorage={credentialStorage}
+          reload={reload}
           onClose={() => setSelectedProvider(null)}
           onCreated={(connectionId) => {
             setFocusConnectionId(connectionId);
+            setExpandedConnectionId(connectionId);
             reload();
           }}
         />

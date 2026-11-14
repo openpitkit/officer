@@ -355,7 +355,7 @@ const pageRegistrations: Record<OfficerDefaultPageId, () => void> = {
       labelKey: "sensitiveData.title",
       icon: ShieldAlert,
       section: "footer",
-      order: 55,
+      order: 1,
       render: () => createElement(SensitiveDataNavEntry),
     });
     registerNav({
@@ -364,7 +364,7 @@ const pageRegistrations: Record<OfficerDefaultPageId, () => void> = {
       labelKey: "brand.nonRelease",
       icon: Skull,
       section: "footer",
-      order: 60,
+      order: 2,
       render: () => createElement(NonReleaseNavEntry),
     });
     registerNav({

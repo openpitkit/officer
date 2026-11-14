@@ -26,7 +26,15 @@ import { SidebarContext } from "@/components/sidebar-context";
 
 function renderFrame(ui: ReactNode, toggle = vi.fn()) {
   render(
-    <SidebarContext.Provider value={{ open: false, toggle, close: vi.fn() }}>
+    <SidebarContext.Provider
+      value={{
+        open: false,
+        toggle,
+        close: vi.fn(),
+        collapsed: false,
+        toggleCollapsed: vi.fn(),
+      }}
+    >
       {ui}
     </SidebarContext.Provider>,
   );
@@ -41,6 +49,8 @@ describe("PageFrame", () => {
           open: false,
           toggle: vi.fn(),
           close: vi.fn(),
+          collapsed: false,
+          toggleCollapsed: vi.fn(),
           indicator: <span>3 unread alerts</span>,
         }}
       >
