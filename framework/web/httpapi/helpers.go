@@ -1042,6 +1042,9 @@ func describeCurrencyChangeBlockedErr(public PublicError, err error) any {
 		"code":    public.Code,
 		"message": public.Message,
 	}
+	if len(typed.Reasons) > 0 {
+		errorBody["reasons"] = typed.Reasons
+	}
 	switch typed.Scope {
 	case domain.ScopeAccount:
 		errorBody["field"] = "currency"

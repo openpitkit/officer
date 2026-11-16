@@ -176,14 +176,7 @@ func (r *realmStore) ListAccountsBlockingCurrencyChange(
 		strings.Repeat("?,", len(activeStatusIDs)),
 		",",
 	)
-	args := make([]any, 0, 3+len(activeStatusIDs)+len(accounts))
-	args = append(
-		args,
-		domain.ScopeAccount,
-		domain.ScopeAccountGroup,
-		domain.ScopeGlobal,
-	)
-	args = append(args, activeStatusIDs...)
+	args := make([]any, 0, len(accounts)+len(activeStatusIDs)+3)
 	accountWhere := ""
 	if len(accounts) > 0 {
 		placeholders := make([]string, 0, len(accounts))
@@ -191,53 +184,67 @@ func (r *realmStore) ListAccountsBlockingCurrencyChange(
 			placeholders = append(placeholders, "?")
 			args = append(args, account.String())
 		}
-		accountWhere = " WHERE a.code IN (" + strings.Join(placeholders, ", ") + ")"
+		accountWhere = " WHERE code IN (" + strings.Join(placeholders, ", ") + ")"
 	}
-	query := `WITH blockers AS (
-SELECT a.code,
-    EXISTS (
-        SELECT 1
-        FROM limit_spot_funds_pnl_bound l
-        WHERE (l.lower_bound <> '' OR l.upper_bound <> '')
-          AND (
-              (l.scope = ? AND l.account_id = a.id) OR
-              (l.scope = ? AND l.account_group_id = a.group_id) OR
-              l.scope = ?
-          )
-    ) AS currency_valued_limit,
-    (
-        EXISTS (
-            SELECT 1
-            FROM balance b
-            WHERE b.account_id = a.id
-              AND (
-                  (b.available <> '' AND b.available COLLATE DECIMAL <> '0') OR
-                  (b.held <> '' AND b.held COLLATE DECIMAL <> '0') OR
-                  (b.incoming <> '' AND b.incoming COLLATE DECIMAL <> '0') OR
-                  (b.average_entry_price <> '' AND
-                   b.average_entry_price COLLATE DECIMAL <> '0') OR
-                  b.realized_pnl_halt_reason <> '' OR
-                  (b.realized_pnl IS NOT NULL AND b.realized_pnl <> '' AND
-                   b.realized_pnl COLLATE DECIMAL <> '0')
-              )
-        ) OR
-        a.pnl_halt_reason <> '' OR
-        (a.pnl IS NOT NULL AND a.pnl <> '' AND
-         a.pnl COLLATE DECIMAL <> '0') OR
-        EXISTS (
-            SELECT 1
-            FROM order_record o
-            WHERE o.account_id = a.id
-              AND o.status_id IN (` + activeStatusPlaceholders + `)
-        )
-    ) AS other_blocker
-FROM account a
-` + accountWhere + `
+	args = append(args, activeStatusIDs...)
+	args = append(args, domain.ScopeAccount, domain.ScopeAccountGroup, domain.ScopeGlobal)
+	query := `WITH candidates AS (
+    SELECT * FROM account` + accountWhere + `
+), balance_fields(kind) AS (
+    VALUES ('available'), ('held'), ('incoming'), ('average_entry_price'),
+           ('realized_pnl'), ('balance_pnl_halt')
+), balance_values AS (
+    SELECT a.code AS account, f.kind, ast.code AS asset,
+           CASE f.kind
+               WHEN 'available' THEN b.available
+               WHEN 'held' THEN b.held
+               WHEN 'incoming' THEN b.incoming
+               WHEN 'average_entry_price' THEN b.average_entry_price
+               WHEN 'realized_pnl' THEN b.realized_pnl
+               WHEN 'balance_pnl_halt' THEN b.realized_pnl_halt_reason
+           END AS value
+    FROM candidates a
+    JOIN balance b ON b.account_id = a.id
+    JOIN asset ast ON ast.id = b.asset_id
+    CROSS JOIN balance_fields f
+), reasons AS (
+    SELECT account, kind, asset, value, '' AS order_id, '' AS status,
+           '' AS scope, '' AS group_code, '' AS axis, '' AS currency,
+           '' AS lower_bound, '' AS upper_bound
+    FROM balance_values
+    WHERE value IS NOT NULL AND value <> '' AND (
+        kind = 'balance_pnl_halt' OR value COLLATE DECIMAL <> '0'
+    )
+    UNION ALL
+    SELECT code, 'account_pnl', '', pnl, '', '', '', '', '', '', '', ''
+    FROM candidates
+    WHERE pnl IS NOT NULL AND pnl <> '' AND pnl COLLATE DECIMAL <> '0'
+    UNION ALL
+    SELECT code, 'account_pnl_halt', '', pnl_halt_reason,
+           '', '', '', '', '', '', '', ''
+    FROM candidates WHERE pnl_halt_reason <> ''
+    UNION ALL
+    SELECT a.code, 'active_order', '', '', o.external_id, s.code,
+           '', '', '', '', '', ''
+    FROM candidates a
+    JOIN order_record o ON o.account_id = a.id
+    JOIN order_status s ON s.id = o.status_id
+    WHERE o.status_id IN (` + activeStatusPlaceholders + `)
+    UNION ALL
+    SELECT a.code, 'pnl_limit', '', '', '', '', l.scope,
+           COALESCE(g.code, ''), l.axis, c.code,
+           COALESCE(l.lower_bound, ''), COALESCE(l.upper_bound, '')
+    FROM candidates a
+    JOIN limit_spot_funds_pnl_bound l ON (
+        (l.scope = ? AND l.account_id = a.id) OR
+        (l.scope = ? AND l.account_group_id = a.group_id) OR l.scope = ?
+    )
+    JOIN asset c ON c.id = l.currency_asset_id
+    LEFT JOIN account_group g ON g.id = l.account_group_id
+    WHERE l.lower_bound <> '' OR l.upper_bound <> ''
 )
-SELECT code, currency_valued_limit, other_blocker
-FROM blockers
-WHERE currency_valued_limit OR other_blocker
-ORDER BY code`
+SELECT * FROM reasons
+ORDER BY account, kind, asset, order_id, scope, group_code, axis`
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list currency change blockers: %w", err)
@@ -245,15 +252,24 @@ ORDER BY code`
 	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	result := make([]fwstore.CurrencyChangeBlocker, 0)
 	for rows.Next() {
-		var blocker fwstore.CurrencyChangeBlocker
+		var reason domain.CurrencyChangeReason
 		if err := rows.Scan(
-			&blocker.Account,
-			&blocker.CurrencyValuedLimit,
-			&blocker.Other,
+			&reason.Account, &reason.Kind, &reason.Asset, &reason.Value,
+			&reason.Order, &reason.Status, &reason.Scope, &reason.Group,
+			&reason.Axis, &reason.Currency, &reason.LowerBound, &reason.UpperBound,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan currency change blocker: %w", err)
 		}
-		result = append(result, blocker)
+		if len(result) == 0 || result[len(result)-1].Account != reason.Account {
+			result = append(result, fwstore.CurrencyChangeBlocker{Account: reason.Account})
+		}
+		blocker := &result[len(result)-1]
+		blocker.Reasons = append(blocker.Reasons, reason)
+		if reason.Kind == "pnl_limit" {
+			blocker.CurrencyValuedLimit = true
+		} else {
+			blocker.Other = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: iterate currency change blockers: %w", err)

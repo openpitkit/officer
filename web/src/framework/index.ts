@@ -21,6 +21,7 @@ export {
   type ApiClient,
   type ApiClientConfig,
   type ApiErrorCode,
+  type ApiCurrencyChangeReason,
   type ApiProblemError,
   type RequestOptions,
 } from "./api/createApiClient";

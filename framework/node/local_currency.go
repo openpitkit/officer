@@ -643,6 +643,11 @@ func (n *localNode) guardEffectiveCurrencyChange(
 type currencyChangeCandidatesBlockedError struct {
 	offenders           []domain.AccountID
 	currencyValuedLimit bool
+	reasons             []domain.CurrencyChangeReason
+}
+
+func (e currencyChangeCandidatesBlockedError) CurrencyChangeReasons() []domain.CurrencyChangeReason {
+	return e.reasons
 }
 
 func (e currencyChangeCandidatesBlockedError) Error() string {
@@ -679,15 +684,18 @@ func (n *localNode) guardCurrencyCandidates(
 		return nil
 	}
 	blockedAccounts := make([]domain.AccountID, 0, len(offenders))
+	var reasons []domain.CurrencyChangeReason
 	currencyValuedLimit := true
 	for _, offender := range offenders {
 		blockedAccounts = append(blockedAccounts, offender.Account)
+		reasons = append(reasons, offender.Reasons...)
 		if !offender.CurrencyValuedLimit || offender.Other {
 			currencyValuedLimit = false
 		}
 	}
 	return currencyChangeCandidatesBlockedError{
 		offenders: blockedAccounts, currencyValuedLimit: currencyValuedLimit,
+		reasons: reasons,
 	}
 }
 

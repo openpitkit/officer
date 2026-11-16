@@ -925,6 +925,33 @@ func TestPathAccountIDDoesNotDecodeChiParamTwice(t *testing.T) {
 // TestWriteErrAccountMissing covers the account_missing envelope: a 404 with its
 // own code and the offending account code as a structured field, so a client
 // matches on structure instead of parsing the message.
+func TestWriteErrCurrencyChangeIncludesExactReasons(t *testing.T) {
+	reasons := []domain.CurrencyChangeReason{
+		{Account: "acc-1", Kind: "held", Asset: "USD", Value: "10.000000000000000001"},
+		{Account: "acc-2", Kind: "active_order", Order: "order-1", Status: "submitted"},
+	}
+	err := domain.CurrencyChangeBlockedError{
+		Scope: domain.ScopeAccountGroup, TargetID: "desk", Cause: domain.ErrConflict,
+		Reasons: reasons,
+	}
+	rec := httptest.NewRecorder()
+	WriteErr(rec, fmt.Errorf("set group currency: %w", err))
+	var body struct {
+		Error struct {
+			Code    string                        `json:"code"`
+			Group   string                        `json:"group"`
+			Reasons []domain.CurrencyChangeReason `json:"reasons"`
+		} `json:"error"`
+	}
+	if decodeErr := json.NewDecoder(rec.Body).Decode(&body); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if rec.Code != http.StatusConflict || body.Error.Code != "currency_change_blocked" ||
+		body.Error.Group != "desk" || !reflect.DeepEqual(body.Error.Reasons, reasons) {
+		t.Fatalf("response = %+v (HTTP %d)", body, rec.Code)
+	}
+}
+
 func TestWriteErrAccountMissing(t *testing.T) {
 	rec := httptest.NewRecorder()
 

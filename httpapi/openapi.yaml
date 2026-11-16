@@ -7088,6 +7088,13 @@ components:
               enum: [currency_change_blocked]
             message:
               type: string
+            reasons:
+              type: array
+              description: >
+                All blocking facts observed by the guard in the same read that
+                refused the change. Decimal values are exact stored strings.
+              items:
+                $ref: "#/components/schemas/CurrencyChangeReason"
             account:
               type: string
               description: Account code for an account-scoped currency change.
@@ -7109,6 +7116,50 @@ components:
               type: string
               enum:
                 [economically_empty, all_members_economically_empty, currency_valued_limit]
+
+    CurrencyChangeReason:
+      type: object
+      required: [account, kind]
+      properties:
+        account:
+          type: string
+          description: Account whose state blocks the change, including group members.
+        kind:
+          type: string
+          enum:
+            [available, held, incoming, average_entry_price, realized_pnl,
+             balance_pnl_halt, account_pnl, account_pnl_halt, active_order, pnl_limit]
+        asset:
+          type: string
+          description: Asset code for a balance or position fact.
+        value:
+          type: string
+          description: Exact non-zero decimal, or the engine halt reason code.
+        order:
+          type: string
+          description: External ID of an active order.
+        status:
+          type: string
+          description: Active order status code.
+        scope:
+          type: string
+          enum: [account, account_group, global]
+          description: P&L limit scope.
+        group:
+          type: string
+          description: Code of the group that owns a group-scoped P&L limit.
+        axis:
+          type: string
+          enum: [realized, unrealized, total]
+        currency:
+          type: string
+          description: P&L limit currency.
+        lowerBound:
+          type: string
+          description: Exact lower limit bound; absent when unset.
+        upperBound:
+          type: string
+          description: Exact upper limit bound; absent when unset.
 
     DependentCount:
       type: object

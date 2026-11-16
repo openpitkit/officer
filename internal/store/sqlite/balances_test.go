@@ -51,6 +51,74 @@ func seedBalanceFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 	return ctx, rs
 }
 
+func TestCurrencyChangeReasonsPreserveEveryBlockingFact(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL", Available: "1.000000000000000001",
+		Held: "2", Incoming: "3", AverageEntryPrice: "150.25",
+		RealizedPnl: "-4.5", RealizedPnlHaltReason: domain.PnlHaltReason("missing_fx"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.SetAccountPnl(ctx, "acc-1", "-4.5", domain.PnlHaltReason("missing_account_currency")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal,
+		Currency: "USD", LowerBound: "-100.000000000000000001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := rs.ListAccountsBlockingCurrencyChange(ctx, []domain.AccountID{"acc-1"})
+	if err != nil || len(got) != 1 || !got[0].Other || !got[0].CurrencyValuedLimit {
+		t.Fatalf("blockers = %+v, err = %v", got, err)
+	}
+	want := map[string]string{
+		"available": "1.000000000000000001", "held": "2", "incoming": "3",
+		"average_entry_price": "150.25",
+		"balance_pnl_halt":    "missing_fx",
+		"account_pnl_halt":    "missing_account_currency", "pnl_limit": "",
+	}
+	if len(got[0].Reasons) != len(want) {
+		t.Fatalf("reasons = %+v", got[0].Reasons)
+	}
+	for _, reason := range got[0].Reasons {
+		value, ok := want[reason.Kind]
+		if !ok || reason.Account != "acc-1" || reason.Value != value {
+			t.Fatalf("unexpected reason = %+v", reason)
+		}
+		delete(want, reason.Kind)
+		if reason.Kind == "pnl_limit" {
+			if reason.Scope != domain.ScopeGlobal || reason.Axis != "realized" ||
+				reason.Currency != "USD" || reason.LowerBound != "-100.000000000000000001" || reason.UpperBound != "" {
+				t.Fatalf("limit reason = %+v", reason)
+			}
+		} else if reason.Kind != "account_pnl" && reason.Kind != "account_pnl_halt" && reason.Asset != "AAPL" {
+			t.Fatalf("asset reason = %+v", reason)
+		}
+	}
+
+	// A halted P&L is stored as unknown, so test healthy values separately.
+	if err := rs.SetAccountPnl(ctx, "acc-1", "-4.500000000000000001", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL", RealizedPnl: "-4.500000000000000001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = rs.ListAccountsBlockingCurrencyChange(ctx, []domain.AccountID{"acc-1"})
+	if err != nil || len(got) != 1 || len(got[0].Reasons) != 3 {
+		t.Fatalf("healthy P&L blockers = %+v, err = %v", got, err)
+	}
+	for _, kind := range []string{"account_pnl", "realized_pnl"} {
+		index := slices.IndexFunc(got[0].Reasons, func(reason domain.CurrencyChangeReason) bool { return reason.Kind == kind })
+		if index < 0 || got[0].Reasons[index].Value != "-4.500000000000000001" {
+			t.Fatalf("healthy %s reasons = %+v", kind, got[0].Reasons)
+		}
+	}
+}
+
 func TestBalanceUpsertGetDeleteRoundTrip(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
 
@@ -402,6 +470,15 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 			!got[0].Other || got[0].CurrencyValuedLimit {
 			t.Fatalf("active order blockers = %v, err=%v", got, err)
 		}
+		if len(got[0].Reasons) != len(domain.OrderStatusesEligibleForFill()) {
+			t.Fatalf("active order reasons = %+v", got[0].Reasons)
+		}
+		for _, reason := range got[0].Reasons {
+			if reason.Kind != "active_order" || reason.Order == "" ||
+				!slices.Contains(domain.OrderStatusesEligibleForFill(), domain.OrderStatus(reason.Status)) {
+				t.Fatalf("active order reason = %+v", reason)
+			}
+		}
 
 		for _, status := range []domain.OrderStatus{
 			domain.OrderStatusFilled,
@@ -476,6 +553,11 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 			if err != nil || len(got) != 1 || got[0].Account != "acc-1" ||
 				!got[0].CurrencyValuedLimit || got[0].Other {
 				t.Fatalf("PnL bound blockers = %v, err=%v", got, err)
+			}
+			if len(got[0].Reasons) != 1 || got[0].Reasons[0].Scope != tc.limit.Scope ||
+				got[0].Reasons[0].Group != tc.limit.AccountGroup ||
+				got[0].Reasons[0].Currency != tc.limit.Currency {
+				t.Fatalf("limit reasons = %+v", got[0].Reasons)
 			}
 		})
 	}

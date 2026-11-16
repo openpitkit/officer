@@ -32,6 +32,32 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+func TestLocalNode_FirstCurrencyAssignmentReportsBlockingBalance(t *testing.T) {
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertBalance(ctx, domain.Balance{Account: id, Asset: "USD", Available: "1000.000000001"}); err != nil {
+		t.Fatal(err)
+	}
+	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
+	var blocked domain.CurrencyChangeBlockedError
+	if !errors.As(err, &blocked) || !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("currency error = %v", err)
+	}
+	if len(blocked.Reasons) != 1 || blocked.Reasons[0].Account != id ||
+		blocked.Reasons[0].Kind != "available" || blocked.Reasons[0].Asset != "USD" ||
+		blocked.Reasons[0].Value != "1000.000000001" {
+		t.Fatalf("reasons = %+v", blocked.Reasons)
+	}
+	account, _, err := n.GetAccountState(ctx, id)
+	if err != nil || account.EffectiveCurrency != "" {
+		t.Fatalf("account = %+v, err = %v", account, err)
+	}
+}
+
 func TestLocalNode_SetAccountCurrencyAuditsAndGuardsOpenBalances(t *testing.T) {
 	t.Parallel()
 	n, st := newTestNode(t, newFakeEngine())

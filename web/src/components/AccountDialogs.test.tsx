@@ -26,7 +26,7 @@ import {
   BlockAccountDialog,
   UnblockAccountConfirm,
 } from "@/components/AccountDialogs";
-import { ApiError } from "@/framework";
+import { ApiError, createApiClient, createOfficerApi } from "@/framework";
 import i18n from "@/i18n";
 import { accountRow, renderWithApi } from "@/test/apiClient";
 
@@ -174,6 +174,62 @@ describe("UnblockAccountConfirm", () => {
 });
 
 describe("AccountCurrencyDialog", () => {
+  it("shows every server blocker from the API client and keeps the dialog open", async () => {
+    const user = userEvent.setup();
+    const onDone = vi.fn();
+    const client = createOfficerApi(
+      createApiClient({
+        baseUrl: "/api/v1",
+        fetch: vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "currency_change_blocked",
+                message: "raw server diagnostic",
+                reasons: [
+                  {
+                    account: "desk-alpha",
+                    kind: "available",
+                    asset: "USD",
+                    value: "1000.000000000000000001",
+                  },
+                  {
+                    account: "desk-alpha",
+                    kind: "active_order",
+                    order: "order-1",
+                    status: "submitted",
+                  },
+                ],
+              },
+            }),
+            { status: 409 },
+          ),
+        ),
+      }),
+    );
+    setAccountCurrencyMock.mockImplementation(client.setAccountCurrency);
+    renderDialog(
+      <AccountCurrencyDialog
+        account={deskAccount({ currency: "", effectiveCurrency: "" })}
+        open
+        onOpenChange={vi.fn()}
+        onDone={onDone}
+      />,
+    );
+
+    await enterCurrencyAndSave(user, "EUR");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "available USD balance = 1000.000000000000000001",
+    );
+    expect(alert).toHaveTextContent("active order order-1, status submitted");
+    expect(alert).not.toHaveTextContent("raw server diagnostic");
+    expect(alert.querySelector("span")).toHaveClass("whitespace-pre-line");
+    expect(onDone).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
   it("shows the effective currency with the tier it comes from", () => {
     renderDialog(
       <AccountCurrencyDialog

@@ -16,6 +16,7 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInstance } from "i18next";
 
 import { normalizeSigningKeysStatus } from "@/api/client";
 import type {
@@ -34,6 +35,161 @@ import {
 } from "@/framework";
 import { appLocaleResources } from "@/i18n";
 import { errorResponse, jsonResponse } from "@/test/apiClient";
+
+describe("currency change diagnostics", () => {
+  it.each(["en", "ru", "zh-CN", "es", "pt-BR"])(
+    "localizes every reason in %s and preserves exact values",
+    async (locale) => {
+      const i18n = createInstance();
+      await i18n.init({
+        lng: locale,
+        resources: appLocaleResources,
+        interpolation: { escapeValue: false },
+      });
+      const reasons = [
+        ...[
+          "available",
+          "held",
+          "incoming",
+          "average_entry_price",
+          "realized_pnl",
+          "balance_pnl_halt",
+        ].map((kind) => ({
+          account: "default",
+          kind,
+          asset: "USD",
+          value:
+            kind === "balance_pnl_halt"
+              ? "missing_fx"
+              : "1000.000000000000000001",
+        })),
+        {
+          account: "default",
+          kind: "account_pnl",
+          value: "-123.456789123456789",
+        },
+        {
+          account: "default",
+          kind: "account_pnl_halt",
+          value: "missing_account_currency",
+        },
+        {
+          account: "default",
+          kind: "active_order",
+          order: "order-1",
+          status: "submitted",
+        },
+        ...["account", "account_group", "global"].map((scope) => ({
+          account: "default",
+          kind: "pnl_limit",
+          scope,
+          group: "desk",
+          axis: "realized",
+          currency: "USD",
+          lowerBound: "-10.000000000000000001",
+        })),
+      ];
+      const fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "currency_change_blocked",
+              message:
+                "1 account(s) carry state that prevents a currency change: conflict",
+              reasons,
+            },
+          }),
+          { status: 409 },
+        ),
+      );
+      const client = createOfficerApi(
+        createApiClient({
+          baseUrl: "/api/v1",
+          fetch,
+          translate: (key, params) => i18n.t(key, params),
+        }),
+      );
+      const error = await client
+        .setAccountCurrency("default", "USD")
+        .catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(ApiError);
+      const decoded = error as ApiError;
+      expect(decoded.code).toBe("currency_change_blocked");
+      expect(decoded.currencyChangeReasons).toEqual(reasons);
+      expect(decoded.message).not.toContain("carry state");
+      expect(decoded.message).not.toContain("{{");
+      expect(decoded.message).not.toContain("undefined");
+      expect(decoded.message).toContain("1000.000000000000000001");
+      expect(decoded.message).toContain("order-1");
+      expect(decoded.message).toContain("-10.000000000000000001");
+      expect(decoded.message.split("\n")).toHaveLength(reasons.length + 1);
+      if (locale === "ru") {
+        expect(decoded.message).toContain(
+          "доступный остаток USD = 1000.000000000000000001",
+        );
+        expect(decoded.message).toContain("лимит P&L группы desk");
+        expect(decoded.message).toContain("верхняя граница не задана");
+        expect(decoded.message).toContain("не задана валюта счёта");
+        expect(decoded.message).toContain(
+          "необходимая валютная котировка недоступна",
+        );
+        expect(decoded.message).not.toContain("missing_account_currency");
+      }
+    },
+  );
+
+  it("formats framework diagnostics in English without a supplied translator", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "currency_change_blocked",
+            message: "raw server text",
+            reasons: [
+              {
+                account: "default",
+                kind: "available",
+                asset: "USD",
+                value: "1.25",
+              },
+            ],
+          },
+        }),
+        { status: 409 },
+      ),
+    );
+    const client = createOfficerApi(
+      createApiClient({ baseUrl: "/api/v1", fetch }),
+    );
+    await expect(client.setAccountCurrency("default", "USD")).rejects.toThrow(
+      "Account default: available USD balance = 1.25.",
+    );
+  });
+
+  it.each([
+    [{ account: "default", kind: "available", value: "1" }],
+    [{ account: "default", kind: "unknown_kind" }],
+    [{ account: "default", kind: "available", asset: "USD", value: 1000 }],
+  ])(
+    "rejects malformed diagnostic facts instead of guessing their meaning",
+    async (reason) => {
+      const fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: "currency_change_blocked", reasons: [reason] },
+          }),
+          { status: 409 },
+        ),
+      );
+      const client = createOfficerApi(
+        createApiClient({ baseUrl: "/api/v1", fetch }),
+      );
+      await expect(client.setAccountCurrency("default", "USD")).rejects.toThrow(
+        "invalid currency-change diagnostics",
+      );
+    },
+  );
+});
 
 function api() {
   return createOfficerApi(

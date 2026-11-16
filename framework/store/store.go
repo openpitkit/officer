@@ -836,6 +836,8 @@ type CurrencyChangeBlocker struct {
 	// Other reports whether economic state, a halt, or an active order also
 	// prevents the change.
 	Other bool
+	// Reasons preserves the facts from the same read that decided the refusal.
+	Reasons []domain.CurrencyChangeReason
 }
 
 // GroupListFilter narrows account-group list reads in the store.

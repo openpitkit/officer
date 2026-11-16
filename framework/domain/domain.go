@@ -264,6 +264,25 @@ type CurrencyChangeBlockedError struct {
 	Scope    LimitScope
 	TargetID string
 	Cause    error
+	Reasons  []CurrencyChangeReason
+}
+
+// CurrencyChangeReason identifies a fact observed by the currency-change guard.
+// Decimal values are exact stored strings. Order is an external order ID;
+// scope, group and axis identify a P&L limit without exposing database IDs.
+type CurrencyChangeReason struct {
+	Account    AccountID  `json:"account"`
+	Kind       string     `json:"kind"`
+	Asset      string     `json:"asset,omitempty"`
+	Value      string     `json:"value,omitempty"`
+	Order      string     `json:"order,omitempty"`
+	Status     string     `json:"status,omitempty"`
+	Scope      LimitScope `json:"scope,omitempty"`
+	Group      string     `json:"group,omitempty"`
+	Axis       string     `json:"axis,omitempty"`
+	Currency   string     `json:"currency,omitempty"`
+	LowerBound string     `json:"lowerBound,omitempty"`
+	UpperBound string     `json:"upperBound,omitempty"`
 }
 
 // Error returns the guard's human-readable explanation.
@@ -276,10 +295,18 @@ func (e CurrencyChangeBlockedError) Unwrap() error { return e.Cause }
 func NewCurrencyChangeBlockedError(
 	scope LimitScope, targetID string, cause error,
 ) error {
+	var details interface {
+		CurrencyChangeReasons() []CurrencyChangeReason
+	}
+	var reasons []CurrencyChangeReason
+	if errors.As(cause, &details) {
+		reasons = details.CurrencyChangeReasons()
+	}
 	return CurrencyChangeBlockedError{
 		Scope:    scope,
 		TargetID: targetID,
 		Cause:    cause,
+		Reasons:  reasons,
 	}
 }
 

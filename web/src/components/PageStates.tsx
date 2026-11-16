@@ -182,7 +182,7 @@ export function ErrorBanner({
       )}
     >
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <span className="flex-1 break-words">{message}</span>
+      <span className="flex-1 whitespace-pre-line break-words">{message}</span>
       {onDismiss && (
         <button
           type="button"

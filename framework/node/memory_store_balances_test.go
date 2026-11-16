@@ -102,7 +102,7 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 		return ok
 	}
 	seen := make(map[domain.AccountID]store.CurrencyChangeBlocker)
-	mark := func(account domain.AccountID, currencyValuedLimit bool) {
+	mark := func(account domain.AccountID, reason domain.CurrencyChangeReason) {
 		if !allowed(account) {
 			return
 		}
@@ -111,7 +111,9 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 		}
 		blocker := seen[account]
 		blocker.Account = account
-		if currencyValuedLimit {
+		reason.Account = account
+		blocker.Reasons = append(blocker.Reasons, reason)
+		if reason.Kind == "pnl_limit" {
 			blocker.CurrencyValuedLimit = true
 		} else {
 			blocker.Other = true
@@ -122,13 +124,25 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 		if !allowed(accountID) {
 			continue
 		}
-		if account.PnlHaltReason != "" || !decimalZeroOrEmpty(account.Pnl) {
-			mark(accountID, false)
+		if account.PnlHaltReason != "" {
+			mark(accountID, domain.CurrencyChangeReason{Kind: "account_pnl_halt", Value: string(account.PnlHaltReason)})
+		}
+		if !decimalZeroOrEmpty(account.Pnl) {
+			mark(accountID, domain.CurrencyChangeReason{Kind: "account_pnl", Value: account.Pnl})
 		}
 	}
 	for _, balance := range r.balances {
-		if allowed(balance.Account) && balanceHoldsValue(balance) {
-			mark(balance.Account, false)
+		for _, field := range []struct{ kind, value string }{
+			{"available", balance.Available}, {"held", balance.Held},
+			{"incoming", balance.Incoming}, {"average_entry_price", balance.AverageEntryPrice},
+			{"realized_pnl", balance.RealizedPnl},
+		} {
+			if !decimalZeroOrEmpty(field.value) {
+				mark(balance.Account, domain.CurrencyChangeReason{Kind: field.kind, Asset: balance.Asset, Value: field.value})
+			}
+		}
+		if balance.RealizedPnlHaltReason != "" {
+			mark(balance.Account, domain.CurrencyChangeReason{Kind: "balance_pnl_halt", Asset: balance.Asset, Value: string(balance.RealizedPnlHaltReason)})
 		}
 	}
 	for _, order := range r.orders {
@@ -138,27 +152,32 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 		if slices.Contains(
 			domain.OrderStatusesEligibleForFill(), order.Status,
 		) {
-			mark(order.Account, false)
+			mark(order.Account, domain.CurrencyChangeReason{Kind: "active_order", Order: order.ExternalID.String(), Status: string(order.Status)})
 		}
 	}
 	for _, limit := range r.spotFundsPnlBoundsLimits {
 		if limit.LowerBound == "" && limit.UpperBound == "" {
 			continue
 		}
+		reason := domain.CurrencyChangeReason{
+			Kind: "pnl_limit", Scope: limit.Scope, Group: limit.AccountGroup,
+			Axis: string(limit.Axis), Currency: limit.Currency,
+			LowerBound: limit.LowerBound, UpperBound: limit.UpperBound,
+		}
 		switch limit.Scope {
 		case domain.ScopeGlobal:
 			for accountID := range r.accounts {
-				mark(accountID, true)
+				mark(accountID, reason)
 			}
 		case domain.ScopeAccount:
-			mark(limit.Account, true)
+			mark(limit.Account, reason)
 		case domain.ScopeAccountGroup:
 			if limit.AccountGroup == "" {
 				continue
 			}
 			for accountID, account := range r.accounts {
 				if allowed(accountID) && account.GroupCode == limit.AccountGroup {
-					mark(accountID, true)
+					mark(accountID, reason)
 				}
 			}
 		}
@@ -169,17 +188,6 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Account < out[j].Account })
 	return out, nil
-}
-
-// balanceHoldsValue mirrors the SQLite currency-guard predicate: a non-zero
-// amount or cost basis, or a retained realized-P&L halt.
-func balanceHoldsValue(balance domain.Balance) bool {
-	return !decimalZeroOrEmpty(balance.Available) ||
-		!decimalZeroOrEmpty(balance.Held) ||
-		!decimalZeroOrEmpty(balance.Incoming) ||
-		!decimalZeroOrEmpty(balance.AverageEntryPrice) ||
-		balance.RealizedPnlHaltReason != "" ||
-		!decimalZeroOrEmpty(balance.RealizedPnl)
 }
 
 func TestMemoryRealmListAccountsBlockingCurrencyChangeIncludesAccountPnl(t *testing.T) {

@@ -23,6 +23,7 @@ export type ApiErrorCode =
   | "not_found"
   | "has_dependents"
   | "conflict"
+  | "currency_change_blocked"
   | "fee_account_required"
   | "non_release_archive"
   | "non_release_confirmation_required"
@@ -66,6 +67,8 @@ export interface ApiProblemError {
 
 /** A failed API call, carrying the HTTP status and decoded error code. */
 export class ApiError extends Error {
+  /** Facts returned by the currency guard that refused the request. */
+  readonly currencyChangeReasons?: ApiCurrencyChangeReason[];
   readonly status?: number;
   readonly code: ApiErrorCode;
   readonly dependents?: ApiErrorDependent[];
@@ -90,10 +93,12 @@ export class ApiError extends Error {
     asset?: string,
     retryAfterSeconds?: number,
     errors?: ApiProblemError[],
+    currencyChangeReasons?: ApiCurrencyChangeReason[],
   ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
+    this.currencyChangeReasons = currencyChangeReasons;
     this.status = status;
     this.dependents = dependents;
     this.account = account;
@@ -105,6 +110,13 @@ export class ApiError extends Error {
       constraint,
     }));
   }
+}
+
+/** A currency guard fact; financial values remain exact decimal strings. */
+export interface ApiCurrencyChangeReason {
+  account: string;
+  kind: string;
+  [field: string]: string;
 }
 
 /** Host-supplied transport and localization configuration. */
@@ -180,6 +192,7 @@ function asCode(v: unknown): ApiErrorCode {
     case "not_found":
     case "has_dependents":
     case "conflict":
+    case "currency_change_blocked":
     case "fee_account_required":
     case "non_release_archive":
     case "non_release_confirmation_required":
@@ -227,6 +240,8 @@ function defaultTranslate(
     not_found: "The requested resource was not found.",
     has_dependents: "The resource has dependent rows.",
     conflict: "The request conflicts with the current state.",
+    currency_change_blocked:
+      "The currency change is blocked by the following account state.",
     fee_account_required: "A fee account is required.",
     non_release_archive:
       "This archive was made by a non-release build whose data is disposable. A release build cannot restore it.",
@@ -270,6 +285,13 @@ function defaultTranslate(
       codeMessages[key.slice("errors:code.".length)] ?? codeMessages.internal
     );
   }
+  if (key.startsWith("errors:currencyChange.")) {
+    const template =
+      currencyChangeMessages[key.slice("errors:currencyChange.".length)];
+    return template.replace(/\{\{(\w+)\}\}/g, (_match, field: string) =>
+      String(params?.[field]),
+    );
+  }
   if (key === "errors:http") {
     return `request to ${String(params?.path ?? "")} failed with HTTP ${String(
       params?.status ?? "",
@@ -295,6 +317,7 @@ function defaultMessage(
 
 function clientOwnedMessage(code: ApiErrorCode): boolean {
   return (
+    code === "currency_change_blocked" ||
     code === "terminal_order" ||
     code === "approval_required" ||
     code === "execution_report_required" ||
@@ -348,6 +371,7 @@ async function toApiError(
   let account: string | undefined;
   let asset: string | undefined;
   let errors: ApiProblemError[] | undefined;
+  let currencyReasons: unknown;
   try {
     const body = (await res.json()) as unknown;
     if (isObject(body)) {
@@ -358,6 +382,7 @@ async function toApiError(
         dependents = asDependents(pick(err, "dependents", "Dependents"));
         account = asEntityCode(pick(err, "account", "Account"));
         asset = asEntityCode(pick(err, "asset", "Asset"));
+        currencyReasons = err.reasons;
       } else if (err === undefined && typeof body.detail === "string") {
         bodyMessage = body.detail;
         if (Array.isArray(body.errors)) {
@@ -393,13 +418,40 @@ async function toApiError(
     }
   }
   const t = translate ?? defaultTranslate;
-  const message = clientOwnedMessage(code)
+  let message = clientOwnedMessage(code)
     ? defaultMessage(code, t)
     : bodyMessage.length > 0
       ? bodyMessage
       : code === "internal"
         ? t("errors:http", { path: requestPath, status: res.status })
         : defaultMessage(code, t);
+  let reasons: ApiCurrencyChangeReason[] | undefined;
+  if (code === "currency_change_blocked" && currencyReasons !== undefined) {
+    reasons = decodeCurrencyChangeReasons(currencyReasons, t);
+    message = [
+      message,
+      ...reasons.map((reason) => {
+        const key =
+          reason.kind === "pnl_limit"
+            ? `pnl_limit_${reason.scope}`
+            : reason.kind;
+        return t(`errors:currencyChange.${key}`, {
+          ...reason,
+          value:
+            reason.kind === "account_pnl_halt" ||
+            reason.kind === "balance_pnl_halt"
+              ? t(`errors:currencyChange.halt_${reason.value}`)
+              : reason.value,
+          axis:
+            reason.kind === "pnl_limit"
+              ? t(`errors:currencyChange.axis_${reason.axis}`)
+              : reason.axis,
+          lowerBound: reason.lowerBound || t("errors:currencyChange.unbounded"),
+          upperBound: reason.upperBound || t("errors:currencyChange.unbounded"),
+        });
+      }),
+    ].join("\n");
+  }
   return new ApiError(
     message,
     code,
@@ -409,7 +461,104 @@ async function toApiError(
     asset,
     asRetryAfterSeconds(res.headers.get("Retry-After")),
     errors,
+    reasons,
   );
+}
+
+const currencyChangeMessages: Record<string, string> = {
+  available: "Account {{account}}: available {{asset}} balance = {{value}}.",
+  held: "Account {{account}}: held {{asset}} balance = {{value}}.",
+  incoming: "Account {{account}}: incoming {{asset}} balance = {{value}}.",
+  average_entry_price:
+    "Account {{account}}: average entry price for {{asset}} = {{value}}.",
+  realized_pnl: "Account {{account}}: realized P&L for {{asset}} = {{value}}.",
+  account_pnl: "Account {{account}}: accumulated P&L = {{value}}.",
+  balance_pnl_halt:
+    "Account {{account}}: P&L calculation for {{asset}} is stopped (reason: {{value}}).",
+  account_pnl_halt:
+    "Account {{account}}: P&L calculation is stopped (reason: {{value}}).",
+  active_order:
+    "Account {{account}}: active order {{order}}, status {{status}}.",
+  pnl_limit_account:
+    "Account {{account}}: account {{axis}} P&L limit in {{currency}}, lower bound {{lowerBound}}, upper bound {{upperBound}}.",
+  pnl_limit_account_group:
+    "Account {{account}}: group {{group}} {{axis}} P&L limit in {{currency}}, lower bound {{lowerBound}}, upper bound {{upperBound}}.",
+  pnl_limit_global:
+    "Account {{account}}: global {{axis}} P&L limit in {{currency}}, lower bound {{lowerBound}}, upper bound {{upperBound}}.",
+  axis_realized: "realized",
+  axis_unrealized: "unrealized",
+  axis_total: "total",
+  unbounded: "not set",
+  invalid: "The server returned invalid currency-change diagnostics.",
+  halt_missing_fx: "a required FX quote is unavailable",
+  halt_missing_account_currency: "the account currency is not set",
+  halt_missing_initial_pnl: "an authoritative initial P&L value is unavailable",
+  halt_missing_cost_basis: "the position cost basis is unavailable",
+  halt_arithmetic_overflow:
+    "exact arithmetic exceeded the supported numeric range",
+};
+
+function decodeCurrencyChangeReasons(
+  value: unknown,
+  t: NonNullable<ApiClientConfig["translate"]>,
+): ApiCurrencyChangeReason[] {
+  const required: Record<string, string[]> = {
+    available: ["asset", "value"],
+    held: ["asset", "value"],
+    incoming: ["asset", "value"],
+    average_entry_price: ["asset", "value"],
+    realized_pnl: ["asset", "value"],
+    account_pnl: ["value"],
+    balance_pnl_halt: ["asset", "value"],
+    account_pnl_halt: ["value"],
+    active_order: ["order", "status"],
+    pnl_limit: ["axis", "scope", "currency"],
+  };
+  if (
+    !Array.isArray(value) ||
+    value.some((item: unknown) => {
+      if (
+        !isObject(item) ||
+        typeof item.account !== "string" ||
+        typeof item.kind !== "string" ||
+        !Object.hasOwn(required, item.kind) ||
+        Object.values(item).some((field) => typeof field !== "string")
+      ) {
+        return true;
+      }
+      if (
+        required[item.kind].some(
+          (field) => typeof item[field] !== "string" || item[field] === "",
+        )
+      ) {
+        return true;
+      }
+      if (
+        (item.kind === "account_pnl_halt" ||
+          item.kind === "balance_pnl_halt") &&
+        ![
+          "missing_fx",
+          "missing_account_currency",
+          "missing_initial_pnl",
+          "missing_cost_basis",
+          "arithmetic_overflow",
+        ].includes(String(item.value))
+      ) {
+        return true;
+      }
+      return (
+        item.kind === "pnl_limit" &&
+        (!["realized", "unrealized", "total"].includes(String(item.axis)) ||
+          !["account", "account_group", "global"].includes(
+            String(item.scope),
+          ) ||
+          (item.scope === "account_group" && typeof item.group !== "string"))
+      );
+    })
+  ) {
+    throw new ApiError(t("errors:currencyChange.invalid"), "internal");
+  }
+  return value as ApiCurrencyChangeReason[];
 }
 
 function filenameFromDisposition(value: string | null): string {

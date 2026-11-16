@@ -456,6 +456,17 @@ answers any code its REST operation documents - most often `validation`,
 retryable `engine_restarting` - except that the default group `-` given as
 `group` is refused with `validation`, where REST answers `reserved_group`.
 
+A REST `currency_change_blocked` error also carries `reasons` when the guard
+reports blocking facts. Each fact names the affected `account` and its `kind`:
+`available`, `held`, `incoming`, `average_entry_price`, `realized_pnl`,
+`balance_pnl_halt`, `account_pnl`, `account_pnl_halt`, `active_order` or
+`pnl_limit`. Balance facts include `asset` and exact `value`; halt facts carry
+the engine's reason code in `value`. Orders include their external `order` ID
+and `status`. Limits include `scope`, `axis`, `currency`, the owning `group`
+where applicable, and the set `lowerBound` and `upperBound`. These facts come
+from the same read that refused the operation, including every blocking member
+of a group. The panel translates reason kinds and keeps decimal strings exact.
+
 A tool answers the body its REST operation answers: `{"account": ...}`,
 `{"asset": ...}`, `{"group": ...}`, `{"adjustment": ...}`, `{"rateLimit": ...}`,
 `{"orderSizeLimit": ...}`, `{"spotFundsPnlBoundsLimit": ...}`,
