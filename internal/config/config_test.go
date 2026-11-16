@@ -29,6 +29,40 @@ import (
 	"go.openpit.dev/officer/framework/secret"
 )
 
+func TestLoadSQLitePathExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		env       map[string]string
+		path      string
+		explicit  bool
+		wantError bool
+	}{
+		{name: "default", path: DefaultSQLitePath},
+		{name: "environment", env: map[string]string{EnvSQLitePath: "env.db"}, path: "env.db"},
+		{name: "flag", args: []string{"-sqlite-path", "chosen.db"}, path: "chosen.db", explicit: true},
+		{name: "flag overrides environment", args: []string{"-sqlite-path=chosen.db"}, env: map[string]string{EnvSQLitePath: "env.db"}, path: "chosen.db", explicit: true},
+		{name: "empty", args: []string{"-sqlite-path="}, wantError: true},
+		{name: "missing", args: []string{"-sqlite-path"}, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(append([]string{"-mode", "serve"}, tc.args...), envLookup(tc.env))
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("invalid database path was accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.SQLitePath != tc.path || cfg.SQLitePathExplicit != tc.explicit {
+				t.Fatalf("database selection = (%q, %t), want (%q, %t)", cfg.SQLitePath, cfg.SQLitePathExplicit, tc.path, tc.explicit)
+			}
+		})
+	}
+}
+
 func TestLoadInitConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "setup.json")
 	body := `{"accountMode":"single","fundsLimitMode":"enforce","encryption":"disabled","signing":"disabled","access":"open"}`

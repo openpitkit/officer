@@ -325,6 +325,30 @@ with the release still stopped. A build from another commit
 asks again and deletes the previous build's data at startup, even if that
 build is still running. Never run both on the volume at once.
 
+## Choose a database when running the binary
+
+Pass an optional database file path to `serve`:
+
+```sh
+pit-officer serve -sqlite-path /path/to/officer.db
+```
+
+From a source checkout, pass the named `just` variable before the recipe:
+
+```sh
+just sqlite_path="/path/to/officer.db" run-serve
+```
+
+The same variable works with `run-serve-debug`, `run-serve-dev`, and
+`run-serve-debug-dev`.
+
+Officer opens that exact file, or creates it and opens setup if it does not
+exist. This also applies to non-release builds: an explicit path skips the
+per-commit filename, database choice screen, and cleanup of other builds' files.
+Only select a database you intend this build to use directly.
+Without this argument, database selection works as before, including the
+`PIT_OFFICER_SQLITE_PATH` environment setting and non-release isolation.
+
 ## When something goes wrong
 
 Find what you see, then do what the entry says.

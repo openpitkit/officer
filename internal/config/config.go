@@ -116,6 +116,9 @@ type Config struct {
 	// SQLitePath is the on-disk path of the SQLite database. It defaults to
 	// DefaultSQLitePath.
 	SQLitePath string
+	// SQLitePathExplicit makes serve use the exact -sqlite-path value, including
+	// in non-release builds. Environment paths retain per-build isolation.
+	SQLitePathExplicit bool
 	// RuntimeLibraryPath is the native OpenPit runtime library the operator
 	// expects. The SDK loads its runtime at process start from
 	// OPENPIT_RUNTIME_LIBRARY_PATH, or its embedded runtime when that is unset,
@@ -198,7 +201,11 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 	masterKeyFileFlagConfigured := false
 	initFlagConfigured := false
+	sqlitePathExplicit := false
 	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "sqlite-path" {
+			sqlitePathExplicit = true
+		}
 		if f.Name == "init" {
 			initFlagConfigured = true
 		}
@@ -206,6 +213,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 			masterKeyFileFlagConfigured = true
 		}
 	})
+	if sqlitePathExplicit && *sqlitePath == "" {
+		return Config{}, fmt.Errorf("config: -sqlite-path requires a database file path")
+	}
 	if initFlagConfigured && *initConfig == "" {
 		return Config{}, fmt.Errorf("config: -init requires a configuration file path")
 	}
@@ -241,6 +251,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 		MCPTransport:            transportForMode(parsedMode),
 		HTTPAddr:                *httpAddr,
 		SQLitePath:              *sqlitePath,
+		SQLitePathExplicit:      sqlitePathExplicit,
 		RuntimeLibraryPath:      *runtimeLibraryPath,
 		OpenBrowser:             *openBrowser,
 		AllowedHosts:            allowedHosts,

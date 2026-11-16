@@ -27,6 +27,8 @@ set windows-shell := ["cmd.exe", "/c"]
 
 just_helper := "scripts/just_helpers.py"
 officer_binary := if os_family() == "windows" { "pit-officer.exe" } else { "pit-officer" }
+sqlite_path := ""
+sqlite_path_args := if sqlite_path == "" { "" } else { "-sqlite-path " + quote(sqlite_path) }
 go_toolchain := "go" + env_var("CI_GO")
 go_version := env_var("CI_GO")
 node_version := env_var("CI_NODE")
@@ -345,7 +347,7 @@ run-mcp-debug: build-debug
 
 # Run pit-officer in serve mode (MCP over HTTP + dashboard).
 run-serve: build-release
-    "{{ python }}" {{ just_helper }} run-officer serve
+    "{{ python }}" {{ just_helper }} run-officer serve {{ sqlite_path_args }}
 
 # Move the existing database aside and initialize a fresh serve configuration.
 run-serve-reset init_config="examples/setup/simple.json": build-release
@@ -353,7 +355,7 @@ run-serve-reset init_config="examples/setup/simple.json": build-release
 
 # Run pit-officer in serve mode with debug compiler flags.
 run-serve-debug: build-debug
-    "{{ python }}" {{ just_helper }} run-officer serve
+    "{{ python }}" {{ just_helper }} run-officer serve {{ sqlite_path_args }}
 
 # Reset and initialize serve with debug compiler flags.
 run-serve-reset-debug init_config="examples/setup/simple.json": build-debug
@@ -467,7 +469,7 @@ run-mcp-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
 
 # Run pit-officer in serve mode against a local Pit checkout.
 run-serve-dev pit_checkout="../pit": (build-release-dev pit_checkout)
-    "{{ python }}" {{ just_helper }} run-officer-dev release {{ quote(pit_checkout) }} serve
+    "{{ python }}" {{ just_helper }} run-officer-dev release {{ quote(pit_checkout) }} serve {{ sqlite_path_args }}
 
 # Reset and initialize serve against a local Pit checkout.
 run-serve-reset-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-release-dev pit_checkout)
@@ -475,7 +477,7 @@ run-serve-reset-dev pit_checkout="../pit" init_config="examples/setup/simple.jso
 
 # Run pit-officer in serve mode against a debug local Pit checkout.
 run-serve-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
-    "{{ python }}" {{ just_helper }} run-officer-dev debug {{ quote(pit_checkout) }} serve
+    "{{ python }}" {{ just_helper }} run-officer-dev debug {{ quote(pit_checkout) }} serve {{ sqlite_path_args }}
 
 # Reset and initialize debug serve against a local Pit checkout.
 run-serve-reset-debug-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-debug-dev pit_checkout)

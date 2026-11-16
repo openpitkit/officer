@@ -461,6 +461,41 @@ func TestSetupServeNonRelease(t *testing.T) {
 	}
 }
 
+func TestSetupServeExplicitDatabase(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		t.Run(fmt.Sprintf("release=%t", release), func(t *testing.T) {
+			cfg := nonReleaseTestConfig(t)
+			cfg.SQLitePathExplicit = true
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			stale := cfg.SQLitePath + ".non-release-" + strings.Repeat("a", 40)
+			if err := os.WriteFile(stale, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				handler, closeApp, err := setupServe(context.Background(), cfg, release, testBuildCommit, testSPA, logger, func(err error) {
+					t.Errorf("unexpected fatal shutdown: %v", err)
+				}, nil, make(chan lifecycleAction, 1))
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertApplicationSession(t, handler)
+				if err := closeApp(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := os.Stat(cfg.SQLitePath); err != nil {
+				t.Fatalf("explicit database: %v", err)
+			}
+			if _, err := os.Stat(cfg.SQLitePath + ".non-release-" + testBuildCommit); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unexpected per-build database: %v", err)
+			}
+			if data, err := os.ReadFile(stale); err != nil || string(data) != "keep" {
+				t.Fatalf("explicit selection changed another database: %q, %v", data, err)
+			}
+		})
+	}
+}
+
 func TestSetupServeClosePreventsChoice(t *testing.T) {
 	cfg := nonReleaseTestConfig(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -717,7 +752,8 @@ func nonReleaseTestConfig(t *testing.T) config.Config {
 	}
 	t.Setenv(config.EnvMasterKey, encodedKey)
 	t.Setenv(config.EnvMasterKeyFile, keyPath)
-	cfg, err := config.Load([]string{"-mode", "serve", "-sqlite-path", filepath.Join(dir, "officer.db")}, os.LookupEnv)
+	t.Setenv(config.EnvSQLitePath, filepath.Join(dir, "officer.db"))
+	cfg, err := config.Load([]string{"-mode", "serve"}, os.LookupEnv)
 	if err != nil {
 		t.Fatal(err)
 	}

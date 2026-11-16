@@ -27,6 +27,7 @@
 // single local node and its engine seeded from that store. Non-release builds
 // use a separate store per commit: serve asks for a database choice before
 // creating it, and mcp requires that choice to have been made already.
+// An explicit serve -sqlite-path opens that exact file instead.
 // serve binds a loopback
 // OS-assigned free port by default and publishes
 // its real address as runtime state; dashboard and healthcheck read that state
@@ -475,7 +476,8 @@ func setupServe(
 	lifecycleRequests chan<- lifecycleAction,
 ) (http.Handler, func() error, error) {
 	releasePath := cfg.SQLitePath
-	if !release {
+	isolated := !release && !cfg.SQLitePathExplicit
+	if isolated {
 		removed, err := nonrelease.RemoveStale(releasePath, commit)
 		for _, path := range removed {
 			logger.Info("removed stale non-release database file", "path", path)
@@ -484,7 +486,7 @@ func setupServe(
 			return nil, nil, err
 		}
 	}
-	path, ownExists, releaseExists, err := databaseForBuild(releasePath, release, commit)
+	path, ownExists, releaseExists, err := databaseForBuild(releasePath, !isolated, commit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -518,12 +520,12 @@ func setupServe(
 		app = built
 		return handler, nil
 	}
-	if !release && !ownExists && appConfig.InitialSetup != nil {
+	if isolated && !ownExists && appConfig.InitialSetup != nil {
 		if err := officer.PrepareNonReleaseDatabase(ctx, appConfig, releasePath, false); err != nil {
 			return nil, nil, err
 		}
 	}
-	if release || ownExists || appConfig.InitialSetup != nil {
+	if !isolated || ownExists || appConfig.InitialSetup != nil {
 		handler, err := build(ctx)
 		if err != nil {
 			return nil, nil, err
