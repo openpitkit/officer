@@ -56,14 +56,20 @@ func ParseWithSecretField(raw, vendor, secretField string) (Credentials, error) 
 // passphrase.
 type PassphraseCredentials struct{ APIKey, APISecret, Passphrase string }
 
-// ParseWithPassphrase accepts only apiKey, apiSecret and passphrase, each
-// non-blank after trimming, and reports validation errors in that order.
-func ParseWithPassphrase(raw, vendor string) (PassphraseCredentials, error) {
-	values, err := parseFields(raw, vendor, "apiKey", "apiSecret", "passphrase")
+// ParseWithPassphrase accepts only apiKey, apiSecret, passphrase and the named
+// non-secret fields. All fields are required and non-blank after trimming.
+// It returns the trimmed non-secret values in the order named and validates
+// the three secrets before them. Validation pointers are relative to the
+// credentials object. Errors never echo values.
+func ParseWithPassphrase(raw, vendor string, fields ...string) (PassphraseCredentials, []string, error) {
+	names := append([]string{"apiKey", "apiSecret", "passphrase"}, fields...)
+	values, err := parseFields(raw, vendor, names...)
 	if err != nil {
-		return PassphraseCredentials{}, err
+		return PassphraseCredentials{}, nil, err
 	}
-	return PassphraseCredentials{APIKey: values[0], APISecret: values[1], Passphrase: values[2]}, nil
+	return PassphraseCredentials{
+		APIKey: values[0], APISecret: values[1], Passphrase: values[2],
+	}, values[3:], nil
 }
 
 // ParseKey accepts only apiKey, non-blank after trimming, and returns the

@@ -560,9 +560,9 @@ second account, needs the fee account there and is refused with
 `fee_account_required` without one.
 
 Paper and live sends require `destination.route`, a JSON object. The built-in
-Alpaca, Binance, IB and eToro providers require `amountKind: "quantity"` and
-support only the `timeInForce` route field. Values are case-sensitive and are
-never normalized:
+Alpaca, Binance, IB, eToro and OKX providers require `amountKind: "quantity"`
+and support only the `timeInForce` route field. Values are case-sensitive and
+are never normalized:
 
 - Alpaca requires `day`, `gtc`, `opg`, `cls`, `ioc` or `fok`. Good till cancelled
   is `{"timeInForce":"gtc"}`; uppercase `GTC` is refused locally with the
@@ -570,6 +570,8 @@ never normalized:
   sent to the venue. Crypto allows only `gtc` or `ioc`; a fractional equity
   quantity requires a fractionable asset and `day`.
 - Binance requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
+  `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
+- OKX requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
   `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
 - IB requires `{"timeInForce":"day"}`, `{"timeInForce":"gtc"}` or
   `{"timeInForce":"ioc"}`. Crypto buys require a limit price; crypto market
@@ -588,6 +590,14 @@ carry an order. Commissions arrive with their fills. IB returns executions only
 since local midnight: when reconciliation needs older executions, the order
 stays pending and the connection shows a diagnostic. It
 never treats the order as missing and never infers a fill.
+
+The `okx` provider requires `{apiKey, apiSecret, passphrase, site}` credentials.
+All four fields are required. `site` is the OKX site the account is registered
+on: `www.okx.com` for global accounts, `my.okx.com` for EEA accounts or
+`app.okx.com` for US and Australian accounts. The connection status returns
+`site` under `settings`, never API key, API secret or passphrase values. Paper
+mode uses OKX demo trading with demo API keys; live mode uses live trading. Only
+spot cash trading is supported, with no venue account binding.
 
 Execution Simulator (provider `test`) is a paper-only venue that takes credentials
 `{}` and sends no requests to external venues.

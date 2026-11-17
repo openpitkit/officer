@@ -70,6 +70,11 @@
     "stopped": "已停止"
   },
   "connection": {
+    "okx": {
+      "site": "站点：{{site}}",
+      "passphraseStored": "Passphrase: 已保存",
+      "passphraseNotSet": "Passphrase: 未设置"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "已启用",
@@ -95,6 +100,16 @@
     "description": "将永久删除 {{label}} 及其配置。请先禁用连接。存在订单历史的连接无法删除。"
   },
   "create": {
+    "okx": {
+      "openDemo": "请进入 OKX 个人中心。在上下文菜单中选择 {{trade}} -> {{demoTrading}}，打开模拟交易终端。",
+      "demoTradingGuide": "关于模拟交易",
+      "createDemoKey": "在终端中打开个人资料菜单，选择 {{demoTradingApi}}。点击 {{createKey}}，授予 {{tradePermission}} 权限并设置 Passphrase。保存 API key、API secret 和 Passphrase。",
+      "keepPageOpen": "请保持页面打开 - 下方字段需要填写这三个值以及您的账户注册站点。",
+      "live": {
+        "createKey": "在您的 OKX 账户中创建 API 密钥，授予 {{tradePermission}} 权限，不授予出金权限，并设置 Passphrase。复制 API key、API secret 和 Passphrase - OKX 无法恢复丢失的 Passphrase。",
+        "bindIp": "将运行 Officer 的计算机的公网 IPv4 地址绑定到密钥：对于拥有交易权限但未绑定网络地址的密钥，OKX 会在闲置 14 天后使其失效。"
+      }
+    },
     "test": {
       "prepare": "此连接在本地执行测试订单，无需密钥。创建后，请为测试账户授予访问权限，配置交易品种掩码及其执行规则，然后启用连接。"
     },
@@ -117,6 +132,7 @@
     "chooseVenue": "选择交易场所",
     "prepareAccount": "准备您的 {{provider}} 账户",
     "mode": "模式",
+    "apiKeyGuide": "如何创建 API 密钥",
     "alpaca": {
       "createAccount": "创建 Alpaca 账户。",
       "signUp": "注册 Alpaca",
@@ -139,7 +155,6 @@
       "keepPageOpen": "请保持页面打开 - 下方字段需要填写这两个值。",
       "live": {
         "prepareAccount": "请满足 Binance 签发 API 密钥的账户要求：完成身份认证、启用双重验证，并向现货钱包存入任意金额。",
-        "apiKeyGuide": "如何创建 API 密钥",
         "createKey": "创建 API 密钥：点击个人资料图标，然后点击 {{account}}，进入 {{apiManagement}} 并点击 {{createApi}}。选择 {{systemGenerated}} - Officer 使用 HMAC-SHA256 签名请求 - 输入标签并完成双重验证。复制 API key 和 API secret。",
         "restrictKey": "点击 {{editRestrictions}}，选择 {{trustedIPs}}，并输入运行 Officer 的计算机的公网 IPv4 地址：未设置该限制时，系统生成的密钥只能读取。然后勾选 {{spotTrading}}，以便 Officer 下单，且不要启用其他权限。"
       }
@@ -168,6 +183,16 @@
     "testResult": "检查通过：测试执行不连接任何交易场所，也不需要密钥。"
   },
   "settings": {
+    "okx": {
+      "passphrase": "Passphrase",
+      "site": "OKX 站点",
+      "sitePlaceholder": "请选择您的账户所属站点",
+      "sites": {
+        "global": "全球账户（{{site}}）",
+        "eea": "欧洲经济区账户（{{site}}）",
+        "us": "美国或澳大利亚账户（{{site}}）"
+      }
+    },
     "description": "将字段留空以保留已保存的值。",
     "unknownProviderCredentials": "此面板无法识别此提供方的凭据字段。",
     "etoro": {

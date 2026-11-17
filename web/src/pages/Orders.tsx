@@ -237,6 +237,14 @@ const VENUE_ORDER_OPTIONS: Record<
     },
     docsUrl: "https://www.interactivebrokers.com/docs/tws-api/doc/",
   },
+  okx: {
+    timeInForce: {
+      limit: ["GTC", "IOC", "FOK"],
+      market: [],
+    },
+    docsUrl:
+      "https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order",
+  },
 };
 
 type DetailBannerTone = "ok" | "warn" | "danger";

@@ -76,18 +76,23 @@ type TradingConnectionStatus struct {
 }
 
 // TradingConnectionSettings reports non-secret settings safe to display in
-// edit forms: IB host, port and clientId. It is nil for any other provider,
-// whose credentials it never reads, and when the stored credentials are not
-// a JSON object or hold no such settings.
+// edit forms: IB host, port and clientId; OKX site. It is nil for any other
+// provider, whose credentials it never reads, and when the stored credentials
+// are not a JSON object or hold no such settings.
 func TradingConnectionSettings(c domain.TradingConnection) map[string]any {
-	if c.Provider != domain.TradingProviderIB {
+	settings := make(map[string]any)
+	switch c.Provider {
+	case domain.TradingProviderIB:
+		credentials := credentialsObject(c.Credentials)
+		copyStringSetting(settings, credentials, "host")
+		copyNumberSetting(settings, credentials, "port")
+		copyNumberSetting(settings, credentials, "clientId")
+	case domain.TradingProviderOKX:
+		credentials := credentialsObject(c.Credentials)
+		copyStringSetting(settings, credentials, "site")
+	default:
 		return nil
 	}
-	credentials := credentialsObject(c.Credentials)
-	settings := make(map[string]any)
-	copyStringSetting(settings, credentials, "host")
-	copyNumberSetting(settings, credentials, "port")
-	copyNumberSetting(settings, credentials, "clientId")
 	if len(settings) == 0 {
 		return nil
 	}

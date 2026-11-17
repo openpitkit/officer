@@ -70,6 +70,11 @@
     "stopped": "Stopped"
   },
   "connection": {
+    "okx": {
+      "site": "Site: {{site}}",
+      "passphraseStored": "Passphrase: stored",
+      "passphraseNotSet": "Passphrase: not set"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "Enabled",
@@ -95,6 +100,16 @@
     "description": "{{label}} and its configuration will be permanently removed. Disable the connection first. Connections with order history cannot be deleted."
   },
   "create": {
+    "okx": {
+      "openDemo": "Open your OKX account dashboard. In its context menu, select {{trade}} -> {{demoTrading}} to open the demo trading terminal.",
+      "demoTradingGuide": "About demo trading",
+      "createDemoKey": "In the terminal, open the profile menu and select {{demoTradingApi}}. Click {{createKey}}, grant the {{tradePermission}} permission, and set a passphrase. Save the API key, secret key, and passphrase.",
+      "keepPageOpen": "Keep the page open - the fields below ask for the three values and the site your account is registered on.",
+      "live": {
+        "createKey": "Create an API key in your OKX account with the {{tradePermission}} permission and no withdrawal permission, and set a passphrase. Copy the API key, the secret key and the passphrase - OKX cannot recover a lost passphrase.",
+        "bindIp": "Bind the public IPv4 address of the machine running Officer to the key: OKX expires a key with the trading permission and no bound IP address after 14 days of inactivity."
+      }
+    },
     "test": {
       "prepare": "This connection executes test orders locally and needs no keys. After creating it, grant access to a test account, configure symbol masks and their execution rules, then enable the connection."
     },
@@ -117,6 +132,7 @@
     "chooseVenue": "Choose venue",
     "prepareAccount": "Prepare your {{provider}} account",
     "mode": "Mode",
+    "apiKeyGuide": "How to create API keys",
     "alpaca": {
       "createAccount": "Create an Alpaca account.",
       "signUp": "Sign up at Alpaca",
@@ -139,7 +155,6 @@
       "keepPageOpen": "Keep the page open - the fields below ask for both values.",
       "live": {
         "prepareAccount": "Meet Binance's account requirements for API keys: identity verification, two-factor authentication and a deposit of any amount to the Spot Wallet.",
-        "apiKeyGuide": "How to create API keys",
         "createKey": "Create an API key: click the profile icon, then {{account}}, go to {{apiManagement}} and click {{createApi}}. Choose {{systemGenerated}} - Officer signs requests with HMAC-SHA256 - enter a label and complete the two-factor verification. Copy the API key and the secret key.",
         "restrictKey": "Click {{editRestrictions}}, select {{trustedIPs}} and enter the public IPv4 address of the machine running Officer: without that restriction, a system-generated key can only read. Then check {{spotTrading}} so Officer can place orders, and enable no other permission."
       }
@@ -168,6 +183,16 @@
     "testResult": "Check passed: test execution reaches no venue and needs no keys."
   },
   "settings": {
+    "okx": {
+      "passphrase": "Passphrase",
+      "site": "OKX site",
+      "sitePlaceholder": "Choose the site of your account",
+      "sites": {
+        "global": "Global account ({{site}})",
+        "eea": "EEA account ({{site}})",
+        "us": "US or Australian account ({{site}})"
+      }
+    },
     "description": "Leave fields blank to keep the stored values.",
     "unknownProviderCredentials": "This panel does not know the credential fields of this provider.",
     "etoro": {

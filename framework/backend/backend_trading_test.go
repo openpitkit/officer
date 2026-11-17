@@ -956,6 +956,32 @@ func TestTradingConnectionSettings(t *testing.T) {
 		{name: "secrets only", provider: domain.TradingProviderIB, credentials: `{"apiKey":"test-key","apiSecret":"test-secret","token":"test-token"}`},
 		{name: "wrong types", provider: domain.TradingProviderIB, credentials: `{"host":1,"port":"7497","clientId":true}`},
 		{name: "blank host", provider: domain.TradingProviderIB, credentials: `{"host":"  "}`},
+		{
+			name: "okx allowlist", provider: domain.TradingProviderOKX,
+			credentials: `{"apiKey":"test-key","apiSecret":"test-secret",` +
+				`"passphrase":"test-passphrase","site":"my.okx.com","host":"gateway","port":4002}`,
+			want: map[string]any{"site": "my.okx.com"},
+		},
+		{
+			name: "okx blank site", provider: domain.TradingProviderOKX,
+			credentials: `{"site":"  "}`,
+		},
+		{
+			name: "okx non-string site", provider: domain.TradingProviderOKX,
+			credentials: `{"site":42}`,
+		},
+		{
+			name: "okx secrets only", provider: domain.TradingProviderOKX,
+			credentials: `{"apiKey":"test-key","apiSecret":"test-secret",` +
+				`"passphrase":"test-passphrase"}`,
+		},
+		{
+			name: "ib ignores site", provider: domain.TradingProviderIB,
+			credentials: `{"host":"gateway","port":4002,"clientId":7,"site":"my.okx.com"}`,
+			want: map[string]any{
+				"host": "gateway", "port": float64(4002), "clientId": float64(7),
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -963,30 +989,39 @@ func TestTradingConnectionSettings(t *testing.T) {
 				Provider: tt.provider, Credentials: tt.credentials,
 			})
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("settings = %#v, want %#v", got, tt.want)
+				t.Fatal("settings differ from the provider allowlist")
 			}
 		})
 	}
 }
 
 func TestTradingStatusSettings(t *testing.T) {
-	for _, provider := range []string{domain.TradingProviderIB, domain.TradingProviderAlpaca} {
+	for _, provider := range []string{
+		domain.TradingProviderIB, domain.TradingProviderAlpaca, domain.TradingProviderOKX,
+	} {
 		t.Run(provider, func(t *testing.T) {
 			s, n, _ := newTradingTestService(t)
 			c := tradingTestConnection()
 			c.Provider = provider
 			c.Credentials = `{"host":"gateway","port":4002,"clientId":7,"apiKey":"test-key","apiSecret":"test-secret"}`
+			if provider == domain.TradingProviderOKX {
+				c.Credentials = `{"apiKey":"test-key","apiSecret":"test-secret",` +
+					`"passphrase":"test-passphrase","site":"app.okx.com"}`
+			}
 			n.connections = []domain.TradingConnection{c}
 			got, err := s.GetTrading(systemCtx())
 			if err != nil {
 				t.Fatal(err)
 			}
 			var want map[string]any
-			if provider == domain.TradingProviderIB {
+			switch provider {
+			case domain.TradingProviderIB:
 				want = map[string]any{"host": "gateway", "port": float64(4002), "clientId": float64(7)}
+			case domain.TradingProviderOKX:
+				want = map[string]any{"site": "app.okx.com"}
 			}
 			if len(got.Connections) != 1 || !reflect.DeepEqual(got.Connections[0].Settings, want) {
-				t.Fatalf("status = %#v, want settings %#v", got, want)
+				t.Fatal("unexpected connection count or status settings")
 			}
 		})
 	}

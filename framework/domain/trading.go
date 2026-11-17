@@ -47,6 +47,9 @@ const TradingProviderIB = "ib"
 // TradingProviderEtoro is the eToro trading-provider discriminator.
 const TradingProviderEtoro = "etoro"
 
+// TradingProviderOKX is the OKX trading-provider discriminator.
+const TradingProviderOKX = "okx"
+
 // TradingModeSupported reports whether mode is a supported trading mode.
 func TradingModeSupported(mode TradingMode) bool {
 	return mode == TradingModePaper || mode == TradingModeLive

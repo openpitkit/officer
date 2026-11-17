@@ -9493,6 +9493,12 @@ components:
         Provider credentials, accepted only on input. Never returned.
         Alpaca uses {apiKey, apiSecret}; IB uses {host, port, clientId?};
         eToro uses {apiKey, userKey}.
+        OKX uses {apiKey, apiSecret, passphrase, site}, all required.
+        site is the OKX site the account is registered on: www.okx.com for
+        global accounts, my.okx.com for EEA accounts or app.okx.com for US and
+        Australian accounts. OKX paper mode uses demo trading with demo API keys;
+        live mode uses live trading. OKX supports spot cash trading only, with no
+        venue account binding.
 
     TradingProvider:
       type: object
@@ -9609,6 +9615,7 @@ components:
           description: >
             Non-secret provider settings safe to display in edit forms.
             IB exposes host, port and clientId.
+            OKX exposes site, never apiKey, apiSecret or passphrase values.
         instruments:
           type: array
           items:
@@ -10685,6 +10692,8 @@ components:
                     GTC, IOC or FOK for a limit order and an empty object for a
                     market order; eToro uses {} for market or {"timeInForce":"ioc"}
                     for an IOC limit buy.
+                    OKX requires timeInForce GTC, IOC or FOK for a limit order
+                    and an empty object for a market order.
                   additionalProperties: true
               additionalProperties: false
       unevaluatedProperties: false

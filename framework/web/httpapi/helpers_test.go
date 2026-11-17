@@ -111,54 +111,77 @@ func TestTradingConnectionPolicyCapabilityWire(t *testing.T) {
 func TestToTradingConnectionDTOSettings(t *testing.T) {
 	t.Parallel()
 
-	for _, provider := range []string{domain.TradingProviderIB, domain.TradingProviderAlpaca} {
-		t.Run(provider, func(t *testing.T) {
+	for _, tc := range []struct {
+		provider    string
+		credentials string
+		secrets     map[string]bool
+		want        map[string]any
+	}{
+		{
+			provider: domain.TradingProviderIB,
+			credentials: `{"host":"gateway","port":4002,"clientId":7,` +
+				`"apiKey":"test-key","apiSecret":"test-secret","token":"test-token"}`,
+			secrets: map[string]bool{"apiKey": true, "apiSecret": true},
+			want:    map[string]any{"host": "gateway", "port": float64(4002), "clientId": float64(7)},
+		},
+		{
+			provider: domain.TradingProviderAlpaca,
+			credentials: `{"host":"gateway","port":4002,"clientId":7,` +
+				`"apiKey":"test-key","apiSecret":"test-secret","token":"test-token"}`,
+			secrets: map[string]bool{"apiKey": true, "apiSecret": true},
+		},
+		{
+			provider: domain.TradingProviderOKX,
+			credentials: `{"apiKey":"test-key","apiSecret":"test-secret",` +
+				`"passphrase":"test-passphrase","site":"www.okx.com"}`,
+			secrets: map[string]bool{"apiKey": true, "apiSecret": true, "passphrase": true},
+			want:    map[string]any{"site": "www.okx.com"},
+		},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
 			connection := domain.TradingConnection{
-				Provider: provider,
-				Credentials: `{"host":"gateway","port":4002,"clientId":7,` +
-					`"apiKey":"test-key","apiSecret":"test-secret","token":"test-token"}`,
+				Provider:    tc.provider,
+				Credentials: tc.credentials,
 			}
 			status := backend.TradingConnectionStatus{
-				Provider: provider,
+				Provider: tc.provider,
 				Settings: backend.TradingConnectionSettings(connection),
-				Secrets:  map[string]bool{"apiKey": true, "apiSecret": true},
-			}
-			var want map[string]any
-			if provider == domain.TradingProviderIB {
-				want = map[string]any{"host": "gateway", "port": float64(4002), "clientId": float64(7)}
+				Secrets:  tc.secrets,
 			}
 			dto := ToTradingConnectionDTO(status)
-			if !reflect.DeepEqual(dto.Settings, want) {
-				t.Fatalf("DTO settings = %#v, want %#v", dto.Settings, want)
+			if !reflect.DeepEqual(dto.Settings, tc.want) {
+				t.Fatal("DTO settings differ from the provider allowlist")
 			}
 			list := ToTradingDTO(backend.TradingStatus{Connections: []backend.TradingConnectionStatus{status}})
-			if len(list.Connections) != 1 || !reflect.DeepEqual(list.Connections[0].Settings, want) {
-				t.Fatalf("list DTO lost settings: %#v", list)
+			if len(list.Connections) != 1 || !reflect.DeepEqual(list.Connections[0].Settings, tc.want) {
+				t.Fatal("list DTO lost settings")
 			}
 			body, err := json.Marshal(dto)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, secret := range []string{"test-key", "test-secret", "test-token", `"credentials"`} {
+			for _, secret := range []string{
+				"test-key", "test-secret", "test-token", "test-passphrase", `"credentials"`,
+			} {
 				if bytes.Contains(body, []byte(secret)) {
-					t.Fatalf("DTO leaked %q: %s", secret, body)
+					t.Fatal("DTO leaked credentials")
 				}
 			}
 			var wire map[string]json.RawMessage
 			if err := json.Unmarshal(body, &wire); err != nil {
 				t.Fatal(err)
 			}
-			if provider == domain.TradingProviderAlpaca {
+			if tc.provider == domain.TradingProviderAlpaca {
 				if _, ok := wire["settings"]; ok {
-					t.Fatalf("Alpaca settings must be omitted: %s", body)
+					t.Fatal("Alpaca settings must be omitted")
 				}
 			} else {
 				var settings map[string]any
 				if err := json.Unmarshal(wire["settings"], &settings); err != nil {
 					t.Fatal(err)
 				}
-				if !reflect.DeepEqual(settings, want) {
-					t.Fatalf("wire settings = %#v, want %#v", settings, want)
+				if !reflect.DeepEqual(settings, tc.want) {
+					t.Fatal("wire settings differ from the provider allowlist")
 				}
 			}
 		})

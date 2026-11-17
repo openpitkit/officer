@@ -720,6 +720,7 @@ func TestEtoroRegistrationRESTAndMCPEndToEnd(t *testing.T) {
 	}
 	tradingE2EMust(t, f.app.Close())
 	tradingE2EMust(t, f.builder.RegisterTradingProvider(p))
+	tradingE2EMust(t, f.builder.RegisterTradingProvider(OKXProvider()))
 	f.start()
 	input := map[string]any{
 		"provider": "etoro", "label": "eToro demo", "mode": "paper", "enabled": false,
@@ -764,6 +765,7 @@ func TestEtoroRegistrationRESTAndMCPEndToEnd(t *testing.T) {
 				ExecutionPolicy: false,
 				Type:            "etoro", Title: "eToro", VerifiesSymbols: true, SearchesSymbols: true,
 			},
+			{Type: "okx", Title: "OKX", VerifiesSymbols: true, SearchesSymbols: true},
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("eToro registration catalogue = %+v, want %+v", got, want)

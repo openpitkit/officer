@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,11 +33,13 @@ import (
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/internal/backoff"
+	"go.openpit.dev/officer/internal/okx"
 )
 
 const (
 	okxPublicFeedURL   = "wss://ws.okx.com:8443/ws/v5/public"
-	okxInstrumentsURL  = "https://www.okx.com/api/v5/public/instruments?instType=SPOT"
+	okxDataURL         = "https://www.okx.com"
+	okxInstrumentsURL  = okxDataURL + okx.SpotInstrumentsURI
 	okxDiagnoseTimeout = 10 * time.Second
 
 	defaultOKXReconnectMin = 250 * time.Millisecond
@@ -323,7 +324,7 @@ func (c *okxConnector) stream(
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
 	pingErr := make(chan error, 1)
-	go okxPingLoop(pingCtx, conn, c.pingInterval, pingErr)
+	go okx.PingLoop(pingCtx, conn, c.pingInterval, pingErr)
 
 	readCtx, cancelRead := context.WithCancel(ctx)
 	defer cancelRead()
@@ -399,72 +400,13 @@ func okxSubscribePayload(subs []okxSubscription) ([]byte, error) {
 	return json.Marshal(okxSubscribeRequest{Op: "subscribe", Args: args})
 }
 
-func okxPingLoop(
-	ctx context.Context,
-	conn okxConn,
-	interval time.Duration,
-	errs chan<- error,
-) {
-	if interval <= 0 {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := conn.Write(ctx, []byte("ping")); err != nil {
-				select {
-				case errs <- err:
-				default:
-				}
-				return
-			}
-		}
-	}
-}
-
-type okxInstrumentsResponse struct {
-	Code string `json:"code"`
-	Msg  string `json:"msg"`
-	Data []struct {
-		InstID string `json:"instId"`
-	} `json:"data"`
-}
-
 func fetchOKXSymbols(ctx context.Context) (map[string]struct{}, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, okxInstrumentsURL, nil)
+	instruments, err := okx.FetchInstruments(ctx, http.DefaultClient, okxDataURL)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			slog.Warn("okx instruments: close response body", "error", err)
-		}
-	}()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("okx instruments: unexpected status %d", resp.StatusCode)
-	}
-	var payload okxInstrumentsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("okx instruments: decode: %w", err)
-	}
-	if payload.Code != "" && payload.Code != "0" {
-		msg := strings.TrimSpace(payload.Msg)
-		if msg == "" {
-			msg = "request failed"
-		}
-		return nil, fmt.Errorf("okx instruments: %s: %s", payload.Code, msg)
-	}
-	set := make(map[string]struct{}, len(payload.Data))
-	for _, item := range payload.Data {
+	set := make(map[string]struct{}, len(instruments))
+	for _, item := range instruments {
 		if instID := strings.TrimSpace(item.InstID); instID != "" {
 			set[instID] = struct{}{}
 		}

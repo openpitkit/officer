@@ -70,6 +70,11 @@
     "stopped": "Parado"
   },
   "connection": {
+    "okx": {
+      "site": "Site: {{site}}",
+      "passphraseStored": "Passphrase: armazenada",
+      "passphraseNotSet": "Passphrase: não definida"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "Ativada",
@@ -95,6 +100,16 @@
     "description": "{{label}} e sua configuração serão excluídos permanentemente. Desative a conexão primeiro. Conexões com histórico de ordens não podem ser excluídas."
   },
   "create": {
+    "okx": {
+      "openDemo": "Acesse sua área pessoal da OKX. No menu de contexto, selecione {{trade}} -> {{demoTrading}} para abrir o terminal de negociação de demonstração.",
+      "demoTradingGuide": "Sobre a negociação de demonstração",
+      "createDemoKey": "No terminal, abra o menu do perfil e selecione {{demoTradingApi}}. Clique em {{createKey}}, conceda a permissão {{tradePermission}} e defina uma Passphrase. Salve a API key, o API secret e a Passphrase.",
+      "keepPageOpen": "Mantenha a página aberta - os campos abaixo pedem os três valores e o site em que sua conta está registrada.",
+      "live": {
+        "createKey": "Crie uma chave de API na sua conta da OKX com a permissão {{tradePermission}}, sem permissão de retirada, e defina uma Passphrase. Copie a API key, o API secret e a Passphrase - a OKX não pode recuperar uma Passphrase perdida.",
+        "bindIp": "Vincule à chave o endereço IPv4 público do computador em que o Officer é executado: na OKX, as chaves com permissão de negociação e sem endereço IP vinculado expiram após 14 dias de inatividade."
+      }
+    },
     "test": {
       "prepare": "Esta conexão executa ordens de teste localmente e não precisa de chaves. Após criá-la, conceda acesso a uma conta de teste, configure as máscaras de símbolos e suas regras de execução e ative a conexão."
     },
@@ -117,6 +132,7 @@
     "chooseVenue": "Escolher plataforma",
     "prepareAccount": "Prepare sua conta {{provider}}",
     "mode": "Modo",
+    "apiKeyGuide": "Como criar chaves de API",
     "alpaca": {
       "createAccount": "Crie uma conta na Alpaca.",
       "signUp": "Cadastrar-se na Alpaca",
@@ -139,7 +155,6 @@
       "keepPageOpen": "Mantenha a página aberta - os campos abaixo pedem os dois valores.",
       "live": {
         "prepareAccount": "Cumpra os requisitos da Binance para emitir chaves de API: verificação de identidade, autenticação de dois fatores e um depósito de qualquer valor na carteira à vista.",
-        "apiKeyGuide": "Como criar chaves de API",
         "createKey": "Crie uma chave de API: clique no ícone do perfil, depois em {{account}}, acesse {{apiManagement}} e clique em {{createApi}}. Escolha {{systemGenerated}} - o Officer assina as solicitações com HMAC-SHA256 - informe um rótulo e conclua a verificação de dois fatores. Copie a API key e o API secret.",
         "restrictKey": "Clique em {{editRestrictions}}, selecione {{trustedIPs}} e informe o endereço IPv4 público do computador em que o Officer é executado: sem essa restrição, uma chave gerada pelo sistema permite somente leitura. Depois marque {{spotTrading}} para que o Officer possa enviar ordens e não habilite outras permissões."
       }
@@ -168,6 +183,16 @@
     "testResult": "Verificação concluída: a execução de teste não se conecta a nenhuma plataforma e não precisa de chaves."
   },
   "settings": {
+    "okx": {
+      "passphrase": "Passphrase",
+      "site": "Site da OKX",
+      "sitePlaceholder": "Selecione o site da sua conta",
+      "sites": {
+        "global": "Conta global ({{site}})",
+        "eea": "Conta do EEE ({{site}})",
+        "us": "Conta dos EUA ou da Austrália ({{site}})"
+      }
+    },
     "description": "Deixe os campos em branco para manter os valores armazenados.",
     "unknownProviderCredentials": "Este painel não conhece os campos de credenciais deste provedor.",
     "etoro": {

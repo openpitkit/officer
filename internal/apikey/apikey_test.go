@@ -42,8 +42,8 @@ func TestParseBybit(t *testing.T) {
 }
 
 func TestParseWithPassphrase(t *testing.T) {
-	got, err := apikey.ParseWithPassphrase(`{"apiKey":" test-key-marker ","apiSecret":" test-secret-marker ","passphrase":" \t test-passphrase-marker \n "}`, "okx")
-	if err != nil || got != (apikey.PassphraseCredentials{
+	got, fields, err := apikey.ParseWithPassphrase(`{"apiKey":" test-key-marker ","apiSecret":" test-secret-marker ","passphrase":" \t test-passphrase-marker \n "}`, "okx")
+	if err != nil || len(fields) != 0 || got != (apikey.PassphraseCredentials{
 		APIKey: "test-key-marker", APISecret: "test-secret-marker", Passphrase: "test-passphrase-marker",
 	}) {
 		t.Fatal("valid passphrase credentials were refused or not trimmed")
@@ -67,7 +67,7 @@ func TestCredentialShapeValidation(t *testing.T) {
 	}{
 		{"passphrase", "okx", []string{"apiKey", "apiSecret", "passphrase"},
 			[]string{"test-key-marker", "test-secret-marker", "test-passphrase-marker"},
-			func(raw, vendor string) error { _, err := apikey.ParseWithPassphrase(raw, vendor); return err }},
+			func(raw, vendor string) error { _, _, err := apikey.ParseWithPassphrase(raw, vendor); return err }},
 		{"single_key", "openalgo", []string{"apiKey"}, []string{"test-key-marker"},
 			func(raw, vendor string) error { _, err := apikey.ParseKey(raw, vendor); return err }},
 		{"cdp", "coinbase", []string{"keyName", "privateKey"},
@@ -317,6 +317,55 @@ func TestParseWithSecretField(t *testing.T) {
 			if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != tc.pointer ||
 				domain.ValidationConstraint(err) != tc.code || err.Error() != tc.message {
 				t.Fatalf("error = %v, want %s at %q: %s", err, tc.code, tc.pointer, tc.message)
+			}
+		})
+	}
+}
+
+func TestParseWithPassphraseExtraFields(t *testing.T) {
+	raw := `{"apiKey":" test-key-marker ","apiSecret":" test-secret-marker ","passphrase":" test-passphrase-marker ","site":" example.test ","region":" region-marker "}`
+	for _, tc := range []struct {
+		names, want []string
+	}{
+		{[]string{"site", "region"}, []string{"example.test", "region-marker"}},
+		{[]string{"region", "site"}, []string{"region-marker", "example.test"}},
+	} {
+		got, fields, err := apikey.ParseWithPassphrase(raw, "test", tc.names...)
+		if err != nil || got != (apikey.PassphraseCredentials{
+			APIKey: "test-key-marker", APISecret: "test-secret-marker",
+			Passphrase: "test-passphrase-marker",
+		}) || len(fields) != 2 || fields[0] != tc.want[0] || fields[1] != tc.want[1] {
+			t.Fatal("required non-secret fields were not trimmed or returned in order")
+		}
+	}
+	if _, _, err := apikey.ParseWithPassphrase(raw, "test"); err == nil {
+		t.Fatal("passphrase parser accepted unnamed extra fields")
+	}
+	base := `{"apiKey":"test-key-marker","apiSecret":"test-secret-marker","passphrase":"test-passphrase-marker"}`
+	plain, extra, err := apikey.ParseWithPassphrase(base, "test")
+	if err != nil || plain != (apikey.PassphraseCredentials{
+		APIKey: "test-key-marker", APISecret: "test-secret-marker",
+		Passphrase: "test-passphrase-marker",
+	}) || len(extra) != 0 {
+		t.Fatal("zero-extra-field shape changed passphrase parsing")
+	}
+}
+
+func TestParseWithPassphraseExtraFieldsValidation(t *testing.T) {
+	for _, tc := range []struct{ name, raw, pointer, code, message string }{
+		{"missing", `{"apiKey":"test-key-marker","apiSecret":"test-secret-marker","passphrase":"test-passphrase-marker"}`, "/site", "required", "test: site is required"},
+		{"blank", `{"apiKey":"test-key-marker","apiSecret":"test-secret-marker","passphrase":"test-passphrase-marker","site":"  "}`, "/site", "required", "test: site is required"},
+		{"null", `{"apiKey":"test-key-marker","apiSecret":"test-secret-marker","passphrase":"test-passphrase-marker","site":null}`, "/site", "required", "test: site is required"},
+		{"type", `{"apiKey":"test-key-marker","apiSecret":"test-secret-marker","passphrase":"test-passphrase-marker","site":42}`, "", "type", "test: invalid credentials JSON"},
+		{"unknown", `{"apiKey":"test-key-marker","apiSecret":"test-secret-marker","passphrase":"test-passphrase-marker","site":"example.test","unknown-name-marker":"unknown-value-marker"}`, "", "unknown_field", "test: unknown credentials field"},
+		{"missing_secret", `{"apiKey":"test-key-marker","apiSecret":"test-secret-marker","site":"example.test"}`, "/passphrase", "required", "test: passphrase is required"},
+		{"malformed", `{"apiKey":"test-key-marker"`, "", "type", "test: invalid credentials JSON"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			credentials, fields, err := apikey.ParseWithPassphrase(tc.raw, "test", "site")
+			assertValidationError(t, err, tc.pointer, tc.code, tc.message)
+			if credentials != (apikey.PassphraseCredentials{}) || fields != nil {
+				t.Fatal("failed parse returned partial credentials or fields")
 			}
 		})
 	}

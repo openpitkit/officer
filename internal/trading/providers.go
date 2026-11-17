@@ -25,7 +25,7 @@ import (
 
 // FirstPartyProviders returns the built-in trading factories.
 func FirstPartyProviders() []fwtrading.Provider {
-	return []fwtrading.Provider{AlpacaProvider(), BinanceProvider(), IBProvider(), EtoroProvider(), TestProvider()}
+	return []fwtrading.Provider{AlpacaProvider(), BinanceProvider(), IBProvider(), EtoroProvider(), OKXProvider(), TestProvider()}
 }
 
 // IBProvider trades stocks, spot FX and crypto through TWS/IB Gateway.
@@ -118,6 +118,40 @@ func BinanceProvider() fwtrading.Provider {
 		UnlinkedFees: false,
 		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
 			return NewBinanceConnector(ctx.Connection)
+		},
+	}
+}
+
+// OKXProvider trades spot for one account identified by its API credentials.
+//
+// Credentials are {apiKey, apiSecret, passphrase, site}. The required site is
+// the registration site: www.okx.com (global accounts), my.okx.com (EEA
+// accounts), or app.okx.com (US and Australian accounts). Paper mode selects
+// demo trading on that site's REST and private WebSocket endpoints; live mode
+// selects live trading.
+// VenueAccount is empty.
+// Market route JSON is {}; limit routes are {"timeInForce":"GTC"|"IOC"|"FOK"}.
+// Only quantity orders are supported, including market buys in base currency.
+// Symbols are OKX instIds such as BTC-USDT. Verification and search read the
+// connection host's public instruments, including baseCcy and quoteCcy.
+// Account check reads account/config for uid, used as the account identity.
+//
+// Pre-check requires a live spot instrument, quantity at least minSz and a
+// multiple of lotSz, and a positive limit price that is a multiple of tickSz.
+// Fill commission negates OKX's fee: charges are positive, rebates negative;
+// base and quote fees are booked against the corresponding Officer asset.
+// There are no unlinked fees.
+//
+// The private orders/SPOT channel delivers fills and venue-side cancellations.
+// Reconnect reconciliation reads trade/order, trade/fills (last three days)
+// and trade/fills-history (last three months), using the order's instId.
+// The full deduplicated fill chain must equal the order's accumulated fill.
+func OKXProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderOKX, Title: "OKX",
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false, Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewOKXConnector(ctx.Connection)
 		},
 	}
 }

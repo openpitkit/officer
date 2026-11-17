@@ -5756,8 +5756,28 @@ describe("Add trading connection dialog", () => {
 
 describe("Trading provider credential fields", () => {
   const etoro: TradingProvider = { ...provider, type: "etoro", title: "eToro" };
+  const okx: TradingProvider = { ...provider, type: "okx", title: "OKX" };
   const unknownCredentials =
     "This panel does not know the credential fields of this provider.";
+
+  async function chooseOKXSite(
+    user: ReturnType<typeof userEvent.setup>,
+    trigger: HTMLElement,
+    name: string,
+    inspect?: (options: HTMLElement[]) => void,
+  ) {
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    try {
+      await user.click(trigger);
+      const options = await screen.findAllByRole("option");
+      inspect?.(options);
+      await user.click(screen.getByRole("option", { name }));
+    } finally {
+      focusSpy.mockRestore();
+    }
+  }
 
   async function openProviderCreate(
     user: ReturnType<typeof userEvent.setup>,
@@ -5775,6 +5795,240 @@ describe("Trading provider credential fields", () => {
       screen.getByRole("dialog", { name: `Add ${title} connection` }),
     );
   }
+
+  it("requires the OKX label, three secrets and an explicitly chosen site", async () => {
+    const user = userEvent.setup();
+    snapshot = { providers: [okx], connections: [] };
+    renderTrading();
+    const dialog = await openProviderCreate(user, "OKX");
+    const create = dialog.getByRole("button", { name: "Create" });
+    const label = dialog.getByLabelText("Label");
+    expect(label).toBeRequired();
+    expect(create).toBeDisabled();
+    const site = dialog.getByRole("combobox", { name: "OKX site" });
+    expect(site).toBeRequired();
+    expect(site).toHaveTextContent("Choose the site of your account");
+    for (const name of ["API key", "API secret", "Passphrase"]) {
+      const input = dialog.getByLabelText(name, { exact: true });
+      expect(input).toBeRequired();
+      expect(input).toHaveAttribute("type", "password");
+      expect(input).toHaveAttribute("autocomplete", "new-password");
+      await user.type(input, `  fixture-${name}  `);
+      expect(create).toBeDisabled();
+    }
+    await chooseOKXSite(user, site, "EEA account (my.okx.com)", (options) => {
+      expect(options.map((option) => option.textContent)).toEqual([
+        "Global account (www.okx.com)",
+        "EEA account (my.okx.com)",
+        "US or Australian account (app.okx.com)",
+      ]);
+      expect(
+        options.every(
+          (option) => option.getAttribute("aria-selected") === "false",
+        ),
+      ).toBe(true);
+    });
+    expect(create).toBeEnabled();
+    for (const name of ["API key", "API secret", "Passphrase"]) {
+      const input = dialog.getByLabelText(name, { exact: true });
+      await user.clear(input);
+      await user.type(input, "   ");
+      expect(create).toBeDisabled();
+      await user.type(input, `fixture-${name}  `);
+      expect(create).toBeEnabled();
+    }
+    await user.clear(label);
+    await user.type(label, "   ");
+    expect(create).toBeDisabled();
+    await user.type(label, "OKX desk  ");
+    await user.click(create);
+    expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+      provider: "okx",
+      label: "OKX desk",
+      mode: "paper",
+      credentials: {
+        apiKey: "fixture-API key",
+        apiSecret: "fixture-API secret",
+        passphrase: "fixture-Passphrase",
+        site: "my.okx.com",
+      },
+      enabled: false,
+    });
+  });
+
+  it("shows the OKX paper guide and switches to the live guide", async () => {
+    const user = userEvent.setup();
+    snapshot = { providers: [okx], connections: [] };
+    renderTrading();
+    await user.click(
+      await screen.findByRole("button", { name: /^Add trading connection/ }),
+    );
+    const picker = within(screen.getByRole("dialog"));
+    expect(picker.getByRole("link", { name: "Site" })).toHaveAttribute(
+      "href",
+      "https://www.okx.com",
+    );
+    expect(picker.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://www.okx.com/docs-v5/en/#overview-demo-trading-services",
+    );
+    await user.click(picker.getByRole("button", { name: "OKX" }));
+    const dialog = within(screen.getByRole("dialog"));
+    const keepPageOpen =
+      "Keep the page open - the fields below ask for the three values and the site your account is registered on.";
+    const paper = [
+      "Open your OKX account dashboard. In its context menu, select Trade -> Demo Trading to open the demo trading terminal.",
+      "In the terminal, open the profile menu and select Demo Trading API. Click Create Demo Trading API Key, grant the Trade permission, and set a passphrase. Save the API key, secret key, and passphrase.",
+      keepPageOpen,
+    ];
+    expect(dialog.getAllByRole("listitem")).toHaveLength(3);
+    paper.forEach((text, index) =>
+      expect(
+        within(dialog.getAllByRole("listitem")[index]).getByText(text),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      dialog.getByRole("link", { name: "About demo trading" }),
+    ).toHaveAttribute(
+      "href",
+      "https://www.okx.com/docs-v5/en/#overview-demo-trading-services",
+    );
+    await user.click(dialog.getByRole("button", { name: "Live" }));
+    const live = [
+      "Create an API key in your OKX account with the Trade permission and no withdrawal permission, and set a passphrase. Copy the API key, the secret key and the passphrase - OKX cannot recover a lost passphrase.",
+      "Bind the public IPv4 address of the machine running Officer to the key: OKX expires a key with the trading permission and no bound IP address after 14 days of inactivity.",
+      keepPageOpen,
+    ];
+    expect(dialog.getAllByRole("listitem")).toHaveLength(3);
+    live.forEach((text, index) =>
+      expect(
+        within(dialog.getAllByRole("listitem")[index]).getByText(text),
+      ).toBeInTheDocument(),
+    );
+    expect(dialog.queryByText(paper[0])).not.toBeInTheDocument();
+    expect(
+      dialog.queryByRole("link", { name: "About demo trading" }),
+    ).not.toBeInTheDocument();
+    expect(
+      dialog.getByRole("link", { name: "How to create API keys" }),
+    ).toHaveAttribute(
+      "href",
+      "https://www.okx.com/docs-v5/en/#overview-api-key-creation",
+    );
+  });
+
+  it.each(["site", "passphrase"])(
+    "edits only the changed OKX %s",
+    async (field) => {
+      const user = userEvent.setup();
+      snapshot = {
+        providers: [okx],
+        connections: [
+          connection({
+            id: "okx-1",
+            provider: "okx",
+            label: "OKX paper",
+            settings: { site: "my.okx.com" },
+            secrets: { apiKey: true, apiSecret: true, passphrase: true },
+          }),
+        ],
+      };
+      renderTrading();
+      const scope = await card("OKX paper");
+      await user.click(scope.getByRole("button", { name: "Edit settings" }));
+      const dialog = within(screen.getByRole("dialog"));
+      const save = dialog.getByRole("button", { name: "Save" });
+      expect(save).toBeDisabled();
+      const site = dialog.getByRole("combobox", { name: "OKX site" });
+      expect(site).toHaveTextContent("EEA account (my.okx.com)");
+      for (const name of ["API key", "API secret", "Passphrase"]) {
+        const input = dialog.getByLabelText(name, { exact: true });
+        expect(input).toHaveValue("");
+        expect(input).toHaveAttribute("type", "password");
+        expect(input).toHaveAttribute("autocomplete", "new-password");
+        expect(input).toHaveAttribute("placeholder", "Keep stored secret");
+        await user.type(input, "   ");
+      }
+      expect(save).toBeDisabled();
+      if (field === "site") {
+        await chooseOKXSite(
+          user,
+          site,
+          "US or Australian account (app.okx.com)",
+        );
+        expect(save).toBeEnabled();
+        await chooseOKXSite(user, site, "EEA account (my.okx.com)");
+        expect(save).toBeDisabled();
+        await chooseOKXSite(
+          user,
+          site,
+          "US or Australian account (app.okx.com)",
+        );
+      } else {
+        await user.type(
+          dialog.getByLabelText("Passphrase"),
+          "fixture-replacement  ",
+        );
+      }
+      expect(save).toBeEnabled();
+      await user.click(save);
+      expect(
+        api.updateTradingConnectionSettings,
+      ).toHaveBeenCalledExactlyOnceWith("okx-1", {
+        credentials:
+          field === "site"
+            ? { site: "app.okx.com" }
+            : { passphrase: "fixture-replacement" },
+      });
+      await user.click(scope.getByRole("button", { name: "Edit settings" }));
+      const reopened = within(screen.getByRole("dialog"));
+      expect(reopened.getByLabelText("Passphrase")).toHaveValue("");
+      expect(reopened.getByRole("button", { name: "Save" })).toBeDisabled();
+    },
+  );
+
+  it.each([true, false])(
+    "shows the OKX site and only secret presence flags (%s)",
+    async (stored) => {
+      snapshot = {
+        providers: [okx],
+        connections: [
+          connection({
+            provider: "okx",
+            label: "OKX paper",
+            settings: {
+              site: "app.okx.com",
+              apiKey: "fixture-hidden-key",
+              apiSecret: "fixture-hidden-secret",
+              passphrase: "fixture-hidden-passphrase",
+            },
+            secrets: { apiKey: stored, apiSecret: !stored, passphrase: stored },
+          }),
+        ],
+      };
+      renderTrading();
+      const scope = await card("OKX paper");
+      expect(
+        scope.getByText("Site: app.okx.com", { exact: true }),
+      ).toBeInTheDocument();
+      for (const [name, flag] of [
+        ["API key", stored],
+        ["API secret", !stored],
+        ["Passphrase", stored],
+      ] as const) {
+        expect(
+          scope.getByText(`${name}: ${flag ? "stored" : "not set"}`, {
+            exact: true,
+          }),
+        ).toBeInTheDocument();
+      }
+      expect(
+        screen
+          .getByRole("region", { name: "OKX paper" })
+          .textContent?.includes("fixture-hidden-"),
+      ).toBe(false);
+    },
+  );
 
   it.each([
     ["trading_access_notification_failed", 409, false],

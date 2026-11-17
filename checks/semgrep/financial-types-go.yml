@@ -21,7 +21,8 @@
 # throughout framework/domain, httpapi, internal/store/sqlite,
 # framework/backend, framework/businesscsv, framework/marketdata,
 # framework/node, framework/trading, internal/trading, internal/alpaca and
-# internal/binance.
+# internal/binance. internal/okx is also covered: it holds venue decimal
+# strings at the boundary rather than decimal.Decimal.
 # A raw float64 in one of these packages is the usual way the
 # domain model gets bypassed; deliberately not keyed on field names, since a
 # rule matching only `price`/`amount`/`qty` misses every field named
@@ -65,6 +66,7 @@ rules:
         - /internal/trading/**
         - /internal/alpaca/**
         - /internal/binance/**
+        - /internal/okx/**
       exclude:
         - "**/*_test.go"
         - /internal/marketdata/**

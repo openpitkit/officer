@@ -142,7 +142,7 @@ func (c *binanceConnector) stream(ctx context.Context,
 			continue
 		}
 		if frame.Status != nil {
-			if *frame.Status == 200 && binanceID(frame.Result.SubscriptionID) {
+			if *frame.Status == 200 && isDecimalID(frame.Result.SubscriptionID.String()) {
 				subscriptionID = frame.Result.SubscriptionID
 				break
 			}
@@ -184,7 +184,7 @@ func (c *binanceConnector) stream(ctx context.Context,
 		if eventType == "serverShutdown" {
 			return session.healthy(), errors.New("binance: server shutdown")
 		}
-		if !binanceID(frame.SubscriptionID) {
+		if !isDecimalID(frame.SubscriptionID.String()) {
 			report(venueStreamUnparsable(health.DiagWarn,
 				binanceFrameUnreadable, venueStreamSkipped))
 			continue
@@ -246,7 +246,7 @@ func (c *binanceConnector) parseBinanceExecution(ctx context.Context,
 	event := fwtrading.Event{Kind: fwtrading.EventOrder,
 		Ref: fwtrading.OrderRef{ClientOrderID: clientID}}
 	var venueID json.Number
-	if json.Unmarshal(fields["i"], &venueID) != nil || !binanceID(venueID) {
+	if json.Unmarshal(fields["i"], &venueID) != nil || !isDecimalID(venueID.String()) {
 		return event, true, venueStreamUnparsable(health.DiagWarn,
 			binanceVenueIDUnusable, venueStreamReconciled)
 	}
@@ -281,11 +281,11 @@ func (c *binanceConnector) parseBinanceExecution(ctx context.Context,
 		return event, true, venueStreamUnparsable(health.DiagWarn,
 			binanceFillUntimed, venueStreamReconciled)
 	}
-	qty, qtyErr := parseBinanceDecimal(update.Original, true)
-	cum, cumErr := parseBinanceDecimal(update.Cumulative, false)
-	_, amountErr := parseBinanceDecimal(update.Quantity, true)
-	_, priceErr := parseBinanceDecimal(update.Price, true)
-	_, commissionErr := parseBinanceDecimal(update.Commission, false)
+	qty, qtyErr := parseVenueDecimal(update.Original, true)
+	cum, cumErr := parseVenueDecimal(update.Cumulative, false)
+	_, amountErr := parseVenueDecimal(update.Quantity, true)
+	_, priceErr := parseVenueDecimal(update.Price, true)
+	_, commissionErr := parseVenueDecimal(update.Commission, false)
 	if qtyErr != nil || cumErr != nil || amountErr != nil ||
 		priceErr != nil || commissionErr != nil {
 		return event, true, venueStreamUnparsable(health.DiagWarn,

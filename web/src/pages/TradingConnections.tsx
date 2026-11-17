@@ -98,6 +98,13 @@ import {
 } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -213,6 +220,15 @@ const ETORO_PUBLIC_API_KEY: TradingGuideStep = {
 };
 const ETORO_KEEP_DIALOG_OPEN: TradingGuideStep = {
   textKey: "create.etoro.keepDialogOpen",
+  links: [],
+};
+
+const OKX_PAPER_DOCS_URL =
+  "https://www.okx.com/docs-v5/en/#overview-demo-trading-services";
+const OKX_LIVE_DOCS_URL =
+  "https://www.okx.com/docs-v5/en/#overview-api-key-creation";
+const OKX_KEEP_PAGE_OPEN: TradingGuideStep = {
+  textKey: "create.okx.keepPageOpen",
   links: [],
 };
 
@@ -346,7 +362,7 @@ const TRADING_PROVIDER_GUIDES: Record<
           textKey: "create.binance.live.prepareAccount",
           links: [
             {
-              labelKey: "create.binance.live.apiKeyGuide",
+              labelKey: "create.apiKeyGuide",
               href: BINANCE_LIVE_DOCS_URL,
             },
           ],
@@ -394,6 +410,48 @@ const TRADING_PROVIDER_GUIDES: Record<
       ],
     },
   },
+  okx: {
+    siteUrl: "https://www.okx.com",
+    docsUrl: { paper: OKX_PAPER_DOCS_URL, live: OKX_LIVE_DOCS_URL },
+    steps: {
+      paper: [
+        {
+          textKey: "create.okx.openDemo",
+          values: { trade: "Trade", demoTrading: "Demo Trading" },
+          links: [
+            {
+              labelKey: "create.okx.demoTradingGuide",
+              href: OKX_PAPER_DOCS_URL,
+            },
+          ],
+        },
+        {
+          textKey: "create.okx.createDemoKey",
+          values: {
+            demoTradingApi: "Demo Trading API",
+            createKey: "Create Demo Trading API Key",
+            tradePermission: "Trade",
+          },
+          links: [],
+        },
+        OKX_KEEP_PAGE_OPEN,
+      ],
+      live: [
+        {
+          textKey: "create.okx.live.createKey",
+          values: { tradePermission: "Trade" },
+          links: [
+            {
+              labelKey: "create.apiKeyGuide",
+              href: OKX_LIVE_DOCS_URL,
+            },
+          ],
+        },
+        { textKey: "create.okx.live.bindIp", links: [] },
+        OKX_KEEP_PAGE_OPEN,
+      ],
+    },
+  },
 };
 
 type TradingCredentialField = {
@@ -403,7 +461,7 @@ type TradingCredentialField = {
   notSetKey: string;
 };
 
-// Alpaca and Binance both take an {apiKey, apiSecret} pair.
+// Alpaca and Binance take an {apiKey, apiSecret} pair; OKX adds a passphrase.
 const API_KEY_SECRET_FIELDS: TradingCredentialField[] = [
   {
     key: "apiKey",
@@ -428,6 +486,18 @@ const TRADING_PROVIDER_CREDENTIAL_FIELDS = new Map<
   ["test", []],
   ["alpaca", API_KEY_SECRET_FIELDS],
   ["binance", API_KEY_SECRET_FIELDS],
+  [
+    "okx",
+    [
+      ...API_KEY_SECRET_FIELDS,
+      {
+        key: "passphrase",
+        labelKey: "settings.okx.passphrase",
+        storedKey: "connection.okx.passphraseStored",
+        notSetKey: "connection.okx.passphraseNotSet",
+      },
+    ],
+  ],
   [
     "etoro",
     [
@@ -469,6 +539,43 @@ function ibSettingsReady(draft: Record<string, string>): boolean {
     port >= 1 &&
     port <= 65535 &&
     isOptionalJSONInt64(draft.clientId)
+  );
+}
+
+const OKX_SITES = [
+  { value: "www.okx.com", labelKey: "settings.okx.sites.global" },
+  { value: "my.okx.com", labelKey: "settings.okx.sites.eea" },
+  { value: "app.okx.com", labelKey: "settings.okx.sites.us" },
+];
+
+function OKXConnectionFields({
+  id,
+  site,
+  busy,
+  onChange,
+}: {
+  id: string;
+  site: string;
+  busy: boolean;
+  onChange: (site: string) => void;
+}) {
+  const { t } = useTranslation("trading");
+  return (
+    <div className="flex flex-col gap-y-2">
+      <Label htmlFor={`${id}-site`}>{t("settings.okx.site")}</Label>
+      <Select value={site} onValueChange={onChange} disabled={busy} required>
+        <SelectTrigger id={`${id}-site`}>
+          <SelectValue placeholder={t("settings.okx.sitePlaceholder")} />
+        </SelectTrigger>
+        <SelectContent>
+          {OKX_SITES.map(({ value, labelKey }) => (
+            <SelectItem key={value} value={value}>
+              {t(labelKey, { site: value })}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -571,12 +678,15 @@ function AddTradingConnectionDialog({
     );
   };
   const isIB = provider.type === "ib";
+  const isOKX = provider.type === "okx";
+  const [okxSite, setOKXSite] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const errorBanner = useRef<HTMLDivElement>(null);
   const guide = TRADING_PROVIDER_GUIDES[provider.type];
   const ready =
     label.trim() !== "" &&
+    (!isOKX || okxSite !== "") &&
     (isIB
       ? ibSettingsReady(ibSettings)
       : fields !== undefined &&
@@ -601,6 +711,7 @@ function AddTradingConnectionDialog({
           credentials[key] = credentialDraft[key].trim();
         }
       }
+      if (isOKX) credentials.site = okxSite;
       const connection = await createTradingConnection({
         provider: provider.type,
         label: label.trim(),
@@ -753,6 +864,14 @@ function AddTradingConnectionDialog({
               </div>
             ))
           )}
+          {isOKX && (
+            <OKXConnectionFields
+              id={id}
+              site={okxSite}
+              busy={busy}
+              onChange={setOKXSite}
+            />
+          )}
           {error && (
             <div ref={errorBanner}>
               <ErrorBanner message={error} />
@@ -800,6 +919,12 @@ function ConnectionSettingsDialog({
     Record<string, string>
   >(() => Object.fromEntries(fields ? fields.map(({ key }) => [key, ""]) : []));
   const isIB = connection.provider === "ib";
+  const isOKX = connection.provider === "okx";
+  const [initialOKXSite] = useState(() =>
+    settingString(connection.settings, "site"),
+  );
+  const [okxSite, setOKXSite] = useState(initialOKXSite);
+  const siteChanged = isOKX && okxSite !== initialOKXSite;
   const [initialIBSettings] = useState(() => ({
     host: settingString(connection.settings, "host"),
     port: settingString(connection.settings, "port"),
@@ -818,6 +943,7 @@ function ConnectionSettingsDialog({
         ibSettings.clientId !== initialIBSettings.clientId)
     : fields !== undefined &&
       (labelChanged ||
+        siteChanged ||
         fields.some(({ key }) => credentialDraft[key].trim() !== ""));
 
   const submit = async () => {
@@ -844,6 +970,7 @@ function ConnectionSettingsDialog({
         if (value !== "") credentials[key] = value;
       }
     }
+    if (siteChanged) credentials.site = okxSite;
     if (Object.keys(credentials).length > 0) body.credentials = credentials;
     setBusy(true);
     setError("");
@@ -936,6 +1063,14 @@ function ConnectionSettingsDialog({
                 </div>
               ))}
             </>
+          )}
+          {isOKX && (
+            <OKXConnectionFields
+              id={id}
+              site={okxSite}
+              busy={busy}
+              onChange={setOKXSite}
+            />
           )}
           <DialogFooter>
             <Button
@@ -2714,6 +2849,13 @@ function ConnectionCard({
             <dt className="text-muted">{tv("venueAccount")}</dt>
             <dd className="break-all">{connection.venueIdentity}</dd>
           </dl>
+          {connection.provider === "okx" && (
+            <p>
+              {t("connection.okx.site", {
+                site: settingString(connection.settings, "site"),
+              })}
+            </p>
+          )}
           {connection.provider === "ib" ? (
             <>
               <p>
