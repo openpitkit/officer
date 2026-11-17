@@ -30,6 +30,8 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	fwstore "go.openpit.dev/officer/framework/store"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // seedLimitFixtures creates an account and an asset for limit tests.
@@ -280,6 +282,146 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 		ctx, domain.ScopeAccountSettlementAsset, "acc-1", "AAPL",
 	); err != nil {
 		t.Fatalf("DeleteOrderSizeLimit(settlement): %v", err)
+	}
+}
+
+func TestPositionLimitPutListDeleteRoundTrip(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.LimitPosition{
+		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "100"},
+		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "10.00000001"},
+		{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "0"},
+		{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "0.1234567890123456789012345678"},
+	}
+	for _, limit := range want {
+		if err := rs.PutPositionLimit(ctx, limit); err != nil {
+			t.Fatalf("PutPositionLimit(%+v): %v", limit, err)
+		}
+	}
+	assertLimits := func(account domain.AccountID, expected []domain.LimitPosition) {
+		t.Helper()
+		got, err := rs.ListPositionLimits(ctx, account)
+		if err != nil {
+			t.Fatalf("ListPositionLimits(%q): %v", account, err)
+		}
+		if len(got) != len(expected) {
+			t.Fatalf("ListPositionLimits(%q) = %+v, want %+v", account, got, expected)
+		}
+		for i := range expected {
+			if got[i] != expected[i] {
+				t.Fatalf("ListPositionLimits(%q)[%d] = %+v, want %+v", account, i, got[i], expected[i])
+			}
+		}
+	}
+	assertLimits("", want)
+	assertLimits("acc-1", want[:2])
+	assertLimits("acc-2", want[2:])
+	assertLimits("missing", nil)
+	for _, value := range []string{"0", "10.00000001", "100"} {
+		want[0].MaxPosition = value
+		if err := rs.PutPositionLimit(ctx, want[0]); err != nil {
+			t.Fatalf("PutPositionLimit(upsert %q): %v", value, err)
+		}
+		assertLimits("", want)
+	}
+	if err := rs.DeletePositionLimit(ctx, "acc-1", "AAPL"); err != nil {
+		t.Fatalf("DeletePositionLimit: %v", err)
+	}
+	assertLimits("", want[1:])
+	if err := rs.DeletePositionLimit(ctx, "acc-1", "AAPL"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeletePositionLimit(missing) = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPositionLimitInvalidRejected(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+	for _, tc := range []struct {
+		name  string
+		limit domain.LimitPosition
+	}{
+		{"unknown account", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "missing", Asset: "AAPL", MaxPosition: "1"}},
+		{"unknown asset", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "missing", MaxPosition: "1"}},
+		{"missing value", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL"}},
+		{"negative", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "-1"}},
+		{"wrong scope", domain.LimitPosition{Scope: domain.ScopeBroker, MaxPosition: "1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := rs.PutPositionLimit(ctx, tc.limit); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("PutPositionLimit = %v, want ErrInvalid", err)
+			}
+		})
+	}
+	list, err := rs.ListPositionLimits(ctx, "")
+	if err != nil || len(list) != 0 {
+		t.Fatalf("invalid writes left limits = %+v, err = %v", list, err)
+	}
+	for _, pair := range [][2]string{{"missing", "AAPL"}, {"acc-1", "missing"}} {
+		if err := rs.DeletePositionLimit(ctx, domain.AccountID(pair[0]), pair[1]); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("DeletePositionLimit(%q) = %v, want ErrInvalid", pair, err)
+		}
+	}
+}
+
+func TestPositionLimitScopeConstraint(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+	db := rs.(*realmStore).rawDB()
+	const insert = `INSERT INTO limit_position (scope, account_id, asset_id, max_position)
+		VALUES (?, (SELECT id FROM account WHERE code = 'acc-1'),
+			(SELECT id FROM asset WHERE code = 'AAPL'), '10')`
+	for _, scope := range []string{"global", "unknown"} {
+		t.Run(scope, func(t *testing.T) {
+			_, err := db.ExecContext(ctx, insert, scope)
+			var sqliteErr *sqlitedriver.Error
+			if !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_CHECK {
+				t.Fatalf("insert position limit scope %q: got %v, want SQLITE_CONSTRAINT_CHECK", scope, err)
+			}
+		})
+	}
+	if _, err := db.ExecContext(ctx, insert, domain.ScopeAccountAsset); err != nil {
+		t.Fatalf("insert account_asset position limit: %v", err)
+	}
+}
+
+func TestPositionLimitDependents(t *testing.T) {
+	for _, entity := range []string{"account", "asset"} {
+		t.Run(entity, func(t *testing.T) {
+			ctx, rs := seedLimitFixtures(t)
+			limit := domain.LimitPosition{
+				Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "0",
+			}
+			if err := rs.PutPositionLimit(ctx, limit); err != nil {
+				t.Fatal(err)
+			}
+			deleteEntity := func(force bool) error {
+				if entity == "account" {
+					return rs.DeleteAccount(ctx, "acc-1", force)
+				}
+				return rs.DeleteAsset(ctx, "AAPL", force)
+			}
+			err := deleteEntity(false)
+			var dependentErr domain.HasDependentsError
+			if !errors.As(err, &dependentErr) {
+				t.Fatalf("Delete %s(no force) = %v, want HasDependentsError", entity, err)
+			}
+			if len(dependentErr.Dependents) != 1 ||
+				dependentErr.Dependents[0] != (domain.DependentCount{Kind: "limit_position", Count: 1}) {
+				t.Fatalf("Delete %s(no force) dependents = %+v, want one limit_position", entity, dependentErr.Dependents)
+			}
+			got, err := rs.ListPositionLimits(ctx, "")
+			if err != nil || len(got) != 1 || got[0] != limit {
+				t.Fatalf("rejected delete changed limits: %+v, err=%v", got, err)
+			}
+			if err := deleteEntity(true); err != nil {
+				t.Fatalf("Delete %s(force): %v", entity, err)
+			}
+			got, err = rs.ListPositionLimits(ctx, "")
+			if err != nil || len(got) != 0 {
+				t.Fatalf("forced delete left limits: %+v, err=%v", got, err)
+			}
+		})
 	}
 }
 

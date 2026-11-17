@@ -1552,6 +1552,115 @@ func TestLimitOrderSize_Validate(t *testing.T) {
 	}
 }
 
+func TestLimitPositionValidate(t *testing.T) {
+	t.Parallel()
+	base := domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "100",
+	}
+	for _, value := range []string{"100", "10.00000001", "0", "0.1234567890123456789012345678"} {
+		t.Run("valid/"+value, func(t *testing.T) {
+			limit := base
+			limit.MaxPosition = value
+			if err := limit.Validate(); err != nil {
+				t.Fatalf("Validate(%q): %v", value, err)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, value, constraint string
+	}{
+		{"missing", "", "required"},
+		{"negative", "-0.01", "range"},
+		{"negative zero", "-0", "range"},
+		{"negative fractional zero", "-0.00", "range"},
+		{"not decimal", "no", "decimal"},
+		{"too precise", "0.12345678901234567890123456789", "decimal"},
+		{"out of range", "79228162514264337593543950336", "decimal"},
+		{"exponent", "1e3", "decimal"},
+		{"signed exponent", "1E+2", "decimal"},
+		{"excess fractional zeros", "1.00000000000000000000000000000000", "decimal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limit := base
+			limit.MaxPosition = tc.value
+			err := limit.Validate()
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("Validate(%q) = %v, want ErrInvalid", tc.value, err)
+			}
+			if got := domain.ValidationPointer(err); got != "/maxPosition" {
+				t.Fatalf("pointer = %q, want /maxPosition", got)
+			}
+			if got := domain.ValidationConstraint(err); got != tc.constraint {
+				t.Fatalf("constraint = %q, want %q", got, tc.constraint)
+			}
+		})
+	}
+	for _, scope := range []domain.LimitScope{
+		"", domain.ScopeBroker, domain.ScopeGlobal, domain.ScopeAccount, domain.ScopeAsset,
+		domain.ScopeAccountGroup, domain.ScopeUnderlyingAsset, domain.ScopeSettlementAsset,
+		domain.ScopeAccountUnderlyingAsset, domain.ScopeAccountSettlementAsset,
+	} {
+		t.Run("scope/"+string(scope), func(t *testing.T) {
+			limit := base
+			limit.Scope = scope
+			err := limit.Validate()
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("Validate(scope=%q) = %v, want ErrInvalid", scope, err)
+			}
+			if got := domain.ValidationPointer(err); got != "/scope" {
+				t.Fatalf("pointer = %q, want /scope", got)
+			}
+			if got := domain.ValidationConstraint(err); got != "enum" {
+				t.Fatalf("constraint = %q, want enum", got)
+			}
+		})
+	}
+	for _, axis := range []string{"account", "asset"} {
+		t.Run("missing/"+axis, func(t *testing.T) {
+			limit := base
+			if axis == "account" {
+				limit.Account = ""
+			} else {
+				limit.Asset = ""
+			}
+			err := limit.Validate()
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("Validate(missing %s) = %v, want ErrInvalid", axis, err)
+			}
+			if got := domain.ValidationPointer(err); got != "/"+axis {
+				t.Fatalf("pointer = %q, want /%s", got, axis)
+			}
+			if got := domain.ValidationConstraint(err); got != "required" {
+				t.Fatalf("constraint = %q, want required", got)
+			}
+		})
+	}
+}
+
+func TestIsSpotFundsSettingPolicy(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		policy string
+		want   bool
+	}{
+		{domain.PolicyRateLimit, false},
+		{domain.PolicyOrderSizeLimit, false},
+		{domain.PolicyPositionLimit, true},
+		{domain.PolicySpotFundsPnlBoundsKillSwitch, true},
+		{domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch, true},
+		{domain.PolicySpotFundsTotalPnlBoundsKillSwitch, true},
+		{domain.PolicySpotFundsLimitMode, false},
+		{"", false},
+		{"unknown", false},
+	} {
+		t.Run(tc.policy, func(t *testing.T) {
+			if got := domain.IsSpotFundsSettingPolicy(tc.policy); got != tc.want {
+				t.Fatalf("IsSpotFundsSettingPolicy(%q) = %v, want %v", tc.policy, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLimitOrderSize_EitherOrValidationUsesRequestRoot(t *testing.T) {
 	t.Parallel()
 

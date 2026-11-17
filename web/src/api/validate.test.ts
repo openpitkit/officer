@@ -20,6 +20,53 @@ import { describe, expect, it } from "vitest";
 import { validateLimit } from "@/api/validate";
 
 describe("validateLimit", () => {
+  const positionLimit = (values: Record<string, string>) =>
+    validateLimit({
+      policy: "position_limit",
+      scope: "account_asset",
+      account: "acc-1",
+      asset: "AAPL",
+      values,
+    });
+
+  it.each(["100", "0", "10.00000001", "+10", ".5", "10."])(
+    "accepts the exact non-negative position ceiling %s",
+    (max_position) => {
+      expect(positionLimit({ max_position })).toBeNull();
+    },
+  );
+
+  it.each(["-1", "-0.00000001", "-0", "-0.00"])(
+    "rejects negative position ceiling %s",
+    (max_position) => {
+      expect(positionLimit({ max_position })).toEqual({
+        key: "kind.nonNegativeDecimal",
+        values: { kind: "max_position" },
+      });
+    },
+  );
+
+  it.each(["abc", "1e2", "1,000"])(
+    "rejects non-decimal position ceiling %s",
+    (max_position) => {
+      expect(positionLimit({ max_position })).toEqual({
+        key: "kind.nonNegativeDecimal",
+        values: { kind: "max_position" },
+      });
+    },
+  );
+
+  it.each<Record<string, string>>([
+    {},
+    { max_position: "" },
+    { max_position: " " },
+  ])("requires the position ceiling in %j", (values) => {
+    expect(positionLimit(values)).toEqual({
+      key: "limit.positionRequires",
+      values: { policy: "position_limit", kind: "max_position" },
+    });
+  });
+
   it("validates semantic order-size scopes and cap applicability", () => {
     const limit = (
       scope: string,

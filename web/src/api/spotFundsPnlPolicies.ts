@@ -15,8 +15,6 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import type { AccountLimits } from "./types";
-
 /** The Spot Funds P&L-bounds policies, one per P&L axis: realized, unrealized
  *  and total. They share one barrier shape and differ only in what they bound. */
 export type SpotFundsPnlPolicy =
@@ -31,7 +29,10 @@ export interface SpotFundsPnlPolicyWire {
   /** Key of the stored barrier in the answer of that PUT. */
   putKey: string;
   /** Key of its barriers in the per-policy limits view. */
-  listKey: Exclude<keyof AccountLimits, "rateLimits" | "orderSizeLimits">;
+  listKey:
+    | "spotFundsPnlBoundsLimits"
+    | "spotFundsUnrealizedPnlBoundsLimits"
+    | "spotFundsTotalPnlBoundsLimits";
 }
 
 /** Every Spot Funds P&L-bounds policy with its wire names, realized first. */
@@ -66,4 +67,13 @@ export function isSpotFundsPnlPolicy(
   policy: string,
 ): policy is SpotFundsPnlPolicy {
   return Object.hasOwn(SPOT_FUNDS_PNL_POLICIES, policy);
+}
+
+/** Whether changing a policy applies in place without an engine rebuild. */
+export function isInPlacePolicy(policy: string): boolean {
+  return (
+    isSpotFundsPnlPolicy(policy) ||
+    policy === "spot_funds_limit_mode" ||
+    policy === "position_limit"
+  );
 }

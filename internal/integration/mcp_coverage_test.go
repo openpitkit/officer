@@ -410,6 +410,10 @@ func (s *setMDErrSource) PutOrderSizeLimit(ctx context.Context, limit domain.Lim
 	return domain.ErrNotImplemented
 }
 
+func (s *setMDErrSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
 func (s *setMDErrSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }

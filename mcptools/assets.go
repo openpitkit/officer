@@ -43,14 +43,14 @@ const (
 	updateAssetToolDescription = "Change an asset's code, title and asset " +
 		"class; the title and the asset class replace the stored ones, and an " +
 		"omitted or empty one clears it. A code change is refused with " +
-		"loosening_refused while a rate-limit or order-size barrier references " +
+		"loosening_refused while a rate-limit, order-size or position barrier references " +
 		"the asset or a Spot Funds P&L bound is denominated in it. Mutates " +
 		"Officer control-plane config; protected and disabled by default."
 	deleteAssetToolDescription = "Delete an asset. An asset with dependent " +
 		"rows, the market-data and trading instruments that reference it " +
 		"included, is refused with has_dependents, and so is an asset an " +
 		"account or group holds as its currency. The delete is refused with " +
-		"loosening_refused while a rate-limit or order-size barrier references " +
+		"loosening_refused while a rate-limit, order-size or position barrier references " +
 		"the asset or a Spot Funds P&L bound is denominated in it, and always " +
 		"with force: force would delete the asset's dependent rows with it - " +
 		"balances, orders, trades, adjustments and barriers among them. " +

@@ -164,6 +164,10 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 			Scope: domain.ScopeAccountUnderlyingAsset, Account: oneAccountFeatures.Account,
 			Asset: "AAPL", MaxQuantity: "10",
 		}},
+		PositionLimits: []domain.LimitPosition{{
+			Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account,
+			Asset: "AAPL", MaxPosition: "10",
+		}},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
@@ -202,6 +206,12 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 			func(f *fakeService) domain.AccountID {
 				return f.spotFundsPnlBoundsLimitPut.Account
 			},
+			oneAccountFeatures.Account,
+		},
+		{
+			"position", "/limits/position",
+			`{"scope":"account_asset","asset":"AAPL","maxPosition":"10"}`, "positionLimit",
+			func(f *fakeService) domain.AccountID { return f.positionLimitPut.Account },
 			oneAccountFeatures.Account,
 		},
 	} {

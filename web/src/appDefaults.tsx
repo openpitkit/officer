@@ -75,6 +75,16 @@ export function registerAppVocabulary(): void {
       fields: [{ key: "max_quantity" }, { key: "max_notional" }],
     },
   });
+  registerPolicy({
+    id: "position_limit",
+    allowedScopes: ["account_asset"],
+    kinds: [{ kind: "max_position" }],
+    catalog: {
+      wikiUrl: siteLink("wiki", "/Spot-Funds/", "position-limit"),
+      group: "orders",
+      fields: [{ key: "max_position" }],
+    },
+  });
   for (const [id, anchor] of [
     ["spot_funds_pnl_bounds_kill_switch", "self-computed-pnl-kill-switch"],
     [

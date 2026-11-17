@@ -58,6 +58,10 @@ func TestSnapshotWithoutAccountKeepsUnrelatedAndGroupRuntimeState(t *testing.T) 
 			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "deleted", Asset: "USD", MaxQuantity: "1"},
 			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "retained", Asset: "USD", MaxQuantity: "2"},
 		},
+		PositionLimits: []domain.LimitPosition{
+			{Scope: domain.ScopeAccountAsset, Account: "deleted", Asset: "USD", MaxPosition: "100"},
+			{Scope: domain.ScopeAccountAsset, Account: "retained", Asset: "USD", MaxPosition: "100"},
+		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "deleted", Currency: "USD", LowerBound: "-1"},
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "retained", Currency: "USD", LowerBound: "-2"},
@@ -68,6 +72,7 @@ func TestSnapshotWithoutAccountKeepsUnrelatedAndGroupRuntimeState(t *testing.T) 
 	if len(snapshot.Accounts) != 1 || snapshot.Accounts[0].Code != "retained" ||
 		len(snapshot.Groups) != 1 || len(snapshot.Balances) != 1 ||
 		snapshot.Balances[0].Account != "retained" || len(snapshot.RateLimits) != 2 ||
+		len(snapshot.PositionLimits) != 1 || snapshot.PositionLimits[0].Account != "retained" ||
 		len(snapshot.OrderSizeLimits) != 1 || len(snapshot.SpotFundsPnlBoundsLimits) != 2 {
 		t.Fatalf("filtered snapshot = %+v, want only deleted account runtime removed", snapshot)
 	}

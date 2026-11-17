@@ -21,6 +21,20 @@
 ALTER TABLE audit ADD COLUMN account_identity BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE audit ADD COLUMN group_identity BIGINT NOT NULL DEFAULT 0;
 
+-- Position ceilings have exactly one scope: an account and an asset.
+-- The scope column lets the shared limit-table code apply unchanged.
+CREATE TABLE limit_position (
+    id           {{PK}},
+    scope        TEXT NOT NULL CHECK (scope = 'account_asset'),
+    account_id   INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    asset_id     INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
+    max_position TEXT NOT NULL
+);
+
+CREATE INDEX idx_limit_position_account ON limit_position (account_id);
+CREATE INDEX idx_limit_position_asset ON limit_position (asset_id);
+CREATE UNIQUE INDEX uq_limit_position ON limit_position (scope, account_id, asset_id);
+
 -- One row per job, including its recurrence and progress. Task arguments and
 -- schedule definition live in spec; mutable progress has one scalar authority.
 -- No future occurrence rows are materialized.

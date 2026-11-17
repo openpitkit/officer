@@ -186,6 +186,7 @@
     "window": "ventana",
     "max_quantity": "cantidad máx.",
     "max_notional": "nocional máx.",
+    "max_position": "posición máx.",
     "currency": "moneda",
     "lower_bound": "límite inferior",
     "upper_bound": "límite superior",

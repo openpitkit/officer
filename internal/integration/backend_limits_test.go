@@ -64,6 +64,26 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 	if len(fn.putOrderSizeLimitCalls) != 0 {
 		t.Fatalf("invalid limit must not reach the node")
 	}
+	for _, tc := range []struct {
+		name, maxPosition string
+		scope             domain.LimitScope
+		missing           domain.MissingAccountPolicy
+	}{
+		{"scope", "1", domain.ScopeAccount, domain.MissingAccountCreate},
+		{"negative", "-1", domain.ScopeAccountAsset, domain.MissingAccountCreate},
+		{"decimal", "no-number", domain.ScopeAccountAsset, domain.MissingAccountCreate},
+		{"missing policy", "1", domain.ScopeAccountAsset, ""},
+	} {
+		t.Run("position/"+tc.name, func(t *testing.T) {
+			limit := domain.LimitPosition{Scope: tc.scope, Account: "acc-1", Asset: "BTC", MaxPosition: tc.maxPosition}
+			if err := svc.PutPositionLimit(ctx, limit, tc.missing); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("PutPositionLimit = %v, want ErrInvalid", err)
+			}
+			if len(fn.putPositionLimitCalls) != 0 {
+				t.Fatalf("invalid position limit reached the node: %+v", fn.putPositionLimitCalls)
+			}
+		})
+	}
 }
 
 func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
@@ -87,6 +107,13 @@ func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 	if len(fn.putRateLimitCalls) != 1 {
 		t.Fatalf("want 1 PutRateLimit call, got %d", len(fn.putRateLimitCalls))
 	}
+	position := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-new", Asset: "BTC", MaxPosition: "0"}
+	if err := svc.PutPositionLimit(ctx, position, domain.MissingAccountCreate); err != nil {
+		t.Fatalf("PutPositionLimit for non-existent account: %v", err)
+	}
+	if len(fn.putPositionLimitCalls) != 1 || fn.putPositionLimitCalls[0] != position {
+		t.Fatalf("position barrier not forwarded: %+v", fn.putPositionLimitCalls)
+	}
 }
 
 func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
@@ -108,6 +135,35 @@ func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 	if fn.putRateLimitCalls[0].Scope != domain.ScopeBroker ||
 		fn.putRateLimitCalls[0].MaxOrders != 100 {
 		t.Fatalf("barrier not forwarded: %+v", fn.putRateLimitCalls[0])
+	}
+	for _, missing := range []domain.MissingAccountPolicy{domain.MissingAccountCreate, domain.MissingAccountReject} {
+		position := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "123.000000000000000001"}
+		if err := svc.PutPositionLimit(ctx, position, missing); err != nil {
+			t.Fatalf("PutPositionLimit: %v", err)
+		}
+		if got := fn.putPositionLimitCalls[len(fn.putPositionLimitCalls)-1]; got != position {
+			t.Fatalf("position barrier = %+v, want %+v", got, position)
+		}
+		if got := fn.missingAccountCalls[len(fn.missingAccountCalls)-1]; got != missing {
+			t.Fatalf("missing account = %q, want %q", got, missing)
+		}
+	}
+}
+
+func TestService_PutPositionLimitScopesAccountAndMissingPolicy(t *testing.T) {
+	t.Parallel()
+	scope := &recordingScope{account: scopeResolvedAccount, policy: domain.MissingAccountReject}
+	svc, fn, _ := newScopeTestService(t, scope)
+	limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: scopeClientAccount, Asset: "BTC", MaxPosition: "10"}
+	if err := svc.PutPositionLimit(systemCtx(), limit, domain.MissingAccountCreate); err != nil {
+		t.Fatal(err)
+	}
+	limit.Account = scopeResolvedAccount
+	if len(fn.putPositionLimitCalls) != 1 || fn.putPositionLimitCalls[0] != limit {
+		t.Fatalf("scoped barrier = %+v, want %+v", fn.putPositionLimitCalls, limit)
+	}
+	if len(fn.missingAccountCalls) != 1 || fn.missingAccountCalls[0] != domain.MissingAccountReject {
+		t.Fatalf("scoped missing account = %v, want reject", fn.missingAccountCalls)
 	}
 }
 

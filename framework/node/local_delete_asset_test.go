@@ -332,6 +332,10 @@ func TestSnapshotWithoutAssetDropsCascadedRuntimeRows(t *testing.T) {
 			{Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "1"},
 			{Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "1"},
 		},
+		PositionLimits: []domain.LimitPosition{
+			{Scope: domain.ScopeAccountAsset, Account: "account", Asset: "AAPL", MaxPosition: "100"},
+			{Scope: domain.ScopeAccountAsset, Account: "account", Asset: "USD", MaxPosition: "100"},
+		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-1"},
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
@@ -342,6 +346,7 @@ func TestSnapshotWithoutAssetDropsCascadedRuntimeRows(t *testing.T) {
 		len(snapshot.Accounts) != 1 || len(snapshot.Groups) != 1 ||
 		len(snapshot.Balances) != 1 || snapshot.Balances[0].Asset != "USD" ||
 		len(snapshot.RateLimits) != 1 || snapshot.RateLimits[0].Asset != "USD" ||
+		len(snapshot.PositionLimits) != 1 || snapshot.PositionLimits[0].Asset != "USD" ||
 		len(snapshot.OrderSizeLimits) != 1 ||
 		snapshot.OrderSizeLimits[0].Asset != "USD" ||
 		len(snapshot.SpotFundsPnlBoundsLimits) != 1 ||

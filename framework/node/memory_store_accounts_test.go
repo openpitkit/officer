@@ -350,6 +350,7 @@ func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID)
 
 	r.rateLimits = renameAccountLimits(r.rateLimits, oldCode, newCode)
 	r.orderSizeLimits = renameAccountLimits(r.orderSizeLimits, oldCode, newCode)
+	r.positionLimits = renameAccountLimits(r.positionLimits, oldCode, newCode)
 	r.spotFundsPnlBoundsLimits = renameSpotFundsPnlBoundsLimits(
 		r.spotFundsPnlBoundsLimits,
 		oldCode,
@@ -375,7 +376,7 @@ func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID)
 }
 
 func renameAccountLimits[Limit interface {
-	domain.LimitRate | domain.LimitOrderSize
+	domain.LimitRate | domain.LimitOrderSize | domain.LimitPosition
 }](
 	limits map[string]Limit,
 	oldCode domain.AccountID,
@@ -391,6 +392,12 @@ func renameAccountLimits[Limit interface {
 			}
 			out[key] = any(typed).(Limit)
 		case domain.LimitOrderSize:
+			if typed.Account == oldCode {
+				typed.Account = newCode
+				key = limitKey(typed.Scope, typed.Account, typed.Asset)
+			}
+			out[key] = any(typed).(Limit)
+		case domain.LimitPosition:
 			if typed.Account == oldCode {
 				typed.Account = newCode
 				key = limitKey(typed.Scope, typed.Account, typed.Asset)
@@ -423,7 +430,7 @@ func renameSpotFundsPnlBoundsLimits(
 }
 
 func (r *memoryRealm) DeleteAccount(
-	_ context.Context, code domain.AccountID, _ bool,
+	_ context.Context, code domain.AccountID, force bool,
 ) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -433,6 +440,58 @@ func (r *memoryRealm) DeleteAccount(
 	for _, connection := range r.tradingConnections {
 		if connection.FeeAccount == code {
 			return fmt.Errorf("account %q is the fee account of trading connection %q: %w", code, connection.Label, domain.ErrConflict)
+		}
+	}
+	var rateLimits, orderSizeLimits, positionLimits, pnlBounds int
+	for _, limit := range r.rateLimits {
+		if limit.Account == code {
+			rateLimits++
+		}
+	}
+	for _, limit := range r.orderSizeLimits {
+		if limit.Account == code {
+			orderSizeLimits++
+		}
+	}
+	for _, limit := range r.positionLimits {
+		if limit.Account == code {
+			positionLimits++
+		}
+	}
+	for _, limit := range r.spotFundsPnlBoundsLimits {
+		if limit.Account == code {
+			pnlBounds++
+		}
+	}
+	if !force {
+		dependents := memoryDependents([]memoryDependentCount{
+			{kind: "limit_rate", count: rateLimits},
+			{kind: "limit_order_size", count: orderSizeLimits},
+			{kind: "limit_position", count: positionLimits},
+			{kind: "limit_spot_funds_pnl_bound", count: pnlBounds},
+		})
+		if len(dependents) > 0 {
+			return domain.NewHasDependentsError(dependents)
+		}
+	}
+	for key, limit := range r.rateLimits {
+		if limit.Account == code {
+			delete(r.rateLimits, key)
+		}
+	}
+	for key, limit := range r.orderSizeLimits {
+		if limit.Account == code {
+			delete(r.orderSizeLimits, key)
+		}
+	}
+	for key, limit := range r.positionLimits {
+		if limit.Account == code {
+			delete(r.positionLimits, key)
+		}
+	}
+	for key, limit := range r.spotFundsPnlBoundsLimits {
+		if limit.Account == code {
+			delete(r.spotFundsPnlBoundsLimits, key)
 		}
 	}
 	delete(r.accounts, code)

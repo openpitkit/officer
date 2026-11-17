@@ -164,6 +164,7 @@ type fakeService struct {
 	// Captured typed-limit puts and delete target, for round-trip assertions.
 	rateLimitPut               domain.LimitRate
 	orderSizeLimitPut          domain.LimitOrderSize
+	positionLimitPut           domain.LimitPosition
 	spotFundsPnlBoundsLimitPut domain.LimitSpotFundsPnlBounds
 	deleteLimitTarget          node.LimitTarget
 	// Captured market-data mutation inputs.
@@ -560,6 +561,14 @@ func (f *fakeService) PutOrderSizeLimit(
 	_ context.Context, l domain.LimitOrderSize, missing domain.MissingAccountPolicy,
 ) error {
 	f.orderSizeLimitPut = l
+	f.missingAccount = missing
+	return f.putLimErr
+}
+
+func (f *fakeService) PutPositionLimit(
+	_ context.Context, l domain.LimitPosition, missing domain.MissingAccountPolicy,
+) error {
+	f.positionLimitPut = l
 	f.missingAccount = missing
 	return f.putLimErr
 }

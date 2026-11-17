@@ -286,6 +286,13 @@ func (rt *restoreTx) pruneLimits(
 	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_order_size", sizeKeep); err != nil {
 		return err
 	}
+	positionKeep := make(map[string]bool, len(data.PositionLimits))
+	for _, l := range data.PositionLimits {
+		positionKeep[limitKey(string(l.Scope), l.Account, l.Asset)] = true
+	}
+	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_position", positionKeep); err != nil {
+		return err
+	}
 	spotFundsPnlBounds := data.SpotFundsPnlBounds()
 	spotFundsKeep := make(map[string]bool, len(spotFundsPnlBounds))
 	for _, l := range spotFundsPnlBounds {

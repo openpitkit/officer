@@ -64,6 +64,7 @@ type restoreRuntimePlan struct {
 	assetsChanged        bool
 	rateChanged          bool
 	orderSizeChanged     bool
+	positionChanged      bool
 	spotFundsChanged     bool
 	marketDataChanged    bool
 	marketDataNeedsClear bool
@@ -209,6 +210,9 @@ func classifyRestoreRuntimeDelta(
 		orderSizeLimitMap(before.data.OrderSizeLimits),
 		orderSizeLimitMap(after.data.OrderSizeLimits),
 	)
+	plan.positionChanged = !reflect.DeepEqual(
+		positionLimitMap(before.data.PositionLimits), positionLimitMap(after.data.PositionLimits),
+	)
 	plan.spotFundsChanged = !reflect.DeepEqual(
 		spotFundsLimitMap(before.data.SpotFundsPnlBounds()),
 		spotFundsLimitMap(after.data.SpotFundsPnlBounds()),
@@ -232,7 +236,7 @@ func classifyRestoreRuntimeDelta(
 	plan.marketDataNeedsClear = plan.marketDataChanged
 	plan.forceAllAccountPnls = plan.spotFundsChanged
 	plan.runtimeChanged = restoreRuntimeShapeChanged(before, after) ||
-		plan.assetsChanged || plan.rateChanged || plan.orderSizeChanged ||
+		plan.assetsChanged || plan.rateChanged || plan.orderSizeChanged || plan.positionChanged ||
 		plan.spotFundsChanged || plan.marketDataChanged
 	return plan
 }
@@ -318,6 +322,14 @@ func rateLimitMap(limits []domain.LimitRate) map[string]domain.LimitRate {
 	out := make(map[string]domain.LimitRate, len(limits))
 	for _, limit := range limits {
 		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.Asset] = limit
+	}
+	return out
+}
+
+func positionLimitMap(limits []domain.LimitPosition) map[string]string {
+	out := make(map[string]string, len(limits))
+	for _, limit := range limits {
+		out[limit.Account.String()+"\x00"+limit.Asset] = limit.MaxPosition
 	}
 	return out
 }
@@ -489,6 +501,7 @@ func (n *localNode) applyRestoreRuntimeDelta(
 	}{
 		{name: domain.PolicyRateLimit, changed: plan.rateChanged},
 		{name: domain.PolicyOrderSizeLimit, changed: plan.orderSizeChanged},
+		{name: domain.PolicyPositionLimit, changed: plan.positionChanged},
 		{name: domain.PolicySpotFundsPnlBoundsKillSwitch, changed: plan.spotFundsChanged},
 		{name: domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch, changed: plan.spotFundsChanged},
 		{name: domain.PolicySpotFundsTotalPnlBoundsKillSwitch, changed: plan.spotFundsChanged},

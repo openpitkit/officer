@@ -562,6 +562,82 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 	}
 }
 
+func TestListPolicyRowsPosition(t *testing.T) {
+	ctx, rs := newRestrictionStore(t)
+	for _, limit := range []domain.LimitPosition{
+		{Scope: domain.ScopeAccountAsset, Account: "a", Asset: "AAPL", MaxPosition: "10"},
+		{Scope: domain.ScopeAccountAsset, Account: "a", Asset: "USD", MaxPosition: "9"},
+		{Scope: domain.ScopeAccountAsset, Account: "b", Asset: "AAPL", MaxPosition: "0"},
+	} {
+		if err := rs.PutPositionLimit(ctx, limit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeBroker, MaxOrders: 10, Window: time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kind := fwstore.PolicyKindPosition
+	filter := fwstore.PolicyListFilter{Kind: &kind}
+	page, err := rs.ListPolicyRows(ctx, filter)
+	if err != nil || page.Total != 3 || len(page.Rows) != 3 {
+		t.Fatalf("position page = %+v, err=%v, want three rows", page, err)
+	}
+	for i, want := range []domain.LimitPosition{
+		{Scope: domain.ScopeAccountAsset, Account: "a", Asset: "AAPL", MaxPosition: "10"},
+		{Scope: domain.ScopeAccountAsset, Account: "a", Asset: "USD", MaxPosition: "9"},
+		{Scope: domain.ScopeAccountAsset, Account: "b", Asset: "AAPL", MaxPosition: "0"},
+	} {
+		row := page.Rows[i]
+		if row.Kind != kind || row.Scope != want.Scope || row.Account != want.Account || row.Asset != want.Asset ||
+			row.Position == nil || *row.Position != want || row.Rate != nil || row.OrderSize != nil ||
+			row.SpotFundsPnlBounds != nil || row.SpotFundsLimitMode != nil {
+			t.Fatalf("position row[%d] = %+v, want %+v", i, row, want)
+		}
+	}
+	all, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{})
+	if err != nil || all.Total != 5 || len(all.Rows) != 5 {
+		t.Fatalf("union page = %+v, err=%v, want five rows", all, err)
+	}
+	for _, restriction := range []domain.AccountRestriction{restrictA, restrictAUnowned} {
+		filter.Restriction = restriction
+		page, err = rs.ListPolicyRows(ctx, filter)
+		if err != nil || page.Total != 2 || len(page.Rows) != 2 {
+			t.Fatalf("restricted page = %+v, err=%v", page, err)
+		}
+		for _, row := range page.Rows {
+			if row.Account != "a" {
+				t.Fatalf("restriction leaked row: %+v", row)
+			}
+		}
+	}
+	filter.Restriction = domain.AccountRestriction{}
+	filter.Account = fwstore.TextMatcher{Fragments: []string{"a"}, AnchorStart: true, AnchorEnd: true}
+	page, err = rs.ListPolicyRows(ctx, filter)
+	if err != nil || page.Total != 2 || len(page.Rows) != 2 {
+		t.Fatalf("account filter page = %+v, err=%v", page, err)
+	}
+	filter.Sort = fwstore.SortSpec{Column: "maxPosition"}
+	filter.Page = fwstore.PageSpec{Limit: 1, Offset: 1}
+	page, err = rs.ListPolicyRows(ctx, filter)
+	if err != nil || page.Total != 2 || len(page.Rows) != 1 || page.Rows[0].Position == nil ||
+		page.Rows[0].Position.MaxPosition != "10" {
+		t.Fatalf("numeric sorted page = %+v, err=%v", page, err)
+	}
+	filter.Sort.Descending = true
+	page, err = rs.ListPolicyRows(ctx, filter)
+	if err != nil || page.Total != 2 || len(page.Rows) != 1 || page.Rows[0].Position == nil ||
+		page.Rows[0].Position.MaxPosition != "9" {
+		t.Fatalf("descending sorted page = %+v, err=%v", page, err)
+	}
+	filter.Page.Offset = 9
+	page, err = rs.ListPolicyRows(ctx, filter)
+	if err != nil || page.Total != 2 || len(page.Rows) != 0 {
+		t.Fatalf("empty page = %+v, err=%v", page, err)
+	}
+}
+
 // seedRestrictionAudit appends audit rows of accounts a and b and rows
 // recorded with no account, interleaved; each row's detail tells it apart.
 // Newest first they read: update asset AAPL, block account a: a-3, unblock

@@ -37,7 +37,7 @@ import type {
 } from "@/api/types";
 import { useLimitsPage } from "@/api/useLimits";
 import { useSpotFundsLimitMode } from "@/api/spotFundsLimitMode";
-import { isSpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
+import { isInPlacePolicy } from "@/api/spotFundsPnlPolicies";
 import {
   getPolicyCatalogEntry,
   policyCatalogDescription,
@@ -119,6 +119,7 @@ const SCOPE_COLUMN_CLASS = "w-[var(--policies-scope-column-width)]";
 const POLICY_FILTER_KIND: Record<Exclude<PolicyFilter, "all">, string> = {
   rate: "rate_limit",
   order_size: "order_size_limit",
+  position: "position_limit",
   spot_funds_pnl_bounds: "spot_funds_pnl_bounds_kill_switch",
   spot_funds_unrealized_pnl_bounds:
     "spot_funds_unrealized_pnl_bounds_kill_switch",
@@ -129,6 +130,7 @@ const POLICY_FILTER_KIND: Record<Exclude<PolicyFilter, "all">, string> = {
 const POLICY_FILTERS: Exclude<PolicyFilter, "all">[] = [
   "rate",
   "order_size",
+  "position",
   "spot_funds_pnl_bounds",
   "spot_funds_unrealized_pnl_bounds",
   "spot_funds_total_pnl_bounds",
@@ -1068,8 +1070,7 @@ export function Limits() {
         open={deleteTarget !== null}
         requiresEngineRebuild={
           deleteTarget !== null &&
-          !isSpotFundsPnlPolicy(deleteTarget.policy) &&
-          deleteTarget.policy !== "spot_funds_limit_mode" &&
+          !isInPlacePolicy(deleteTarget.policy) &&
           policyCounts[deleteTarget.policy] !== undefined &&
           policyCounts[deleteTarget.policy] <= 1
         }

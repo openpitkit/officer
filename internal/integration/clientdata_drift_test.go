@@ -626,6 +626,12 @@ var backupParitySpecs = []paritySpec{
 	},
 	{
 		surface: driftBackup,
+		entity:  "position-limits",
+		source:  reflect.TypeOf(domain.LimitPosition{}),
+		target:  reflect.TypeOf(domain.LimitPosition{}),
+	},
+	{
+		surface: driftBackup,
 		entity:  "spot-funds-pnl-bounds-limits",
 		source:  reflect.TypeOf(domain.LimitSpotFundsPnlBounds{}),
 		target:  reflect.TypeOf(domain.LimitSpotFundsPnlBounds{}),
@@ -838,6 +844,7 @@ var expectedSchemaTableNames = []string{
 	"execution_report",
 	"execution_report_event",
 	"limit_order_size",
+	"limit_position",
 	"limit_rate",
 	"limit_spot_funds_pnl_bound",
 	"market_data_instance",
@@ -1015,6 +1022,14 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"asset_id":     "Asset",
 			"max_quantity": "MaxQuantity",
 			"max_notional": "MaxNotional",
+		},
+	},
+	"limit_position": {
+		backup: map[string]string{
+			"scope":        "Scope",
+			"account_id":   "Account",
+			"asset_id":     "Asset",
+			"max_position": "MaxPosition",
 		},
 	},
 	"limit_spot_funds_pnl_bound": {
@@ -1657,6 +1672,9 @@ func seedClientDataDriftRealm(
 		Asset:       "AAPL",
 		MaxNotional: "2500.75",
 	}))
+	must(t, "PutPositionLimit", rs.PutPositionLimit(ctx, domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001",
+	}))
 	must(t, "PutSpotFundsPnlBoundsLimit", rs.PutSpotFundsPnlBoundsLimit(
 		ctx,
 		domain.LimitSpotFundsPnlBounds{
@@ -2151,6 +2169,7 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"positions", data.Balances},
 		{"rate-limits", data.RateLimits},
 		{"order-size-limits", data.OrderSizeLimits},
+		{"position-limits", data.PositionLimits},
 		// The archive files P&L bounds in one list per axis; the accessor
 		// stamps each with the axis of its list.
 		{"spot-funds-pnl-bounds-limits", data.SpotFundsPnlBounds()},

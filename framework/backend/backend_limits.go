@@ -99,6 +99,10 @@ func (s *Service) ListLimits(
 		slices.Clone(limits.OrderSizeLimits),
 		func(limit domain.LimitOrderSize) bool { return hidden(limit.Account, "") },
 	)
+	limits.PositionLimits = slices.DeleteFunc(
+		slices.Clone(limits.PositionLimits),
+		func(limit domain.LimitPosition) bool { return hidden(limit.Account, "") },
+	)
 	limits.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
 		slices.Clone(limits.SpotFundsPnlBoundsLimits),
 		func(limit domain.LimitSpotFundsPnlBounds) bool {
@@ -188,6 +192,39 @@ func (s *Service) PutOrderSizeLimit(
 	defer s.marketDataMu.Unlock()
 	n := s.node
 	sink, err := n.PutOrderSizeLimit(ctx, scoped, scopedMissing, caller)
+	return s.finishLimitChangeLocked(sink, err)
+}
+
+// PutPositionLimit validates and upserts the SDK's account-asset ceiling.
+// missing follows PutRateLimit.
+func (s *Service) PutPositionLimit(
+	ctx context.Context,
+	limit domain.LimitPosition,
+	missing domain.MissingAccountPolicy,
+) error {
+	caller, err := auth.CallerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	scoped := limit
+	scoped.Account, err = s.scopeLimitSubject(caller, limit.Scope, limit.Account, "")
+	if err != nil {
+		return err
+	}
+	scopedMissing, err := s.scope.MissingAccount(caller, missing)
+	if err != nil {
+		return err
+	}
+	if err := scoped.Validate(); err != nil {
+		return err
+	}
+	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
+		return err
+	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+	n := s.node
+	sink, err := n.PutPositionLimit(ctx, scoped, scopedMissing, caller)
 	return s.finishLimitChangeLocked(sink, err)
 }
 

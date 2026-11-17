@@ -26,6 +26,7 @@
       "cap": "window deve ser no máximo 24h"
     },
     "positiveDecimal": "{{kind}} deve ser um número decimal positivo",
+    "nonNegativeDecimal": "{{kind}} deve ser um número decimal não negativo",
     "decimal": "{{kind}} deve ser um número decimal",
     "mode": "modo de limite de fundos desconhecido",
     "unknown": "tipo desconhecido {{kind}}"
@@ -44,6 +45,7 @@
     "orderSizeUnderlyingNoNotional": "um escopo de ativo-objeto não pode incluir max_notional",
     "orderSizeSettlementRequires": "um escopo de ativo de liquidação exige max_notional",
     "orderSizeSettlementNoQuantity": "um escopo de ativo de liquidação não pode incluir max_quantity",
+    "positionRequires": "{{policy}} requer {{kind}}",
     "pnlCurrencyRequired": "{{policy}} exige uma moeda",
     "pnlRequires": "{{policy}} exige lower_bound ou upper_bound",
     "pnlBoundOrder": "lower_bound deve ser <= upper_bound",

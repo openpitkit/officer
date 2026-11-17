@@ -52,6 +52,14 @@ type OrderSizeLimitDTO struct {
 	MaxNotional string `json:"maxNotional"`
 }
 
+// PositionLimitDTO carries a non-negative exact decimal ceiling; zero is valid.
+type PositionLimitDTO struct {
+	Scope       string `json:"scope"`
+	Account     string `json:"account"`
+	Asset       string `json:"asset"`
+	MaxPosition string `json:"maxPosition"`
+}
+
 // SpotFundsPnlBoundsLimitDTO is the wire shape of a currency-valued SpotFunds
 // self-computed P&L-bounds barrier.
 type SpotFundsPnlBoundsLimitDTO struct {
@@ -96,6 +104,7 @@ func ToSpotFundsLimitModeDTO(state domain.SpotFundsLimitModeState) SpotFundsLimi
 type PutLimitResultDTO struct {
 	RateLimit                         *RateLimitDTO               `json:"rateLimit,omitempty"`
 	OrderSizeLimit                    *OrderSizeLimitDTO          `json:"orderSizeLimit,omitempty"`
+	PositionLimit                     *PositionLimitDTO           `json:"positionLimit,omitempty"`
 	SpotFundsPnlBoundsLimit           *SpotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimit,omitempty"`
 	SpotFundsUnrealizedPnlBoundsLimit *SpotFundsPnlBoundsLimitDTO `json:"spotFundsUnrealizedPnlBoundsLimit,omitempty"`
 	SpotFundsTotalPnlBoundsLimit      *SpotFundsPnlBoundsLimitDTO `json:"spotFundsTotalPnlBoundsLimit,omitempty"`
@@ -108,6 +117,7 @@ type PutLimitResultDTO struct {
 type AccountLimitsDTO struct {
 	RateLimits                         []RateLimitDTO               `json:"rateLimits"`
 	OrderSizeLimits                    []OrderSizeLimitDTO          `json:"orderSizeLimits"`
+	PositionLimits                     []PositionLimitDTO           `json:"positionLimits"`
 	SpotFundsPnlBoundsLimits           []SpotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimits"`
 	SpotFundsUnrealizedPnlBoundsLimits []SpotFundsPnlBoundsLimitDTO `json:"spotFundsUnrealizedPnlBoundsLimits"`
 	SpotFundsTotalPnlBoundsLimits      []SpotFundsPnlBoundsLimitDTO `json:"spotFundsTotalPnlBoundsLimits"`
@@ -143,6 +153,16 @@ func FromOrderSizeLimitDTO(dto OrderSizeLimitDTO) domain.LimitOrderSize {
 		Asset:       dto.Asset,
 		MaxQuantity: dto.MaxQuantity,
 		MaxNotional: dto.MaxNotional,
+	}
+}
+
+// FromPositionLimitDTO preserves exact decimal strings for domain validation.
+func FromPositionLimitDTO(dto PositionLimitDTO) domain.LimitPosition {
+	return domain.LimitPosition{
+		Scope:       domain.LimitScope(dto.Scope),
+		Account:     domain.AccountID(dto.Account),
+		Asset:       dto.Asset,
+		MaxPosition: dto.MaxPosition,
 	}
 }
 
@@ -206,6 +226,16 @@ func ToOrderSizeLimitDTO(l domain.LimitOrderSize) OrderSizeLimitDTO {
 	}
 }
 
+// ToPositionLimitDTO preserves the stored exact decimal ceiling.
+func ToPositionLimitDTO(l domain.LimitPosition) PositionLimitDTO {
+	return PositionLimitDTO{
+		Scope:       string(l.Scope),
+		Account:     string(l.Account),
+		Asset:       l.Asset,
+		MaxPosition: l.MaxPosition,
+	}
+}
+
 // ToSpotFundsPnlBoundsLimitDTO maps a domain.LimitSpotFundsPnlBounds onto the
 // wire DTO.
 func ToSpotFundsPnlBoundsLimitDTO(
@@ -232,6 +262,10 @@ func ToAccountLimitsDTO(limits node.AccountLimits) AccountLimitsDTO {
 	for _, l := range limits.OrderSizeLimits {
 		sizes = append(sizes, ToOrderSizeLimitDTO(l))
 	}
+	positions := make([]PositionLimitDTO, 0, len(limits.PositionLimits))
+	for _, l := range limits.PositionLimits {
+		positions = append(positions, ToPositionLimitDTO(l))
+	}
 	spotFundsPnls := map[domain.SpotFundsPnlAxis][]SpotFundsPnlBoundsLimitDTO{}
 	for _, axis := range domain.SpotFundsPnlAxes {
 		spotFundsPnls[axis] = []SpotFundsPnlBoundsLimitDTO{}
@@ -246,6 +280,7 @@ func ToAccountLimitsDTO(limits node.AccountLimits) AccountLimitsDTO {
 	return AccountLimitsDTO{
 		RateLimits:                         rates,
 		OrderSizeLimits:                    sizes,
+		PositionLimits:                     positions,
 		SpotFundsPnlBoundsLimits:           spotFundsPnls[domain.SpotFundsPnlAxisRealized],
 		SpotFundsUnrealizedPnlBoundsLimits: spotFundsPnls[domain.SpotFundsPnlAxisUnrealized],
 		SpotFundsTotalPnlBoundsLimits:      spotFundsPnls[domain.SpotFundsPnlAxisTotal],
@@ -308,23 +343,38 @@ func storedLimitAccount(
 	return account
 }
 
+// persistedLimit reads back a barrier using its normalized stored address.
+func persistedLimit[T any](
+	ctx context.Context, svc LimitReader,
+	scope domain.LimitScope, account domain.AccountID, asset string,
+	slice func(node.AccountLimits) []T,
+	address func(T) (domain.LimitScope, domain.AccountID, string),
+) (T, error) {
+	var zero T
+	account = storedLimitAccount(svc, scope, account)
+	limits, err := svc.ListLimits(ctx, account)
+	if err != nil {
+		return zero, err
+	}
+	for _, limit := range slice(limits) {
+		limitScope, limitAccount, limitAsset := address(limit)
+		if sameLimitAddress(limitScope, limitAccount, limitAsset, scope, account, asset) {
+			return limit, nil
+		}
+	}
+	return zero, domain.ErrNotFound
+}
+
 // PersistedRateLimit reads back the rate-limit barrier stored at target's
 // address. It answers domain.ErrNotFound when none is stored there.
 func PersistedRateLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitRate,
 ) (domain.LimitRate, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	limits, err := svc.ListLimits(ctx, target.Account)
-	if err != nil {
-		return domain.LimitRate{}, err
-	}
-	for _, limit := range limits.RateLimits {
-		if sameLimitAddress(limit.Scope, limit.Account, limit.Asset,
-			target.Scope, target.Account, target.Asset) {
-			return limit, nil
-		}
-	}
-	return domain.LimitRate{}, domain.ErrNotFound
+	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset,
+		func(limits node.AccountLimits) []domain.LimitRate { return limits.RateLimits },
+		func(limit domain.LimitRate) (domain.LimitScope, domain.AccountID, string) {
+			return limit.Scope, limit.Account, limit.Asset
+		})
 }
 
 // PersistedOrderSizeLimit reads back the order-size barrier stored at
@@ -332,18 +382,23 @@ func PersistedRateLimit(
 func PersistedOrderSizeLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitOrderSize,
 ) (domain.LimitOrderSize, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	limits, err := svc.ListLimits(ctx, target.Account)
-	if err != nil {
-		return domain.LimitOrderSize{}, err
-	}
-	for _, limit := range limits.OrderSizeLimits {
-		if sameLimitAddress(limit.Scope, limit.Account, limit.Asset,
-			target.Scope, target.Account, target.Asset) {
-			return limit, nil
-		}
-	}
-	return domain.LimitOrderSize{}, domain.ErrNotFound
+	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset,
+		func(limits node.AccountLimits) []domain.LimitOrderSize { return limits.OrderSizeLimits },
+		func(limit domain.LimitOrderSize) (domain.LimitScope, domain.AccountID, string) {
+			return limit.Scope, limit.Account, limit.Asset
+		})
+}
+
+// PersistedPositionLimit reads back the addressed barrier, including an account
+// supplied by a single-account composition.
+func PersistedPositionLimit(
+	ctx context.Context, svc LimitReader, target domain.LimitPosition,
+) (domain.LimitPosition, error) {
+	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset,
+		func(limits node.AccountLimits) []domain.LimitPosition { return limits.PositionLimits },
+		func(limit domain.LimitPosition) (domain.LimitScope, domain.AccountID, string) {
+			return limit.Scope, limit.Account, limit.Asset
+		})
 }
 
 // PersistedSpotFundsPnlBoundsLimit reads back the SpotFunds P&L-bounds

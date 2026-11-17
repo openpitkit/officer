@@ -186,6 +186,7 @@
     "window": "окно",
     "max_quantity": "макс. количество",
     "max_notional": "макс. номинал",
+    "max_position": "макс. позиция",
     "currency": "валюта",
     "lower_bound": "нижняя граница",
     "upper_bound": "верхняя граница",

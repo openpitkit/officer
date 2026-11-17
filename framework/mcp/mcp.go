@@ -71,7 +71,8 @@ type Source interface {
 	// names and returns the stored row. A tighten-only caller (an agent) is
 	// refused a code change with domain.ErrLoosening for a blocked account, an
 	// account in a blocked group or in a group carrying a group-scoped Spot
-	// Funds P&L bound, and an account carrying a barrier of its own.
+	// Funds P&L bound, and an account carrying a rate-limit, order-size, position
+	// or Spot Funds P&L barrier of its own.
 	UpdateAccount(
 		ctx context.Context, oldID domain.AccountID, account domain.Account,
 	) (domain.Account, error)
@@ -83,8 +84,8 @@ type Source interface {
 	// caller (an agent) is refused with domain.ErrLoosening, with or without
 	// force, for a blocked account, an account in a blocked group or in a group
 	// carrying a group-scoped Spot Funds P&L bound, an account carrying a
-	// barrier of its own, and any account while a rate-limit barrier is
-	// configured.
+	// rate-limit, order-size, position or Spot Funds P&L barrier of its own,
+	// and any account while a rate-limit barrier is configured.
 	DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error
 	// SetAccountCurrency sets the account's own realized P&L currency, or
 	// clears it when currency is empty. A change of the account's effective
@@ -120,8 +121,8 @@ type Source interface {
 	// UpdateAsset replaces the public code, title and asset class of the asset
 	// oldCode names and returns the stored row. A tighten-only caller (an
 	// agent) is refused a code change with domain.ErrLoosening while a
-	// rate-limit or order-size barrier references the asset or a Spot Funds P&L
-	// bound is denominated in it.
+	// rate-limit, order-size or position barrier references the asset or a Spot
+	// Funds P&L bound is denominated in it.
 	UpdateAsset(
 		ctx context.Context, oldCode string, asset domain.Asset,
 	) (domain.Asset, error)
@@ -131,9 +132,9 @@ type Source interface {
 	// group holds as its currency is refused even with force. A tighten-only
 	// caller (an agent) is refused with domain.ErrLoosening: with force whatever
 	// the asset carries, since force would delete the asset's balances, orders,
-	// trades and adjustments with it, and without force while a rate-limit or
-	// order-size barrier references the asset or a Spot Funds P&L bound is
-	// denominated in it.
+	// trades and adjustments with it, and without force while a rate-limit,
+	// order-size or position barrier references the asset or a Spot Funds P&L
+	// bound is denominated in it.
 	DeleteAsset(ctx context.Context, code string, force bool) error
 	// CreateGroup creates an account group under its public code with its
 	// title, currency and notes and returns the stored row.
@@ -207,6 +208,14 @@ type Source interface {
 	PutOrderSizeLimit(
 		ctx context.Context,
 		limit domain.LimitOrderSize,
+		missing domain.MissingAccountPolicy,
+	) error
+	// PutPositionLimit validates the position barrier and upserts it; missing
+	// follows PutRateLimit. A tighten-only caller (an agent) is refused with
+	// domain.ErrLoosening a ceiling above the one it replaces.
+	PutPositionLimit(
+		ctx context.Context,
+		limit domain.LimitPosition,
 		missing domain.MissingAccountPolicy,
 	) error
 	// PutSpotFundsPnlBoundsLimit validates the Spot Funds P&L-bounds barrier
@@ -1093,6 +1102,12 @@ func (s controlPlaneSource) PutOrderSizeLimit(
 	ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy,
 ) error {
 	return s.cp.PutOrderSizeLimit(ctx, limit, missing)
+}
+
+func (s controlPlaneSource) PutPositionLimit(
+	ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy,
+) error {
+	return s.cp.PutPositionLimit(ctx, limit, missing)
 }
 
 func (s controlPlaneSource) PutSpotFundsPnlBoundsLimit(

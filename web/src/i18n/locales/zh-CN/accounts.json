@@ -360,7 +360,8 @@
       "order_approvals": "订单审批",
       "adjustments": "调整",
       "limit_rate": "频率限制",
-      "limit_order_size": "订单规模限制"
+      "limit_order_size": "订单规模限制",
+      "limit_position": "持仓限制"
     },
     "cancel": "取消",
     "submit": "删除",

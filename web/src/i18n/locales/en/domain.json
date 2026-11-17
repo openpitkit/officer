@@ -2,6 +2,7 @@
   "policyLabel": {
     "rate_limit": "Rate limit",
     "order_size_limit": "Order size limit",
+    "position_limit": "Position limit",
     "spot_funds_pnl_bounds_kill_switch": "Realized P&L Kill Switch",
     "spot_funds_unrealized_pnl_bounds_kill_switch": "Unrealized P&L Kill Switch",
     "spot_funds_total_pnl_bounds_kill_switch": "Total P&L Kill Switch",
@@ -34,6 +35,9 @@
       "max_quantity": "positive decimal",
       "max_notional": "positive decimal"
     },
+    "position_limit": {
+      "max_position": "non-negative decimal"
+    },
     "spot_funds_pnl_bounds_kill_switch": {
       "currency": "asset code",
       "lower_bound": "decimal",
@@ -58,6 +62,10 @@
     "order_size_limit": {
       "label": "Order size limit",
       "description": "Caps the size of a single order by quantity and notional value to prevent fat-finger errors."
+    },
+    "position_limit": {
+      "label": "Position limit",
+      "description": "Caps an account's worst-case position in one asset on both the long and short side, including open orders. A position equal to the ceiling is allowed."
     },
     "spot_funds_pnl_bounds_kill_switch": {
       "label": "Realized Profit and Loss Kill Switch",
@@ -95,6 +103,12 @@
       "max_notional": {
         "label": "max notional",
         "hint": "positive decimal"
+      }
+    },
+    "position_limit": {
+      "max_position": {
+        "label": "max position",
+        "hint": "non-negative decimal"
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {

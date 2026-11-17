@@ -186,6 +186,7 @@
     "window": "janela",
     "max_quantity": "quantidade máx.",
     "max_notional": "nocional máx.",
+    "max_position": "posição máx.",
     "currency": "moeda",
     "lower_bound": "piso",
     "upper_bound": "teto",

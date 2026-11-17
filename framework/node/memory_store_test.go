@@ -83,6 +83,7 @@ type memoryRealm struct {
 
 	rateLimits               map[string]domain.LimitRate
 	orderSizeLimits          map[string]domain.LimitOrderSize
+	positionLimits           map[string]domain.LimitPosition
 	spotFundsPnlBoundsLimits map[string]domain.LimitSpotFundsPnlBounds
 
 	adjustments  []domain.AccountAdjustmentRecord
@@ -153,6 +154,7 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		balances:                 map[string]domain.Balance{},
 		rateLimits:               map[string]domain.LimitRate{},
 		orderSizeLimits:          map[string]domain.LimitOrderSize{},
+		positionLimits:           map[string]domain.LimitPosition{},
 		spotFundsPnlBoundsLimits: map[string]domain.LimitSpotFundsPnlBounds{},
 		orders:                   map[domain.ExternalID]domain.Order{},
 		reports:                  map[domain.ExternalID]domain.ExternalID{},

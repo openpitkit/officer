@@ -104,6 +104,7 @@ import type {
   OrderListFilters,
   OrderMutationResponse,
   OrderSizeLimit,
+  PositionLimit,
   PublicKeyMaterial,
   PageRequest,
   PagedResult,
@@ -900,8 +901,30 @@ function normalizeSpotFundsPnlBoundsLimit(v: unknown): SpotFundsPnlBoundsLimit {
   };
 }
 
+function normalizePositionLimit(v: unknown): PositionLimit {
+  if (!isObject(v)) {
+    throw new ApiError(
+      "Position limit is missing from the API response",
+      "internal",
+    );
+  }
+  return {
+    scope: requireStringField(v, "Position limit scope", "scope"),
+    account: requireStringField(v, "Position limit account", "account"),
+    asset: requireStringField(v, "Position limit asset", "asset"),
+    maxPosition: requireStringField(v, "Position ceiling", "maxPosition"),
+  };
+}
+
 function normalizeAccountLimits(v: unknown): AccountLimits {
   const o = isObject(v) ? v : {};
+  const positionLimits = pick(o, "positionLimits");
+  if (!Array.isArray(positionLimits)) {
+    throw new ApiError(
+      "Position limits array is invalid or missing from the API response",
+      "internal",
+    );
+  }
   return {
     rateLimits: normalizeArray(
       pick(o, "rateLimits", "RateLimits", "rate_limits"),
@@ -911,6 +934,7 @@ function normalizeAccountLimits(v: unknown): AccountLimits {
       pick(o, "orderSizeLimits", "OrderSizeLimits", "order_size_limits"),
       normalizeOrderSizeLimit,
     ),
+    positionLimits: positionLimits.map(normalizePositionLimit),
     spotFundsPnlBoundsLimits: normalizeArray(
       pick(
         o,
@@ -953,6 +977,13 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
         max_notional: limit.maxNotional,
       },
     })),
+    ...v.positionLimits.map((limit) => ({
+      policy: "position_limit",
+      scope: limit.scope,
+      account: limit.account,
+      asset: limit.asset,
+      values: { max_position: limit.maxPosition },
+    })),
     ...SPOT_FUNDS_PNL_POLICY_IDS.flatMap((policy) =>
       v[SPOT_FUNDS_PNL_POLICIES[policy].listKey].map((limit) => ({
         policy,
@@ -981,6 +1012,7 @@ function normalizePolicyKind(v: unknown): Policy["kind"] {
   switch (v) {
     case "rate_limit":
     case "order_size_limit":
+    case "position_limit":
     case "spot_funds_pnl_bounds_kill_switch":
     case "spot_funds_unrealized_pnl_bounds_kill_switch":
     case "spot_funds_total_pnl_bounds_kill_switch":
@@ -1033,6 +1065,16 @@ function normalizePolicy(v: unknown): Policy {
       ),
       maxNotional: asString(
         pick(orderSize, "maxNotional", "MaxNotional", "max_notional"),
+      ),
+    };
+  }
+  const position = pick(values, "position");
+  if (isObject(position)) {
+    policy.values.position = {
+      maxPosition: requireStringField(
+        position,
+        "Position ceiling",
+        "maxPosition",
       ),
     };
   }
@@ -1103,6 +1145,16 @@ function policyToLimit(policy: Policy): Limit {
           max_notional: orderSize?.maxNotional ?? "",
         },
       };
+    }
+    case "position_limit": {
+      const position = policy.values.position;
+      if (position === undefined) {
+        throw new ApiError(
+          "Position limit is missing from the API response",
+          "internal",
+        );
+      }
+      return { ...base, values: { max_position: position.maxPosition } };
     }
     case "spot_funds_pnl_bounds_kill_switch":
     case "spot_funds_unrealized_pnl_bounds_kill_switch":
@@ -1230,6 +1282,16 @@ function limitEndpointBody(
           maxNotional: limit.values.max_notional ?? "",
         },
       };
+    case "position_limit":
+      return {
+        path: `${client.baseUrl}/limits/position${query}`,
+        body: {
+          scope: limit.scope,
+          account: limit.account,
+          asset: limit.asset,
+          maxPosition: limit.values.max_position,
+        },
+      };
     default:
       throw new ApiError(`unknown policy ${limit.policy}`, "validation", 400);
   }
@@ -1248,6 +1310,7 @@ function emptyAccountLimits(): AccountLimits {
   return {
     rateLimits: [],
     orderSizeLimits: [],
+    positionLimits: [],
     spotFundsPnlBoundsLimits: [],
     spotFundsUnrealizedPnlBoundsLimits: [],
     spotFundsTotalPnlBoundsLimits: [],
@@ -1279,6 +1342,11 @@ function normalizePutLimitResponse(policy: string, v: unknown): Limit {
         orderSizeLimits: [
           normalizeOrderSizeLimit(pick(o, "orderSizeLimit", "OrderSizeLimit")),
         ],
+      });
+    case "position_limit":
+      return singleFlattenedLimit(policy, {
+        ...emptyAccountLimits(),
+        positionLimits: [normalizePositionLimit(pick(o, "positionLimit"))],
       });
     case "spot_funds_limit_mode": {
       const body = pick(o, "spotFundsLimitMode", "SpotFundsLimitMode");

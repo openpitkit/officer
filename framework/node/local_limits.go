@@ -65,6 +65,10 @@ func (n *localNode) listLimits(
 	if err != nil {
 		return AccountLimits{}, fmt.Errorf("list order-size limits: %w", err)
 	}
+	position, err := n.realm.ListPositionLimits(ctx, account)
+	if err != nil {
+		return AccountLimits{}, fmt.Errorf("list position limits: %w", err)
+	}
 	spotFundsPnlBounds, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, account)
 	if err != nil {
 		return AccountLimits{}, fmt.Errorf("list spot funds pnl-bounds limits: %w", err)
@@ -80,6 +84,7 @@ func (n *localNode) listLimits(
 	return AccountLimits{
 		RateLimits:               rate,
 		OrderSizeLimits:          orderSize,
+		PositionLimits:           position,
 		SpotFundsPnlBoundsLimits: spotFundsPnlBounds,
 		SpotFundsLimitModes:      modes,
 	}, nil
@@ -256,6 +261,59 @@ func (n *localNode) PutOrderSizeLimit(
 	if err := n.audit(ctx, caller, audit); err != nil {
 		return sink, n.fatalPostEngineAuditByCode(
 			"audit order-size limit", "policy", domain.PolicyOrderSizeLimit,
+			fmt.Errorf("audit set limit: %w", err),
+		)
+	}
+	return sink, nil
+}
+
+// PutPositionLimit upserts the position barrier and reconfigures the policy,
+// including the missing-account handling of PutRateLimit.
+func (n *localNode) PutPositionLimit(
+	ctx context.Context, limit domain.LimitPosition,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
+) (marketdata.Sink, error) {
+	if err := n.beginLivePolicyConfiguration(); err != nil {
+		return nil, err
+	}
+	defer n.endLivePolicyConfiguration()
+	target := LimitTarget{
+		Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset,
+	}
+	prev, hadPrev, err := n.readPositionBarrier(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	if caller.TightenOnly() && hadPrev {
+		if err := limit.NoLooserThan(prev); err != nil {
+			return nil, fmt.Errorf("put position limit: %w", err)
+		}
+	}
+	if err := n.ensureLimitAccount(ctx, limit.Scope, limit.Account, missing, "put position limit", caller); err != nil {
+		return nil, err
+	}
+	if err := n.ensureLimitAsset(ctx, limit.Scope, limit.Asset, "position limit", caller); err != nil {
+		return nil, err
+	}
+	audit, err := n.captureAuditTarget(ctx, store.AuditEntry{
+		Action: domain.AuditActionSetLimit, Account: target.Account,
+		Detail: setPositionLimitDetail(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := n.realm.PutPositionLimit(ctx, limit); err != nil {
+		return nil, fmt.Errorf("put position limit: %w", err)
+	}
+	sink, err := n.applyPolicyChangeLocked(ctx, domain.PolicyPositionLimit, func() error {
+		return n.revertPositionBarrier(context.WithoutCancel(ctx), target, prev, hadPrev)
+	})
+	if err != nil {
+		return sink, fmt.Errorf("configure policy after limit: %w", err)
+	}
+	if err := n.audit(context.WithoutCancel(ctx), caller, audit); err != nil {
+		return sink, n.fatalPostEngineAuditByCode(
+			"audit position limit", "policy", domain.PolicyPositionLimit,
 			fmt.Errorf("audit set limit: %w", err),
 		)
 	}
@@ -616,6 +674,17 @@ func (n *localNode) deleteBarrier(
 				context.WithoutCancel(ctx), target, prev, hadPrev,
 			)
 		}, nil
+	case domain.PolicyPositionLimit:
+		prev, hadPrev, err := n.readPositionBarrier(ctx, target)
+		if err != nil {
+			return nil, err
+		}
+		if err := n.realm.DeletePositionLimit(ctx, target.Account, target.Asset); err != nil {
+			return nil, fmt.Errorf("delete position limit: %w", err)
+		}
+		return func() error {
+			return n.revertPositionBarrier(context.WithoutCancel(ctx), target, prev, hadPrev)
+		}, nil
 	case domain.PolicySpotFundsPnlBoundsKillSwitch,
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
@@ -786,7 +855,8 @@ func (n *localNode) applyPolicyChangeLocked(
 		return nil
 	}
 
-	if errors.Is(err, domain.ErrNotImplemented) {
+	// Position settings apply per pair, so even ErrNotImplemented may follow a partial apply.
+	if errors.Is(err, domain.ErrNotImplemented) && policy != domain.PolicyPositionLimit {
 		if spotFunds {
 			if revertErr := revertPolicy(); revertErr != nil {
 				return nil, revertErr
@@ -808,16 +878,20 @@ func (n *localNode) applyPolicyChangeLocked(
 	if revertErr := revertPolicy(); revertErr != nil {
 		return nil, revertErr
 	}
-	if !spotFunds {
+	if !domain.IsSpotFundsSettingPolicy(policy) {
 		return nil, err
 	}
 	if rebuildErr := n.rebuildEngineFromStore(durableCtx); rebuildErr != nil {
+		policyKind := "spot funds pnl-bounds"
+		if policy == domain.PolicyPositionLimit {
+			policyKind = "position limit"
+		}
 		reconcileErr := errors.Join(err, fmt.Errorf(
-			"rebuild engine after failed spot funds pnl-bounds configure: %w",
-			rebuildErr,
+			"rebuild engine after failed %s configure: %w",
+			policyKind, rebuildErr,
 		))
 		return nil, n.fatalPostEngineAuditByCode(
-			"rebuild after failed spot funds pnl-bounds configuration",
+			"rebuild after failed "+policyKind+" configuration",
 			"policy",
 			policy,
 			reconcileErr,
@@ -857,6 +931,12 @@ func (n *localNode) policyLimitSet(ctx context.Context, policy string) (engine.L
 			return engine.LimitSet{}, fmt.Errorf("read order-size limits: %w", err)
 		}
 		return engine.LimitSet{OrderSizeLimits: limits}, nil
+	case domain.PolicyPositionLimit:
+		limits, err := n.realm.ListPositionLimits(ctx, "")
+		if err != nil {
+			return engine.LimitSet{}, fmt.Errorf("read position limits: %w", err)
+		}
+		return engine.LimitSet{PositionLimits: limits}, nil
 	case domain.PolicySpotFundsPnlBoundsKillSwitch,
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
@@ -958,6 +1038,39 @@ func (n *localNode) revertRateBarrier(
 	}
 	if err := n.realm.DeleteRateLimit(ctx, target.Scope, target.Account, target.Asset); err != nil {
 		return fmt.Errorf("remove rate-limit barrier: %w", err)
+	}
+	return nil
+}
+
+// readPositionBarrier reads the position barrier for the account and asset.
+func (n *localNode) readPositionBarrier(
+	ctx context.Context, target LimitTarget,
+) (domain.LimitPosition, bool, error) {
+	limits, err := n.realm.ListPositionLimits(ctx, target.Account)
+	if err != nil {
+		return domain.LimitPosition{}, false, fmt.Errorf("read position barrier: %w", err)
+	}
+	for _, limit := range limits {
+		if limit.Account == target.Account && limit.Asset == target.Asset {
+			return limit, true, nil
+		}
+	}
+	return domain.LimitPosition{}, false, nil
+}
+
+// revertPositionBarrier restores the previous barrier, or deletes the pair
+// when none existed before.
+func (n *localNode) revertPositionBarrier(
+	ctx context.Context, target LimitTarget, prev domain.LimitPosition, hadPrev bool,
+) error {
+	if hadPrev {
+		if err := n.realm.PutPositionLimit(ctx, prev); err != nil {
+			return fmt.Errorf("restore position barrier: %w", err)
+		}
+		return nil
+	}
+	if err := n.realm.DeletePositionLimit(ctx, target.Account, target.Asset); err != nil {
+		return fmt.Errorf("remove position barrier: %w", err)
 	}
 	return nil
 }

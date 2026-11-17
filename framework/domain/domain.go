@@ -455,6 +455,7 @@ func ValidateDropCopyMissingAccountPolicy(policy MissingAccountPolicy) error {
 const (
 	PolicyRateLimit                    = "rate_limit"
 	PolicyOrderSizeLimit               = "order_size_limit"
+	PolicyPositionLimit                = "position_limit"
 	PolicySpotFundsPnlBoundsKillSwitch = "spot_funds_pnl_bounds_kill_switch"
 	// PolicySpotFundsUnrealizedPnlBoundsKillSwitch bounds the account's
 	// unrealized P&L at current prices; see SpotFundsPnlAxisUnrealized.

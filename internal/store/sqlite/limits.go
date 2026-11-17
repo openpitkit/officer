@@ -56,6 +56,7 @@ SELECT 'rate_limit' AS kind, lr.scope AS scope,
        ast.code AS asset_code, NULL AS currency_code,
        lr.max_orders AS max_orders, lr.window AS window,
        NULL AS max_quantity, NULL AS max_notional,
+       NULL AS max_position,
 	       NULL AS lower_bound, NULL AS upper_bound,
        NULL AS mode,
        'rate_limit:' || lr.id AS stable_id
@@ -68,12 +69,24 @@ SELECT 'order_size_limit' AS kind, los.scope AS scope,
        ast.code AS asset_code, NULL AS currency_code,
        NULL AS max_orders, NULL AS window,
        los.max_quantity AS max_quantity, los.max_notional AS max_notional,
+       NULL AS max_position,
 	       NULL AS lower_bound, NULL AS upper_bound,
        NULL AS mode,
        'order_size_limit:' || los.id AS stable_id
 FROM limit_order_size los
 LEFT JOIN account a   ON a.id   = los.account_id
 LEFT JOIN asset   ast ON ast.id = los.asset_id
+UNION ALL
+SELECT 'position_limit' AS kind, lp.scope AS scope,
+       a.code AS account_code, NULL AS account_group_code,
+       ast.code AS asset_code, NULL AS currency_code,
+       NULL AS max_orders, NULL AS window,
+       NULL AS max_quantity, NULL AS max_notional, lp.max_position AS max_position,
+       NULL AS lower_bound, NULL AS upper_bound, NULL AS mode,
+       'position_limit:' || lp.id AS stable_id
+FROM limit_position lp
+JOIN account a ON a.id = lp.account_id
+JOIN asset ast ON ast.id = lp.asset_id
 UNION ALL
 SELECT CASE lsfpb.axis
          WHEN 'realized'   THEN 'spot_funds_pnl_bounds_kill_switch'
@@ -85,6 +98,7 @@ SELECT CASE lsfpb.axis
        NULL AS asset_code, c.code AS currency_code,
        NULL AS max_orders, NULL AS window,
        NULL AS max_quantity, NULL AS max_notional,
+       NULL AS max_position,
 	       lsfpb.lower_bound AS lower_bound, lsfpb.upper_bound AS upper_bound,
        NULL AS mode,
        'spot_funds_pnl_bounds_kill_switch:' || lsfpb.id AS stable_id
@@ -98,6 +112,7 @@ SELECT 'spot_funds_limit_mode' AS kind, 'global' AS scope,
        NULL AS asset_code, NULL AS currency_code,
        NULL AS max_orders, NULL AS window,
        NULL AS max_quantity, NULL AS max_notional,
+       NULL AS max_position,
        NULL AS lower_bound, NULL AS upper_bound,
        COALESCE((SELECT value FROM setting WHERE key = '` + domain.SettingKeySpotFundsLimitMode + `'), 'enforce') AS mode,
        'spot_funds_limit_mode:global' AS stable_id
@@ -129,7 +144,7 @@ func (r *realmStore) ListPolicyRows(
 	queryArgs := append([]any{}, args...)
 	query := `SELECT kind, scope, account_code, account_group_code,
 		       asset_code, currency_code,
-	       max_orders, window, max_quantity, max_notional,
+	       max_orders, window, max_quantity, max_notional, max_position,
 	       lower_bound, upper_bound, mode` + from + policyListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
@@ -212,6 +227,7 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 		"maxNotional":  "max_notional COLLATE DECIMAL",
 		"maxOrders":    "max_orders",
 		"maxQuantity":  "max_quantity COLLATE DECIMAL",
+		"maxPosition":  "max_position COLLATE DECIMAL",
 		"policy":       "kind",
 		"scope":        "scope",
 		"upperBound":   "upper_bound COLLATE DECIMAL",
@@ -248,13 +264,14 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 		windowStr                     sql.NullString
 		maxQuantity                   sql.NullString
 		maxNotional                   sql.NullString
+		maxPosition                   sql.NullString
 		lowerBound, upperBound        sql.NullString
 		mode                          sql.NullString
 	)
 	if err := rows.Scan(
 		&kind, &scope, &accountCode, &accountGroupCode,
 		&assetCode, &currencyCode,
-		&maxOrders, &windowStr, &maxQuantity, &maxNotional,
+		&maxOrders, &windowStr, &maxQuantity, &maxNotional, &maxPosition,
 		&lowerBound, &upperBound, &mode,
 	); err != nil {
 		return fwstore.PolicyListRow{}, fmt.Errorf("store: scan policy row: %w", err)
@@ -289,6 +306,11 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 			Asset:       assetCode.String,
 			MaxQuantity: maxQuantity.String,
 			MaxNotional: maxNotional.String,
+		}
+	case fwstore.PolicyKindPosition:
+		row.Position = &domain.LimitPosition{
+			Scope: scope, Account: account, Asset: assetCode.String,
+			MaxPosition: maxPosition.String,
 		}
 	case fwstore.PolicyKindSpotFundsPnlBounds,
 		fwstore.PolicyKindSpotFundsUnrealizedPnlBounds,
@@ -581,6 +603,91 @@ func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 		MaxQuantity: maxQuantity.String,
 		MaxNotional: maxNotional.String,
 	}, nil
+}
+
+// ListPositionLimits returns the position ceilings, optionally narrowed to an account.
+func (r *realmStore) ListPositionLimits(
+	ctx context.Context, account domain.AccountID,
+) (value []domain.LimitPosition, resultErr error) {
+	q := `SELECT lp.scope, a.code, ast.code, lp.max_position
+FROM limit_position lp
+JOIN account a ON a.id = lp.account_id
+JOIN asset ast ON ast.id = lp.asset_id`
+	args := make([]any, 0, 1)
+	if account != "" {
+		q += ` WHERE a.code = ?`
+		args = append(args, account.String())
+	}
+	q += ` ORDER BY a.code, ast.code`
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list position limits: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
+	result := make([]domain.LimitPosition, 0)
+	for rows.Next() {
+		var limit domain.LimitPosition
+		if err := rows.Scan(&limit.Scope, &limit.Account, &limit.Asset, &limit.MaxPosition); err != nil {
+			return nil, fmt.Errorf("store: scan position limit: %w", err)
+		}
+		result = append(result, limit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate position limits: %w", err)
+	}
+	return result, nil
+}
+
+// PutPositionLimit replaces the ceiling for the account and asset atomically.
+func (r *realmStore) PutPositionLimit(ctx context.Context, limit domain.LimitPosition) error {
+	if err := limit.Validate(); err != nil {
+		return err
+	}
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	accountID, assetID, err := resolveLimitAxes(ctx, db, limit.Account, limit.Asset)
+	if err != nil {
+		return err
+	}
+	return putLimitRow(ctx, db, "limit_position",
+		limit.Scope, accountID, assetID,
+		func(ctx context.Context, exec sqlExecer) error {
+			_, err := exec.ExecContext(
+				ctx,
+				`INSERT INTO limit_position
+				 (scope, account_id, asset_id, max_position)
+				 VALUES (?, ?, ?, ?)`,
+				limit.Scope, accountID, assetID, limit.MaxPosition,
+			)
+			return err
+		},
+	)
+}
+
+// DeletePositionLimit removes the ceiling for the account and asset.
+func (r *realmStore) DeletePositionLimit(ctx context.Context, account domain.AccountID, asset string) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	accountID, assetID, err := resolveLimitAxes(ctx, db, account, asset)
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(ctx,
+		`DELETE FROM limit_position WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
+		domain.ScopeAccountAsset, accountID, assetID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: delete position limit: %w", err)
+	}
+	return notFoundIfNoRows(res, "position limit", account.String()+":"+asset)
 }
 
 // --- SpotFunds P&L-bounds barriers (limit_spot_funds_pnl_bound) -------------

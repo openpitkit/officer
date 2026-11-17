@@ -110,6 +110,13 @@ type ControlPlane interface {
 		limit domain.LimitOrderSize,
 		missing domain.MissingAccountPolicy,
 	) error
+	// PutPositionLimit sets the account-asset ceiling under the caller resolved
+	// from ctx. The SDK enforces the stored ceiling from the next order.
+	PutPositionLimit(
+		ctx context.Context,
+		limit domain.LimitPosition,
+		missing domain.MissingAccountPolicy,
+	) error
 	PutSpotFundsPnlBoundsLimit(
 		ctx context.Context,
 		limit domain.LimitSpotFundsPnlBounds,

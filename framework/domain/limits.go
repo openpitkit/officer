@@ -84,6 +84,20 @@ type LimitOrderSize struct {
 	MaxNotional string
 }
 
+// LimitPosition bounds the long and short position magnitude for one account
+// and asset. The engine computes the projected position and enforces the bound.
+type LimitPosition struct {
+	// Scope is always ScopeAccountAsset.
+	Scope LimitScope
+	// Account is the required account axis.
+	Account AccountID
+	// Asset is the required asset axis.
+	Asset string
+	// MaxPosition is the inclusive, non-negative ceiling (exact decimal).
+	// Zero permits only a flat projected position.
+	MaxPosition string
+}
+
 // LimitSpotFundsPnlBounds configures a currency-valued SpotFunds P&L barrier.
 // The engine blocks an account-tier currency mismatch, but skips a nonmatching
 // account-group or global barrier. Bounds are never FX-converted; Officer
@@ -156,6 +170,15 @@ func SpotFundsPnlAxisOf(policy string) (SpotFundsPnlAxis, bool) {
 	return "", false
 }
 
+// IsSpotFundsSettingPolicy reports whether a policy is applied to the engine
+// in place as SDK SpotFunds settings: the three P&L axes and position ceilings.
+// Limit mode has its own path in framework/node/local_spot_funds_limit_mode.go
+// and is not covered here.
+func IsSpotFundsSettingPolicy(policy string) bool {
+	_, pnlBounds := SpotFundsPnlAxisOf(policy)
+	return pnlBounds || policy == PolicyPositionLimit
+}
+
 // LimitSpotFundsLimitMode is the value of the Officer meta-policy
 // PolicySpotFundsLimitMode: whether Spot Funds refuses an order on funds. It
 // is global only and carries no account, asset or account-group axis.
@@ -170,7 +193,8 @@ type LimitSpotFundsLimitMode struct {
 // policies it is the engine mapping the typed validators enforce; the Officer
 // meta-policy PolicySpotFundsLimitMode is global only.
 var allowedScopes = map[string][]LimitScope{
-	PolicyRateLimit: {ScopeBroker, ScopeAsset, ScopeAccount, ScopeAccountAsset},
+	PolicyPositionLimit: {ScopeAccountAsset},
+	PolicyRateLimit:     {ScopeBroker, ScopeAsset, ScopeAccount, ScopeAccountAsset},
 	PolicyOrderSizeLimit: {
 		ScopeBroker,
 		ScopeUnderlyingAsset,
@@ -282,6 +306,26 @@ func (l LimitOrderSize) Validate() error {
 		if err := validatePositiveDecimal(l.MaxNotional); err != nil {
 			return invalidField("/maxNotional", "positive_decimal", fmt.Errorf("max_notional: %w", err))
 		}
+	}
+	return nil
+}
+
+// Validate requires an account, an asset and a non-negative exact ceiling.
+func (l LimitPosition) Validate() error {
+	if err := ValidateLimitScopeAndAxes(
+		PolicyPositionLimit, l.Scope, l.Account, l.Asset, "",
+	); err != nil {
+		return err
+	}
+	if l.MaxPosition == "" {
+		return invalidField("/maxPosition", "required", fmt.Errorf("max_position is required: %w", ErrInvalid))
+	}
+	value, err := parseEngineExactDecimal(l.MaxPosition)
+	if err != nil {
+		return invalidField("/maxPosition", "decimal", fmt.Errorf("max_position: %w", err))
+	}
+	if value.IsNegative() || strings.HasPrefix(l.MaxPosition, "-") {
+		return invalidField("/maxPosition", "range", fmt.Errorf("max_position must be non-negative: %w", ErrInvalid))
 	}
 	return nil
 }
@@ -422,14 +466,14 @@ func ValidateLimitScopeAndAxes(
 
 // validatePnlBounds checks that each set bound is a decimal the engine can
 // hold, written as the engine parses it, and that the lower bound is not above
-// the upper one. Both are parsed with parseEngineBound before they are
+// the upper one. Both are parsed with parseEngineExactDecimal before they are
 // compared, so the comparison never rescales by the exponent a bound is
 // written with.
 func validatePnlBounds(lowerBound, upperBound string) error {
 	var lowerD, upperD decimal.Decimal
 	var err error
 	if lowerBound != "" {
-		lowerD, err = parseEngineBound(lowerBound)
+		lowerD, err = parseEngineExactDecimal(lowerBound)
 		if err != nil {
 			return invalidField(
 				"/lowerBound", "decimal", fmt.Errorf("lower_bound: %w", err),
@@ -437,7 +481,7 @@ func validatePnlBounds(lowerBound, upperBound string) error {
 		}
 	}
 	if upperBound != "" {
-		upperD, err = parseEngineBound(upperBound)
+		upperD, err = parseEngineExactDecimal(upperBound)
 		if err != nil {
 			return invalidField(
 				"/upperBound", "decimal", fmt.Errorf("upper_bound: %w", err),
@@ -455,19 +499,19 @@ func validatePnlBounds(lowerBound, upperBound string) error {
 	return nil
 }
 
-// parseEngineBound parses a P&L bound as ParseEngineDecimal does and also
-// refuses, with an error wrapping ErrInvalid, a bound written in a way the
-// engine does not parse. The engine reads a bound with rust_decimal's
+// parseEngineExactDecimal parses a decimal as ParseEngineDecimal does and also
+// refuses, with an error wrapping ErrInvalid, a spelling the engine does not
+// parse. The engine reads a decimal with rust_decimal's
 // Decimal::from_str_exact (rust_decimal 1.42.1, parse_str_radix_10_exact in
 // src/str.rs): an optional leading sign, then digits with at most one point,
 // every digit kept as written, at most 28 of them after the point, and all of
 // them, read as one integer, below 2^96. ParseEngineDecimal takes more: an
 // exponent, a sign right after a leading point, and trailing fractional zeros
 // past either limit, since it drops them before it checks the scale and the
-// range. A stored bound the engine cannot parse fails the policy
+// range. A stored value the engine cannot parse fails the policy
 // configuration, and undoing that rebuilds the engine, which resets every
 // rate-limit window.
-func parseEngineBound(value string) (decimal.Decimal, error) {
+func parseEngineExactDecimal(value string) (decimal.Decimal, error) {
 	parsed, err := ParseEngineDecimal(value)
 	if err != nil {
 		return decimal.Decimal{}, err
@@ -553,6 +597,11 @@ func (l LimitOrderSize) NoLooserThan(ref LimitOrderSize) error {
 	return boundNoLooserThan(
 		"max_notional", l.MaxNotional, ref.MaxNotional, false,
 	)
+}
+
+// NoLooserThan returns ErrLoosening when the ceiling is raised or removed.
+func (l LimitPosition) NoLooserThan(ref LimitPosition) error {
+	return boundNoLooserThan("max_position", l.MaxPosition, ref.MaxPosition, false)
 }
 
 // NoLooserThan returns nil when the Spot Funds P&L-bounds barrier is at least

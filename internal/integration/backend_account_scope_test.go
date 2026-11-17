@@ -1562,6 +1562,10 @@ func TestService_AccountScopeNarrowsLimits(t *testing.T) {
 			},
 			{Scope: domain.ScopeSettlementAsset, Asset: "USD"},
 		},
+		PositionLimits: []domain.LimitPosition{
+			{Scope: domain.ScopeAccountAsset, Account: scopeHiddenAccount, Asset: "BTC", MaxPosition: "2"},
+			{Scope: domain.ScopeAccountAsset, Account: scopeResolvedAccount, Asset: "BTC", MaxPosition: "1"},
+		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
@@ -1575,6 +1579,7 @@ func TestService_AccountScopeNarrowsLimits(t *testing.T) {
 		OrderSizeLimits: []domain.LimitOrderSize{
 			limits.OrderSizeLimits[1],
 		},
+		PositionLimits: []domain.LimitPosition{limits.PositionLimits[1]},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			limits.SpotFundsPnlBoundsLimits[0],
 			limits.SpotFundsPnlBoundsLimits[2],
@@ -1669,6 +1674,10 @@ func TestService_AccountScopeNarrowsOverview(t *testing.T) {
 			{Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
 			{Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
 		},
+		PositionLimits: []domain.LimitPosition{
+			{Scope: domain.ScopeAccountAsset, Account: scopeResolvedAccount, Asset: "BTC", MaxPosition: "1"},
+			{Scope: domain.ScopeAccountAsset, Account: scopeHiddenAccount, Asset: "BTC", MaxPosition: "2"},
+		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
@@ -1691,7 +1700,7 @@ func TestService_AccountScopeNarrowsOverview(t *testing.T) {
 			scope:       newNarrowingScope(),
 			restriction: scopeRestriction,
 			accounts:    1,
-			limits:      2,
+			limits:      3,
 			audit:       []domain.AuditFilter{{Restriction: scopeRestriction}},
 			reached:     []string{`ListLimits ""`, `ListAdjustments "scoped-acc"`},
 		},
@@ -1699,7 +1708,7 @@ func TestService_AccountScopeNarrowsOverview(t *testing.T) {
 			name:     "every account",
 			scope:    backend.EveryAccount{},
 			accounts: 2,
-			limits:   4,
+			limits:   6,
 			reached:  []string{`ListLimits ""`, `ListAdjustments ""`},
 		},
 	} {

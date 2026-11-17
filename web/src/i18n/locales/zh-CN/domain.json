@@ -2,6 +2,7 @@
   "policyLabel": {
     "rate_limit": "频率限制",
     "order_size_limit": "订单规模限制",
+    "position_limit": "持仓限制",
     "spot_funds_pnl_bounds_kill_switch": "已实现 P&L 熔断开关",
     "spot_funds_unrealized_pnl_bounds_kill_switch": "未实现 P&L 熔断开关",
     "spot_funds_total_pnl_bounds_kill_switch": "总 P&L 熔断开关",
@@ -34,6 +35,9 @@
       "max_quantity": "正小数",
       "max_notional": "正小数"
     },
+    "position_limit": {
+      "max_position": "非负小数"
+    },
     "spot_funds_pnl_bounds_kill_switch": {
       "currency": "资产代码",
       "lower_bound": "小数",
@@ -58,6 +62,10 @@
     "order_size_limit": {
       "label": "订单规模限制",
       "description": "按数量和名义价值限制单笔订单的规模，防止乌龙指错误。"
+    },
+    "position_limit": {
+      "label": "持仓限制",
+      "description": "限制账户在单一资产上的最大可能多头和空头持仓，包括未成交订单。持仓等于上限时允许通过。"
     },
     "spot_funds_pnl_bounds_kill_switch": {
       "label": "已实现盈亏熔断开关",
@@ -95,6 +103,12 @@
       "max_notional": {
         "label": "最大名义价值",
         "hint": "正小数"
+      }
+    },
+    "position_limit": {
+      "max_position": {
+        "label": "最大持仓",
+        "hint": "非负小数"
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {

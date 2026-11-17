@@ -259,6 +259,9 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.OrderSizeLimits, err = r.ListOrderSizeLimits(ctx, ""); err != nil {
 		return backup.Data{}, err
 	}
+	if data.PositionLimits, err = r.ListPositionLimits(ctx, ""); err != nil {
+		return backup.Data{}, err
+	}
 	spotFundsPnlBounds, err := r.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
 		return backup.Data{}, err

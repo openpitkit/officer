@@ -736,6 +736,192 @@ describe("Limits identity filters", () => {
 });
 
 describe("LimitDialog framework controls", () => {
+  it("creates a position ceiling through the dialog with its exact value", async () => {
+    const user = userEvent.setup();
+    renderLimits();
+    const dialog = await openAddDialog(user);
+    await chooseInDialog(user, dialog, 0, "Position limit");
+    expect(within(dialog).getAllByRole("combobox")[0]).toHaveTextContent(
+      "account_asset",
+    );
+    await user.type(within(dialog).getByLabelText("Account"), "acc-1");
+    await user.type(within(dialog).getByLabelText("Asset"), "AAPL");
+    await user.type(
+      within(dialog).getByLabelText("max position"),
+      "+10.000000010",
+    );
+    expect(within(dialog).getByLabelText("max position")).toHaveValue(
+      "10.000000010",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add policy" }),
+    );
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/rebuilds the risk engine/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Rebuild and apply" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(putLimitMock).toHaveBeenCalledWith(
+        {
+          policy: "position_limit",
+          scope: "account_asset",
+          account: "acc-1",
+          accountGroup: "",
+          asset: "AAPL",
+          values: { max_position: "10.000000010" },
+        },
+        "reject",
+      ),
+    );
+  });
+
+  it.each(["+", "-"])(
+    "refuses a typed %s sign in the position ceiling",
+    async (sign) => {
+      const user = userEvent.setup();
+      renderLimitDialog(null);
+      const dialog = screen.getByRole("dialog");
+      await chooseInDialog(user, dialog, 0, "Position limit");
+      const ceiling = within(dialog).getByLabelText("max position");
+      await user.type(ceiling, sign);
+      expect(ceiling).toHaveValue("");
+      await user.type(ceiling, "10.000000010");
+      expect(ceiling).toHaveValue("10.000000010");
+      expect(putLimitMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["abc", "position_limit requires max_position"],
+    ["", "position_limit requires max_position"],
+  ])(
+    "blocks invalid position ceiling %j without a request",
+    async (value, message) => {
+      const user = userEvent.setup();
+      renderLimitDialog(null);
+      const dialog = screen.getByRole("dialog");
+      await chooseInDialog(user, dialog, 0, "Position limit");
+      await user.type(within(dialog).getByLabelText("Account"), "acc-1");
+      await user.type(within(dialog).getByLabelText("Asset"), "AAPL");
+      if (value !== "") {
+        await user.type(within(dialog).getByLabelText("max position"), value);
+      }
+      expect(within(dialog).getByLabelText("max position")).toHaveValue("");
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(message);
+      expect(
+        within(dialog).getByRole("button", { name: "Add policy" }),
+      ).toBeDisabled();
+      expect(putLimitMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows the position ceiling and selects its policy filter", async () => {
+    const user = userEvent.setup();
+    useLimitsMock.mockReturnValue(
+      readyPage([
+        {
+          policy: "position_limit",
+          scope: "account_asset",
+          account: "acc-1",
+          asset: "AAPL",
+          values: { max_position: "10.00000001" },
+        },
+      ]),
+    );
+    renderLimits();
+    const row = within(policyRow("Position limit"));
+    expect(row.getByText("max_position")).toBeInTheDocument();
+    expect(row.getByText("10.00000001")).toBeInTheDocument();
+    const field = screen.getByText("Filter by policy").parentElement;
+    if (!field) {
+      throw new Error("policy filter field not found");
+    }
+    await user.click(within(field).getByRole("combobox"));
+    await user.click(screen.getByRole("option", { name: "Position limit" }));
+    expect(
+      latestPolicyFiltersMatching(
+        (filters) => filters?.policy === "position" && filters.limit !== 1,
+      ),
+    ).toEqual(expect.objectContaining({ policy: "position" }));
+  });
+
+  it("accepts the position filter and ceiling sort from the URL", () => {
+    renderLimits("/policies?policy=position&sort=maxPosition&order=desc");
+    expect(
+      latestPolicyFiltersMatching((filters) => filters?.limit !== 1),
+    ).toEqual(
+      expect.objectContaining({
+        policy: "position",
+        sort: "maxPosition",
+        order: "desc",
+      }),
+    );
+  });
+
+  it("edits a position ceiling while locking its account and asset", async () => {
+    const user = userEvent.setup();
+    renderLimitDialog({
+      policy: "position_limit",
+      scope: "account_asset",
+      account: "acc-1",
+      asset: "AAPL",
+      values: { max_position: "100" },
+    });
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("Account")).toBeDisabled();
+    expect(within(dialog).getByLabelText("Asset")).toBeDisabled();
+    const ceiling = within(dialog).getByLabelText("max position");
+    await user.clear(ceiling);
+    await user.type(ceiling, "0");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(putLimitMock).toHaveBeenCalledWith(
+        {
+          policy: "position_limit",
+          scope: "account_asset",
+          account: "acc-1",
+          accountGroup: "",
+          asset: "AAPL",
+          values: { max_position: "0" },
+        },
+        "reject",
+      ),
+    );
+  });
+
+  it("deletes the last position ceiling without a rebuild warning", async () => {
+    const user = userEvent.setup();
+    useLimitsMock.mockReturnValue(
+      readyPage([
+        {
+          policy: "position_limit",
+          scope: "account_asset",
+          account: "acc-1",
+          asset: "AAPL",
+          values: { max_position: "100" },
+        },
+      ]),
+    );
+    renderLimits();
+    const confirm = await openDeleteConfirm(user, "Position limit");
+    expect(
+      within(confirm).queryByText(/rebuilds the risk engine/),
+    ).not.toBeInTheDocument();
+    await user.click(within(confirm).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(deleteLimitMock).toHaveBeenCalledWith({
+        policy: "position_limit",
+        scope: "account_asset",
+        account: "acc-1",
+        accountGroup: undefined,
+        asset: "AAPL",
+      }),
+    );
+  });
+
   it("renders and submits only the quantity cap for an underlying-asset scope", async () => {
     const user = userEvent.setup();
     renderLimitDialog(null);

@@ -81,6 +81,11 @@ func TestFixtureArchiveDecodes(t *testing.T) {
 		data.OrderSizeLimits[0].MaxQuantity != "100" {
 		t.Fatalf("limits not portable: %+v", data.OrderSizeLimits)
 	}
+	if len(data.PositionLimits) != 1 || data.PositionLimits[0] != (domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001",
+	}) {
+		t.Fatalf("position limits not portable: %+v", data.PositionLimits)
+	}
 	if len(data.Orders) != 1 {
 		t.Fatalf("orders = %d, want 1", len(data.Orders))
 	}
@@ -267,6 +272,49 @@ func TestFilterDataLimitsRespectAccountSelectorAndGlobalRows(t *testing.T) {
 	filtered = FilterData(data, Scope{Sections: []Section{SectionRiskLimits}})
 	if got := orderSizeAccounts(filtered.OrderSizeLimits); !sameStrings(got, []string{"", "acc-1", "acc-2"}) {
 		t.Fatalf("unfiltered limit accounts = %v, want global, acc-1, acc-2", got)
+	}
+}
+
+func TestFilterDataPositionLimits(t *testing.T) {
+	data := fixtureData()
+	for _, tc := range []struct {
+		name  string
+		scope Scope
+		want  []domain.LimitPosition
+	}{
+		{"all", Scope{All: true}, data.PositionLimits},
+		{"risk limits", Scope{Sections: []Section{SectionRiskLimits}}, data.PositionLimits},
+		{"account", Scope{Sections: []Section{SectionRiskLimits},
+			Accounts: EntitySelector{Accounts: []string{"acc-1"}}}, data.PositionLimits[:1]},
+		{"group", Scope{Sections: []Section{SectionRiskLimits},
+			Accounts: EntitySelector{Groups: []string{"grp-2"}}}, data.PositionLimits[1:]},
+		{"unselected account", Scope{Sections: []Section{SectionRiskLimits},
+			Accounts: EntitySelector{Accounts: []string{"acc-3"}}}, []domain.LimitPosition{}},
+		{"other section", Scope{Sections: []Section{SectionPositions}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FilterData(data, tc.scope).PositionLimits
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("position limits = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestArchiveWithoutPositionLimits(t *testing.T) {
+	var archive Archive
+	if err := json.Unmarshal([]byte(`{"manifest":{"formatVersion":6},"data":{}}`), &archive); err != nil {
+		t.Fatal(err)
+	}
+	if archive.Manifest.FormatVersion != FormatVersion || len(archive.Data.PositionLimits) != 0 {
+		t.Fatalf("archive without position limits = %+v", archive)
+	}
+	raw, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`"positionLimits"`)) {
+		t.Fatalf("empty position limits were not omitted: %s", raw)
 	}
 }
 
@@ -755,6 +803,10 @@ func fixtureData() Data {
 			{Scope: domain.ScopeBroker, MaxQuantity: "1000"},
 			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100"},
 			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-2", Asset: "AAPL", MaxQuantity: "200"},
+		},
+		PositionLimits: []domain.LimitPosition{
+			{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
+			{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "0"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{

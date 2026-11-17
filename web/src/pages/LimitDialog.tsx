@@ -18,7 +18,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { isSpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
+import {
+  isInPlacePolicy,
+  isSpotFundsPnlPolicy,
+} from "@/api/spotFundsPnlPolicies";
 import type { Account, Limit } from "@/api/types";
 import { validateLimit } from "@/api/validate";
 import {
@@ -513,8 +516,7 @@ export function LimitDialog({
   const policyCount = policyCounts[form.policy];
   const requiresEngineRebuild =
     !isEdit &&
-    !isSpotFundsPnl &&
-    !isSpotFundsMode &&
+    !isInPlacePolicy(form.policy) &&
     policyCount !== undefined &&
     policyCount === 0;
 
@@ -857,7 +859,11 @@ export function LimitDialog({
                               id={`kind-${kind}`}
                               value={form.values[kind] ?? ""}
                               spellCheck={false}
-                              min={kind === "max_orders" ? "0" : null}
+                              min={
+                                kind === "max_orders" || kind === "max_position"
+                                  ? "0"
+                                  : null
+                              }
                               integerOnly={kind === "max_orders"}
                               valueType={
                                 kind === "max_quantity" ? "quantity" : undefined

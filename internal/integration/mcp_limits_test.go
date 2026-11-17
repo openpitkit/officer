@@ -115,6 +115,18 @@ func orderSizeLimitDriver(
 	}
 }
 
+func positionLimitDriver(
+	t *testing.T, service *backend.Service, src frameworkmcp.Source,
+) setLimitDriver[domain.LimitPosition] {
+	return setLimitDriver[domain.LimitPosition]{
+		t: t, src: src,
+		stored: func() []domain.LimitPosition { return storedLimits(t, service).PositionLimits },
+		body: func(limit domain.LimitPosition) map[string]any {
+			return map[string]any{"positionLimit": httpx.ToPositionLimitDTO(limit)}
+		},
+	}
+}
+
 // spotFundsPnlBoundsDriver drives the P&L-bound kill switch of axis: it sees
 // only the stored bounds of that axis, and REST's body answers them under that
 // axis's key.
@@ -150,7 +162,7 @@ func spotFundsPnlBoundsDriver(
 func requireNoLimits(t *testing.T, service *backend.Service) {
 	t.Helper()
 	limits := storedLimits(t, service)
-	if len(limits.RateLimits)+len(limits.OrderSizeLimits)+len(limits.SpotFundsPnlBoundsLimits) != 0 {
+	if len(limits.RateLimits)+len(limits.OrderSizeLimits)+len(limits.PositionLimits)+len(limits.SpotFundsPnlBoundsLimits) != 0 {
 		t.Fatalf("stored barriers %+v, want none", limits)
 	}
 }
@@ -198,6 +210,7 @@ func TestSetLimitRateOnControlPlane(t *testing.T) {
 	assertResultBody(t, wire, map[string]any{"limits": map[string]any{
 		"rateLimits":                         []httpx.RateLimitDTO{httpx.ToRateLimitDTO(stricter)},
 		"orderSizeLimits":                    []any{},
+		"positionLimits":                     []any{},
 		"spotFundsPnlBoundsLimits":           []any{},
 		"spotFundsUnrealizedPnlBoundsLimits": []any{},
 		"spotFundsTotalPnlBoundsLimits":      []any{},
@@ -248,6 +261,88 @@ func TestSetLimitOrderSizeOnControlPlane(t *testing.T) {
 			"policy": "order_size_limit", "scope": "broker",
 			"maxQuantity": "4", "maxNotional": "1000", "windowMs": window,
 		}, "validation", stricter)
+	}
+}
+
+func TestSetLimitPositionOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: "ETH"}); err != nil {
+		t.Fatal(err)
+	}
+	position := positionLimitDriver(t, service, src)
+	for _, ceiling := range []string{"10.0000000000000000001", "5.0000000000000000001", "0"} {
+		stored := domain.LimitPosition{
+			Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: ceiling,
+		}
+		position.accepts(map[string]any{
+			"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
+			"maxPosition": ceiling, "missingAccount": "reject",
+		}, "position_limit account_asset set", stored)
+		assertResultBody(t, callToolOK(t, src, "get_limits", map[string]any{"account": "desk"}),
+			map[string]any{"limits": httpx.ToAccountLimitsDTO(node.AccountLimits{
+				PositionLimits: []domain.LimitPosition{stored},
+			})})
+		state := callTool[struct {
+			Limits httpx.AccountLimitsDTO `json:"limits"`
+		}](t, src, "get_account_state", map[string]any{"account": "desk"})
+		if state.IsError || !slices.Equal(state.StructuredContent.Limits.PositionLimits, []httpx.PositionLimitDTO{httpx.ToPositionLimitDTO(stored)}) {
+			t.Fatalf("get_account_state position limits = %+v (error %t)", state.StructuredContent.Limits.PositionLimits, state.IsError)
+		}
+	}
+	zero := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "0"}
+	for _, ceiling := range []string{"-1", "not-a-decimal", ""} {
+		position.refuses(map[string]any{
+			"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
+			"maxPosition": ceiling, "missingAccount": "reject",
+		}, "validation", zero)
+	}
+}
+
+func TestPositionLimitReadSummaries(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: "ETH"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.PutPositionLimit(systemCtx(), domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "1",
+	}, domain.MissingAccountReject); err != nil {
+		t.Fatal(err)
+	}
+	for tool, want := range map[string]string{
+		"get_limits": "1 limit(s)", "get_account_state": "account desk: 1 limit(s)",
+	} {
+		res := callTool[map[string]any](t, src, tool, map[string]any{"account": "desk"})
+		if got := summaryText(res.Content); res.IsError || got != want {
+			t.Errorf("%s summary = %q (error %t), want %q", tool, got, res.IsError, want)
+		}
+	}
+}
+
+func TestSetLimitPositionRefusesForeignFields(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: "ETH"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []map[string]any{
+		{"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH", "maxPosition": "1", "maxQuantity": "1", "missingAccount": "reject"},
+		{"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH", "maxPosition": "1", "maxQuantity": "", "missingAccount": "reject"},
+		{"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1", "maxPosition": "1"},
+		{"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1", "maxPosition": ""},
+	} {
+		positionLimitDriver(t, service, src).refuses(in, "validation")
+		requireNoLimits(t, service)
 	}
 }
 
@@ -612,6 +707,7 @@ func TestSetLimitSpotFundsLimitModeOnControlPlane(t *testing.T) {
 	assertResultBody(t, wire, map[string]any{"limits": map[string]any{
 		"rateLimits":                         []any{},
 		"orderSizeLimits":                    []any{},
+		"positionLimits":                     []any{},
 		"spotFundsPnlBoundsLimits":           []any{},
 		"spotFundsUnrealizedPnlBoundsLimits": []any{},
 		"spotFundsTotalPnlBoundsLimits":      []any{},
@@ -799,6 +895,11 @@ func TestSetLimitWithOneAccount(t *testing.T) {
 	restCtx := auth.ContextWithCaller(context.Background(), domain.Caller{
 		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
 	})
+	positionLimitDriver(t, service, src).accepts(map[string]any{
+		"policy": "position_limit", "scope": "account_asset", "asset": "USD", "maxPosition": "0",
+	}, "position_limit account_asset set", domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account, Asset: "USD", MaxPosition: "0",
+	})
 	rest := httpx.DescribeErr(service.PutSpotFundsPnlBoundsLimit(restCtx, domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, Currency: "USD", LowerBound: "-1",
@@ -841,6 +942,22 @@ func TestSetLimitMissingAccountWithOneAccount(t *testing.T) {
 		"policy": "rate_limit", "scope": "account", "account": string(oneAccountFeatures.Account),
 		"windowMs": 1000, "maxOrders": 4, "missingAccount": "bogus",
 	}, "validation", stored)
+
+	if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: "ETH"}); err != nil {
+		t.Fatal(err)
+	}
+	position := positionLimitDriver(t, service, src)
+	positionStored := domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account, Asset: "ETH", MaxPosition: "1",
+	}
+	position.accepts(map[string]any{
+		"policy": "position_limit", "scope": "account_asset", "asset": "ETH", "maxPosition": "1",
+		"missingAccount": "bogus",
+	}, "position_limit account_asset set", positionStored)
+	position.refuses(map[string]any{
+		"policy": "position_limit", "scope": "account_asset", "account": string(oneAccountFeatures.Account),
+		"asset": "ETH", "maxPosition": "0", "missingAccount": "bogus",
+	}, "validation", positionStored)
 }
 
 // TestSetLimitRefusesUndeclaredField calls set_limit with an argument it does

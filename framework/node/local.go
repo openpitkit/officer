@@ -364,6 +364,10 @@ func (n *localNode) loadSnapshot(
 	if err != nil {
 		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load order-size limits for build: %w", err)
 	}
+	positionLimits, err := n.realm.ListPositionLimits(ctx, "")
+	if err != nil {
+		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf("load position limits for build: %w", err)
+	}
 	spotFundsPnlBoundsLimits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
 		return engine.Snapshot{}, domain.AuditDetail{}, fmt.Errorf(
@@ -393,12 +397,13 @@ func (n *localNode) loadSnapshot(
 		Accounts:                 accounts,
 		RateLimits:               rateLimits,
 		OrderSizeLimits:          orderSizeLimits,
+		PositionLimits:           positionLimits,
 		SpotFundsPnlBoundsLimits: spotFundsPnlBoundsLimits,
 		Groups:                   groups,
 		Balances:                 balances,
 		SpotFundsTrackOnly:       spotFundsLimitMode == domain.SpotFundsLimitModeTrackOnly,
 	}
-	barriers := len(rateLimits) + len(orderSizeLimits) + len(spotFundsPnlBoundsLimits)
+	barriers := len(rateLimits) + len(orderSizeLimits) + len(positionLimits) + len(spotFundsPnlBoundsLimits)
 	counts := domain.NewAuditDetail(domain.AuditDetailHydrate, domain.AuditDetailParams{
 		"assets":   strconv.Itoa(len(assets)),
 		"accounts": strconv.Itoa(len(accounts)),

@@ -2,6 +2,7 @@
   "policyLabel": {
     "rate_limit": "Límite de frecuencia",
     "order_size_limit": "Límite de tamaño de orden",
+    "position_limit": "Límite de posición",
     "spot_funds_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L realizado",
     "spot_funds_unrealized_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L no realizado",
     "spot_funds_total_pnl_bounds_kill_switch": "Interruptor de emergencia por P&L total",
@@ -34,6 +35,9 @@
       "max_quantity": "decimal positivo",
       "max_notional": "decimal positivo"
     },
+    "position_limit": {
+      "max_position": "decimal no negativo"
+    },
     "spot_funds_pnl_bounds_kill_switch": {
       "currency": "código de activo",
       "lower_bound": "decimal",
@@ -58,6 +62,10 @@
     "order_size_limit": {
       "label": "Límite de tamaño de orden",
       "description": "Limita el tamaño de una sola orden por cantidad y por valor nocional para evitar errores de introducción."
+    },
+    "position_limit": {
+      "label": "Límite de posición",
+      "description": "Limita la posición máxima posible de una cuenta en un activo, tanto larga como corta, incluidas las órdenes abiertas. Se permite una posición igual al límite."
     },
     "spot_funds_pnl_bounds_kill_switch": {
       "label": "Interruptor de emergencia por pérdidas y ganancias realizadas",
@@ -95,6 +103,12 @@
       "max_notional": {
         "label": "nocional máx.",
         "hint": "decimal positivo"
+      }
+    },
+    "position_limit": {
+      "max_position": {
+        "label": "posición máx.",
+        "hint": "decimal no negativo"
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {

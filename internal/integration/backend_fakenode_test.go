@@ -50,6 +50,7 @@ type fakeNode struct {
 
 	putRateLimitCalls               []domain.LimitRate
 	putOrderSizeLimitCalls          []domain.LimitOrderSize
+	putPositionLimitCalls           []domain.LimitPosition
 	putRateLimitHook                func()
 	putOrderSizeLimitHook           func()
 	putSpotFundsPnlBoundsLimitCalls []domain.LimitSpotFundsPnlBounds
@@ -598,6 +599,16 @@ func (n *fakeNode) PutRateLimit(
 		n.putRateLimitHook()
 	}
 	n.putRateLimitCalls = append(n.putRateLimitCalls, limit)
+	return n.restoreSink, nil
+}
+
+func (n *fakeNode) PutPositionLimit(
+	_ context.Context, limit domain.LimitPosition,
+	missing domain.MissingAccountPolicy, _ domain.Caller,
+) (marketdata.Sink, error) {
+	n.recordCall("PutPositionLimit", limit.Account, missing)
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
+	n.putPositionLimitCalls = append(n.putPositionLimitCalls, limit)
 	return n.restoreSink, nil
 }
 

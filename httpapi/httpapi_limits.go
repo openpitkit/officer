@@ -152,6 +152,32 @@ func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
 	}
 }
 
+func handlePutPositionLimit(svc backend.ControlPlane) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req httpx.PositionLimitDTO
+		if !httpx.DecodeBody(w, r, &req) {
+			return
+		}
+		limit := httpx.FromPositionLimitDTO(req)
+		missing, err := missingAccountQuery(r, limit.Account)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		if err := svc.PutPositionLimit(r.Context(), limit, missing); err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		persisted, err := httpx.PersistedPositionLimit(r.Context(), svc, limit)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		stored := httpx.ToPositionLimitDTO(persisted)
+		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{PositionLimit: &stored})
+	}
+}
+
 // handlePutSpotFundsPnlBoundsLimit handles
 // PUT /api/v1/limits/spot-funds-pnl-bounds,
 // /limits/spot-funds-unrealized-pnl-bounds and

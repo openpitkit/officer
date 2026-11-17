@@ -471,6 +471,26 @@ func TestListLimits_FilterAndPaging(t *testing.T) {
 	}
 }
 
+func TestListLimits_PositionSort(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/limits?policy=position&sort=maxPosition&order=desc", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.policyFilter.Kind == nil || *svc.policyFilter.Kind != store.PolicyKindPosition {
+		t.Fatalf("kind filter = %v", svc.policyFilter.Kind)
+	}
+	if svc.policyFilter.Sort.Column != "maxPosition" || !svc.policyFilter.Sort.Descending {
+		t.Fatalf("sort spec = %+v", svc.policyFilter.Sort)
+	}
+}
+
 func TestListLimits_BadSort(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {
@@ -609,6 +629,130 @@ func TestPutOrderSizeLimit(t *testing.T) {
 	if osl["scope"] != "account_settlement_asset" ||
 		osl["maxQuantity"] != "" || osl["maxNotional"] != "50001" {
 		t.Fatalf("unexpected persisted orderSizeLimit: %v", osl)
+	}
+}
+
+func TestPutPositionLimit(t *testing.T) {
+	for _, value := range []string{"0", "123.000000000000000001"} {
+		t.Run(value, func(t *testing.T) {
+			limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: value}
+			stored := limit
+			stored.MaxPosition = "321.000000000000000002"
+			svc := &fakeService{limits: node.AccountLimits{PositionLimits: []domain.LimitPosition{
+				{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "BTC", MaxPosition: "1"},
+				{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "ETH", MaxPosition: "2"},
+				stored,
+			}}}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := bytes.NewBufferString(`{"scope":"account_asset","account":"acc-1","asset":"BTC","maxPosition":"` + value + `"}`)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/position?missingAccount=reject", body))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body)
+			}
+			if svc.positionLimitPut != limit || svc.missingAccount != domain.MissingAccountReject {
+				t.Fatalf("captured position limit = %+v, missing = %q", svc.positionLimitPut, svc.missingAccount)
+			}
+			m := bodyMap(t, rec.Result())
+			position, ok := m["positionLimit"].(map[string]any)
+			if !ok || len(m) != 1 || len(position) != 4 || position["scope"] != "account_asset" || position["account"] != "acc-1" || position["asset"] != "BTC" || position["maxPosition"] != stored.MaxPosition {
+				t.Fatalf("unexpected persisted positionLimit: %v", m)
+			}
+		})
+	}
+}
+
+func TestPutPositionLimit_ValidationError(t *testing.T) {
+	for _, value := range []string{"-1", "not-a-decimal"} {
+		t.Run(value, func(t *testing.T) {
+			limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: value}
+			svc := &fakeService{putLimErr: limit.Validate()}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			body := bytes.NewBufferString(`{"scope":"account_asset","account":"acc-1","asset":"BTC","maxPosition":"` + value + `"}`)
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/position?missingAccount=create", body))
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d body=%s", rec.Code, rec.Body)
+			}
+			m := bodyMap(t, rec.Result())
+			problems, ok := m["errors"].([]any)
+			if !ok || len(problems) == 0 {
+				t.Fatalf("missing validation problems: %v", m)
+			}
+			if problem := problems[0].(map[string]any); problem["code"] != "validation" {
+				t.Fatalf("unexpected validation problem: %v", problem)
+			}
+			if svc.positionLimitPut != limit || svc.listLimitsCalls != 0 {
+				t.Fatalf("invalid put = %+v, read-back calls = %d", svc.positionLimitPut, svc.listLimitsCalls)
+			}
+		})
+	}
+}
+
+func TestPutPositionLimitReadBackError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"missing", nil, http.StatusNotFound},
+		{"read failed", fmt.Errorf("read failed"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{listLimErr: tc.err}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			body := bytes.NewBufferString(`{"scope":"account_asset","account":"acc-1","asset":"BTC","maxPosition":"1"}`)
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/position?missingAccount=create", body))
+			if rec.Code != tc.status {
+				t.Fatalf("want %d, got %d body=%s", tc.status, rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+func TestListLimitsPositionValues(t *testing.T) {
+	for _, policy := range []string{"position", "all"} {
+		t.Run(policy, func(t *testing.T) {
+			limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "123.000000000000000001"}
+			svc := &fakeService{policyRows: []store.PolicyListRow{{Kind: store.PolicyKindPosition, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset, Position: &limit}}}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/limits?policy="+policy, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body)
+			}
+			if policy == "position" {
+				if svc.policyFilter.Kind == nil || *svc.policyFilter.Kind != store.PolicyKindPosition {
+					t.Fatalf("kind filter = %v, want position", svc.policyFilter.Kind)
+				}
+			} else if svc.policyFilter.Kind != nil {
+				t.Fatalf("all kind filter = %v, want nil", svc.policyFilter.Kind)
+			}
+			m := bodyMap(t, rec.Result())
+			policies, ok := m["policies"].([]any)
+			if !ok || len(policies) != 1 || m["total"] != float64(1) {
+				t.Fatalf("unexpected policy list: %v", m)
+			}
+			row := policies[0].(map[string]any)
+			values := row["values"].(map[string]any)
+			position, ok := values["position"].(map[string]any)
+			if row["kind"] != "position_limit" || row["scope"] != "account_asset" || row["account"] != "acc-1" || row["asset"] != "BTC" || !ok || len(values) != 1 || position["maxPosition"] != limit.MaxPosition {
+				t.Fatalf("unexpected position row: %v", row)
+			}
+		})
 	}
 }
 
@@ -1010,6 +1154,34 @@ func TestDeleteLimit(t *testing.T) {
 	}
 }
 
+func TestDeletePositionLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"deleted", nil, http.StatusNoContent},
+		{"absent", domain.ErrNotFound, http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{delLimErr: tc.err}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/limits?policy=position_limit&scope=account_asset&account=acc-1&asset=BTC", nil))
+			if rec.Code != tc.status {
+				t.Fatalf("want %d, got %d body=%s", tc.status, rec.Code, rec.Body)
+			}
+			want := node.LimitTarget{Policy: domain.PolicyPositionLimit, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC"}
+			if svc.deleteLimitTarget != want {
+				t.Fatalf("delete target = %+v, want %+v", svc.deleteLimitTarget, want)
+			}
+		})
+	}
+}
+
 func TestDeleteSpotFundsPnlBoundsLimit(t *testing.T) {
 	svc := &fakeService{}
 	r, err := newRouter(svc)
@@ -1057,6 +1229,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 		OrderSizeLimits: []domain.LimitOrderSize{
 			{Scope: domain.ScopeBroker, MaxQuantity: "500", MaxNotional: "50000"},
 		},
+		PositionLimits: []domain.LimitPosition{{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "1.000000000000000001"}},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-1",
 				Currency: "USD", LowerBound: "-1000", UpperBound: "5000"},
@@ -1092,6 +1265,14 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 		if _, ok := size[key]; !ok {
 			t.Fatalf("OrderSizeLimitDTO missing JSON key %q", key)
 		}
+	}
+	positions, ok := m["positionLimits"].([]any)
+	if !ok || len(positions) != 1 {
+		t.Fatalf("want 1 position limit, got %v", m["positionLimits"])
+	}
+	position := positions[0].(map[string]any)
+	if len(position) != 4 || position["scope"] != "account_asset" || position["account"] != "acc-1" || position["asset"] != "BTC" || position["maxPosition"] != "1.000000000000000001" {
+		t.Fatalf("unexpected position limit: %v", position)
 	}
 	spotFundsPnls, _ := m["spotFundsPnlBoundsLimits"].([]any)
 	spotFundsPnl := spotFundsPnls[0].(map[string]any)

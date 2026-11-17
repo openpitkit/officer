@@ -494,6 +494,26 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		}
 		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
+	for _, l := range data.PositionLimits {
+		if err := restoreValidationError(l.Validate()); err != nil {
+			return fmt.Errorf(
+				"store: restore position_limit scope %q account %q asset %q: %w",
+				l.Scope, l.Account, l.Asset, err,
+			)
+		}
+		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
+		if err != nil {
+			return err
+		}
+		applied, err := rt.putLimit(ctx, "limit_position", l.Scope, accountID, assetID,
+			`INSERT INTO limit_position (scope, account_id, asset_id, max_position) VALUES (?, ?, ?, ?)`,
+			[]any{l.Scope, accountID, assetID, l.MaxPosition},
+		)
+		if err != nil {
+			return err
+		}
+		rt.applyRuntime(backup.SectionRiskLimits, applied)
+	}
 	for _, l := range data.SpotFundsPnlBounds() {
 		if err := restoreValidationError(l.Validate()); err != nil {
 			return fmt.Errorf(
@@ -546,7 +566,8 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 // (scope, account, asset) composite; insert-missing skips an existing composite,
 // overwrite and replace-all delete-then-insert it (delete-then-insert is required
 // because SQLite treats NULL axes as distinct in the UNIQUE constraint). Returns
-// the number of rows applied (0 when skipped).
+// the number of rows applied (0 when skipped). Position limits have a fixed
+// account-asset scope, so their key has no stored scope column.
 func (rt *restoreTx) putLimit(
 	ctx context.Context,
 	table string, scope domain.LimitScope,
@@ -554,10 +575,12 @@ func (rt *restoreTx) putLimit(
 	insertSQL string,
 	insertArgs []any,
 ) (int, error) {
+	where := `scope = ? AND account_id IS ? AND asset_id IS ?`
+	keyArgs := []any{scope, accountID, assetID}
 	exists, err := rowExists(
 		ctx, rt.tx,
-		`SELECT 1 FROM `+table+` WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
-		scope, accountID, assetID,
+		`SELECT 1 FROM `+table+` WHERE `+where,
+		keyArgs...,
 	)
 	if err != nil {
 		return 0, err
@@ -567,8 +590,8 @@ func (rt *restoreTx) putLimit(
 	}
 	if _, err := rt.tx.ExecContext(
 		ctx,
-		`DELETE FROM `+table+` WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
-		scope, accountID, assetID,
+		`DELETE FROM `+table+` WHERE `+where,
+		keyArgs...,
 	); err != nil {
 		return 0, fmt.Errorf("store: restore delete %s: %w", table, err)
 	}

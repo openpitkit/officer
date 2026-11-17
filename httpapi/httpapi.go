@@ -107,6 +107,7 @@ func RegisterRoutes(
 
 	register(registry, "limits.rate.put", http.MethodPut, "/limits/rate", handlePutRateLimit(svc))
 	register(registry, "limits.order-size.put", http.MethodPut, "/limits/order-size", handlePutOrderSizeLimit(svc))
+	register(registry, "limits.position.put", http.MethodPut, "/limits/position", handlePutPositionLimit(svc))
 	register(registry, "limits.spot-funds-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisRealized))
 	register(registry, "limits.spot-funds-unrealized-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-unrealized-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisUnrealized))
 	register(registry, "limits.spot-funds-total-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-total-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisTotal))

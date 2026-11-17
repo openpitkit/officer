@@ -249,6 +249,65 @@ func TestLimitOrderSizeNoLooserThan(t *testing.T) {
 	}
 }
 
+func TestLimitPositionNoLooserThan(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, value, ref, want string
+	}{
+		{"lower", "9", "10", ""},
+		{"equal", "10.000", "10", ""},
+		{"flat", "0", "10", ""},
+		{"flat unchanged", "0", "0", ""},
+		{"raise", "11", "10", "max_position 11 above the current 10: " + loosening},
+		{"raise from flat", "0.01", "0", "max_position 0.01 above the current 0: " + loosening},
+		{"fraction raise", "0.1234567890123456789012345679", "0.1234567890123456789012345678",
+			"max_position 0.1234567890123456789012345679 above the current 0.1234567890123456789012345678: " + loosening},
+		{"removed", "", "10", "max_position unset while the current is 10: " + loosening},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limit := domain.LimitPosition{MaxPosition: tc.value}
+			requireTightening(t, limit.NoLooserThan(domain.LimitPosition{MaxPosition: tc.ref}), tc.want)
+		})
+	}
+	for _, values := range [][2]string{{"bad", "10"}, {"10", "bad"}} {
+		if err := (domain.LimitPosition{MaxPosition: values[0]}).NoLooserThan(
+			domain.LimitPosition{MaxPosition: values[1]},
+		); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("NoLooserThan(%q, %q) = %v, want ErrInvalid", values[0], values[1], err)
+		}
+	}
+}
+
+func FuzzLimitPositionNoLooserThan(f *testing.F) {
+	f.Add("0", "0.01")
+	f.Add("100", "1")
+	f.Add("0.1234567890123456789012345678", "0.0000000000000000000000000001")
+	f.Fuzz(func(t *testing.T, value, rawStep string) {
+		ref := domain.LimitPosition{
+			Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: value,
+		}
+		if ref.Validate() != nil {
+			t.Skip("not a valid position ceiling")
+		}
+		step := fuzzStep(t, rawStep)
+		current, err := domain.ParseEngineDecimal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireAccepted(t, "the ceiling itself", ref.NoLooserThan(ref))
+		raised := ref
+		raised.MaxPosition = current.Add(step).String()
+		if raised.Validate() == nil {
+			requireRefused(t, "a raised ceiling", raised.NoLooserThan(ref))
+		}
+		lowered := ref
+		lowered.MaxPosition = current.Sub(step).String()
+		if lowered.Validate() == nil {
+			requireAccepted(t, "a lowered ceiling", lowered.NoLooserThan(ref))
+		}
+	})
+}
+
 // pnlBoundsTighteningCases compare a Spot Funds P&L-bounds barrier, limit,
 // with the one it would replace or take over from, ref; want is the refusal's
 // text, empty when limit is accepted.

@@ -264,11 +264,20 @@ export interface SpotFundsPnlBoundsLimit {
   upperBound: string;
 }
 
+/** Stored position ceiling for one account and asset, as an exact decimal. */
+export interface PositionLimit {
+  scope: string;
+  account: string;
+  asset: string;
+  maxPosition: string;
+}
+
 /** Per-policy typed limits returned by the account-state and limit-list APIs.
  *  The Spot Funds P&L bounds are listed per axis: realized, unrealized, total. */
 export interface AccountLimits {
   rateLimits: RateLimit[];
   orderSizeLimits: OrderSizeLimit[];
+  positionLimits: PositionLimit[];
   spotFundsPnlBoundsLimits: SpotFundsPnlBoundsLimit[];
   spotFundsUnrealizedPnlBoundsLimits: SpotFundsPnlBoundsLimit[];
   spotFundsTotalPnlBoundsLimits: SpotFundsPnlBoundsLimit[];
@@ -290,6 +299,7 @@ export interface Limit {
 export type PolicyKind =
   | "rate_limit"
   | "order_size_limit"
+  | "position_limit"
   | "spot_funds_pnl_bounds_kill_switch"
   | "spot_funds_unrealized_pnl_bounds_kill_switch"
   | "spot_funds_total_pnl_bounds_kill_switch"
@@ -319,10 +329,16 @@ export interface PolicySpotFundsLimitModeValues {
   mode: SpotFundsLimitMode;
 }
 
+/** Exact position ceiling in a policy-list row. */
+export interface PolicyPositionValues {
+  maxPosition: string;
+}
+
 /** Discriminated value carrier: exactly one member is present per `kind`. */
 export interface PolicyValues {
   rate?: PolicyRateValues;
   orderSize?: PolicyOrderSizeValues;
+  position?: PolicyPositionValues;
   spotFundsPnlBounds?: PolicyPnlBoundsValues;
   spotFundsLimitMode?: PolicySpotFundsLimitModeValues;
 }
@@ -343,6 +359,7 @@ export type PolicyFilter =
   | "all"
   | "rate"
   | "order_size"
+  | "position"
   | "spot_funds_pnl_bounds"
   | "spot_funds_unrealized_pnl_bounds"
   | "spot_funds_total_pnl_bounds"

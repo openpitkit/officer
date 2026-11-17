@@ -129,6 +129,7 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		Balances:        make([]backup.Balance, 0, len(r.balances)),
 		RateLimits:      make([]domain.LimitRate, 0, len(r.rateLimits)),
 		OrderSizeLimits: make([]domain.LimitOrderSize, 0, len(r.orderSizeLimits)),
+		PositionLimits:  make([]domain.LimitPosition, 0, len(r.positionLimits)),
 		SpotFundsPnlBoundsLimits: make(
 			[]domain.LimitSpotFundsPnlBounds,
 			0,
@@ -192,6 +193,9 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 	}
 	for _, limit := range r.orderSizeLimits {
 		data.OrderSizeLimits = append(data.OrderSizeLimits, limit)
+	}
+	for _, limit := range r.positionLimits {
+		data.PositionLimits = append(data.PositionLimits, limit)
 	}
 	for _, limit := range r.spotFundsPnlBoundsLimits {
 		data.SpotFundsPnlBoundsLimits = append(data.SpotFundsPnlBoundsLimits, limit)
@@ -332,6 +336,10 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 	for _, limit := range data.OrderSizeLimits {
 		r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
 	}
+	r.positionLimits = map[string]domain.LimitPosition{}
+	for _, limit := range data.PositionLimits {
+		r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+	}
 	r.spotFundsPnlBoundsLimits = map[string]domain.LimitSpotFundsPnlBounds{}
 	for _, limit := range data.SpotFundsPnlBoundsLimits {
 		r.spotFundsPnlBoundsLimits[spotFundsPnlBoundsLimitKey(
@@ -442,7 +450,7 @@ func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) in
 	case backup.SectionPositions:
 		return len(r.balances)
 	case backup.SectionRiskLimits:
-		return len(r.rateLimits) + len(r.orderSizeLimits) + len(r.spotFundsPnlBoundsLimits)
+		return len(r.rateLimits) + len(r.orderSizeLimits) + len(r.positionLimits) + len(r.spotFundsPnlBoundsLimits)
 	case backup.SectionMarketData:
 		return len(r.instances) + len(r.instruments)
 	case backup.SectionGeneralSettings:
@@ -453,6 +461,49 @@ func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) in
 		return len(r.audit)
 	default:
 		return 0
+	}
+}
+
+func TestMemoryRealmPositionLimitsBackupRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	src := newMemoryStore("position-backup-source.db").realm
+	limit := domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001",
+	}
+	if _, err := src.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.PutPositionLimit(ctx, limit); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archive.Data.PositionLimits) != 1 || archive.Data.PositionLimits[0] != limit {
+		t.Fatalf("exported position limits = %+v, want %+v", archive.Data.PositionLimits, limit)
+	}
+	dst := newMemoryStore("position-backup-target.db").realm
+	stale := limit
+	stale.Asset = "USD"
+	if err := dst.PutPositionLimit(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := dst.ListPositionLimits(ctx, "")
+	if err != nil || len(got) != 1 || got[0] != limit {
+		t.Fatalf("restored position limits = %+v, err=%v, want %+v", got, err, limit)
+	}
+	if summary.Applied[backup.SectionRiskLimits] != 1 {
+		t.Fatalf("applied risk limits = %d, want 1", summary.Applied[backup.SectionRiskLimits])
 	}
 }
 

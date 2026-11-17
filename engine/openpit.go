@@ -110,6 +110,11 @@ type openPitEngine struct {
 	// policy-registration API.
 	registered map[string]struct{}
 
+	// positionLimits tracks successful SDK calls by stable engine ids, including
+	// pairs whose dictionary aliases have since been renamed or removed.
+	// Guarded by mu after construction.
+	positionLimits map[accountAssetKey]positionLimitValue
+
 	// seedAccountBlocks are the blocks the engine latched while this handle was
 	// seeded: a seeded P&L that is halted, or that breaches its own barrier,
 	// kill-switches the account before the handle ever goes live. The build seam
@@ -168,6 +173,7 @@ func newOpenPitEngine(
 	registered map[string]struct{},
 	seedAccountBlocks []domain.AccountBlock,
 	res idResolver,
+	positionLimits map[accountAssetKey]positionLimitValue,
 ) fwengine.Engine {
 	if registered == nil {
 		registered = make(map[string]struct{})
@@ -180,6 +186,7 @@ func newOpenPitEngine(
 		sink:              newMarketDataSink(service.service, res),
 		marketDataService: service,
 		registered:        registered,
+		positionLimits:    positionLimits,
 		seedAccountBlocks: seedAccountBlocks,
 		running:           async != nil,
 	}
@@ -343,6 +350,12 @@ func buildOpenPitEngine(
 		return nil, service, err
 	}
 
+	positionLimits := make(map[accountAssetKey]positionLimitValue)
+	if err := configurePositionLimits(
+		eng.Configure(), res, snap.PositionLimits, positionLimits,
+	); err != nil {
+		return releaseOnErr(err)
+	}
 	// Group membership and group currency are exclusive operations. They are
 	// hydrated on the bare handle before the dispatcher exists, so no other call
 	// can be in flight beside them.
@@ -376,6 +389,7 @@ func buildOpenPitEngine(
 		registered,
 		append(buildBlocks, accountPnlBlocks...),
 		res,
+		positionLimits,
 	), service, nil
 }
 
@@ -526,10 +540,17 @@ func (e *openPitEngine) CheckOrderModel(
 // rate_limit / order_size_limit: the full axes are rebuilt from the complete
 // barrier set and replaced in one Configure call. Barriers, including a broker
 // barrier, are added and removed at runtime while the policy remains non-empty.
+//
+// position_limit applies the complete stored set as a per-pair diff against the
+// applied set inside an exclusive section. An empty set is valid and clears
+// every applied pair. An invalid or unresolvable set changes nothing; an SDK
+// error part-way leaves the pairs applied before it live and tracked.
+//
 // Configuring an unregistered policy returns a not-implemented stub. Removing
 // the last barrier returns the same stub except for
-// spot_funds_pnl_bounds_kill_switch, whose separate SDK surface can clear empty
-// axes online. Live state is changed only on success.
+// spot_funds_pnl_bounds_kill_switch and position_limit, whose separate SDK
+// surfaces can clear empty sets online. For the other policies live state is
+// changed only on success.
 func (e *openPitEngine) ConfigurePolicy(
 	ctx context.Context, policy string, limits fwengine.LimitSet,
 ) (fwengine.PolicyConfigurationResult, error) {
@@ -549,8 +570,8 @@ func (e *openPitEngine) ConfigurePolicy(
 				"registration is not supported by the SDK yet: %w",
 			policy, domain.ErrNotImplemented)
 	}
-	pnlAxis, pnlBounds := domain.SpotFundsPnlAxisOf(policy)
-	if !pnlBounds && barrierCount(policy, limits) == 0 {
+	pnlAxis, _ := domain.SpotFundsPnlAxisOf(policy)
+	if !domain.IsSpotFundsSettingPolicy(policy) && barrierCount(policy, limits) == 0 {
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf(
 			"engine: cannot remove the last barrier of policy %q: empty policy "+
 				"settings are rejected by the SDK: %w",
@@ -567,6 +588,16 @@ func (e *openPitEngine) ConfigurePolicy(
 			return fwengine.PolicyConfigurationResult{}, err
 		}
 		return fwengine.PolicyConfigurationResult{}, nil
+	case domain.PolicyPositionLimit:
+		err := fwengine.RunExclusive(
+			context.WithoutCancel(ctx), e.async,
+			func(driver asyncengine.Driver) error {
+				return configurePositionLimits(
+					driver.Configure(), e.res, limits.PositionLimits, e.positionLimits,
+				)
+			},
+		)
+		return fwengine.PolicyConfigurationResult{}, err
 	case domain.PolicySpotFundsPnlBoundsKillSwitch,
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
@@ -611,6 +642,44 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize)
 		nameOrderSizeLimit, optional.Some(broker), assets, accountAssets,
 	); err != nil {
 		return fmt.Errorf("engine: configure order_size_limit: %w", err)
+	}
+	return nil
+}
+
+// configurePositionLimits validates and resolves the whole set before SDK calls,
+// pins new or changed pairs, and clears applied pairs absent from the set.
+// It updates applied after each successful SDK call, matching partial failures.
+func configurePositionLimits(
+	configurator configure.Configurator,
+	res idResolver,
+	limits []domain.LimitPosition,
+	applied map[accountAssetKey]positionLimitValue,
+) error {
+	desired, err := positionLimitValues(limits, res)
+	if err != nil {
+		return err
+	}
+	for key, value := range desired {
+		if current, exists := applied[key]; exists && current.maxPosition == value.maxPosition {
+			continue
+		}
+		if err := configurator.SpotFundsPositionLimit(
+			nameSpotFunds, key.account, value.asset, optional.Some(value.quantity),
+		); err != nil {
+			return fmt.Errorf("engine: configure position_limit: %w", err)
+		}
+		applied[key] = value
+	}
+	for key, value := range applied {
+		if _, exists := desired[key]; exists {
+			continue
+		}
+		if err := configurator.SpotFundsPositionLimit(
+			nameSpotFunds, key.account, value.asset, optional.None[param.Quantity](),
+		); err != nil {
+			return fmt.Errorf("engine: clear position_limit: %w", err)
+		}
+		delete(applied, key)
 	}
 	return nil
 }
@@ -996,7 +1065,7 @@ func policyName(policy string) string {
 		return nameRateLimit
 	case domain.PolicyOrderSizeLimit:
 		return nameOrderSizeLimit
-	case domain.PolicySpotFundsPnlBoundsKillSwitch,
+	case domain.PolicyPositionLimit, domain.PolicySpotFundsPnlBoundsKillSwitch,
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
 		return nameSpotFunds

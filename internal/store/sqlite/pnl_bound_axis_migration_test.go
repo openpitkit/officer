@@ -84,6 +84,7 @@ func pnlBoundV1Fixture(t *testing.T) string {
 		DROP TABLE trading_test_policy;
 		ALTER TABLE audit DROP COLUMN account_identity;
 		ALTER TABLE audit DROP COLUMN group_identity;
+		DROP TABLE limit_position;
 		DROP TABLE alert_delivery;
 		DROP TABLE alert_read_state;
 		DROP TABLE actionable_alert;

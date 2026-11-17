@@ -518,6 +518,11 @@ func newSubjectNode(
 // agent may not shed by deleting the account or changing its code, since an
 // account recreated under the code has no block, no group and no barrier.
 var accountProtections = map[string]func(context.Context, store.RealmStore) error{
+	"own position barrier": func(ctx context.Context, realm store.RealmStore) error {
+		return realm.PutPositionLimit(ctx, domain.LimitPosition{
+			Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "USD", MaxPosition: "100",
+		})
+	},
 	"operator block": func(ctx context.Context, realm store.RealmStore) error {
 		return realm.SetAccountBlocked(ctx, "acc", true, "risk")
 	},
@@ -561,6 +566,11 @@ var accountProtections = map[string]func(context.Context, store.RealmStore) erro
 // each way an agent may not shed by deleting the asset or changing its code,
 // since an asset recreated under the code is referenced by no barrier.
 var assetProtections = map[string]func(context.Context, store.RealmStore) error{
+	"position barrier": func(ctx context.Context, realm store.RealmStore) error {
+		return realm.PutPositionLimit(ctx, domain.LimitPosition{
+			Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
+		})
+	},
 	"asset rate barrier": func(ctx context.Context, realm store.RealmStore) error {
 		return realm.PutRateLimit(ctx, rateLimit(
 			domain.ScopeAsset, "", "AAPL", 100, time.Second,
@@ -641,6 +651,9 @@ func storedRiskState(t *testing.T, n *localNode) []any {
 			cmp.Compare(a.Asset, b.Asset),
 		)
 	})
+	slices.SortFunc(limits.PositionLimits, func(a, b domain.LimitPosition) int {
+		return cmp.Or(cmp.Compare(a.Account, b.Account), cmp.Compare(a.Asset, b.Asset))
+	})
 	slices.SortFunc(limits.SpotFundsPnlBoundsLimits,
 		func(a, b domain.LimitSpotFundsPnlBounds) int {
 			return cmp.Or(
@@ -683,6 +696,8 @@ func rebuiltWithAccount(probe *rebuildProbe, account domain.AccountID) bool {
 		return row.Account == account
 	}) || slices.ContainsFunc(last.OrderSizeLimits, func(row domain.LimitOrderSize) bool {
 		return row.Account == account
+	}) || slices.ContainsFunc(last.PositionLimits, func(row domain.LimitPosition) bool {
+		return row.Account == account
 	}) || slices.ContainsFunc(last.SpotFundsPnlBoundsLimits,
 		func(row domain.LimitSpotFundsPnlBounds) bool { return row.Account == account },
 	)
@@ -697,6 +712,8 @@ func rebuiltWithAsset(probe *rebuildProbe, asset string) bool {
 	}) || slices.ContainsFunc(last.RateLimits, func(row domain.LimitRate) bool {
 		return row.Asset == asset
 	}) || slices.ContainsFunc(last.OrderSizeLimits, func(row domain.LimitOrderSize) bool {
+		return row.Asset == asset
+	}) || slices.ContainsFunc(last.PositionLimits, func(row domain.LimitPosition) bool {
 		return row.Asset == asset
 	}) || slices.ContainsFunc(last.SpotFundsPnlBoundsLimits,
 		func(row domain.LimitSpotFundsPnlBounds) bool { return row.Currency == asset },
@@ -1098,6 +1115,11 @@ func newLimitNode(t *testing.T, stored AccountLimits) (*localNode, *rebuildProbe
 	for _, limit := range stored.OrderSizeLimits {
 		if err := n.realm.PutOrderSizeLimit(ctx, limit); err != nil {
 			t.Fatalf("PutOrderSizeLimit: %v", err)
+		}
+	}
+	for _, limit := range stored.PositionLimits {
+		if err := n.realm.PutPositionLimit(ctx, limit); err != nil {
+			t.Fatalf("PutPositionLimit: %v", err)
 		}
 	}
 	for _, limit := range stored.SpotFundsPnlBoundsLimits {

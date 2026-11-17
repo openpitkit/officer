@@ -51,7 +51,7 @@ const (
 		"title replaces the stored one and an empty title clears it. A code " +
 		"change is refused with loosening_refused when the account is blocked, " +
 		"when it is in a blocked group or in a group with a group-scoped Spot " +
-		"Funds P&L bound, or when it carries a rate-limit, order-size or Spot " +
+		"Funds P&L bound, or when it carries a rate-limit, order-size, position or Spot " +
 		"Funds P&L barrier of its own. Mutates Officer control-plane config; " +
 		"protected and disabled by default."
 	deleteAccountToolDescription = "Delete an account. An account with " +
@@ -60,7 +60,7 @@ const (
 		"even with force. The delete is refused with loosening_refused, even " +
 		"with force, when the account is blocked, when it is in a blocked group " +
 		"or in a group with a group-scoped Spot Funds P&L bound, when it carries " +
-		"a rate-limit, order-size or Spot Funds P&L barrier of its own, or while " +
+		"a rate-limit, order-size, position or Spot Funds P&L barrier of its own, or while " +
 		"any rate-limit barrier is configured. Force-deleting removes the " +
 		"account's venue-fee adjustments, so fees it received may be booked " +
 		"again to the connection's current fee account on the next restart. " +

@@ -2357,6 +2357,218 @@ describe("business CSV client", () => {
 });
 
 describe("limits client", () => {
+  it.each([
+    ["positionLimit", {}, "Position limit is missing from the API response"],
+    [
+      "maxPosition",
+      {
+        positionLimit: {
+          scope: "account_asset",
+          account: "desk-alpha",
+          asset: "AAPL",
+        },
+      },
+      "Position ceiling is missing from the API response",
+    ],
+  ])(
+    "rejects a position PUT answer without %s",
+    async (_field, body, message) => {
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(body));
+      const { putLimit } = api();
+      const result = putLimit(
+        {
+          policy: "position_limit",
+          scope: "account_asset",
+          account: "desk-alpha",
+          asset: "AAPL",
+          values: { max_position: "10" },
+        },
+        "reject",
+      );
+      await expect(result).rejects.toThrow(ApiError);
+      await expect(result).rejects.toMatchObject({ message, code: "internal" });
+    },
+  );
+
+  it.each([
+    ["values.position", {}, "Position limit is missing from the API response"],
+    [
+      "maxPosition",
+      { position: {} },
+      "Position ceiling is missing from the API response",
+    ],
+  ])(
+    "rejects a position policy row without %s",
+    async (_field, values, message) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          policies: [
+            {
+              kind: "position_limit",
+              scope: "account_asset",
+              account: "desk-alpha",
+              asset: "AAPL",
+              values,
+            },
+          ],
+          total: 1,
+        }),
+      );
+      const { fetchPoliciesPage } = api();
+      const result = fetchPoliciesPage({ policy: "position" });
+      await expect(result).rejects.toThrow(ApiError);
+      await expect(result).rejects.toMatchObject({ message, code: "internal" });
+    },
+  );
+
+  it.each([
+    ["missing", {}],
+    ["null", { positionLimits: null }],
+    ["non-array", { positionLimits: {} }],
+  ])("rejects account state with %s positionLimits", async (_case, limits) => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ account: { code: "desk-alpha" }, limits }),
+    );
+    const { fetchAccountState } = api();
+    const result = fetchAccountState("desk-alpha");
+    await expect(result).rejects.toThrow(ApiError);
+    await expect(result).rejects.toMatchObject({
+      message:
+        "Position limits array is invalid or missing from the API response",
+      code: "internal",
+    });
+  });
+
+  it("upserts a position ceiling with the exact string and reads the stored barrier", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        positionLimit: {
+          scope: "account_asset",
+          account: "desk-alpha",
+          asset: "AAPL",
+          maxPosition: "10.00000001",
+        },
+      }),
+    );
+    const { putLimit } = api();
+    const limit = await putLimit(
+      {
+        policy: "position_limit",
+        scope: "account_asset",
+        account: "desk-alpha",
+        asset: "AAPL",
+        values: { max_position: "+10.000000010" },
+      },
+      "reject",
+    );
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/limits/position?missingAccount=reject",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          scope: "account_asset",
+          account: "desk-alpha",
+          asset: "AAPL",
+          maxPosition: "+10.000000010",
+        }),
+      }),
+    );
+    expect(limit).toEqual({
+      policy: "position_limit",
+      scope: "account_asset",
+      account: "desk-alpha",
+      asset: "AAPL",
+      values: { max_position: "10.00000001" },
+    });
+  });
+
+  it("reads a position policy row and serializes its filter and sort", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        policies: [
+          {
+            kind: "position_limit",
+            scope: "account_asset",
+            account: "desk-alpha",
+            asset: "AAPL",
+            values: { position: { maxPosition: "10.00000001" } },
+          },
+        ],
+        total: 1,
+      }),
+    );
+    const { fetchPoliciesPage } = api();
+    const page = await fetchPoliciesPage({
+      policy: "position",
+      sort: "maxPosition",
+      order: "desc",
+    });
+    const url = new URL(
+      String(vi.mocked(fetch).mock.calls[0][0]),
+      "http://test",
+    );
+    expect(Object.fromEntries(url.searchParams.entries())).toEqual({
+      policy: "position",
+      sort: "maxPosition",
+      order: "desc",
+    });
+    expect(page.items).toEqual([
+      {
+        policy: "position_limit",
+        scope: "account_asset",
+        account: "desk-alpha",
+        accountGroup: "",
+        asset: "AAPL",
+        values: { max_position: "10.00000001" },
+      },
+    ]);
+  });
+
+  it("reads positionLimits from account state", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        account: { code: "desk-alpha" },
+        limits: {
+          positionLimits: [
+            {
+              scope: "account_asset",
+              account: "desk-alpha",
+              asset: "AAPL",
+              maxPosition: "0",
+            },
+          ],
+        },
+      }),
+    );
+    const { fetchAccountState } = api();
+    const state = await fetchAccountState("desk-alpha");
+    expect(state.limits).toEqual([
+      {
+        policy: "position_limit",
+        scope: "account_asset",
+        account: "desk-alpha",
+        asset: "AAPL",
+        values: { max_position: "0" },
+      },
+    ]);
+  });
+
+  it("deletes a position limit through the generic pair endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+    const { deleteLimit } = api();
+    await deleteLimit({
+      policy: "position_limit",
+      scope: "account_asset",
+      account: "desk-alpha",
+      asset: "AAPL",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/limits?policy=position_limit&scope=account_asset&account=desk-alpha&asset=AAPL",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
   it("serializes policy list filters", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({ policies: [], total: 0 }),

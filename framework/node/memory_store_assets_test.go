@@ -172,6 +172,14 @@ func (r *memoryRealm) UpdateAsset(
 			limit.Asset = asset.Code
 			r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
 		}
+		for key, limit := range r.positionLimits {
+			if limit.Asset != oldCode {
+				continue
+			}
+			delete(r.positionLimits, key)
+			limit.Asset = asset.Code
+			r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+		}
 		for key, limit := range r.spotFundsPnlBoundsLimits {
 			if limit.Currency == oldCode {
 				limit.Currency = asset.Code
@@ -248,7 +256,7 @@ func (r *memoryRealm) assetCurrencyDependents(code string) []domain.DependentCou
 }
 
 func (r *memoryRealm) assetDependents(code string) []domain.DependentCount {
-	var balances, adjustments, rateLimits, orderSizeLimits, pnlBounds int
+	var balances, adjustments, rateLimits, orderSizeLimits, positionLimits, pnlBounds int
 	var orders, trades, instruments int
 	for _, balance := range r.balances {
 		if balance.Asset == code {
@@ -268,6 +276,11 @@ func (r *memoryRealm) assetDependents(code string) []domain.DependentCount {
 	for _, limit := range r.orderSizeLimits {
 		if limit.Asset == code {
 			orderSizeLimits++
+		}
+	}
+	for _, limit := range r.positionLimits {
+		if limit.Asset == code {
+			positionLimits++
 		}
 	}
 	for _, limit := range r.spotFundsPnlBoundsLimits {
@@ -296,6 +309,7 @@ func (r *memoryRealm) assetDependents(code string) []domain.DependentCount {
 			{kind: "adjustment", count: adjustments},
 			{kind: "limit_rate", count: rateLimits},
 			{kind: "limit_order_size", count: orderSizeLimits},
+			{kind: "limit_position", count: positionLimits},
 			{kind: "limit_spot_funds_pnl_bound", count: pnlBounds},
 			{kind: "order_record", count: orders},
 			{kind: "trade", count: trades},
@@ -336,6 +350,11 @@ func (r *memoryRealm) cascadeDeleteAsset(code string) {
 	for key, limit := range r.orderSizeLimits {
 		if limit.Asset == code {
 			delete(r.orderSizeLimits, key)
+		}
+	}
+	for key, limit := range r.positionLimits {
+		if limit.Asset == code {
+			delete(r.positionLimits, key)
 		}
 	}
 	for key, limit := range r.spotFundsPnlBoundsLimits {

@@ -70,7 +70,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				"funds but records every hold, so balances and positions may go negative; " +
 				"until first set the mode is enforce. stored is whether the spot_funds_limit_mode " +
 				"policy row is stored; false means no row and the default enforce. " +
-				"P&L bounds, rate and order-size barriers " +
+				"P&L bounds, rate, order-size and position barriers " +
 				"apply in both modes. accountsWithoutCurrency lists the visible accounts " +
 				"with no effective realized P&L currency that a Spot Funds P&L bound applies " +
 				"to: their P&L halts, so the bound blocks them. Read-only - no secrets, no order-flow control.",
@@ -144,7 +144,7 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "set_limit",
 			description: "Create a risk barrier, or make the one stored at the same " +
 				"address stricter, and return it as stored. policy names the kind - " +
-				"rate_limit, order_size_limit, one of the P&L-bound kill " +
+				"rate_limit, order_size_limit, position_limit, one of the P&L-bound kill " +
 				"switches spot_funds_pnl_bounds_kill_switch (realized P&L), " +
 				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
 				"spot_funds_total_pnl_bounds_kill_switch (total P&L), or " +
@@ -156,7 +156,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				"no more orders and, on the broker and asset scopes, the same " +
 				"window, on the account and account_asset scopes a window no " +
 				"shorter; for order_size_limit every current cap kept and none " +
-				"raised; for a P&L-bound kill switch the same currency, " +
+				"raised; for position_limit a ceiling no higher; for a P&L-bound kill switch the same currency, " +
 				"every current bound kept, the lower bound no lower and the upper " +
 				"bound no higher. A new account_underlying_asset or " +
 				"account_settlement_asset cap must be no higher than the " +
@@ -175,8 +175,8 @@ func TestServerToolSnapshot(t *testing.T) {
 				"without blocking) does not refuse on funds but records every hold, so " +
 				"balances and positions may go negative. Until first set the mode is " +
 				"enforce; the switch to track_only is refused with loosening_refused, " +
-				"and the switch to enforce resets no balance. P&L bounds, rate and " +
-				"order-size barriers apply in both modes. No barrier can be removed; " +
+				"and the switch to enforce resets no balance. P&L bounds, rate, order-size and " +
+				"position barriers apply in both modes. No barrier can be removed; " +
 				"to switch Spot Funds back to Check funds, set spot_funds_limit_mode " +
 				"with mode enforce. Mutates Officer control-plane config; protected " +
 				"and disabled by default.",
@@ -198,7 +198,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				"stored one and an empty title clears it. A code change is refused with " +
 				"loosening_refused when the account is blocked, when it is in a blocked " +
 				"group or in a group with a group-scoped Spot Funds P&L bound, or when " +
-				"it carries a rate-limit, order-size or Spot Funds P&L barrier of its " +
+				"it carries a rate-limit, order-size, position or Spot Funds P&L barrier of its " +
 				"own. Mutates Officer control-plane config; protected and disabled by " +
 				"default.",
 		},
@@ -210,7 +210,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				"The delete is refused with loosening_refused, even with force, when " +
 				"the account is blocked, when it is in a blocked group or in a group " +
 				"with a group-scoped Spot Funds P&L bound, when it carries a " +
-				"rate-limit, order-size or Spot Funds P&L barrier of its own, or while " +
+				"rate-limit, order-size, position or Spot Funds P&L barrier of its own, or while " +
 				"any rate-limit barrier is configured. Force-deleting removes the " +
 				"account's venue-fee adjustments, so fees it received may be booked " +
 				"again to the connection's current fee account on the next restart. " +
@@ -258,7 +258,7 @@ func TestServerToolSnapshot(t *testing.T) {
 			description: "Change an asset's code, title and asset class; the title " +
 				"and the asset class replace the stored ones, and an omitted or empty " +
 				"one clears it. A code change is refused with loosening_refused while " +
-				"a rate-limit or order-size barrier references the asset or a Spot " +
+				"a rate-limit, order-size or position barrier references the asset or a Spot " +
 				"Funds P&L bound is denominated in it. Mutates Officer control-plane " +
 				"config; protected and disabled by default.",
 		},
@@ -268,7 +268,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				"market-data and trading instruments that reference it included, is " +
 				"refused with has_dependents, and so is an asset an account or group " +
 				"holds as its currency. The delete is refused with loosening_refused " +
-				"while a rate-limit or order-size barrier references the asset or a " +
+				"while a rate-limit, order-size or position barrier references the asset or a " +
 				"Spot Funds P&L bound is denominated in it, and always with force: " +
 				"force would delete the asset's dependent rows with it - balances, " +
 				"orders, trades, adjustments and barriers among them. Mutates Officer " +
@@ -447,6 +447,19 @@ func TestServerToolSnapshot(t *testing.T) {
 	for _, got := range list.Tools {
 		gotByName[got.Name] = got
 	}
+	t.Run("position-limit-schema", func(t *testing.T) {
+		input, _ := decodeInputShape(t, gotByName["set_limit"])
+		for field, guidance := range map[string]string{
+			"policy":      "position_limit",
+			"scope":       "account_asset for position_limit",
+			"asset":       "position_limit: the asset whose position is bounded",
+			"maxPosition": "position_limit: non-negative ceiling on the worst-case position as an exact decimal string in plain notation, without an exponent; zero is valid",
+		} {
+			if !strings.Contains(input.Properties[field].Description, guidance) {
+				t.Errorf("set_limit.%s description must include %q", field, guidance)
+			}
+		}
+	})
 	t.Run("venue-send-schema", func(t *testing.T) {
 		type schema struct {
 			Type        any                `json:"type"`

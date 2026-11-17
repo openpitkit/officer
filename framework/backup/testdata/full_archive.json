@@ -101,6 +101,14 @@
         "MaxNotional": ""
       }
     ],
+    "positionLimits": [
+      {
+        "Scope": "account_asset",
+        "Account": "acc-1",
+        "Asset": "AAPL",
+        "MaxPosition": "10.00000001"
+      }
+    ],
     "adjustments": [
       {
         "At": "2026-06-22T10:00:00Z",

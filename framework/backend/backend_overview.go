@@ -112,7 +112,7 @@ func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, erro
 		return Overview{}, err
 	}
 	limitCount := len(limits.RateLimits) + len(limits.OrderSizeLimits) +
-		len(limits.SpotFundsPnlBoundsLimits)
+		len(limits.PositionLimits) + len(limits.SpotFundsPnlBoundsLimits)
 
 	restriction, err := s.listRestriction(ctx, "")
 	if err != nil {

@@ -73,6 +73,8 @@ type Snapshot struct {
 	RateLimits []domain.LimitRate
 	// OrderSizeLimits are the persisted order-size barriers.
 	OrderSizeLimits []domain.LimitOrderSize
+	// PositionLimits are the persisted per-(account, asset) position ceilings.
+	PositionLimits []domain.LimitPosition
 	// SpotFundsPnlBoundsLimits are the persisted SpotFunds self-computed
 	// P&L-bounds barriers of every axis.
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
@@ -99,6 +101,9 @@ type LimitSet struct {
 	RateLimits []domain.LimitRate
 	// OrderSizeLimits is the complete order-size barrier set (order_size_limit).
 	OrderSizeLimits []domain.LimitOrderSize
+	// PositionLimits is the complete position ceiling set (position_limit).
+	// An empty set clears every applied pair.
+	PositionLimits []domain.LimitPosition
 	// SpotFundsPnlBoundsLimits is the complete SpotFunds self-computed
 	// P&L-bounds barrier set of every axis; each P&L-bounds policy applies the
 	// barriers of its own axis.

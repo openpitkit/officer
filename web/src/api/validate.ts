@@ -248,6 +248,12 @@ export function validateKindValue(
       }
       return null;
     }
+    case "max_position": {
+      if (!isDecimal(value) || value.trim().startsWith("-")) {
+        return { key: "kind.nonNegativeDecimal", values: { kind } };
+      }
+      return null;
+    }
     case "lower_bound":
     case "upper_bound": {
       if (!isDecimal(value)) {
@@ -346,6 +352,13 @@ export function validateLimit(limit: Limit): FieldError | null {
     }
     if (isSettlementScope && kinds.includes("max_quantity")) {
       return { key: "limit.orderSizeSettlementNoQuantity" };
+    }
+  } else if (policy === "position_limit") {
+    if (!kinds.includes("max_position")) {
+      return {
+        key: "limit.positionRequires",
+        values: { policy, kind: "max_position" },
+      };
     }
   } else if (isSpotFundsPnl) {
     if ((limit.values.currency ?? "").trim() === "") {

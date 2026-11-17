@@ -361,7 +361,8 @@
       "order_approvals": "Aprovações de ordens",
       "adjustments": "Ajustes",
       "limit_rate": "Limites de frequência",
-      "limit_order_size": "Limites de tamanho de ordem"
+      "limit_order_size": "Limites de tamanho de ordem",
+      "limit_position": "Limites de posição"
     },
     "cancel": "Cancelar",
     "submit": "Excluir",

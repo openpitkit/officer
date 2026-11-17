@@ -345,16 +345,17 @@ are refused, and so is any `realizedPnl` while the position's P&L calculation
 is halted, as it would restart it. An `id` starting with `trading:` is refused
 too, as that namespace is reserved for the trading runtime. `delete_asset`
 without `force` and a code change in
-`update_asset` are refused while a rate-limit or order-size barrier references
-the asset or a Spot Funds P&L bound is denominated in it, and `delete_asset`
+`update_asset` are refused while a rate-limit, order-size or position barrier
+references the asset or a Spot Funds P&L bound is denominated in it, and `delete_asset`
 with `force` is refused whatever the asset carries, as it would delete the
 asset's dependent rows with it - balances, orders, trades, adjustments and
 barriers among them. `set_limit` stores a new barrier, or one no looser than
 the barrier at its address: no more orders, the same window on a broker or
 asset scope and none shorter on an account or account_asset scope, every cap
 and bound kept, no cap or upper bound raised and no lower bound lowered, and
-the same currency. A new account-tier order-size cap must be no looser than
-the asset-tier cap it overrides, a new account or group bound no looser than,
+the same currency; for `position_limit` a ceiling no higher. A new account-tier
+order-size cap must be no looser than the asset-tier cap it overrides, a new
+account or group bound no looser than,
 and in the currency of, the bound it takes over from, and the first order-size
 barrier is refused while a rate-limit barrier is configured, as installing it
 rebuilds the engine and so resets every rate window.
@@ -426,7 +427,7 @@ Each of these tools makes the core call of one REST operation:
   `PUT /assets/{code}`, `DELETE /assets/{code}`;
 - `create_group`, `update_group`, `delete_group`: `POST /groups`,
   `PUT /groups/{code}`, `DELETE /groups/{code}`;
-- `set_limit`: `PUT /limits/rate`, `PUT /limits/order-size`,
+- `set_limit`: `PUT /limits/rate`, `PUT /limits/order-size`, `PUT /limits/position`,
   `PUT /limits/spot-funds-pnl-bounds`,
   `PUT /limits/spot-funds-unrealized-pnl-bounds`,
   `PUT /limits/spot-funds-total-pnl-bounds` or
@@ -469,7 +470,8 @@ of a group. The panel translates reason kinds and keeps decimal strings exact.
 
 A tool answers the body its REST operation answers: `{"account": ...}`,
 `{"asset": ...}`, `{"group": ...}`, `{"adjustment": ...}`, `{"rateLimit": ...}`,
-`{"orderSizeLimit": ...}`, `{"spotFundsPnlBoundsLimit": ...}`,
+`{"orderSizeLimit": ...}`, `{"positionLimit": ...}`,
+`{"spotFundsPnlBoundsLimit": ...}`,
 `{"spotFundsUnrealizedPnlBoundsLimit": ...}`,
 `{"spotFundsTotalPnlBoundsLimit": ...}`, `{"mode": ...}` or the
 execution-report body. A delete, which REST answers without a body, answers its
@@ -648,6 +650,39 @@ holds: an order of an account that holds an asset without a price is rejected
 and blocks the account, as the realized bound does when it cannot calculate the
 P&L.
 
+## Position limit
+
+The SDK's SpotFunds policy enforces a non-negative position ceiling for each
+(account, asset) pair; Officer stores exact decimal strings and computes no
+position or decision. A buy adds the order to the owned position
+(`available + held`) plus open positive `incoming` and is rejected above the
+ceiling; a sell subtracts the order from the owned position less open positive
+`held` and is rejected below minus the ceiling, while equality passes.
+The reject is policy `SpotFundsPolicy`, scope `order`, code
+`position_limit_exceeded`, reason "position limit exceeded", with details
+`asset {asset}, side long|short, projected worst-case position {projected}, limit {limit}`;
+the account is not blocked.
+
+`PUT /limits/position` takes `{scope, account, asset, maxPosition}` with scope
+`account_asset`, a required asset and a required non-negative exact decimal
+`maxPosition` in plain notation; zero is valid. A negative or non-decimal
+ceiling answers `422` `validation`. `?missingAccount=create|reject` is
+required when an account is named, choosing whether to register a missing
+account or refuse with `404`. In single-account mode an omitted or empty
+account stands for that account. The answer is
+`{"positionLimit": {scope, account, asset, maxPosition}}`, read back as stored.
+
+`GET /limits` lists the barrier as kind `position_limit`, scope `account_asset`,
+with `values.position.maxPosition`; `policy=position` selects it alone and
+`policy=all` includes it. The account answer includes `limits.positionLimits`,
+always an array, and account-scoped callers see only their visible accounts'
+pairs. `DELETE /limits?policy=position_limit&scope=account_asset&account=acc-1&asset=BTC`
+clears that pair and answers `204`, or `404` when no barrier is stored.
+
+Every change applies from the next order without a restart. The stored set is
+what every engine build takes, a restart and a backup restore included.
+Position barriers apply in both `enforce` and `track_only` limit modes.
+
 ## Spot Funds limit mode
 
 The Officer-level policy `spot_funds_limit_mode` decides whether the Spot Funds
@@ -661,8 +696,8 @@ database set up before that requirement may have none.
 - `enforce` refuses an order that lacks funds or holdings.
 - `track_only` does not refuse on funds but records every hold, so balances and
   positions may go negative: an account trades from zero without prepared
-  balances. P&L bounds, rate and order-size barriers apply in both modes, and a
-  P&L bound still halts trading on breach.
+  balances. P&L bounds, rate, order-size and position barriers apply in both
+  modes, and a P&L bound still halts trading on breach.
 
 `GET /limits/spot-funds-limit-mode` answers
 `{mode, stored, accountsWithoutCurrency}`. `stored` is whether the row is

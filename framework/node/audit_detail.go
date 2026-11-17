@@ -40,6 +40,15 @@ func setRateLimitDetail(limit domain.LimitRate) domain.AuditDetail {
 	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
 }
 
+// setPositionLimitDetail renders a position-limit upsert as a short audit detail.
+func setPositionLimitDetail(limit domain.LimitPosition) domain.AuditDetail {
+	target := LimitTarget{
+		Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset,
+	}
+	fields := append(axesFields(target), domain.AuditDetailField{Name: "max_position", Value: limit.MaxPosition})
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
+}
+
 // setOrderSizeLimitDetail renders an order-size upsert as a short audit detail.
 func setOrderSizeLimitDetail(limit domain.LimitOrderSize) domain.AuditDetail {
 	target := LimitTarget{

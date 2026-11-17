@@ -116,6 +116,10 @@ type policyOrderSizeValuesDTO struct {
 	MaxNotional string `json:"maxNotional"`
 }
 
+type policyPositionValuesDTO struct {
+	MaxPosition string `json:"maxPosition"`
+}
+
 // policyPnlBoundsValuesDTO carries the P&L-bounds-specific values of a policy
 // row. The bounds are exact decimal strings; an unset value is empty.
 type policyPnlBoundsValuesDTO struct {
@@ -136,6 +140,7 @@ type policyLimitModeValuesDTO struct {
 type policyValuesDTO struct {
 	Rate               *policyRateValuesDTO      `json:"rate,omitempty"`
 	OrderSize          *policyOrderSizeValuesDTO `json:"orderSize,omitempty"`
+	Position           *policyPositionValuesDTO  `json:"position,omitempty"`
 	SpotFundsPnlBounds *policyPnlBoundsValuesDTO `json:"spotFundsPnlBounds,omitempty"`
 	SpotFundsLimitMode *policyLimitModeValuesDTO `json:"spotFundsLimitMode,omitempty"`
 }
@@ -236,6 +241,10 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 		dto.Values.OrderSize = &policyOrderSizeValuesDTO{
 			MaxQuantity: row.OrderSize.MaxQuantity,
 			MaxNotional: row.OrderSize.MaxNotional,
+		}
+	case row.Position != nil:
+		dto.Values.Position = &policyPositionValuesDTO{
+			MaxPosition: row.Position.MaxPosition,
 		}
 	case row.SpotFundsPnlBounds != nil:
 		dto.Values.SpotFundsPnlBounds = &policyPnlBoundsValuesDTO{

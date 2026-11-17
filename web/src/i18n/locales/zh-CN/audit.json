@@ -186,6 +186,7 @@
     "window": "时间窗口",
     "max_quantity": "最大数量",
     "max_notional": "最大名义价值",
+    "max_position": "最大持仓",
     "currency": "货币",
     "lower_bound": "下限",
     "upper_bound": "上限",

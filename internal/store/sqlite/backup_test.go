@@ -3655,6 +3655,7 @@ var backupExportedTables = map[string]bool{
 	"balance":                    true,
 	"limit_rate":                 true,
 	"limit_order_size":           true,
+	"limit_position":             true,
 	"limit_spot_funds_pnl_bound": true,
 	"adjustment":                 true,
 	"order_record":               true,
@@ -3698,6 +3699,169 @@ var backupExcludedTables = map[string]bool{
 	"attestation_alg":          true, // immutable enum dictionary, seeded by Migrate
 	"attestation_request_type": true, // immutable enum dictionary, seeded by Migrate
 	"attestation_mode":         true, // immutable enum dictionary, seeded by Migrate
+}
+
+func TestBackupPositionLimitsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedRealm(t, ctx, src)
+	want := []domain.LimitPosition{
+		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
+		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
+	}
+	for _, limit := range want {
+		if err := src.PutPositionLimit(ctx, limit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(archive.Data.PositionLimits, want) {
+		t.Fatalf("exported position limits = %+v, want %+v", archive.Data.PositionLimits, want)
+	}
+	raw, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded backup.Archive
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Manifest.FormatVersion != 6 || !reflect.DeepEqual(decoded.Data.PositionLimits, want) {
+		t.Fatalf("JSON position limits changed: version=%d limits=%+v", decoded.Manifest.FormatVersion, decoded.Data.PositionLimits)
+	}
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	// Allocate different asset ids to prove restore resolves portable codes.
+	mustCreateAsset(t, ctx, dst, domain.Asset{Code: "USD"})
+	if _, err := dst.RestoreBackup(ctx, decoded, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	got, err := dst.ListPositionLimits(ctx, "")
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("restored position limits = %+v, err=%v, want %+v", got, err, want)
+	}
+}
+
+func TestBackupPositionLimitsRestoreModesAndSelectors(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedRealm(t, ctx, src)
+	if _, err := src.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []domain.LimitPosition{
+		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
+		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
+		{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "100"},
+	} {
+		if err := src.PutPositionLimit(ctx, limit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scope := backup.Scope{
+		Sections: []backup.Section{backup.SectionRiskLimits},
+		Accounts: backup.EntitySelector{Accounts: []string{"acc-1"}},
+	}
+	archive, err := src.ExportBackup(ctx, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archive.Data.PositionLimits) != 2 {
+		t.Fatalf("partial position limits = %+v, want only acc-1 rows", archive.Data.PositionLimits)
+	}
+	for _, limit := range archive.Data.PositionLimits {
+		if limit.Account != "acc-1" {
+			t.Fatalf("partial archive leaked position limit: %+v", limit)
+		}
+	}
+	for _, tc := range []struct {
+		mode      backup.RestoreMode
+		existing  string
+		keepExtra bool
+	}{
+		{backup.RestoreModeInsertMissing, "999", true},
+		{backup.RestoreModeOverwrite, "10.00000001", true},
+		{backup.RestoreModeReplaceAll, "10.00000001", false},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			_, dst := newRealmStore(t, domain.DefaultRealm)
+			for _, code := range []string{"EXTRA", "USD", "AAPL"} {
+				mustCreateAsset(t, ctx, dst, domain.Asset{Code: code})
+			}
+			for _, code := range []domain.AccountID{"acc-2", "acc-1"} {
+				if _, err := dst.CreateAccount(ctx, domain.Account{Code: code}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, limit := range []domain.LimitPosition{
+				{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "999"},
+				{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "EXTRA", MaxPosition: "7"},
+				{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "8"},
+			} {
+				if err := dst.PutPositionLimit(ctx, limit); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{Scope: scope, Mode: tc.mode}); err != nil {
+				t.Fatalf("RestoreBackup: %v", err)
+			}
+			want := []domain.LimitPosition{
+				{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: tc.existing},
+			}
+			if tc.keepExtra {
+				want = append(want, domain.LimitPosition{
+					Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "EXTRA", MaxPosition: "7",
+				})
+			}
+			want = append(want,
+				domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
+				domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "8"},
+			)
+			got, err := dst.ListPositionLimits(ctx, "")
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("restored position limits = %+v, err=%v, want %+v", got, err, want)
+			}
+		})
+	}
+}
+
+func TestBackupPositionLimitsRejectInvalidAndUnknownAxes(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		limit domain.LimitPosition
+		want  string
+	}{
+		{"invalid value", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "-1"}, "position_limit"},
+		{"unknown account", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "missing", Asset: "AAPL", MaxPosition: "1"}, "missing"},
+		{"unknown asset", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "missing", MaxPosition: "1"}, "missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rs := newRealmStore(t, domain.DefaultRealm)
+			seedRealm(t, ctx, rs)
+			before := snapshotBackupData(t, ctx, rs)
+			archive := backup.NewArchive(time.Now().UTC(), "test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)}, backup.Scope{All: true},
+				backup.Data{PositionLimits: []domain.LimitPosition{
+					{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
+					tc.limit,
+				}}, backup.CredentialFormPlaintext,
+			)
+			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+			})
+			if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("RestoreBackup = %v, want ErrInvalid with %q", err, tc.want)
+			}
+			if after := snapshotBackupData(t, ctx, rs); !reflect.DeepEqual(after, before) {
+				t.Fatalf("rejected restore changed database: before=%+v after=%+v", before, after)
+			}
+		})
+	}
 }
 
 // TestBackupCompleteness introspects sqlite_master for every user table and

@@ -74,6 +74,7 @@ func TestSetLimitInputCarriesLimitBodies(t *testing.T) {
 		domain.PolicyOrderSizeLimit: jsonFields(
 			reflect.TypeFor[httpx.OrderSizeLimitDTO](),
 		),
+		domain.PolicyPositionLimit: jsonFields(reflect.TypeFor[httpx.PositionLimitDTO]()),
 		domain.PolicySpotFundsPnlBoundsKillSwitch: jsonFields(
 			reflect.TypeFor[httpx.SpotFundsPnlBoundsLimitDTO](),
 		),

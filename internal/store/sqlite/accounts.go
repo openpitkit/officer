@@ -2085,6 +2085,7 @@ func accountDependents(
 		{"adjustment", `SELECT COUNT(*) FROM adjustment WHERE account_id = ?`},
 		{"limit_rate", `SELECT COUNT(*) FROM limit_rate WHERE account_id = ?`},
 		{"limit_order_size", `SELECT COUNT(*) FROM limit_order_size WHERE account_id = ?`},
+		{"limit_position", `SELECT COUNT(*) FROM limit_position WHERE account_id = ?`},
 		{"limit_spot_funds_pnl_bound", `SELECT COUNT(*)
 		 FROM limit_spot_funds_pnl_bound WHERE account_id = ?`},
 		{"trading_access", `SELECT COUNT(*) FROM trading_access WHERE account_id = ?`},
@@ -2110,6 +2111,7 @@ func assetDependents(
 		{"adjustment", `SELECT COUNT(*) FROM adjustment WHERE asset_id = ?`},
 		{"limit_rate", `SELECT COUNT(*) FROM limit_rate WHERE asset_id = ?`},
 		{"limit_order_size", `SELECT COUNT(*) FROM limit_order_size WHERE asset_id = ?`},
+		{"limit_position", `SELECT COUNT(*) FROM limit_position WHERE asset_id = ?`},
 		{"limit_spot_funds_pnl_bound", `SELECT COUNT(*)
 		 FROM limit_spot_funds_pnl_bound WHERE currency_asset_id = ?`},
 		{"order_record", `SELECT COUNT(*) FROM order_record

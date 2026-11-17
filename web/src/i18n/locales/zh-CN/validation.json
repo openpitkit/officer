@@ -26,6 +26,7 @@
       "cap": "window 最大为 24h"
     },
     "positiveDecimal": "{{kind}} 必须为正小数",
+    "nonNegativeDecimal": "{{kind}} 必须为非负小数",
     "decimal": "{{kind}} 必须为小数",
     "mode": "未知的资金限额模式",
     "unknown": "未知类型 {{kind}}"
@@ -44,6 +45,7 @@
     "orderSizeUnderlyingNoNotional": "标的资产范围不得携带 max_notional",
     "orderSizeSettlementRequires": "结算资产范围需要指定 max_notional",
     "orderSizeSettlementNoQuantity": "结算资产范围不得携带 max_quantity",
+    "positionRequires": "{{policy}} 需要 {{kind}}",
     "pnlCurrencyRequired": "{{policy}} 需要指定货币",
     "pnlRequires": "{{policy}} 需要指定 lower_bound 或 upper_bound",
     "pnlBoundOrder": "lower_bound 必须 <= upper_bound",

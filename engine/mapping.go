@@ -676,6 +676,12 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 	return broker, assets, accounts, accountAssets, nil
 }
 
+// accountAssetKey identifies (account, asset) by engine ids across alias renames.
+type accountAssetKey struct {
+	account param.AccountID
+	asset   string
+}
+
 // orderSizeAxes maps an order-size barrier set onto the public Configure axes:
 // an optional broker barrier and per-asset/account-asset slices. The slices are
 // always non-nil so a Configure call replaces each axis wholesale (an empty
@@ -692,10 +698,6 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 	assets := []policies.OrderSizeAssetBarrier{}
 	assetIndexes := make(map[string]int)
 	accountAssets := []policies.OrderSizeAccountAssetBarrier{}
-	type accountAssetKey struct {
-		account param.AccountID
-		asset   string
-	}
 	accountAssetIndexes := make(map[accountAssetKey]int)
 
 	for _, limit := range limits {
@@ -965,6 +967,48 @@ func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error
 		out.MaxNotional = optional.Some(n)
 	}
 	return out, nil
+}
+
+type positionLimitValue struct {
+	asset       param.Asset
+	maxPosition string
+	quantity    param.Quantity
+}
+
+func positionLimitValues(
+	limits []domain.LimitPosition, res idResolver,
+) (map[accountAssetKey]positionLimitValue, error) {
+	values := make(map[accountAssetKey]positionLimitValue, len(limits))
+	for _, limit := range limits {
+		if err := limit.Validate(); err != nil {
+			return nil, fmt.Errorf("engine: position_limit: %w", err)
+		}
+		account, err := res.account(limit.Account)
+		if err != nil {
+			return nil, fmt.Errorf("engine: position_limit: %w", err)
+		}
+		asset, err := res.asset(limit.Asset)
+		if err != nil {
+			return nil, fmt.Errorf("engine: position_limit: %w", err)
+		}
+		quantity, err := param.NewQuantityFromString(limit.MaxPosition)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"engine: position_limit max_position %q: %w", limit.MaxPosition, err,
+			)
+		}
+		key := accountAssetKey{account: account, asset: asset.Safe()}
+		if _, exists := values[key]; exists {
+			return nil, fmt.Errorf(
+				"engine: position_limit duplicate pair (%q, %q): %w",
+				limit.Account, limit.Asset, domain.ErrInvalid,
+			)
+		}
+		values[key] = positionLimitValue{
+			asset: asset, maxPosition: limit.MaxPosition, quantity: quantity,
+		}
+	}
+	return values, nil
 }
 
 // mergeOrderSizeValue combines complementary caps on one SDK barrier key and

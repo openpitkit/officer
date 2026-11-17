@@ -1587,7 +1587,15 @@ func (s *fakeSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOr
 	return domain.ErrNotImplemented
 }
 
+func (s *fakeSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
 func (s *captureNSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
+func (s *captureNSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 

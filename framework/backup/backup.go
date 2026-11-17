@@ -586,6 +586,8 @@ type Data struct {
 	RateLimits []domain.LimitRate `json:"rateLimits,omitempty"`
 	// OrderSizeLimits are order-size barriers, linked by scope+codes.
 	OrderSizeLimits []domain.LimitOrderSize `json:"orderSizeLimits,omitempty"`
+	// PositionLimits are position barriers, linked by account and asset codes.
+	PositionLimits []domain.LimitPosition `json:"positionLimits,omitempty"`
 	// SpotFundsPnlBoundsLimits are currency-valued SpotFunds realized
 	// P&L-bounds barriers, linked by scope+codes. Each P&L axis has a list of
 	// its own and the list carries the axis, so a barrier in a list holds no
@@ -942,6 +944,7 @@ func FilterData(data Data, scope Scope) Data {
 	if scope.Included(SectionRiskLimits) {
 		out.RateLimits = filterRateLimits(data.RateLimits, scope.Accounts, groupByAccount)
 		out.OrderSizeLimits = filterOrderSizeLimits(data.OrderSizeLimits, scope.Accounts, groupByAccount)
+		out.PositionLimits = filterPositionLimits(data.PositionLimits, scope.Accounts, groupByAccount)
 		out.SpotFundsPnlBoundsLimits = filterSpotFundsPnlBoundsLimits(
 			data.SpotFundsPnlBoundsLimits,
 			scope.Accounts,
@@ -1189,6 +1192,20 @@ func filterOrderSizeLimits(
 	out := make([]domain.LimitOrderSize, 0, len(limits))
 	for _, limit := range limits {
 		if matchLimitAccount(selector, limit.Account, groupByAccount) {
+			out = append(out, limit)
+		}
+	}
+	return out
+}
+
+func filterPositionLimits(
+	limits []domain.LimitPosition,
+	selector EntitySelector,
+	groupByAccount map[domain.AccountID]string,
+) []domain.LimitPosition {
+	out := make([]domain.LimitPosition, 0, len(limits))
+	for _, limit := range limits {
+		if selectorMatchesAccount(selector, limit.Account, groupByAccount) {
 			out = append(out, limit)
 		}
 	}

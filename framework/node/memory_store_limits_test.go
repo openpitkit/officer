@@ -72,6 +72,22 @@ func (r *memoryRealm) ListPolicyRows(
 			})
 		}
 	}
+	if wantKind(store.PolicyKindPosition) {
+		for _, limit := range r.positionLimits {
+			if (filter.Scope != "" && filter.Scope != limit.Scope) ||
+				!restrictionMatches(filter.Restriction, limit.Account) ||
+				!textMatches(filter.Account, string(limit.Account)) ||
+				!textMatches(filter.AccountGroup, "") ||
+				!textMatches(filter.Asset, limit.Asset) {
+				continue
+			}
+			value := limit
+			out = append(out, store.PolicyListRow{
+				Kind: store.PolicyKindPosition, Scope: limit.Scope,
+				Account: limit.Account, Asset: limit.Asset, Position: &value,
+			})
+		}
+	}
 	if wantKind(store.PolicyKindSpotFundsPnlBounds) {
 		for _, limit := range r.spotFundsPnlBoundsLimits {
 			if !restrictionMatches(filter.Restriction, limit.Account) ||
@@ -153,6 +169,8 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 			cmp = compareDecimalText(policyMaxOrders(left), policyMaxOrders(right))
 		case "maxQuantity":
 			cmp = compareDecimalText(policyMaxQuantity(left), policyMaxQuantity(right))
+		case "maxPosition":
+			cmp = compareDecimalText(policyMaxPosition(left), policyMaxPosition(right))
 		case "scope":
 			cmp = compareStrings(string(left.Scope), string(right.Scope))
 		case "upperBound":
@@ -179,6 +197,13 @@ func policyMaxQuantity(row store.PolicyListRow) string {
 		return ""
 	}
 	return row.OrderSize.MaxQuantity
+}
+
+func policyMaxPosition(row store.PolicyListRow) string {
+	if row.Position == nil {
+		return ""
+	}
+	return row.Position.MaxPosition
 }
 
 func policyMaxNotional(row store.PolicyListRow) string {
@@ -261,6 +286,30 @@ func (r *memoryRealm) DeleteOrderSizeLimit(
 		return domain.ErrNotFound
 	}
 	delete(r.orderSizeLimits, key)
+	return nil
+}
+
+func (r *memoryRealm) ListPositionLimits(_ context.Context, account domain.AccountID) ([]domain.LimitPosition, error) {
+	var out []domain.LimitPosition
+	for _, limit := range r.positionLimits {
+		if account == "" || limit.Account == account {
+			out = append(out, limit)
+		}
+	}
+	return out, nil
+}
+
+func (r *memoryRealm) PutPositionLimit(_ context.Context, limit domain.LimitPosition) error {
+	r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+	return nil
+}
+
+func (r *memoryRealm) DeletePositionLimit(_ context.Context, account domain.AccountID, asset string) error {
+	key := limitKey(domain.ScopeAccountAsset, account, asset)
+	if _, ok := r.positionLimits[key]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.positionLimits, key)
 	return nil
 }
 

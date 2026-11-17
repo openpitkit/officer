@@ -32,6 +32,167 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+func TestLocalNode_RestoreBackupPositionLimitOnlyConfiguresOnline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, _ := newTestNode(t, eng)
+	limit := domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
+	}
+	if _, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := n.ExportBackup(ctx, backup.Scope{All: true}, testCaller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+	for _, clear := range []bool{false, true} {
+		if clear {
+			archive.Data.PositionLimits = nil
+		} else {
+			limit.MaxPosition = "50.00000001"
+			archive.Data.PositionLimits = []domain.LimitPosition{limit}
+		}
+		eng.configureCalls = nil
+		summary, sink, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+		}, testCaller)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary.RestartRequired || builds != 0 || n.currentEngine() != eng || sink != eng.MarketDataSink() {
+			t.Fatalf("position-only restore rebuilt: summary=%+v builds=%d", summary, builds)
+		}
+		if len(eng.configureCalls) != 1 || eng.configureCalls[0].policy != domain.PolicyPositionLimit ||
+			!samePositionLimits(eng.configureCalls[0].limits.PositionLimits, archive.Data.PositionLimits) {
+			t.Fatalf("position restore configure = %+v, want %+v", eng.configureCalls, archive.Data.PositionLimits)
+		}
+		stored, err := n.ListLimits(ctx, "")
+		if err != nil || !samePositionLimits(stored.PositionLimits, archive.Data.PositionLimits) {
+			t.Fatalf("restored positions = %+v, %v", stored.PositionLimits, err)
+		}
+	}
+}
+
+func TestLocalNode_RestoreBackupPublishesNewPositionLimitAxesOnline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, _ := newTestNode(t, eng)
+	existing := domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
+	}
+	if _, err := n.PutPositionLimit(ctx, existing, domain.MissingAccountCreate, testCaller); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := n.ExportBackup(ctx, backup.Scope{All: true}, testCaller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive.Data.Assets = append(archive.Data.Assets, backup.Asset{Code: "restored-asset"})
+	archive.Data.Accounts = append(archive.Data.Accounts, backup.Account{Code: "restored"})
+	archive.Data.PositionLimits = append(archive.Data.PositionLimits, domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "restored", Asset: "restored-asset", MaxPosition: "50.00000001",
+	})
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+	eng.configureCalls = nil
+
+	summary, sink, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if summary.RestartRequired || builds != 0 || n.currentEngine() != eng ||
+		!eng.running || sink != eng.MarketDataSink() {
+		t.Fatalf("new position axes restore rebuilt: summary=%+v builds=%d", summary, builds)
+	}
+	if _, ok := eng.knownAssets["restored-asset"]; !ok {
+		t.Fatal("live resolver missing restored asset")
+	}
+	if _, ok := eng.knownAccounts["restored"]; !ok {
+		t.Fatal("live resolver missing restored account")
+	}
+	stored, err := n.ListLimits(ctx, "")
+	if err != nil || !samePositionLimits(stored.PositionLimits, archive.Data.PositionLimits) {
+		t.Fatalf("restored positions = %+v, %v; want %+v", stored.PositionLimits, err, archive.Data.PositionLimits)
+	}
+	if len(eng.configureCalls) != 1 ||
+		eng.configureCalls[0].policy != domain.PolicyPositionLimit ||
+		!samePositionLimits(eng.configureCalls[0].limits.PositionLimits, stored.PositionLimits) {
+		t.Fatalf("position restore configure = %+v, want complete stored set %+v", eng.configureCalls, stored.PositionLimits)
+	}
+}
+
+func TestLocalNode_RestoreBackupDropsAssetPositionLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, _ := newTestNode(t, eng)
+	removed := domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
+	}
+	kept := domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "MSFT", MaxPosition: "25",
+	}
+	for _, limit := range []domain.LimitPosition{removed, kept} {
+		if _, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive, err := n.ExportBackup(ctx, backup.Scope{All: true}, testCaller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assets []backup.Asset
+	for _, asset := range archive.Data.Assets {
+		if asset.Code != removed.Asset {
+			assets = append(assets, asset)
+		}
+	}
+	archive.Data.Assets = assets
+	archive.Data.PositionLimits = []domain.LimitPosition{kept}
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+	eng.configureCalls = nil
+
+	summary, sink, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if summary.RestartRequired || builds != 0 || n.currentEngine() != eng ||
+		!eng.running || sink != eng.MarketDataSink() {
+		t.Fatalf("asset-dropping position restore rebuilt: summary=%+v builds=%d", summary, builds)
+	}
+	stored, err := n.ListLimits(ctx, "")
+	if err != nil || !samePositionLimits(stored.PositionLimits, archive.Data.PositionLimits) {
+		t.Fatalf("restored positions = %+v, %v; want %+v", stored.PositionLimits, err, archive.Data.PositionLimits)
+	}
+	if len(eng.configureCalls) != 1 ||
+		eng.configureCalls[0].policy != domain.PolicyPositionLimit ||
+		!samePositionLimits(eng.configureCalls[0].limits.PositionLimits, stored.PositionLimits) {
+		t.Fatalf("position restore configure = %+v, want retained pair %+v", eng.configureCalls, stored.PositionLimits)
+	}
+}
+
 func TestLocalNode_ExportBackupAudits(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

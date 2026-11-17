@@ -2,6 +2,7 @@
   "policyLabel": {
     "rate_limit": "Лимит частоты ордеров",
     "order_size_limit": "Лимит размера ордера",
+    "position_limit": "Лимит позиции",
     "spot_funds_pnl_bounds_kill_switch": "Ограничитель реализованного P&L",
     "spot_funds_unrealized_pnl_bounds_kill_switch": "Ограничитель нереализованного P&L",
     "spot_funds_total_pnl_bounds_kill_switch": "Ограничитель совокупного P&L",
@@ -34,6 +35,9 @@
       "max_quantity": "положительное десятичное число",
       "max_notional": "положительное десятичное число"
     },
+    "position_limit": {
+      "max_position": "неотрицательное десятичное число"
+    },
     "spot_funds_pnl_bounds_kill_switch": {
       "currency": "код актива",
       "lower_bound": "десятичное число",
@@ -58,6 +62,10 @@
     "order_size_limit": {
       "label": "Лимит размера ордера",
       "description": "Ограничивает размер одного ордера по количеству и номиналу для защиты от ошибок ввода."
+    },
+    "position_limit": {
+      "label": "Лимит позиции",
+      "description": "Ограничивает максимально возможную позицию счёта по одному активу в длинную и короткую сторону с учётом открытых ордеров. Позиция, равная лимиту, допускается."
     },
     "spot_funds_pnl_bounds_kill_switch": {
       "label": "Ограничитель реализованных прибылей и убытков",
@@ -95,6 +103,12 @@
       "max_notional": {
         "label": "макс. номинал",
         "hint": "положительное десятичное число"
+      }
+    },
+    "position_limit": {
+      "max_position": {
+        "label": "макс. позиция",
+        "hint": "неотрицательное десятичное число"
       }
     },
     "spot_funds_pnl_bounds_kill_switch": {

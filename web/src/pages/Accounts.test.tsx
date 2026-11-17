@@ -760,20 +760,23 @@ describe("DeleteAccountConfirm", () => {
     ).toBeEnabled();
   });
 
-  it("labels trading access dependents after a refused delete", async () => {
+  it.each([
+    ["trading_access", "Trading connection access"],
+    ["limit_position", "Position limits"],
+  ])("labels %s dependents after a refused delete", async (kind, title) => {
     const user = userEvent.setup();
     const error = new ApiError(
       "account has dependents",
       "has_dependents",
       409,
-      [{ kind: "trading_access", count: 2 }],
+      [{ kind, count: 2 }],
     );
     deleteAccountMock.mockRejectedValue(error);
     renderAccounts();
     await user.click(screen.getByRole("button", { name: "Delete desk-alpha" }));
     const dialog = screen.getByRole("alertdialog");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
-    const label = await within(dialog).findByText("Trading connection access");
+    const label = await within(dialog).findByText(title);
     expect(label.closest("li")).toHaveTextContent("2");
     expect(deleteAccountMock).toHaveBeenCalledWith("desk-alpha", false);
     expect(

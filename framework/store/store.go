@@ -967,6 +967,8 @@ const (
 	PolicyKindRate PolicyKind = "rate_limit"
 	// PolicyKindOrderSize is the order-size barrier.
 	PolicyKindOrderSize PolicyKind = "order_size_limit"
+	// PolicyKindPosition is the per-account, per-asset position barrier.
+	PolicyKindPosition PolicyKind = "position_limit"
 	// PolicyKindSpotFundsPnlBounds is the SpotFunds self-computed P&L-bounds
 	// kill-switch barrier.
 	PolicyKindSpotFundsPnlBounds PolicyKind = "spot_funds_pnl_bounds_kill_switch"
@@ -1017,6 +1019,7 @@ type PolicyListRow struct {
 	Asset              string
 	Rate               *domain.LimitRate
 	OrderSize          *domain.LimitOrderSize
+	Position           *domain.LimitPosition
 	SpotFundsPnlBounds *domain.LimitSpotFundsPnlBounds
 	SpotFundsLimitMode *domain.LimitSpotFundsLimitMode
 }
@@ -1545,6 +1548,18 @@ type RealmStore interface {
 	DeleteOrderSizeLimit(
 		ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
 	) error
+
+	// ListPositionLimits returns every position barrier, optionally narrowed to
+	// the given account.
+	ListPositionLimits(ctx context.Context, account domain.AccountID) ([]domain.LimitPosition, error)
+
+	// PutPositionLimit upserts a position barrier keyed by (account, asset).
+	// Unknown account or asset codes are an error wrapping domain.ErrInvalid.
+	PutPositionLimit(ctx context.Context, limit domain.LimitPosition) error
+
+	// DeletePositionLimit removes the barrier for (account, asset).
+	// Returns domain.ErrNotFound when absent.
+	DeletePositionLimit(ctx context.Context, account domain.AccountID, asset string) error
 
 	// ListSpotFundsPnlBoundsLimits returns every SpotFunds self-computed P&L
 	// barrier of every axis, optionally narrowed to the given account.

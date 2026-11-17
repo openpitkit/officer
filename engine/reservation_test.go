@@ -119,6 +119,7 @@ func newTestEngine(t *testing.T) *openPitEngine {
 		registered,
 		nil,
 		res,
+		make(map[accountAssetKey]positionLimitValue),
 	).(*openPitEngine)
 	t.Cleanup(func() {
 		adapter.Stop()
@@ -160,6 +161,7 @@ func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 		map[string]struct{}{},
 		nil,
 		res,
+		make(map[accountAssetKey]positionLimitValue),
 	).(*openPitEngine)
 	t.Cleanup(func() {
 		adapter.Stop()
@@ -608,6 +610,7 @@ func newLockSpyTestEngine(t *testing.T, spy *executionLockSpy) *openPitEngine {
 		map[string]struct{}{nameSpotFunds: {}},
 		nil,
 		res,
+		make(map[accountAssetKey]positionLimitValue),
 	).(*openPitEngine)
 	t.Cleanup(func() {
 		adapter.Stop()

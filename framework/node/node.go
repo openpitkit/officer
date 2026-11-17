@@ -55,6 +55,8 @@ type AccountLimits struct {
 	RateLimits []domain.LimitRate
 	// OrderSizeLimits are the matching order-size barriers.
 	OrderSizeLimits []domain.LimitOrderSize
+	// PositionLimits are the matching per-account, per-asset position ceilings.
+	PositionLimits []domain.LimitPosition
 	// SpotFundsPnlBoundsLimits are the matching SpotFunds self-computed
 	// P&L-bounds barriers.
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
@@ -274,6 +276,15 @@ type Node interface {
 	// its handling of missing.
 	PutOrderSizeLimit(
 		ctx context.Context, limit domain.LimitOrderSize,
+		missing domain.MissingAccountPolicy, caller domain.Caller,
+	) (marketdata.Sink, error)
+
+	// PutPositionLimit upserts the position ceiling and reconfigures the live
+	// SpotFunds policy from every persisted pair, then audits the action.
+	// missing follows PutRateLimit. A replacement market-data sink is returned
+	// only when the engine was rebuilt.
+	PutPositionLimit(
+		ctx context.Context, limit domain.LimitPosition,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (marketdata.Sink, error)
 

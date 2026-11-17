@@ -403,6 +403,7 @@ var policySortKeys = map[string]struct{}{
 	"lowerBound":   {},
 	"maxNotional":  {},
 	"maxOrders":    {},
+	"maxPosition":  {},
 	"maxQuantity":  {},
 	"policy":       {},
 	"scope":        {},
@@ -850,6 +851,9 @@ func policyKindFromQuery(q url.Values) (*store.PolicyKind, error) {
 		return &kind, nil
 	case "order_size":
 		kind := store.PolicyKindOrderSize
+		return &kind, nil
+	case "position":
+		kind := store.PolicyKindPosition
 		return &kind, nil
 	case "spot_funds_pnl_bounds":
 		kind := store.PolicyKindSpotFundsPnlBounds

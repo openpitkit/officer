@@ -931,6 +931,10 @@ func (s *guardSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitO
 	return domain.ErrNotImplemented
 }
 
+func (s *guardSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
 func (s *guardSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }

@@ -59,6 +59,10 @@ describe("framework registries", () => {
     ]);
   });
 
+  it("registers the position limit only for an account and asset", () => {
+    expect(getAllowedScopes("position_limit")).toEqual(["account_asset"]);
+  });
+
   afterEach(() => {
     unregisterRoute("smoke-route");
     unregisterNav("smoke-nav");

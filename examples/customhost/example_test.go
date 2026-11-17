@@ -1159,6 +1159,10 @@ func (s *customHostSource) PutOrderSizeLimit(ctx context.Context, limit domain.L
 	return domain.ErrNotImplemented
 }
 
+func (s *customHostSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
+	return domain.ErrNotImplemented
+}
+
 func (s *customHostSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }

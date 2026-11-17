@@ -186,6 +186,7 @@
     "window": "window",
     "max_quantity": "max quantity",
     "max_notional": "max notional",
+    "max_position": "max position",
     "currency": "currency",
     "lower_bound": "lower bound",
     "upper_bound": "upper bound",

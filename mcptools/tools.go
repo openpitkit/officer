@@ -893,7 +893,7 @@ func accountBlock(
 }
 
 func limitsCount(l node.AccountLimits) int {
-	return len(l.RateLimits) + len(l.OrderSizeLimits) +
+	return len(l.RateLimits) + len(l.OrderSizeLimits) + len(l.PositionLimits) +
 		len(l.SpotFundsPnlBoundsLimits) + len(l.SpotFundsLimitModes)
 }
 

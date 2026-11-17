@@ -60,7 +60,8 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 			"overrides, and the first order-size barrier while a rate-limit barrier " +
 			"is configured, as its engine rebuild resets every rate window " +
 			"(framework/node/local_limits.go: PutRateLimit, guardTightenOnlyOrderSize, " +
-			"guardTightenOnlySpotFundsPnlBounds, through the NoLooserThan methods of " +
+			"guardTightenOnlySpotFundsPnlBounds, PutPositionLimit for the position " +
+			"guard, through the NoLooserThan methods of " +
 			"framework/domain/limits.go), and the Spot Funds limit-mode switch from " +
 			"enforce to track_only, as it lifts the funds refusal for every account " +
 			"(framework/node/local_spot_funds_limit_mode.go: SetSpotFundsLimitMode, " +
@@ -69,6 +70,7 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 		proof: func(t *testing.T) {
 			t.Parallel()
 			t.Run("rate limit", TestSetLimitRateOnControlPlane)
+			t.Run("position limit", TestSetLimitPositionRefusesLooseningOnControlPlane)
 			t.Run("spot funds limit mode", TestSetLimitSpotFundsLimitModeRefusesLooseningOnControlPlane)
 		},
 	},
@@ -131,8 +133,8 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 			"barrier is keyed by asset class.",
 	},
 	"update_asset": {
-		reason: "The core refuses an agent's code change of an asset a rate-limit " +
-			"or order-size barrier references or a Spot Funds P&L bound is " +
+		reason: "The core refuses an agent's code change of an asset a rate-limit, " +
+			"order-size or position barrier references or a Spot Funds P&L bound is " +
 			"denominated in (framework/node/local_assets.go: " +
 			"guardTightenOnlyAssetRelease, from UpdateAsset); the title and the " +
 			"asset class key no barrier.",
@@ -340,6 +342,38 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 				return map[string]any{"connection": connection}
 			}, operatorSetsFeeAccount),
 	},
+}
+
+func TestSetLimitPositionRefusesLooseningOnControlPlane(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: "ETH"}); err != nil {
+		t.Fatal(err)
+	}
+	position := positionLimitDriver(t, service, src)
+	stored := domain.LimitPosition{
+		Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "5.0000000000000000001",
+	}
+	position.accepts(map[string]any{
+		"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
+		"maxPosition": stored.MaxPosition, "missingAccount": "reject",
+	}, "position_limit account_asset set", stored)
+	position.refuses(map[string]any{
+		"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
+		"maxPosition": "5.0000000000000000002", "missingAccount": "reject",
+	}, "loosening_refused", stored)
+	stored.MaxPosition = "4.0000000000000000001"
+	position.accepts(map[string]any{
+		"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
+		"maxPosition": stored.MaxPosition, "missingAccount": "reject",
+	}, "position_limit account_asset set", stored)
+	position.accepts(map[string]any{
+		"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
+		"maxPosition": stored.MaxPosition, "missingAccount": "reject",
+	}, "position_limit account_asset set", stored)
 }
 
 // operatorSetsFeeAccount sets fees as the fee account of connection as the

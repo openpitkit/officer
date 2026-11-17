@@ -1229,7 +1229,7 @@ func (n *localNode) guardTightenOnlyAccountRelease(
 	if err != nil {
 		return err
 	}
-	if len(limits.RateLimits) > 0 || len(limits.OrderSizeLimits) > 0 ||
+	if len(limits.RateLimits) > 0 || len(limits.OrderSizeLimits) > 0 || len(limits.PositionLimits) > 0 ||
 		len(limits.SpotFundsPnlBoundsLimits) > 0 {
 		return fmt.Errorf(
 			"the account carries a barrier of its own: %w", domain.ErrLoosening,
@@ -1254,6 +1254,10 @@ func snapshotWithoutAccount(
 	snapshot.OrderSizeLimits = slices.DeleteFunc(
 		snapshot.OrderSizeLimits,
 		func(row domain.LimitOrderSize) bool { return row.Account == account },
+	)
+	snapshot.PositionLimits = slices.DeleteFunc(
+		snapshot.PositionLimits,
+		func(row domain.LimitPosition) bool { return row.Account == account },
 	)
 	snapshot.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
 		snapshot.SpotFundsPnlBoundsLimits,

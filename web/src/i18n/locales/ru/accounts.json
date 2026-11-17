@@ -362,7 +362,8 @@
       "order_approvals": "Подтверждения ордеров",
       "adjustments": "Корректировки",
       "limit_rate": "Лимиты частоты",
-      "limit_order_size": "Лимиты размера ордера"
+      "limit_order_size": "Лимиты размера ордера",
+      "limit_position": "Лимиты позиции"
     },
     "cancel": "Отмена",
     "submit": "Удалить",

@@ -41,7 +41,7 @@ const getSpotFundsLimitModeToolDescription = "Return the global Spot Funds limit
 	"balances and positions may go negative; until first set the mode is enforce. " +
 	"stored is whether the spot_funds_limit_mode policy row is stored; false " +
 	"means no row and the default enforce. " +
-	"P&L bounds, rate and order-size barriers apply in both modes. " +
+	"P&L bounds, rate, order-size and position barriers apply in both modes. " +
 	"accountsWithoutCurrency lists the visible accounts with no effective " +
 	"realized P&L currency that a Spot Funds P&L bound applies to: their P&L " +
 	"halts, so the bound blocks them. Read-only - no secrets, no order-flow control."
@@ -75,7 +75,7 @@ const setLimitToolName = "set_limit"
 
 const setLimitToolDescription = "Create a risk barrier, or make the one " +
 	"stored at the same address stricter, and return it as stored. policy " +
-	"names the kind - rate_limit, order_size_limit, one of the P&L-bound " +
+	"names the kind - rate_limit, order_size_limit, position_limit, one of the P&L-bound " +
 	"kill switches spot_funds_pnl_bounds_kill_switch (realized P&L), " +
 	"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
 	"spot_funds_total_pnl_bounds_kill_switch (total P&L), or " +
@@ -86,7 +86,7 @@ const setLimitToolDescription = "Create a risk barrier, or make the one " +
 	"looser: for rate_limit no more orders and, on the broker and asset " +
 	"scopes, the same window, on the account and account_asset scopes a " +
 	"window no shorter; for order_size_limit every current cap kept and none " +
-	"raised; for a P&L-bound kill switch the same currency, every " +
+	"raised; for position_limit a ceiling no higher; for a P&L-bound kill switch the same currency, every " +
 	"current bound kept, the lower bound no lower and the upper bound no " +
 	"higher. A new account_underlying_asset or account_settlement_asset cap " +
 	"must be no higher than the underlying_asset or settlement_asset cap on " +
@@ -104,7 +104,7 @@ const setLimitToolDescription = "Create a risk barrier, or make the one " +
 	"does not refuse on funds but records every hold, so balances and " +
 	"positions may go negative. Until first set the mode is enforce; the " +
 	"switch to track_only is refused with loosening_refused, and the switch " +
-	"to enforce resets no balance. P&L bounds, rate and order-size barriers " +
+	"to enforce resets no balance. P&L bounds, rate, order-size and position barriers " +
 	"apply in both modes. No barrier can be removed; to switch Spot Funds back " +
 	"to Check funds, set spot_funds_limit_mode with mode enforce. Mutates " +
 	"Officer control-plane config; protected and disabled by default."
@@ -112,15 +112,16 @@ const setLimitToolDescription = "Create a risk barrier, or make the one " +
 // setLimitInput is the REST body of the named policy's put, flattened next to
 // the policy, with REST's missingAccount query value.
 type setLimitInput struct {
-	Policy         string `json:"policy" jsonschema:"Barrier kind: rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch or spot_funds_limit_mode"`
-	Scope          string `json:"scope" jsonschema:"Barrier scope: broker, asset, account or account_asset for rate_limit; broker, underlying_asset, settlement_asset, account_underlying_asset or account_settlement_asset for order_size_limit; global, account_group or account for the P&L-bound kill switches; global for spot_funds_limit_mode"`
+	Policy         string `json:"policy" jsonschema:"Barrier kind: rate_limit, order_size_limit, position_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch or spot_funds_limit_mode"`
+	Scope          string `json:"scope" jsonschema:"Barrier scope: broker, asset, account or account_asset for rate_limit; broker, underlying_asset, settlement_asset, account_underlying_asset or account_settlement_asset for order_size_limit; account_asset for position_limit; global, account_group or account for the P&L-bound kill switches; global for spot_funds_limit_mode"`
 	Account        string `json:"account,omitempty" jsonschema:"Account code, for a scope with an account axis; omitted otherwise"`
-	Asset          string `json:"asset,omitempty" jsonschema:"rate_limit and order_size_limit: asset code, for a scope with an asset axis - the underlying asset for a quantity cap, the settlement asset for a notional cap; omitted otherwise"`
+	Asset          string `json:"asset,omitempty" jsonschema:"rate_limit and order_size_limit: asset code, for a scope with an asset axis - the underlying asset for a quantity cap, the settlement asset for a notional cap; position_limit: the asset whose position is bounded; omitted otherwise"`
 	AccountGroup   string `json:"accountGroup,omitempty" jsonschema:"P&L-bound kill switches: account group code, for the account_group scope"`
 	WindowMs       int64  `json:"windowMs,omitempty" jsonschema:"rate_limit: window in milliseconds, fixed on the broker and asset scopes and rolling on the account and account_asset scopes"`
 	MaxOrders      uint64 `json:"maxOrders,omitempty" jsonschema:"rate_limit: most orders admitted within the window"`
 	MaxQuantity    string `json:"maxQuantity,omitempty" jsonschema:"order_size_limit: per-order quantity cap as an exact decimal string; a broker barrier carries either cap or both, the underlying-asset scopes this one only"`
 	MaxNotional    string `json:"maxNotional,omitempty" jsonschema:"order_size_limit: per-order notional cap as an exact decimal string; the settlement-asset scopes carry this one only"`
+	MaxPosition    string `json:"maxPosition,omitempty" jsonschema:"position_limit: non-negative ceiling on the worst-case position as an exact decimal string in plain notation, without an exponent; zero is valid"`
 	Currency       string `json:"currency,omitempty" jsonschema:"P&L-bound kill switches: code of an existing asset that denominates both bounds"`
 	LowerBound     string `json:"lowerBound,omitempty" jsonschema:"P&L-bound kill switches: lower P&L bound as an exact decimal string in plain notation, without an exponent"`
 	UpperBound     string `json:"upperBound,omitempty" jsonschema:"P&L-bound kill switches: upper P&L bound, written as lowerBound is; at least one bound is set"`
@@ -166,6 +167,7 @@ func (in setLimitInput) sent(name string) bool {
 func (in setLimitInput) refuseForeignFields() error {
 	rate := domain.PolicyRateLimit
 	size := domain.PolicyOrderSizeLimit
+	position := domain.PolicyPositionLimit
 	bounds := []string{
 		domain.PolicySpotFundsPnlBoundsKillSwitch,
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
@@ -176,13 +178,14 @@ func (in setLimitInput) refuseForeignFields() error {
 		name     string
 		policies []string
 	}{
-		{"account", append([]string{rate, size}, bounds...)},
-		{"asset", []string{rate, size}},
+		{"account", append([]string{rate, size, position}, bounds...)},
+		{"asset", []string{rate, size, position}},
 		{"accountGroup", bounds},
 		{"windowMs", []string{rate}},
 		{"maxOrders", []string{rate}},
 		{"maxQuantity", []string{size}},
 		{"maxNotional", []string{size}},
+		{"maxPosition", []string{position}},
 		{"currency", bounds},
 		{"lowerBound", bounds},
 		{"upperBound", bounds},
@@ -216,6 +219,8 @@ func setLimitHandler(
 			put = putRateLimit
 		case domain.PolicyOrderSizeLimit:
 			put = putOrderSizeLimit
+		case domain.PolicyPositionLimit:
+			put = putPositionLimit
 		case domain.PolicySpotFundsPnlBoundsKillSwitch,
 			domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 			domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
@@ -225,8 +230,8 @@ func setLimitHandler(
 		default:
 			return "", httpx.PutLimitResultDTO{}, toolError(domain.NewValidationError(
 				"/policy", "unsupported_value", fmt.Sprintf(
-					"policy %q must be %q, %q, %q, %q, %q or %q", in.Policy,
-					domain.PolicyRateLimit, domain.PolicyOrderSizeLimit,
+					"policy %q must be %q, %q, %q, %q, %q, %q or %q", in.Policy,
+					domain.PolicyRateLimit, domain.PolicyOrderSizeLimit, domain.PolicyPositionLimit,
 					domain.PolicySpotFundsPnlBoundsKillSwitch,
 					domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 					domain.PolicySpotFundsTotalPnlBoundsKillSwitch,
@@ -284,6 +289,25 @@ func putOrderSizeLimit(
 	}
 	dto := httpx.ToOrderSizeLimitDTO(stored)
 	return httpx.PutLimitResultDTO{OrderSizeLimit: &dto}, nil
+}
+
+func putPositionLimit(
+	ctx context.Context, src frameworkmcp.Source, in setLimitInput,
+) (httpx.PutLimitResultDTO, error) {
+	limit := httpx.FromPositionLimitDTO(httpx.PositionLimitDTO{
+		Scope: in.Scope, Account: in.Account, Asset: in.Asset,
+		MaxPosition: in.MaxPosition,
+	})
+	err := src.PutPositionLimit(ctx, limit, missingAccountPolicy(limit.Account, in.MissingAccount))
+	if err != nil {
+		return httpx.PutLimitResultDTO{}, err
+	}
+	stored, err := httpx.PersistedPositionLimit(ctx, src, limit)
+	if err != nil {
+		return httpx.PutLimitResultDTO{}, err
+	}
+	dto := httpx.ToPositionLimitDTO(stored)
+	return httpx.PutLimitResultDTO{PositionLimit: &dto}, nil
 }
 
 func putSpotFundsPnlBoundsLimit(

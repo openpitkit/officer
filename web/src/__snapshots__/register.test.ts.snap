@@ -192,6 +192,7 @@ exports[`officer default registration > preserves the complete default registrat
   "policies": [
     "rate_limit",
     "order_size_limit",
+    "position_limit",
     "spot_funds_pnl_bounds_kill_switch",
     "spot_funds_unrealized_pnl_bounds_kill_switch",
     "spot_funds_total_pnl_bounds_kill_switch",

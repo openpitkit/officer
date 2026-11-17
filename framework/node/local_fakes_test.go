@@ -529,6 +529,12 @@ func (e *fakeEngine) checkKnownPolicyAssets(
 				return err
 			}
 		}
+	case domain.PolicyPositionLimit:
+		for _, limit := range limits.PositionLimits {
+			if err := e.checkKnownAsset(limit.Asset); err != nil {
+				return err
+			}
+		}
 	case domain.PolicySpotFundsPnlBoundsKillSwitch:
 		for _, limit := range limits.SpotFundsPnlBoundsLimits {
 			if err := e.checkKnownAsset(limit.Currency); err != nil {

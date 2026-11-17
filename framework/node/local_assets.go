@@ -416,6 +416,11 @@ func (n *localNode) guardTightenOnlyAssetRelease(
 			)
 		}
 	}
+	for _, limit := range limits.PositionLimits {
+		if limit.Asset == code {
+			return fmt.Errorf("a position barrier references the asset: %w", domain.ErrLoosening)
+		}
+	}
 	for _, limit := range limits.SpotFundsPnlBoundsLimits {
 		if isAssetSpotFundsPnlBoundsLimit(limit, code) {
 			return fmt.Errorf(
@@ -443,6 +448,10 @@ func snapshotWithoutAsset(snapshot engine.Snapshot, asset string) engine.Snapsho
 		func(row domain.LimitOrderSize) bool {
 			return isAssetOrderSizeLimit(row, asset)
 		},
+	)
+	snapshot.PositionLimits = slices.DeleteFunc(
+		snapshot.PositionLimits,
+		func(row domain.LimitPosition) bool { return row.Asset == asset },
 	)
 	snapshot.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
 		snapshot.SpotFundsPnlBoundsLimits,

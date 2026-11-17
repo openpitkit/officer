@@ -3266,8 +3266,8 @@ paths:
       operationId: listLimits
       summary: List typed risk limit barriers
       description: >
-        Returns the typed limit barriers (rate, order-size, P&L-bounds, and
-        SpotFunds P&L-bounds)
+        Returns the typed limit barriers (rate, order-size, position, P&L-bounds,
+        and SpotFunds P&L-bounds)
         flattened into one sorted, paged policy list. Barriers reference accounts
         by code; no surrogate or engine id is involved. The Spot Funds
         limit mode is one more row of kind `spot_funds_limit_mode` on the
@@ -3306,13 +3306,13 @@ paths:
           description: Filter by policy kind.
           schema:
             type: string
-            enum: [all, rate, order_size, spot_funds_pnl_bounds, spot_funds_unrealized_pnl_bounds, spot_funds_total_pnl_bounds, spot_funds_limit_mode]
+            enum: [all, rate, order_size, position, spot_funds_pnl_bounds, spot_funds_unrealized_pnl_bounds, spot_funds_total_pnl_bounds, spot_funds_limit_mode]
             default: all
         - name: sort
           in: query
           schema:
             type: string
-            enum: [policy, scope, account, accountGroup, asset, maxOrders, maxQuantity, maxNotional, lowerBound, upperBound]
+            enum: [policy, scope, account, accountGroup, asset, maxOrders, maxQuantity, maxNotional, maxPosition, lowerBound, upperBound]
           description: Policy list sort key. Unknown keys are rejected.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
@@ -3365,7 +3365,7 @@ paths:
           description: Risk policy whose barrier should be deleted.
           schema:
             type: string
-            enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch, spot_funds_limit_mode]
+            enum: [rate_limit, order_size_limit, position_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch, spot_funds_limit_mode]
         - name: scope
           in: query
           required: true
@@ -3493,6 +3493,68 @@ paths:
                 properties:
                   orderSizeLimit:
                     $ref: "#/components/schemas/OrderSizeLimit"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /limits/position:
+    put:
+      operationId: putPositionLimit
+      summary: Upsert a position barrier
+      description: >
+        Sets the SpotFunds position ceiling for one (account, asset) pair on
+        scope `account_asset`. `maxPosition` is a required non-negative exact
+        decimal string in plain notation; zero is valid. Officer stores the
+        ceiling; the SDK computes and enforces the worst-case position from
+        the next order, without a restart. Every engine build takes the
+        stored set, including after a restart or backup restore. A buy adds
+        the order to the owned position (`available + held`) plus open
+        positive `incoming`; a sell
+        subtracts the order from the owned position less open positive `held`.
+        A projection above the ceiling or below minus the ceiling respectively
+        is rejected; equality passes. The reject is policy `SpotFundsPolicy`,
+        scope `order`, code `position_limit_exceeded`, reason "position limit
+        exceeded", with details "asset {asset}, side long|short, projected
+        worst-case position {projected}, limit {limit}". The account is not
+        blocked. `missingAccount=create|reject` is required when an account is
+        named. In single-account mode an omitted or empty account stands for
+        that account; naming another account is refused with 422 (constraint
+        `single_account_mode`).
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionLimit"
+      responses:
+        "200":
+          description: Normalized form of the stored position barrier.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [positionLimit]
+                properties:
+                  positionLimit:
+                    $ref: "#/components/schemas/PositionLimit"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -7527,6 +7589,11 @@ components:
           description: Serialized order-size limit rows.
           items:
             type: object
+        positionLimits:
+          type: array
+          description: Serialized account-asset position-limit rows.
+          items:
+            type: object
         spotFundsPnlBoundsLimits:
           type: array
           description: Serialized SpotFunds realized P&L-bounds limit rows.
@@ -8715,7 +8782,7 @@ components:
         `account`, and `account_asset`. Order-size limits use `broker`,
         `underlying_asset`, `settlement_asset`, `account_underlying_asset`, and
         `account_settlement_asset`. P&L bounds use `global`, `account_group`,
-        and `account`.
+        and `account`. Position limits use only `account_asset`.
       enum: [broker, global, asset, account, account_group, account_asset,
         underlying_asset, settlement_asset, account_underlying_asset,
         account_settlement_asset]
@@ -8813,6 +8880,35 @@ components:
             empty. A barrier carrying neither cap, or a cap its scope does not
             consult, is rejected with a validation error.
 
+    PositionLimit:
+      type: object
+      additionalProperties: false
+      required: [scope, asset, maxPosition]
+      properties:
+        scope:
+          type: string
+          enum: [account_asset]
+        account:
+          type: string
+          description: >
+            Required account code, except in single-account mode where an
+            omitted or empty value stands for that account. Always present
+            in a response.
+        asset:
+          type: string
+          description: Required asset code of the position being bounded.
+        maxPosition:
+          type: string
+          description: >
+            Required non-negative exact decimal ceiling; zero is valid.
+            Plain notation only: an optional leading sign, digits with at most
+            one point, at most 28 digits after the point and all digits, read as
+            one integer as written, below 2^96. Exponent notation is refused
+            with validation.
+            Officer stores the value and the SDK computes the position and
+            enforces the ceiling. Negative or non-decimal values are refused
+            with 422 validation.
+
     SpotFundsPnlBoundsLimit:
       type: object
       additionalProperties: false
@@ -8856,8 +8952,8 @@ components:
         is `enforce`, the documented default. `enforce` refuses
         an order that lacks funds or holdings. `track_only` does not refuse on
         funds but records every hold, so balances and positions may go negative.
-        P&L bounds, rate and order-size barriers still apply in both modes, and
-        a P&L bound still halts trading on breach. Switching back to `enforce`
+        P&L bounds, rate, order-size and position barriers still apply in both
+        modes, and a P&L bound still halts trading on breach. Switching back to `enforce`
         resets no balance; orders that need funds against a negative balance
         are refused again.
 
@@ -8896,7 +8992,7 @@ components:
 
     AccountLimits:
       type: object
-      required: [rateLimits, orderSizeLimits, spotFundsPnlBoundsLimits, spotFundsUnrealizedPnlBoundsLimits, spotFundsTotalPnlBoundsLimits, spotFundsLimitModes]
+      required: [rateLimits, orderSizeLimits, positionLimits, spotFundsPnlBoundsLimits, spotFundsUnrealizedPnlBoundsLimits, spotFundsTotalPnlBoundsLimits, spotFundsLimitModes]
       properties:
         rateLimits:
           type: array
@@ -8908,6 +9004,11 @@ components:
           description: Order-size barriers (always a non-null array).
           items:
             $ref: "#/components/schemas/OrderSizeLimit"
+        positionLimits:
+          type: array
+          description: Position barriers (always a non-null array).
+          items:
+            $ref: "#/components/schemas/PositionLimit"
         spotFundsPnlBoundsLimits:
           type: array
           description: SpotFunds realized P&L-bounds barriers (always a non-null array).
@@ -8944,7 +9045,7 @@ components:
         kind:
           type: string
           description: Policy kind discriminator.
-          enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch, spot_funds_limit_mode]
+          enum: [rate_limit, order_size_limit, position_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch, spot_funds_limit_mode]
         scope:
           $ref: "#/components/schemas/LimitScope"
         account:
@@ -8959,7 +9060,7 @@ components:
         values:
           type: object
           description: >
-            Kind-specific values: exactly one of rate, orderSize,
+            Kind-specific values: exactly one of rate, orderSize, position,
             spotFundsPnlBounds or spotFundsLimitMode is present, matching
             kind.
           properties:
@@ -8989,6 +9090,13 @@ components:
                 maxNotional:
                   type: string
                   description: Maximum order notional - exact decimal string; empty when unset.
+            position:
+              type: object
+              required: [maxPosition]
+              properties:
+                maxPosition:
+                  type: string
+                  description: Non-negative exact decimal ceiling in plain notation; zero is valid.
             spotFundsPnlBounds:
               type: object
               description: >

@@ -338,6 +338,7 @@ var auditDetailFieldNames = map[string]bool{
 	"window":               true,
 	"max_quantity":         true,
 	"max_notional":         true,
+	"max_position":         true,
 	"currency":             true,
 	"lower_bound":          true,
 	"upper_bound":          true,

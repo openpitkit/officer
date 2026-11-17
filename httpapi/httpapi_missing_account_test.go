@@ -70,6 +70,13 @@ func missingAccountRoutes() []missingAccountRoute {
 			ok:     http.StatusOK,
 		},
 		{
+			name:   "limits.position",
+			method: http.MethodPut,
+			path:   "/api/v1/limits/position",
+			body:   `{"scope":"account_asset","account":"acc-1","asset":"AAPL","maxPosition":"10"}`,
+			ok:     http.StatusOK,
+		},
+		{
 			name:   "accounts.adjustments",
 			method: http.MethodPost,
 			path:   "/api/v1/accounts/acc-1/adjustments",
@@ -151,6 +158,9 @@ func newMissingAccountService() *fakeService {
 				Account:     "acc-1",
 				Asset:       "AAPL",
 				MaxQuantity: "10",
+			}},
+			PositionLimits: []domain.LimitPosition{{
+				Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10",
 			}},
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
 				Axis:       domain.SpotFundsPnlAxisRealized,
