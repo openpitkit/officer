@@ -50,13 +50,13 @@ func TestNormalizeKrakenSubscriptionsPreservesAssetKeys(t *testing.T) {
 		t.Fatalf("first symbol = %q, want BTC/USD", subs[0].symbol)
 	}
 	if subs[0].Base != testMarketDataAssetID("opaque-base") || subs[0].Quote != testMarketDataAssetID("opaque-quote") {
-		t.Fatalf("first asset key = %q/%q, want caller values", subs[0].Base, subs[0].Quote)
+		t.Fatalf("first asset key = %d/%d, want caller values", subs[0].Base, subs[0].Quote)
 	}
 	if subs[1].symbol != "DOGE/USD" {
 		t.Fatalf("second symbol = %q, want DOGE/USD", subs[1].symbol)
 	}
 	if subs[1].Base != testMarketDataAssetID("another-base") || subs[1].Quote != testMarketDataAssetID("another-quote") {
-		t.Fatalf("second asset key = %q/%q, want caller values", subs[1].Base, subs[1].Quote)
+		t.Fatalf("second asset key = %d/%d, want caller values", subs[1].Base, subs[1].Quote)
 	}
 }
 

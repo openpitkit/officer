@@ -40,6 +40,11 @@ export GOTOOLCHAIN := go_toolchain
 export GOCACHE := go_cache
 export GOLANGCI_LINT_CACHE := golangci_lint_cache
 export CGO_ENABLED := "1"
+# Use the Apple toolchain selected by Xcode rather than Homebrew LLVM's SDK path.
+[macos]
+export CC := env_var_or_default("CC", "/usr/bin/clang")
+[macos]
+export CXX := env_var_or_default("CXX", "/usr/bin/clang++")
 # Python tools must read the repository's Unicode fixtures as UTF-8 on Windows.
 export PYTHONUTF8 := "1"
 
