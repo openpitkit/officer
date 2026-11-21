@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -540,6 +541,142 @@ func TestListLimits_BadLimit(t *testing.T) {
 		"/api/v1/limits?limit=-1", nil))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestKeyedLimitRESTWrites(t *testing.T) {
+	const (
+		pnlFirst   = `{"scope":"global","currency":"USD","lowerBound":"-1000","upperBound":"5000"}`
+		pnlChanged = `{"scope":"global","currency":"USD","lowerBound":"-2000","upperBound":"6000"}`
+	)
+	pnlFirstValues := map[string]any{"currency": "USD", "lowerBound": "-1000", "upperBound": "5000"}
+	pnlChangedValues := map[string]any{"currency": "USD", "lowerBound": "-2000", "upperBound": "6000"}
+
+	for _, tc := range []struct {
+		path, policy, scope, resultField, valuesField string
+		asset, query                                  string
+		first, changed                                string
+		firstValues, changedValues                    map[string]any
+	}{
+		{
+			path: "rate", policy: "rate", scope: "broker",
+			resultField: "rateLimit", valuesField: "rate",
+			first:         `{"scope":"broker","windowMs":1000,"maxOrders":100}`,
+			changed:       `{"scope":"broker","windowMs":2000,"maxOrders":200}`,
+			firstValues:   map[string]any{"windowMs": float64(1000), "maxOrders": float64(100)},
+			changedValues: map[string]any{"windowMs": float64(2000), "maxOrders": float64(200)},
+		},
+		{
+			path: "order-size", policy: "order_size", scope: "account_underlying_asset",
+			resultField: "orderSizeLimit", valuesField: "orderSize",
+			asset: "AAPL", query: "?missingAccount=create",
+			first:         `{"scope":"account_underlying_asset","account":"acc-1","asset":"AAPL","maxQuantity":"10"}`,
+			changed:       `{"scope":"account_underlying_asset","account":"acc-1","asset":"AAPL","maxQuantity":"20"}`,
+			firstValues:   map[string]any{"maxQuantity": "10", "maxNotional": ""},
+			changedValues: map[string]any{"maxQuantity": "20", "maxNotional": ""},
+		},
+		{
+			path: "position", policy: "position", scope: "account_asset",
+			resultField: "positionLimit", valuesField: "position",
+			asset: "AAPL", query: "?missingAccount=create",
+			first:         `{"scope":"account_asset","account":"acc-1","asset":"AAPL","maxPosition":"10"}`,
+			changed:       `{"scope":"account_asset","account":"acc-1","asset":"AAPL","maxPosition":"20"}`,
+			firstValues:   map[string]any{"maxPosition": "10"},
+			changedValues: map[string]any{"maxPosition": "20"},
+		},
+		{
+			path: "spot-funds-pnl-bounds", policy: "spot_funds_pnl_bounds", scope: "global",
+			resultField: "spotFundsPnlBoundsLimit", valuesField: "spotFundsPnlBounds",
+			asset: "USD", first: pnlFirst, changed: pnlChanged,
+			firstValues: pnlFirstValues, changedValues: pnlChangedValues,
+		},
+		{
+			path: "spot-funds-unrealized-pnl-bounds", policy: "spot_funds_unrealized_pnl_bounds", scope: "global",
+			resultField: "spotFundsUnrealizedPnlBoundsLimit", valuesField: "spotFundsPnlBounds",
+			asset: "USD", first: pnlFirst, changed: pnlChanged,
+			firstValues: pnlFirstValues, changedValues: pnlChangedValues,
+		},
+		{
+			path: "spot-funds-total-pnl-bounds", policy: "spot_funds_total_pnl_bounds", scope: "global",
+			resultField: "spotFundsTotalPnlBoundsLimit", valuesField: "spotFundsPnlBounds",
+			asset: "USD", first: pnlFirst, changed: pnlChanged,
+			firstValues: pnlFirstValues, changedValues: pnlChangedValues,
+		},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			for _, create := range []struct {
+				method string
+				status int
+			}{
+				{http.MethodPost, http.StatusCreated},
+				{http.MethodPut, http.StatusOK},
+			} {
+				t.Run(create.method, func(t *testing.T) {
+					router, err := newRouter(newTestPolicyService(t))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if tc.asset != "" {
+						rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/assets", `{"code":"`+tc.asset+`"}`)
+						if rec.Code != http.StatusCreated {
+							t.Fatalf("create %s asset = %d: %s", tc.asset, rec.Code, rec.Body)
+						}
+					}
+					writePath := "/limits/" + tc.path + tc.query
+					write := func(method, body string) *httptest.ResponseRecorder {
+						return callTestPolicy(t, router, "/api/v1", method, writePath, body)
+					}
+					requireResult := func(rec *httptest.ResponseRecorder, status int, want map[string]any) {
+						t.Helper()
+						if rec.Code != status {
+							t.Fatalf("write status = %d, want %d: %s", rec.Code, status, rec.Body)
+						}
+						result, _ := bodyMap(t, rec.Result())[tc.resultField].(map[string]any)
+						if result["scope"] != tc.scope {
+							t.Fatalf("%s = %v, want scope %s", tc.resultField, result, tc.scope)
+						}
+						for field, value := range want {
+							if result[field] != value {
+								t.Fatalf("%s.%s = %v, want %v", tc.resultField, field, result[field], value)
+							}
+						}
+					}
+					requireStored := func(want map[string]any) {
+						t.Helper()
+						rec := callTestPolicy(t, router, "/api/v1", http.MethodGet, "/limits?policy="+tc.policy, "")
+						if rec.Code != http.StatusOK {
+							t.Fatalf("GET /limits = %d: %s", rec.Code, rec.Body)
+						}
+						policies, _ := bodyMap(t, rec.Result())["policies"].([]any)
+						if len(policies) != 1 {
+							t.Fatalf("GET /limits policies = %v, want one rule", policies)
+						}
+						rule, _ := policies[0].(map[string]any)
+						values, _ := rule["values"].(map[string]any)
+						if rule["scope"] != tc.scope || !reflect.DeepEqual(values[tc.valuesField], want) {
+							t.Fatalf("stored rule = %v, want scope %s with values %v", rule, tc.scope, want)
+						}
+					}
+
+					requireResult(write(create.method, tc.first), create.status, tc.firstValues)
+					requireStored(tc.firstValues)
+					if create.method == http.MethodPost {
+						rec := write(http.MethodPost, tc.changed)
+						if rec.Code != http.StatusConflict {
+							t.Errorf("repeated POST = %d, want 409: %s", rec.Code, rec.Body)
+						} else {
+							failure, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+							if failure["code"] != "limit_exists" {
+								t.Errorf("repeated POST error = %v, want code limit_exists", failure)
+							}
+						}
+						requireStored(tc.firstValues)
+						requireResult(write(http.MethodPut, tc.changed), http.StatusOK, tc.changedValues)
+						requireStored(tc.changedValues)
+					}
+				})
+			}
+		})
 	}
 }
 

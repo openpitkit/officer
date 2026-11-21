@@ -68,8 +68,11 @@
     "check_order": {
       "description": "Ejecutar una simulación pre-negociación sin efectos para una orden (aprobación/rechazo + motivos); no modifica ningún estado."
     },
-    "set_limit": {
-      "description": "Endurecer una barrera de riesgo: añadir una o hacerla más estricta, o devolver Spot Funds al modo Comprobar fondos; la relajación y la eliminación se rechazan."
+    "add_limit": {
+      "description": "Añadir una barrera de riesgo en una dirección nueva. Si ya existe una barrera en esa dirección, se devuelve limit_exists. Para cambiarla, utilice update_limit."
+    },
+    "update_limit": {
+      "description": "Endurecer una barrera de riesgo existente o devolver Spot Funds al modo Comprobar fondos. En las políticas con clave, si la barrera no existe, se devuelve not_found. Para crearla, utilice add_limit."
     },
     "submit_order": {
       "description": "Enviar una intención de orden a través del control pre-negociación y obtener un sobre de aprobación."

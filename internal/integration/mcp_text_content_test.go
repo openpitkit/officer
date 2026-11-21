@@ -88,9 +88,16 @@ var textContentCalls = map[string]textContentCall{
 	"list_accounts":             {textContentLists, map[string]any{}},
 	"list_groups":               {textContentLists, map[string]any{}},
 	"check_order":               {textContentFake, textContentOrder},
-	"set_limit": {textContentControlPlane, map[string]any{
+	"add_limit": {textContentControlPlane, map[string]any{
 		"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1",
 	}},
+	"update_limit": {func(t *testing.T) frameworkmcp.Source {
+		src := textContentControlPlane(t)
+		callToolOK(t, src, "add_limit", map[string]any{
+			"policy": "order_size_limit", "scope": "broker", "maxQuantity": "2",
+		})
+		return src
+	}, map[string]any{"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1"}},
 	"create_account":       {textContentAccounts, accountToolInputs["create_account"]},
 	"update_account":       {textContentAccounts, accountToolInputs["update_account"]},
 	"delete_account":       {textContentAccounts, accountToolInputs["delete_account"]},

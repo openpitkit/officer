@@ -90,15 +90,37 @@ func (n *localNode) listLimits(
 	}, nil
 }
 
-// PutRateLimit upserts the whole rate-limit barrier in the store, reconfigures
-// the rate policy from the persisted full barrier set, reverts the store on
-// engine-apply failure, and audits the action. It returns a replacement
-// market-data sink only when the policy change had to rebuild the engine.
-//
-// missing decides what happens when an account-carrying scope names an account
-// Officer does not know yet.
+func checkLimitWrite(write domain.LimitWrite, target LimitTarget, exists bool) error {
+	if err := write.Validate(); err != nil {
+		return err
+	}
+	var refusal error
+	if write == domain.LimitWriteAdd && exists {
+		refusal = domain.ErrLimitExists
+	}
+	if write == domain.LimitWriteChange && !exists {
+		refusal = domain.ErrNotFound
+	}
+	if refusal != nil {
+		key := fmt.Sprintf("%s at %s", target.Policy, target.Scope)
+		for _, axis := range axesFields(target) {
+			if axis.Name == string(target.Scope) {
+				key += fmt.Sprintf(" %q", axis.Value)
+			} else {
+				key += fmt.Sprintf(" %s %q", axis.Name, axis.Value)
+			}
+		}
+		return fmt.Errorf("%s: %w", key, refusal)
+	}
+	return nil
+}
+
+// PutRateLimit writes with the given intent, reconfigures the rate policy from
+// the persisted barriers, reverts on engine-apply failure, and audits the action.
+// It returns a replacement market-data sink only when the engine was rebuilt.
+// missing decides whether an unknown account is registered or refused.
 func (n *localNode) PutRateLimit(
-	ctx context.Context, limit domain.LimitRate,
+	ctx context.Context, limit domain.LimitRate, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (marketdata.Sink, error) {
 	if err := n.beginLivePolicyConfiguration(); err != nil {
@@ -114,6 +136,9 @@ func (n *localNode) PutRateLimit(
 	}
 	prev, hadPrev, err := n.readRateBarrier(ctx, target)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkLimitWrite(write, target, hadPrev); err != nil {
 		return nil, err
 	}
 	// Every matching rate barrier applies, so a tighten-only caller may add one
@@ -181,11 +206,11 @@ func (n *localNode) PutRateLimit(
 	return sink, nil
 }
 
-// PutOrderSizeLimit upserts the whole order-size barrier and reconfigures the
-// order-size policy, mirroring PutRateLimit for the rate policy, including its
+// PutOrderSizeLimit writes the order-size barrier with the given intent and
+// reconfigures the order-size policy, mirroring PutRateLimit, including its
 // handling of missing.
 func (n *localNode) PutOrderSizeLimit(
-	ctx context.Context, limit domain.LimitOrderSize,
+	ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (marketdata.Sink, error) {
 	if err := n.beginLivePolicyConfiguration(); err != nil {
@@ -201,6 +226,9 @@ func (n *localNode) PutOrderSizeLimit(
 	}
 	prev, hadPrev, err := n.readOrderSizeBarrier(ctx, target)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkLimitWrite(write, target, hadPrev); err != nil {
 		return nil, err
 	}
 	if err := n.guardTightenOnlyOrderSize(
@@ -267,10 +295,10 @@ func (n *localNode) PutOrderSizeLimit(
 	return sink, nil
 }
 
-// PutPositionLimit upserts the position barrier and reconfigures the policy,
+// PutPositionLimit writes with the given intent and reconfigures the policy,
 // including the missing-account handling of PutRateLimit.
 func (n *localNode) PutPositionLimit(
-	ctx context.Context, limit domain.LimitPosition,
+	ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (marketdata.Sink, error) {
 	if err := n.beginLivePolicyConfiguration(); err != nil {
@@ -282,6 +310,9 @@ func (n *localNode) PutPositionLimit(
 	}
 	prev, hadPrev, err := n.readPositionBarrier(ctx, target)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkLimitWrite(write, target, hadPrev); err != nil {
 		return nil, err
 	}
 	if caller.TightenOnly() && hadPrev {
@@ -320,15 +351,15 @@ func (n *localNode) PutPositionLimit(
 	return sink, nil
 }
 
-// PutSpotFundsPnlBoundsLimit upserts the whole SpotFunds self-computed
-// P&L-bounds barrier and reconfigures the SpotFunds policy. missing is handled
+// PutSpotFundsPnlBoundsLimit writes the whole SpotFunds self-computed P&L-bounds
+// barrier with the given intent and reconfigures the policy. missing is handled
 // as in PutRateLimit; only the account scope carries an account axis here.
 // Unlike other asset-code inputs, an unknown currency fails and must be created
 // first: it is a matcher, so a typo at global or account-group scope would
 // leave a kill-switch silently skipped by the engine, and only the asset
 // dictionary can catch it.
 func (n *localNode) PutSpotFundsPnlBoundsLimit(
-	ctx context.Context, limit domain.LimitSpotFundsPnlBounds,
+	ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (marketdata.Sink, error) {
 	if err := n.beginLivePolicyConfiguration(); err != nil {
@@ -343,24 +374,34 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 		)
 	}
 	var groupCode, currency string
-	if limit.Scope == domain.ScopeAccount {
+	checkAccountAndCurrency := func() error {
+		if limit.Scope != domain.ScopeAccount {
+			return nil
+		}
 		if missing != domain.MissingAccountCreate {
 			if err := n.ensureLimitAccount(
 				ctx, limit.Scope, limit.Account, missing,
 				"put spot-funds P&L bounds limit", caller,
 			); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		var err error
 		groupCode, currency, err = n.spotFundsPnlAccountCurrency(ctx, limit.Account)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if currency == "" || currency != limit.Currency {
-			return nil, domain.NewPnlBoundCurrencyMismatchError(
+			return domain.NewPnlBoundCurrencyMismatchError(
 				limit.Account, currency, limit.Currency,
 			)
+		}
+		return nil
+	}
+	// Preserve Replace's currency refusal before the barrier read.
+	if write == domain.LimitWriteReplace {
+		if err := checkAccountAndCurrency(); err != nil {
+			return nil, err
 		}
 	}
 	target := LimitTarget{
@@ -372,6 +413,14 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	prev, hadPrev, err := n.readSpotFundsPnlBoundsBarrier(ctx, target)
 	if err != nil {
 		return nil, err
+	}
+	if err := checkLimitWrite(write, target, hadPrev); err != nil {
+		return nil, err
+	}
+	if write != domain.LimitWriteReplace {
+		if err := checkAccountAndCurrency(); err != nil {
+			return nil, err
+		}
 	}
 	if err := n.guardTightenOnlySpotFundsPnlBounds(
 		ctx, limit, prev, hadPrev, groupCode, currency, caller,

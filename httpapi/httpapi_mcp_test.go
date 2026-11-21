@@ -37,7 +37,7 @@ func TestListMcpAccess(t *testing.T) {
 				Implemented: true, DefaultEnabled: true,
 			}, Enabled: false},
 			{Command: catalog.CatalogCommand{
-				Name: "set_limit", Title: "Set limit", AgentDescription: "desc",
+				Name: "update_limit", Title: "Update limit", AgentDescription: "desc",
 				Mutating: true, Protective: true,
 			}, Enabled: true},
 		},

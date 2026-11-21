@@ -128,13 +128,14 @@ func (s *Service) ListPolicyRows(
 	return s.node.ListPolicyRows(ctx, filter)
 }
 
-// PutRateLimit validates the rate-limit barrier and upserts it. A barrier whose
-// scope carries an account axis may name an account
+// PutRateLimit validates and writes the barrier with the given intent. A
+// barrier whose scope carries an account axis may name an account
 // that does not exist yet; missing is the caller's required choice between
 // registering that account and rejecting the request with
 // domain.ErrAccountMissing, and is ignored for a scope that names no account.
 func (s *Service) PutRateLimit(
-	ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy,
+	ctx context.Context, limit domain.LimitRate, write domain.LimitWrite,
+	missing domain.MissingAccountPolicy,
 ) error {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
@@ -149,6 +150,9 @@ func (s *Service) PutRateLimit(
 	if err != nil {
 		return err
 	}
+	if err := write.Validate(); err != nil {
+		return err
+	}
 	if err := scoped.Validate(); err != nil {
 		return err
 	}
@@ -158,15 +162,16 @@ func (s *Service) PutRateLimit(
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
-	sink, err := n.PutRateLimit(ctx, scoped, scopedMissing, caller)
+	sink, err := n.PutRateLimit(ctx, scoped, write, scopedMissing, caller)
 	return s.finishLimitChangeLocked(sink, err)
 }
 
-// PutOrderSizeLimit validates the order-size barrier and upserts it. missing
+// PutOrderSizeLimit validates and writes with the given intent. missing
 // follows PutRateLimit.
 func (s *Service) PutOrderSizeLimit(
 	ctx context.Context,
 	limit domain.LimitOrderSize,
+	write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
 ) error {
 	caller, err := auth.CallerFromContext(ctx)
@@ -182,6 +187,9 @@ func (s *Service) PutOrderSizeLimit(
 	if err != nil {
 		return err
 	}
+	if err := write.Validate(); err != nil {
+		return err
+	}
 	if err := scoped.Validate(); err != nil {
 		return err
 	}
@@ -191,15 +199,17 @@ func (s *Service) PutOrderSizeLimit(
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
-	sink, err := n.PutOrderSizeLimit(ctx, scoped, scopedMissing, caller)
+	sink, err := n.PutOrderSizeLimit(ctx, scoped, write, scopedMissing, caller)
 	return s.finishLimitChangeLocked(sink, err)
 }
 
-// PutPositionLimit validates and upserts the SDK's account-asset ceiling.
+// PutPositionLimit validates and writes the SDK's account-asset ceiling with
+// the given intent.
 // missing follows PutRateLimit.
 func (s *Service) PutPositionLimit(
 	ctx context.Context,
 	limit domain.LimitPosition,
+	write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
 ) error {
 	caller, err := auth.CallerFromContext(ctx)
@@ -215,6 +225,9 @@ func (s *Service) PutPositionLimit(
 	if err != nil {
 		return err
 	}
+	if err := write.Validate(); err != nil {
+		return err
+	}
 	if err := scoped.Validate(); err != nil {
 		return err
 	}
@@ -224,15 +237,16 @@ func (s *Service) PutPositionLimit(
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
-	sink, err := n.PutPositionLimit(ctx, scoped, scopedMissing, caller)
+	sink, err := n.PutPositionLimit(ctx, scoped, write, scopedMissing, caller)
 	return s.finishLimitChangeLocked(sink, err)
 }
 
 // PutSpotFundsPnlBoundsLimit validates the SpotFunds P&L-bounds barrier and
-// upserts it. missing follows PutRateLimit.
+// writes it with the given intent. missing follows PutRateLimit.
 func (s *Service) PutSpotFundsPnlBoundsLimit(
 	ctx context.Context,
 	limit domain.LimitSpotFundsPnlBounds,
+	write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
 ) error {
 	caller, err := auth.CallerFromContext(ctx)
@@ -250,6 +264,9 @@ func (s *Service) PutSpotFundsPnlBoundsLimit(
 	if err != nil {
 		return err
 	}
+	if err := write.Validate(); err != nil {
+		return err
+	}
 	if err := scoped.Validate(); err != nil {
 		return err
 	}
@@ -263,7 +280,7 @@ func (s *Service) PutSpotFundsPnlBoundsLimit(
 	defer s.marketDataMu.Unlock()
 	n := s.node
 	sink, err := n.PutSpotFundsPnlBoundsLimit(
-		ctx, scoped, scopedMissing, caller,
+		ctx, scoped, write, scopedMissing, caller,
 	)
 	return s.finishLimitChangeLocked(sink, err)
 }

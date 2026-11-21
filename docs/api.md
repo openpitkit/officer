@@ -334,10 +334,12 @@ carrying a barrier of its own, as an account recreated under the freed code
 would have none of them; `delete_account` is also refused while a rate-limit
 barrier is configured. `create_account` is refused, and so is
 `missingAccount=create` for an account that does not exist yet in
-`apply_adjustment`, `set_limit`, `submit_order` and `submit_drop_copy_order`,
-as a new account starts unblocked, with no barrier of its own and no balance
-or P&L history. `apply_adjustment` may only lower the balance, held or incoming
-of the account's own currency, and may not change the average entry price or
+`apply_adjustment`, `add_limit`, `submit_order` and
+`submit_drop_copy_order`, as a new account starts unblocked, with no barrier
+of its own and no balance or P&L history. For keyed policies, `update_limit`
+returns `not_found` if the barrier or account is absent. `apply_adjustment` may
+only lower the balance, held or incoming of the account's own currency, and may not
+change the average entry price or
 the realized P&L: another asset - a position included - an account without a
 currency of its own, a delta above zero, an absolute above the field's current
 value and an `averageEntryPrice` or `realizedPnl` other than the current one
@@ -349,17 +351,25 @@ without `force` and a code change in
 references the asset or a Spot Funds P&L bound is denominated in it, and `delete_asset`
 with `force` is refused whatever the asset carries, as it would delete the
 asset's dependent rows with it - balances, orders, trades, adjustments and
-barriers among them. `set_limit` stores a new barrier, or one no looser than
-the barrier at its address: no more orders, the same window on a broker or
-asset scope and none shorter on an account or account_asset scope, every cap
-and bound kept, no cap or upper bound raised and no lower bound lowered, and
-the same currency; for `position_limit` a ceiling no higher. A new account-tier
-order-size cap must be no looser than the asset-tier cap it overrides, a new
-account or group bound no looser than,
-and in the currency of, the bound it takes over from, and the first order-size
-barrier is refused while a rate-limit barrier is configured, as installing it
-rebuilds the engine and so resets every rate window.
-`set_limit` with policy `spot_funds_limit_mode` is refused for the switch to
+barriers among them.
+
+`add_limit` creates a barrier at a new address. An existing key returns
+`limit_exists` and leaves the barrier unchanged. A new account-tier order-size
+cap must be no looser than the asset-tier cap it overrides. A new account or
+group bound must use the currency of the bound it takes over from and be at
+least as strict. The first order-size barrier is refused while a rate-limit
+barrier is configured, as installing it rebuilds the engine and resets every
+rate window.
+
+`update_limit` changes the barrier at an existing address. A missing key returns
+`not_found`. Use `add_limit` to create it. An agent's change must keep the
+barrier at least as strict. A rate limit can admit no more orders, and its
+window must stay the same on a broker or asset scope or be at least as long on
+an account or account_asset scope. Keep every cap and bound, and keep the
+currency of each P&L bound. Caps and upper bounds can only stay the same or
+decrease. Lower bounds can only stay the same or increase. For `position_limit` the ceiling
+can only stay the same or decrease.
+`update_limit` with policy `spot_funds_limit_mode` is refused for the switch to
 `track_only`, as the engine then stops refusing orders on funds; the switch to
 `enforce` passes.
 Trading and market data may only be narrowed: `grant_trading_access`,
@@ -416,7 +426,7 @@ protocol error, not as a tool result.
 
 ### Control-plane tools
 
-Each of these tools makes the core call of one REST operation:
+These tools map to the following REST operations:
 
 - `create_account`, `update_account`, `delete_account`: `POST /accounts`,
   `PUT /accounts/{code}`, `DELETE /accounts/{code}`;
@@ -427,22 +437,31 @@ Each of these tools makes the core call of one REST operation:
   `PUT /assets/{code}`, `DELETE /assets/{code}`;
 - `create_group`, `update_group`, `delete_group`: `POST /groups`,
   `PUT /groups/{code}`, `DELETE /groups/{code}`;
-- `set_limit`: `PUT /limits/rate`, `PUT /limits/order-size`, `PUT /limits/position`,
-  `PUT /limits/spot-funds-pnl-bounds`,
+- `add_limit`: `POST /limits/rate`, `POST /limits/order-size`,
+  `POST /limits/position`, `POST /limits/spot-funds-pnl-bounds`,
+  `POST /limits/spot-funds-unrealized-pnl-bounds` or
+  `POST /limits/spot-funds-total-pnl-bounds`, by its `policy` argument;
+- `update_limit`: `PUT /limits/rate`, `PUT /limits/order-size`,
+  `PUT /limits/position`, `PUT /limits/spot-funds-pnl-bounds`,
   `PUT /limits/spot-funds-unrealized-pnl-bounds`,
   `PUT /limits/spot-funds-total-pnl-bounds` or
   `PUT /limits/spot-funds-limit-mode`, by its `policy` argument;
 - `report_fill`: `POST /orders/{id}/execution-reports`.
 
-All thirteen are mutating and protective and ship disabled. The path code or id
+For keyed barriers, `update_limit` returns `not_found` when the key is absent.
+REST `PUT` creates the barrier in that case.
+
+The fourteen mutating tools are protective and ship disabled. The path code or id
 is the `account`, `asset`, `group` or `order` argument, a delete's `force` query
 parameter is the `force` argument, `missingAccount` keeps its query name, and
 body fields keep their REST names; `apply_adjustment` takes the whole REST body
-as its `adjustment` argument, and `set_limit` takes the body of its policy's
-`PUT` as flat arguments next to `policy` and refuses a field of another policy
-with `validation`. `get_limits` and `get_account_state` answer every barrier
-with those fields, so a rate barrier's window is `windowMs` in integer
-milliseconds, as `set_limit` takes it, in place of the `window` duration string
+as its `adjustment` argument. `add_limit` and `update_limit` take the body of the
+corresponding REST write as flat arguments next to `policy` and refuse a field
+of another policy with `validation`. Only `update_limit` accepts
+`spot_funds_limit_mode` and its `mode` argument. `get_limits` and
+`get_account_state` answer every barrier with those fields, so a rate
+barrier's window is `windowMs` in integer milliseconds, as both tools take it,
+in place of the `window` duration string
 they answered before. `get_limits` without an account also answers the stored
 Spot Funds limit-mode row in `spotFundsLimitModes`; the row is global, so a
 list narrowed to an account, `get_account_state` among them, never carries it.
@@ -643,6 +662,23 @@ confirmed; `error` says why. `GET /orders/{id}` is authoritative, and the runtim
 reconciles orders that reached the send step, retrying cancellation after a
 refusal.
 
+## Adding and editing keyed limits
+
+Send `POST` to add a barrier at a new key or `PUT` to create or replace the
+barrier at that key. Both methods accept the same request body and
+`missingAccount` query parameter on these paths:
+
+- `/limits/rate`
+- `/limits/order-size`
+- `/limits/position`
+- `/limits/spot-funds-pnl-bounds`
+- `/limits/spot-funds-unrealized-pnl-bounds`
+- `/limits/spot-funds-total-pnl-bounds`
+
+Both return the stored barrier, with `201 Created` for POST and `200 OK` for PUT.
+A POST to an existing key returns `409` with code `limit_exists` and leaves the
+barrier intact. Use PUT to edit the barrier.
+
 ## Spot Funds P&L bounds
 
 For scope `account`, a realized, unrealized or total P&L bound must use the
@@ -650,10 +686,11 @@ account's effective currency, resolved from the account, its group, then the
 default group. This includes the currency of the account a
 `missingAccount=create` request would create, which inherits the default
 group's currency. If no currency resolves, the bound is refused. REST returns
-`409` with code `pnl_bound_currency_mismatch`; MCP `set_limit` returns the
-same code and message. The rule does not apply to `account_group` or `global`
-scope. With `missingAccount=reject`, an unknown account still returns `404`
-`account_missing`. Barriers already stored are not re-checked.
+`409` with code `pnl_bound_currency_mismatch`. MCP `add_limit` and
+`update_limit` return the same code and message. The rule does not apply to
+`account_group` or `global` scope. With `missingAccount=reject`, REST and
+`add_limit` return `account_missing` for an unknown account (HTTP `404`
+in REST). Barriers already stored are not re-checked.
 
 An unrealized or total P&L bound needs a price for every asset the account
 holds: an order of an account that holds an asset without a price is rejected
@@ -673,8 +710,9 @@ The reject is policy `SpotFundsPolicy`, scope `order`, code
 `asset {asset}, side long|short, projected worst-case position {projected}, limit {limit}`;
 the account is not blocked.
 
-`PUT /limits/position` takes `{scope, account, asset, maxPosition}` with scope
-`account_asset`, a required asset and a required non-negative exact decimal
+`POST /limits/position` and `PUT /limits/position` take
+`{scope, account, asset, maxPosition}` with scope `account_asset`, a required
+asset and a required non-negative exact decimal
 `maxPosition` in plain notation; zero is valid. A negative or non-decimal
 ceiling answers `422` `validation`. `?missingAccount=create|reject` is
 required when an account is named, choosing whether to register a missing
@@ -745,7 +783,7 @@ through the Orders, P&L, and Confirmation and review groups. Each policy links
 to its wiki section. The mode row has the
 values "Check funds" (`enforce`) and "Accounting without blocking"
 (`track_only`). The MCP tool `get_spot_funds_limit_mode` follows the REST
-`GET`, and `set_limit` with policy `spot_funds_limit_mode` and the one field
+`GET`, and `update_limit` with policy `spot_funds_limit_mode` and the one field
 `mode` follows the `PUT`; the switch to `track_only` is refused through MCP
 (see MCP tools).
 

@@ -52,14 +52,14 @@ const healthToolDescription = "Report Pit Officer deployment health: per-node " 
 
 const getAccountStateToolName = "get_account_state"
 const getAccountStateToolDescription = "Return account row and its " +
-	"account-scoped risk barriers, each with the fields set_limit takes, the " +
-	"rate window as windowMs in milliseconds. Read-only - no secrets, no " +
+	"account-scoped risk barriers, each with the fields add_limit and update_limit " +
+	"take, the rate window as windowMs in milliseconds. Read-only - no secrets, no " +
 	"order-flow control."
 
 const getLimitsToolName = "get_limits"
 const getLimitsToolDescription = "Return risk barriers and P&L-bound currencies, " +
-	"optionally filtered by account; each barrier has the fields set_limit " +
-	"takes, the rate window as windowMs in milliseconds. Read-only - no " +
+	"optionally filtered by account; each barrier has the fields add_limit and " +
+	"update_limit take, the rate window as windowMs in milliseconds. Read-only - no " +
 	"secrets, no order-flow control."
 
 const getOrderToolName = "get_order"
@@ -228,16 +228,26 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		true,
 		true,
 	), checkOrderHandler)
-	registerTool(reg, descriptor(
-		setLimitToolName,
-		"Set limit",
-		setLimitToolDescription,
-		"Tighten a risk barrier: add one or make it stricter, or switch Spot Funds back to Check funds; loosening and removal are refused.",
+	registerToolWithSchemas(reg, descriptor(
+		addLimitToolName,
+		"Add limit",
+		addLimitToolDescription,
+		"Add a risk barrier at a new address. A duplicate returns limit_exists. Use update_limit to change it.",
 		true,
 		true,
 		true,
 		false,
-	), setLimitHandler)
+	), addLimitHandler, restrictAddLimitInputSchema, nil)
+	registerTool(reg, descriptor(
+		updateLimitToolName,
+		"Update limit",
+		updateLimitToolDescription,
+		"Tighten an existing risk barrier or switch Spot Funds back to Check funds. For keyed policies, a missing barrier returns not_found. Use add_limit to create it.",
+		true,
+		true,
+		true,
+		false,
+	), updateLimitHandler)
 	registerTool(reg, descriptor(
 		createAccountToolName,
 		"Create account",
@@ -470,12 +480,12 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 	registerTool(reg, descriptor("list_trading_destinations", "List trading destinations",
 		"List the trading destinations available to an Officer account. Read-only - credentials are never exposed.",
 		"List the trading destinations available to an Officer account.", false, false, true, true), listTradingDestinationsHandler)
-	registerToolWithOutputSchema(reg, descriptor("get_test_execution_policy", "Get test execution policy",
+	registerToolWithSchemas(reg, descriptor("get_test_execution_policy", "Get test execution policy",
 		getTestExecutionPolicyDescription, "Read a test connection's execution policy.",
-		false, false, true, true), getTestExecutionPolicyHandler, testExecutionPolicyOutputSchema)
-	registerToolWithOutputSchema(reg, descriptor("set_test_execution_policy", "Set test execution policy",
+		false, false, true, true), getTestExecutionPolicyHandler, nil, testExecutionPolicyOutputSchema)
+	registerToolWithSchemas(reg, descriptor("set_test_execution_policy", "Set test execution policy",
 		setTestExecutionPolicyDescription, "Replace only a test connection's execution policy.",
-		true, true, true, false), setTestExecutionPolicyHandler, testExecutionPolicyOutputSchema)
+		true, true, true, false), setTestExecutionPolicyHandler, nil, testExecutionPolicyOutputSchema)
 }
 
 func descriptor(
@@ -505,14 +515,15 @@ func registerTool[In, Out any](
 	d frameworkmcp.ToolDescriptor,
 	handler func(frameworkmcp.Source) frameworkmcp.ToolBody[In, Out],
 ) {
-	registerToolWithOutputSchema(reg, d, handler, nil)
+	registerToolWithSchemas(reg, d, handler, nil, nil)
 }
 
-func registerToolWithOutputSchema[In, Out any](
+func registerToolWithSchemas[In, Out any](
 	reg *frameworkmcp.ToolRegistry,
 	d frameworkmcp.ToolDescriptor,
 	handler func(frameworkmcp.Source) frameworkmcp.ToolBody[In, Out],
-	transform func(*jsonschema.Schema) *jsonschema.Schema,
+	restrictInput func(*jsonschema.Schema),
+	transformOutput func(*jsonschema.Schema) *jsonschema.Schema,
 ) {
 	d.Register = func(server *sdkmcp.Server, deps frameworkmcp.RegisterDeps) {
 		outputSchema, err := outputSchemaFor[Out]()
@@ -529,17 +540,50 @@ func registerToolWithOutputSchema[In, Out any](
 			Description:  d.Description,
 			OutputSchema: outputSchema,
 		}
-		if transform != nil {
-			tool.OutputSchema = transform(outputSchema)
+		if transformOutput != nil {
+			tool.OutputSchema = transformOutput(outputSchema)
 		}
+		makeInputSchema := inputSchemaFor[In]
 		if !deps.Source.AccountFeatures().Accounts() {
-			tool.InputSchema = oneAccountInputSchema[In]()
-		} else {
-			tool.InputSchema = inputSchemaFor[In]()
+			makeInputSchema = oneAccountInputSchema[In]
 		}
+		inputSchema := makeInputSchema()
+		if restrictInput != nil {
+			restrictInput(inputSchema)
+		}
+		tool.InputSchema = inputSchema
 		frameworkmcp.AddTool[In, Out](server, tool, frameworkmcp.Guard(d, deps, handler(deps.Source)))
 	}
 	reg.Register(d)
+}
+
+func restrictAddLimitInputSchema(schema *jsonschema.Schema) {
+	if schema.Properties["mode"] == nil {
+		panic("add_limit input schema is missing the mode property")
+	}
+	delete(schema.Properties, "mode")
+
+	policy := schema.Properties["policy"]
+	if policy == nil {
+		panic("add_limit input schema is missing the policy property")
+	}
+	policySuffix := ", " + domain.PolicySpotFundsTotalPnlBoundsKillSwitch + " or " + domain.PolicySpotFundsLimitMode
+	policies, ok := strings.CutSuffix(policy.Description, policySuffix)
+	if !ok {
+		panic(fmt.Errorf("policy description %q does not end with %q", policy.Description, policySuffix))
+	}
+	policy.Description = policies + " or " + domain.PolicySpotFundsTotalPnlBoundsKillSwitch
+
+	scope := schema.Properties["scope"]
+	if scope == nil {
+		panic("add_limit input schema is missing the scope property")
+	}
+	scopeSuffix := "; global for " + domain.PolicySpotFundsLimitMode
+	scopes, ok := strings.CutSuffix(scope.Description, scopeSuffix)
+	if !ok {
+		panic(fmt.Errorf("scope description %q does not end with %q", scope.Description, scopeSuffix))
+	}
+	scope.Description = scopes
 }
 
 // Input property descriptions of a composition that fixes one account. A

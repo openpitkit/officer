@@ -64,40 +64,54 @@ func getSpotFundsLimitModeHandler(
 	}
 }
 
-// The limit tool maps its flat JSON arguments onto the limit put REST makes
-// for the policy they name: the fields are that put's body and reach the core
-// verbatim, missingAccount only with a named account, as REST reads its query
-// parameter, and the core validates every value and the missing-account
-// policy and refuses an agent anything that loosens risk. The tool itself
-// refuses only a policy it does not set and a field of another policy.
+// The limit tools accept the flat fields of the corresponding REST body and
+// pass them to the core with the explicit write intent. The core validates
+// the values and missing-account policy and enforces tighten-only writes.
 
-const setLimitToolName = "set_limit"
+const addLimitToolName = "add_limit"
+const updateLimitToolName = "update_limit"
 
-const setLimitToolDescription = "Create a risk barrier, or make the one " +
-	"stored at the same address stricter, and return it as stored. policy " +
-	"names the kind - rate_limit, order_size_limit, position_limit, one of the P&L-bound " +
-	"kill switches spot_funds_pnl_bounds_kill_switch (realized P&L), " +
+const keyedLimitPoliciesDescription = "rate_limit, order_size_limit, position_limit, " +
+	"spot_funds_pnl_bounds_kill_switch (realized P&L), " +
 	"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
-	"spot_funds_total_pnl_bounds_kill_switch (total P&L), or " +
-	"spot_funds_limit_mode - and the other arguments are that " +
-	"kind's fields; a field of another kind is refused with validation. " +
-	"Anything that loosens risk is refused with loosening_refused and changes " +
-	"nothing. A barrier that replaces the one at its address must be no " +
-	"looser: for rate_limit no more orders and, on the broker and asset " +
-	"scopes, the same window, on the account and account_asset scopes a " +
-	"window no shorter; for order_size_limit every current cap kept and none " +
-	"raised; for position_limit a ceiling no higher; for a P&L-bound kill switch the same currency, every " +
-	"current bound kept, the lower bound no lower and the upper bound no " +
-	"higher. A new account_underlying_asset or account_settlement_asset cap " +
-	"must be no higher than the underlying_asset or settlement_asset cap on " +
-	"the same asset that it overrides, and a new account_group or account " +
-	"bound must be in the currency of, and no looser than, the bound it takes " +
-	"over from: for a group the global bound, for an account the bound that " +
-	"applies to it now. An account P&L bound must use the account's effective " +
+	"spot_funds_total_pnl_bounds_kill_switch (total P&L)"
+
+const limitPolicyFieldsDescription = "The other arguments are that " +
+	"kind's fields. A field of another kind is refused with validation. "
+
+const limitAccountCurrencyDescription = "An account P&L bound must use the account's effective " +
 	"currency: its own, else its group's, else the default group's. A different " +
-	"bound currency or no resolved currency is refused with pnl_bound_currency_mismatch. " +
-	"The first order-size barrier is refused while any " +
-	"rate-limit barrier is configured. spot_funds_limit_mode is the Officer " +
+	"bound currency or no resolved currency is refused with pnl_bound_currency_mismatch. "
+
+const limitLooseningDescription = "Anything that loosens risk is refused with " +
+	"loosening_refused and changes nothing. "
+
+const addLimitToolDescription = "Create a risk barrier at a new address and return it as stored. " +
+	"If a barrier already exists at that address, limit_exists is returned and nothing changes. " +
+	"Use update_limit to change a stored barrier. " +
+	"The policy argument accepts " + keyedLimitPoliciesDescription + ". " +
+	limitPolicyFieldsDescription + limitLooseningDescription +
+	"A new account_underlying_asset or account_settlement_asset cap " +
+	"must be no higher than the underlying_asset or settlement_asset cap on " +
+	"the same asset that it overrides. A new account_group or account P&L " +
+	"bound must be in the currency of, and no looser than, the bound it takes " +
+	"over from. A group takes over from the global bound, and an account takes " +
+	"over from its currently applicable bound. " + limitAccountCurrencyDescription +
+	"The first order-size barrier is refused while any rate-limit barrier is configured. " +
+	"Mutates Officer control-plane config; protected and disabled by default."
+
+const updateLimitToolDescription = "Change the risk barrier stored at the given address and return it as stored. " +
+	"For keyed policies, if no barrier exists there, not_found is returned. Use add_limit to create one. " +
+	"The policy argument accepts " + keyedLimitPoliciesDescription + ", or spot_funds_limit_mode. " +
+	limitPolicyFieldsDescription + limitLooseningDescription +
+	"For rate_limit, allow no more orders and keep, on the broker and asset " +
+	"scopes, the same window, on the account and account_asset scopes a " +
+	"window no shorter. For order_size_limit, keep every current cap and raise none. " +
+	"For position_limit, keep the ceiling at or below its current value. " +
+	"For a P&L-bound kill switch, keep the same currency and every current bound. " +
+	"The lower bound can only stay the same or rise, and the upper bound can only stay the same or fall. " +
+	limitAccountCurrencyDescription +
+	"spot_funds_limit_mode is the Officer " +
 	"policy that decides whether Spot Funds checks funds, on the global scope " +
 	"only, with the one field mode: enforce (Check funds) refuses an order " +
 	"that lacks funds or holdings; track_only (Accounting without blocking) " +
@@ -109,9 +123,9 @@ const setLimitToolDescription = "Create a risk barrier, or make the one " +
 	"to Check funds, set spot_funds_limit_mode with mode enforce. Mutates " +
 	"Officer control-plane config; protected and disabled by default."
 
-// setLimitInput is the REST body of the named policy's put, flattened next to
-// the policy, with REST's missingAccount query value.
-type setLimitInput struct {
+// limitWriteInput is the REST body of the named policy's write, flattened next
+// to the policy, with REST's missingAccount query value.
+type limitWriteInput struct {
 	Policy         string `json:"policy" jsonschema:"Barrier kind: rate_limit, order_size_limit, position_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch or spot_funds_limit_mode"`
 	Scope          string `json:"scope" jsonschema:"Barrier scope: broker, asset, account or account_asset for rate_limit; broker, underlying_asset, settlement_asset, account_underlying_asset or account_settlement_asset for order_size_limit; account_asset for position_limit; global, account_group or account for the P&L-bound kill switches; global for spot_funds_limit_mode"`
 	Account        string `json:"account,omitempty" jsonschema:"Account code, for a scope with an account axis; omitted otherwise"`
@@ -126,7 +140,7 @@ type setLimitInput struct {
 	LowerBound     string `json:"lowerBound,omitempty" jsonschema:"P&L-bound kill switches: lower P&L bound as an exact decimal string in plain notation, without an exponent"`
 	UpperBound     string `json:"upperBound,omitempty" jsonschema:"P&L-bound kill switches: upper P&L bound, written as lowerBound is; at least one bound is set"`
 	Mode           string `json:"mode,omitempty" jsonschema:"spot_funds_limit_mode: enforce (Check funds) or track_only (Accounting without blocking); the switch from enforce to track_only is refused with loosening_refused"`
-	MissingAccount string `json:"missingAccount,omitempty" jsonschema:"Needed when account is named: create or reject; for an account that does not exist yet, create is refused for an agent with loosening_refused, and reject fails the call instead; ignored otherwise"`
+	MissingAccount string `json:"missingAccount,omitempty" jsonschema:"Needed when account is named: create or reject. For a missing account, add_limit refuses create with loosening_refused, and reject refuses the unknown account with account_missing unless another refusal comes first. update_limit returns not_found for an absent barrier before handling this option. Ignored when no account is named"`
 	// keys are the argument names the call sent, as it spelled them.
 	keys []string
 }
@@ -135,9 +149,9 @@ type setLimitInput struct {
 // refusing an undeclared one, and keeps the names the call sent: an argument
 // sent empty, zero or null decodes as one omitted, and refuseForeignFields
 // reads the names to refuse it all the same.
-func (in *setLimitInput) UnmarshalJSON(data []byte) error {
-	type setLimitArguments setLimitInput
-	var args setLimitArguments
+func (in *limitWriteInput) UnmarshalJSON(data []byte) error {
+	type limitWriteArguments limitWriteInput
+	var args limitWriteArguments
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&args); err != nil {
@@ -147,14 +161,14 @@ func (in *setLimitInput) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &sent); err != nil {
 		return err
 	}
-	*in = setLimitInput(args)
+	*in = limitWriteInput(args)
 	in.keys = slices.Collect(maps.Keys(sent))
 	return nil
 }
 
 // sent reports whether the call sent the argument name, matching its key
 // ignoring case as encoding/json matches a key to a field.
-func (in setLimitInput) sent(name string) bool {
+func (in limitWriteInput) sent(name string) bool {
 	return slices.ContainsFunc(in.keys, func(key string) bool {
 		return strings.EqualFold(key, name)
 	})
@@ -164,7 +178,7 @@ func (in setLimitInput) sent(name string) bool {
 // names, sent with any value, as no body of that policy carries it. The Spot
 // Funds limit-mode meta-policy carries no axis, so even account is foreign to
 // it.
-func (in setLimitInput) refuseForeignFields() error {
+func (in limitWriteInput) refuseForeignFields() error {
 	rate := domain.PolicyRateLimit
 	size := domain.PolicyOrderSizeLimit
 	position := domain.PolicyPositionLimit
@@ -201,18 +215,38 @@ func (in setLimitInput) refuseForeignFields() error {
 	return nil
 }
 
-// setLimitHandler makes the put of the named policy as REST does and answers
-// REST's body: the barrier read back as stored, under the key of its kind.
-func setLimitHandler(
+func addLimitHandler(
 	src frameworkmcp.Source,
-) frameworkmcp.ToolBody[setLimitInput, httpx.PutLimitResultDTO] {
+) frameworkmcp.ToolBody[limitWriteInput, httpx.PutLimitResultDTO] {
+	return writeLimitHandler(src, domain.LimitWriteAdd)
+}
+
+func updateLimitHandler(
+	src frameworkmcp.Source,
+) frameworkmcp.ToolBody[limitWriteInput, httpx.PutLimitResultDTO] {
+	return writeLimitHandler(src, domain.LimitWriteChange)
+}
+
+// writeLimitHandler returns the stored barrier under the key of its kind.
+func writeLimitHandler(
+	src frameworkmcp.Source, write domain.LimitWrite,
+) frameworkmcp.ToolBody[limitWriteInput, httpx.PutLimitResultDTO] {
 	return func(
 		ctx context.Context,
 		_ *sdkmcp.ServerSession,
-		in setLimitInput,
+		in limitWriteInput,
 	) (string, httpx.PutLimitResultDTO, error) {
+		var verb string
+		switch write {
+		case domain.LimitWriteAdd:
+			verb = "added"
+		case domain.LimitWriteChange:
+			verb = "set"
+		default:
+			return "", httpx.PutLimitResultDTO{}, fmt.Errorf("mcptools: unsupported limit write intent %q", write)
+		}
 		var put func(
-			context.Context, frameworkmcp.Source, setLimitInput,
+			context.Context, frameworkmcp.Source, limitWriteInput, domain.LimitWrite,
 		) (httpx.PutLimitResultDTO, error)
 		switch in.Policy {
 		case domain.PolicyRateLimit:
@@ -226,32 +260,43 @@ func setLimitHandler(
 			domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
 			put = putSpotFundsPnlBoundsLimit
 		case domain.PolicySpotFundsLimitMode:
-			put = putSpotFundsLimitMode
-		default:
+			if write == domain.LimitWriteChange {
+				put = putSpotFundsLimitMode
+			}
+		}
+		if put == nil {
+			allowed := []string{
+				domain.PolicyRateLimit, domain.PolicyOrderSizeLimit, domain.PolicyPositionLimit,
+				domain.PolicySpotFundsPnlBoundsKillSwitch,
+				domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+				domain.PolicySpotFundsTotalPnlBoundsKillSwitch,
+			}
+			if write == domain.LimitWriteChange {
+				allowed = append(allowed, domain.PolicySpotFundsLimitMode)
+			}
+			for i, policy := range allowed {
+				allowed[i] = fmt.Sprintf("%q", policy)
+			}
 			return "", httpx.PutLimitResultDTO{}, toolError(domain.NewValidationError(
 				"/policy", "unsupported_value", fmt.Sprintf(
-					"policy %q must be %q, %q, %q, %q, %q, %q or %q", in.Policy,
-					domain.PolicyRateLimit, domain.PolicyOrderSizeLimit, domain.PolicyPositionLimit,
-					domain.PolicySpotFundsPnlBoundsKillSwitch,
-					domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
-					domain.PolicySpotFundsTotalPnlBoundsKillSwitch,
-					domain.PolicySpotFundsLimitMode,
+					"policy %q must be %s or %s", in.Policy,
+					strings.Join(allowed[:len(allowed)-1], ", "), allowed[len(allowed)-1],
 				),
 			))
 		}
 		if err := in.refuseForeignFields(); err != nil {
 			return "", httpx.PutLimitResultDTO{}, toolError(err)
 		}
-		out, err := put(ctx, src, in)
+		out, err := put(ctx, src, in, write)
 		if err != nil {
 			return "", httpx.PutLimitResultDTO{}, toolError(err)
 		}
-		return fmt.Sprintf("%s %s set", in.Policy, in.Scope), out, nil
+		return fmt.Sprintf("%s %s %s", in.Policy, in.Scope, verb), out, nil
 	}
 }
 
 func putRateLimit(
-	ctx context.Context, src frameworkmcp.Source, in setLimitInput,
+	ctx context.Context, src frameworkmcp.Source, in limitWriteInput, write domain.LimitWrite,
 ) (httpx.PutLimitResultDTO, error) {
 	limit, err := httpx.FromRateLimitDTO(httpx.RateLimitDTO{
 		Scope: in.Scope, Account: in.Account, Asset: in.Asset,
@@ -260,7 +305,7 @@ func putRateLimit(
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
-	err = src.PutRateLimit(ctx, limit, missingAccountPolicy(limit.Account, in.MissingAccount))
+	err = src.PutRateLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
@@ -273,13 +318,13 @@ func putRateLimit(
 }
 
 func putOrderSizeLimit(
-	ctx context.Context, src frameworkmcp.Source, in setLimitInput,
+	ctx context.Context, src frameworkmcp.Source, in limitWriteInput, write domain.LimitWrite,
 ) (httpx.PutLimitResultDTO, error) {
 	limit := httpx.FromOrderSizeLimitDTO(httpx.OrderSizeLimitDTO{
 		Scope: in.Scope, Account: in.Account, Asset: in.Asset,
 		MaxQuantity: in.MaxQuantity, MaxNotional: in.MaxNotional,
 	})
-	err := src.PutOrderSizeLimit(ctx, limit, missingAccountPolicy(limit.Account, in.MissingAccount))
+	err := src.PutOrderSizeLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
@@ -292,13 +337,13 @@ func putOrderSizeLimit(
 }
 
 func putPositionLimit(
-	ctx context.Context, src frameworkmcp.Source, in setLimitInput,
+	ctx context.Context, src frameworkmcp.Source, in limitWriteInput, write domain.LimitWrite,
 ) (httpx.PutLimitResultDTO, error) {
 	limit := httpx.FromPositionLimitDTO(httpx.PositionLimitDTO{
 		Scope: in.Scope, Account: in.Account, Asset: in.Asset,
 		MaxPosition: in.MaxPosition,
 	})
-	err := src.PutPositionLimit(ctx, limit, missingAccountPolicy(limit.Account, in.MissingAccount))
+	err := src.PutPositionLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
@@ -311,7 +356,7 @@ func putPositionLimit(
 }
 
 func putSpotFundsPnlBoundsLimit(
-	ctx context.Context, src frameworkmcp.Source, in setLimitInput,
+	ctx context.Context, src frameworkmcp.Source, in limitWriteInput, write domain.LimitWrite,
 ) (httpx.PutLimitResultDTO, error) {
 	axis, ok := domain.SpotFundsPnlAxisOf(in.Policy)
 	if !ok {
@@ -324,7 +369,7 @@ func putSpotFundsPnlBoundsLimit(
 		Currency: in.Currency, LowerBound: in.LowerBound, UpperBound: in.UpperBound,
 	})
 	err := src.PutSpotFundsPnlBoundsLimit(
-		ctx, limit, missingAccountPolicy(limit.Account, in.MissingAccount),
+		ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount),
 	)
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
@@ -339,7 +384,7 @@ func putSpotFundsPnlBoundsLimit(
 // putSpotFundsLimitMode sets the Spot Funds limit-mode meta-policy. It has no
 // account axis, so missingAccount is ignored, as on a global P&L bound.
 func putSpotFundsLimitMode(
-	ctx context.Context, src frameworkmcp.Source, in setLimitInput,
+	ctx context.Context, src frameworkmcp.Source, in limitWriteInput, _ domain.LimitWrite,
 ) (httpx.PutLimitResultDTO, error) {
 	limit := httpx.FromSpotFundsLimitModeLimitDTO(httpx.SpotFundsLimitModeLimitDTO{
 		Scope: in.Scope, Mode: in.Mode,

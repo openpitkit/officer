@@ -55,7 +55,7 @@ func TestService_ListMcpAccessMergesDefaults(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)
 	// Override one default-on command off and one default-off command on.
-	fn.mcpAccess = map[string]bool{"health": false, "set_limit": true}
+	fn.mcpAccess = map[string]bool{"health": false, "update_limit": true}
 	ctx := systemCtx()
 
 	commands, err := svc.ListMcpAccess(ctx)
@@ -69,8 +69,8 @@ func TestService_ListMcpAccessMergesDefaults(t *testing.T) {
 	if got["health"] != false {
 		t.Errorf("health override not applied: %v", got["health"])
 	}
-	if got["set_limit"] != true {
-		t.Errorf("set_limit override not applied: %v", got["set_limit"])
+	if got["update_limit"] != true {
+		t.Errorf("update_limit override not applied: %v", got["update_limit"])
 	}
 	if got["get_limits"] != true {
 		t.Errorf("get_limits should default on, got %v", got["get_limits"])

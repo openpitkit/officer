@@ -596,6 +596,8 @@ func DescribeErr(err error) PublicError {
 		return PublicError{http.StatusNotFound, "asset_missing", err.Error()}
 	case errors.Is(err, domain.ErrNotFound):
 		return PublicError{http.StatusNotFound, "not_found", err.Error()}
+	case errors.Is(err, domain.ErrLimitExists):
+		return PublicError{http.StatusConflict, "limit_exists", err.Error()}
 	case errors.Is(err, domain.ErrAlreadyExists):
 		return PublicError{http.StatusConflict, "conflict", err.Error()}
 	case errors.Is(err, domain.ErrHasDependents):

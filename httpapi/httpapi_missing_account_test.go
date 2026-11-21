@@ -45,36 +45,70 @@ type missingAccountRoute struct {
 // missingAccountRoutes enumerates every surface that takes the parameter. The
 // bodies are the minimal valid payload each handler needs to reach the backend.
 func missingAccountRoutes() []missingAccountRoute {
+	const (
+		rateBody = `{"scope":"account","account":"acc-1",` +
+			`"windowMs":1000,"maxOrders":100}`
+		orderSizeBody = `{"scope":"account_underlying_asset","account":"acc-1",` +
+			`"asset":"AAPL","maxQuantity":"10"}`
+		pnlBoundsBody = `{"scope":"account","account":"acc-1","currency":"USD","lowerBound":"-100"}`
+		positionBody  = `{"scope":"account_asset","account":"acc-1","asset":"AAPL","maxPosition":"10"}`
+	)
 	return []missingAccountRoute{
 		{
 			name:   "limits.rate",
 			method: http.MethodPut,
 			path:   "/api/v1/limits/rate",
-			body: `{"scope":"account","account":"acc-1",` +
-				`"windowMs":1000,"maxOrders":100}`,
-			ok: http.StatusOK,
+			body:   rateBody,
+			ok:     http.StatusOK,
+		},
+		{
+			name:   "limits.rate.post",
+			method: http.MethodPost,
+			path:   "/api/v1/limits/rate",
+			body:   rateBody,
+			ok:     http.StatusCreated,
 		},
 		{
 			name:   "limits.order-size",
 			method: http.MethodPut,
 			path:   "/api/v1/limits/order-size",
-			body: `{"scope":"account_underlying_asset","account":"acc-1",` +
-				`"asset":"AAPL","maxQuantity":"10"}`,
-			ok: http.StatusOK,
+			body:   orderSizeBody,
+			ok:     http.StatusOK,
+		},
+		{
+			name:   "limits.order-size.post",
+			method: http.MethodPost,
+			path:   "/api/v1/limits/order-size",
+			body:   orderSizeBody,
+			ok:     http.StatusCreated,
 		},
 		{
 			name:   "limits.spot-funds-pnl-bounds",
 			method: http.MethodPut,
 			path:   "/api/v1/limits/spot-funds-pnl-bounds",
-			body:   `{"scope":"account","account":"acc-1","currency":"USD","lowerBound":"-100"}`,
+			body:   pnlBoundsBody,
 			ok:     http.StatusOK,
+		},
+		{
+			name:   "limits.spot-funds-pnl-bounds.post",
+			method: http.MethodPost,
+			path:   "/api/v1/limits/spot-funds-pnl-bounds",
+			body:   pnlBoundsBody,
+			ok:     http.StatusCreated,
 		},
 		{
 			name:   "limits.position",
 			method: http.MethodPut,
 			path:   "/api/v1/limits/position",
-			body:   `{"scope":"account_asset","account":"acc-1","asset":"AAPL","maxPosition":"10"}`,
+			body:   positionBody,
 			ok:     http.StatusOK,
+		},
+		{
+			name:   "limits.position.post",
+			method: http.MethodPost,
+			path:   "/api/v1/limits/position",
+			body:   positionBody,
+			ok:     http.StatusCreated,
 		},
 		{
 			name:   "accounts.adjustments",

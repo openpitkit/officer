@@ -62,13 +62,13 @@ func jsonFields(t reflect.Type) map[string]reflect.Type {
 	return fields
 }
 
-// TestSetLimitInputCarriesLimitBodies reads the fields of each limit put's
-// body from its REST DTO: setLimitInput declares every one of them under its
+// TestLimitWriteInputCarriesLimitBodies reads the fields of each limit put's
+// body from its REST DTO: limitWriteInput declares every one of them under its
 // JSON name and type, and for each policy refuseForeignFields accepts every
 // field of that policy's body and refuses every field of another body that
 // the policy's own lacks with a validation error naming it. Each field is sent
 // with its zero value, which decodes as if it were omitted.
-func TestSetLimitInputCarriesLimitBodies(t *testing.T) {
+func TestLimitWriteInputCarriesLimitBodies(t *testing.T) {
 	bodies := map[string]map[string]reflect.Type{
 		domain.PolicyRateLimit: jsonFields(reflect.TypeFor[httpx.RateLimitDTO]()),
 		domain.PolicyOrderSizeLimit: jsonFields(
@@ -79,12 +79,12 @@ func TestSetLimitInputCarriesLimitBodies(t *testing.T) {
 			reflect.TypeFor[httpx.SpotFundsPnlBoundsLimitDTO](),
 		),
 	}
-	declared := jsonFields(reflect.TypeFor[setLimitInput]())
+	declared := jsonFields(reflect.TypeFor[limitWriteInput]())
 	every := map[string]reflect.Type{}
 	for policy, body := range bodies {
 		for name, typ := range body {
 			if got, ok := declared[name]; !ok || got != typ {
-				t.Errorf("setLimitInput declares %s as %v, want %v as the %s body does",
+				t.Errorf("limitWriteInput declares %s as %v, want %v as the %s body does",
 					name, got, typ, policy)
 			}
 			every[name] = typ
@@ -99,7 +99,7 @@ func TestSetLimitInputCarriesLimitBodies(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal the arguments of %s with %s: %v", policy, name, err)
 			}
-			var in setLimitInput
+			var in limitWriteInput
 			if err := json.Unmarshal(args, &in); err != nil {
 				t.Fatalf("decode %s: %v", args, err)
 			}
@@ -117,12 +117,12 @@ func TestSetLimitInputCarriesLimitBodies(t *testing.T) {
 	}
 }
 
-// TestSetLimitInputRefusesForeignKeyInAnyCase sends a field of another policy
+// TestLimitWriteInputRefusesForeignKeyInAnyCase sends another policy's field
 // under a key that differs from its name only in case, which decoding matches
 // to the field as it matches any key: it is refused as the field is.
-func TestSetLimitInputRefusesForeignKeyInAnyCase(t *testing.T) {
+func TestLimitWriteInputRefusesForeignKeyInAnyCase(t *testing.T) {
 	const args = `{"policy": "order_size_limit", "WindowMS": 0}`
-	var in setLimitInput
+	var in limitWriteInput
 	if err := json.Unmarshal([]byte(args), &in); err != nil {
 		t.Fatalf("decode %s: %v", args, err)
 	}

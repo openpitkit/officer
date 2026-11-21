@@ -3408,10 +3408,45 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   /limits/rate:
+    post:
+      operationId: addRateLimit
+      summary: Add a rate-limit barrier
+      description: >
+        Creates a barrier at an unused key. Uses the same scopes, request
+        fields and validation as `PUT /limits/rate`.
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        $ref: "#/components/requestBodies/RateLimitWrite"
+      responses:
+        "201":
+          $ref: "#/components/responses/RateLimitWriteResult"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "409":
+          $ref: "#/components/responses/LimitExistsError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
     put:
       operationId: putRateLimit
-      summary: Upsert a rate-limit barrier
+      summary: Create or replace a rate-limit barrier
       description: >
+        Use PUT to edit the barrier at the key or create it if absent.
         A barrier whose scope carries the account axis (`account`,
         `account_asset`) may name an account that does not exist yet;
         `missingAccount` is the caller's required choice between registering it
@@ -3423,22 +3458,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RateLimit"
+        $ref: "#/components/requestBodies/RateLimitWrite"
       responses:
         "200":
-          description: Normalized form of the stored rate-limit barrier.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [rateLimit]
-                properties:
-                  rateLimit:
-                    $ref: "#/components/schemas/RateLimit"
+          $ref: "#/components/responses/RateLimitWriteResult"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -3459,10 +3482,45 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   /limits/order-size:
+    post:
+      operationId: addOrderSizeLimit
+      summary: Add an order-size barrier
+      description: >
+        Creates a barrier at an unused key. Uses the same scopes, request
+        fields and validation as `PUT /limits/order-size`.
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        $ref: "#/components/requestBodies/OrderSizeLimitWrite"
+      responses:
+        "201":
+          $ref: "#/components/responses/OrderSizeLimitWriteResult"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "409":
+          $ref: "#/components/responses/LimitExistsError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
     put:
       operationId: putOrderSizeLimit
-      summary: Upsert an order-size barrier
+      summary: Create or replace an order-size barrier
       description: >
+        Use PUT to edit the barrier at the key or create it if absent.
         `missingAccount` follows the rate-limit barrier: it is required when the
         scope carries the account axis and ignored otherwise. A broker barrier may
         carry either cap or both. `underlying_asset` and
@@ -3477,22 +3535,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/OrderSizeLimit"
+        $ref: "#/components/requestBodies/OrderSizeLimitWrite"
       responses:
         "200":
-          description: Normalized form of the stored order-size barrier.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [orderSizeLimit]
-                properties:
-                  orderSizeLimit:
-                    $ref: "#/components/schemas/OrderSizeLimit"
+          $ref: "#/components/responses/OrderSizeLimitWriteResult"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -3513,10 +3559,45 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   /limits/position:
+    post:
+      operationId: addPositionLimit
+      summary: Add a position barrier
+      description: >
+        Creates a barrier at an unused key. Uses the same scope, request
+        fields and validation as `PUT /limits/position`.
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        $ref: "#/components/requestBodies/PositionLimitWrite"
+      responses:
+        "201":
+          $ref: "#/components/responses/PositionLimitWriteResult"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "409":
+          $ref: "#/components/responses/LimitExistsError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
     put:
       operationId: putPositionLimit
-      summary: Upsert a position barrier
+      summary: Create or replace a position barrier
       description: >
+        Use PUT to edit the barrier at the key or create it if absent.
         Sets the SpotFunds position ceiling for one (account, asset) pair on
         scope `account_asset`. `maxPosition` is a required non-negative exact
         decimal string in plain notation; zero is valid. Officer stores the
@@ -3539,22 +3620,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PositionLimit"
+        $ref: "#/components/requestBodies/PositionLimitWrite"
       responses:
         "200":
-          description: Normalized form of the stored position barrier.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [positionLimit]
-                properties:
-                  positionLimit:
-                    $ref: "#/components/schemas/PositionLimit"
+          $ref: "#/components/responses/PositionLimitWriteResult"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -3575,10 +3644,45 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   /limits/spot-funds-unrealized-pnl-bounds:
+    post:
+      operationId: addSpotFundsUnrealizedPnlBoundsLimit
+      summary: Add a SpotFunds unrealized P&L-bounds barrier
+      description: >
+        Creates a barrier at an unused key. Uses the same scopes, request
+        fields and validation as `PUT /limits/spot-funds-unrealized-pnl-bounds`.
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        $ref: "#/components/requestBodies/SpotFundsPnlBoundsLimitWrite"
+      responses:
+        "201":
+          $ref: "#/components/responses/SpotFundsUnrealizedPnlBoundsLimitWriteResult"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "409":
+          $ref: "#/components/responses/LimitExistsOrPnlBoundCurrencyMismatchError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
     put:
       operationId: putSpotFundsUnrealizedPnlBoundsLimit
-      summary: Upsert a SpotFunds unrealized P&L-bounds barrier
+      summary: Create or replace a SpotFunds unrealized P&L-bounds barrier
       description: >
+        Use PUT to edit the barrier at the key or create it if absent.
         The barrier of policy `spot_funds_unrealized_pnl_bounds_kill_switch`:
         it bounds the account's unrealized P&L, valued at the current price.
         Body, scopes, `missingAccount` and single-account mode are those of
@@ -3588,22 +3692,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+        $ref: "#/components/requestBodies/SpotFundsPnlBoundsLimitWrite"
       responses:
         "200":
-          description: Normalized form of the stored barrier.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [spotFundsUnrealizedPnlBoundsLimit]
-                properties:
-                  spotFundsUnrealizedPnlBoundsLimit:
-                    $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+          $ref: "#/components/responses/SpotFundsUnrealizedPnlBoundsLimitWriteResult"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -3626,10 +3718,45 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   /limits/spot-funds-total-pnl-bounds:
+    post:
+      operationId: addSpotFundsTotalPnlBoundsLimit
+      summary: Add a SpotFunds total P&L-bounds barrier
+      description: >
+        Creates a barrier at an unused key. Uses the same scopes, request
+        fields and validation as `PUT /limits/spot-funds-total-pnl-bounds`.
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        $ref: "#/components/requestBodies/SpotFundsPnlBoundsLimitWrite"
+      responses:
+        "201":
+          $ref: "#/components/responses/SpotFundsTotalPnlBoundsLimitWriteResult"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "409":
+          $ref: "#/components/responses/LimitExistsOrPnlBoundCurrencyMismatchError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
     put:
       operationId: putSpotFundsTotalPnlBoundsLimit
-      summary: Upsert a SpotFunds total P&L-bounds barrier
+      summary: Create or replace a SpotFunds total P&L-bounds barrier
       description: >
+        Use PUT to edit the barrier at the key or create it if absent.
         The barrier of policy `spot_funds_total_pnl_bounds_kill_switch`: it
         bounds the account's total P&L, realized plus unrealized. Body,
         scopes, `missingAccount` and single-account mode are those of
@@ -3639,22 +3766,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+        $ref: "#/components/requestBodies/SpotFundsPnlBoundsLimitWrite"
       responses:
         "200":
-          description: Normalized form of the stored barrier.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [spotFundsTotalPnlBoundsLimit]
-                properties:
-                  spotFundsTotalPnlBoundsLimit:
-                    $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+          $ref: "#/components/responses/SpotFundsTotalPnlBoundsLimitWriteResult"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -3677,10 +3792,45 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   /limits/spot-funds-pnl-bounds:
+    post:
+      operationId: addSpotFundsPnlBoundsLimit
+      summary: Add a SpotFunds realized P&L-bounds barrier
+      description: >
+        Creates a barrier at an unused key. Uses the same scopes, request
+        fields and validation as `PUT /limits/spot-funds-pnl-bounds`.
+      tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccountOptional"
+      requestBody:
+        $ref: "#/components/requestBodies/SpotFundsPnlBoundsLimitWrite"
+      responses:
+        "201":
+          $ref: "#/components/responses/SpotFundsPnlBoundsLimitWriteResult"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "409":
+          $ref: "#/components/responses/LimitExistsOrPnlBoundCurrencyMismatchError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
     put:
       operationId: putSpotFundsPnlBoundsLimit
-      summary: Upsert a SpotFunds P&L-bounds barrier
+      summary: Create or replace a SpotFunds realized P&L-bounds barrier
       description: >
+        Use PUT to edit the barrier at the key or create it if absent.
         The barrier of policy `spot_funds_pnl_bounds_kill_switch`: it bounds
         the account's realized P&L.
         `missingAccount` follows the rate-limit barrier; only the `account`
@@ -3693,22 +3843,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+        $ref: "#/components/requestBodies/SpotFundsPnlBoundsLimitWrite"
       responses:
         "200":
-          description: Normalized form of the stored SpotFunds P&L-bounds barrier.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [spotFundsPnlBoundsLimit]
-                properties:
-                  spotFundsPnlBoundsLimit:
-                    $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+          $ref: "#/components/responses/SpotFundsPnlBoundsLimitWriteResult"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -3768,7 +3906,7 @@ paths:
         naming one is refused with 422. Switching back to `enforce` resets no
         balance; orders that need funds against a negative balance are refused
         again. This route takes no tighten-only caller; an agent is one, and
-        MCP `set_limit` refuses its switch from `enforce` to `track_only`
+        MCP `update_limit` refuses its switch from `enforce` to `track_only`
         with `loosening_refused`.
         Returns the mode read back as stored, without the no-currency list.
       tags: [limits]
@@ -6585,10 +6723,128 @@ components:
         minimum: 1
 
   # ---------------------------------------------------------------------------
+  # Request bodies
+  # ---------------------------------------------------------------------------
+
+  requestBodies:
+    RateLimitWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RateLimit"
+
+    OrderSizeLimitWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OrderSizeLimit"
+
+    PositionLimitWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PositionLimit"
+
+    SpotFundsPnlBoundsLimitWrite:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+
+  # ---------------------------------------------------------------------------
   # Responses
   # ---------------------------------------------------------------------------
 
   responses:
+    RateLimitWriteResult:
+      description: Normalized form of the stored rate-limit barrier.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [rateLimit]
+            properties:
+              rateLimit:
+                $ref: "#/components/schemas/RateLimit"
+
+    OrderSizeLimitWriteResult:
+      description: Normalized form of the stored order-size barrier.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [orderSizeLimit]
+            properties:
+              orderSizeLimit:
+                $ref: "#/components/schemas/OrderSizeLimit"
+
+    PositionLimitWriteResult:
+      description: Normalized form of the stored position barrier.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [positionLimit]
+            properties:
+              positionLimit:
+                $ref: "#/components/schemas/PositionLimit"
+
+    SpotFundsUnrealizedPnlBoundsLimitWriteResult:
+      description: Normalized form of the stored barrier.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [spotFundsUnrealizedPnlBoundsLimit]
+            properties:
+              spotFundsUnrealizedPnlBoundsLimit:
+                $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+
+    SpotFundsTotalPnlBoundsLimitWriteResult:
+      description: Normalized form of the stored barrier.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [spotFundsTotalPnlBoundsLimit]
+            properties:
+              spotFundsTotalPnlBoundsLimit:
+                $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+
+    SpotFundsPnlBoundsLimitWriteResult:
+      description: Normalized form of the stored SpotFunds P&L-bounds barrier.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [spotFundsPnlBoundsLimit]
+            properties:
+              spotFundsPnlBoundsLimit:
+                $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
+
+    LimitExistsError:
+      description: >-
+        A barrier with this key already exists (`limit_exists`).
+        Use PUT to change it.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    LimitExistsOrPnlBoundCurrencyMismatchError:
+      description: >-
+        A barrier with this key already exists (`limit_exists`). Use PUT to
+        change it. For `pnl_bound_currency_mismatch`, see the currency
+        requirement for Spot Funds P&L bounds in `PnlBoundCurrencyMismatchError`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     PnlBoundCurrencyMismatchError:
       description: >-
         An account-scoped Spot Funds P&L bound must use the account's effective
@@ -7110,7 +7366,8 @@ components:
               type: string
               description: >
                 Machine-readable code: `validation`, `not_found`,
-                `account_missing`, `asset_missing`, `pnl_bound_currency_mismatch`, `conflict`, `currency_change_blocked`, `has_dependents`,
+                `account_missing`, `asset_missing`, `limit_exists`,
+                `pnl_bound_currency_mismatch`, `conflict`, `currency_change_blocked`, `has_dependents`,
                 `terminal_order`, `approval_required`,
                 `execution_report_required`, `precondition`, `too_large`,
                 `forbidden`, `host_not_allowed`, `origin_not_allowed`,

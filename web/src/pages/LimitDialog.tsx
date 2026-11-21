@@ -326,7 +326,7 @@ export function LimitDialog({
   const { t: tv } = useTranslation("validation");
   const { t: tc } = useTranslation();
   const officerApi = useOfficerApi();
-  const { fetchAccounts, putLimit } = officerApi;
+  const { fetchAccounts, addLimit, putLimit } = officerApi;
   const fetchGroups =
     "fetchGroups" in officerApi ? officerApi.fetchGroups : undefined;
   const { showsAccounts } = accountScope();
@@ -563,7 +563,8 @@ export function LimitDialog({
     setBusy(true);
     setError(null);
     try {
-      await putLimit(candidate, missingAccount);
+      const saveLimit = isEdit ? putLimit : addLimit;
+      await saveLimit(candidate, missingAccount);
       setConfirmOpen(false);
       setMissingAccountConfirmOpen(false);
       onOpenChange(false);

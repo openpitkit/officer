@@ -103,11 +103,13 @@ type ControlPlane interface {
 	PutRateLimit(
 		ctx context.Context,
 		limit domain.LimitRate,
+		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
 	) error
 	PutOrderSizeLimit(
 		ctx context.Context,
 		limit domain.LimitOrderSize,
+		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
 	) error
 	// PutPositionLimit sets the account-asset ceiling under the caller resolved
@@ -115,11 +117,13 @@ type ControlPlane interface {
 	PutPositionLimit(
 		ctx context.Context,
 		limit domain.LimitPosition,
+		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
 	) error
 	PutSpotFundsPnlBoundsLimit(
 		ctx context.Context,
 		limit domain.LimitSpotFundsPnlBounds,
+		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
 	) error
 	// SpotFundsLimitMode returns the effective global mode and the visible

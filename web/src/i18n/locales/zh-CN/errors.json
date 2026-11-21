@@ -31,6 +31,7 @@
     "not_found": "请求的资源未找到。",
     "has_dependents": "资源存在关联行。",
     "conflict": "请求与当前状态冲突。",
+    "limit_exists": "该策略已存在。请编辑现有策略。",
     "fee_account_required": "需要指定手续费账户。",
     "trading_mode_mismatch": "连接使用不同的交易模式。",
     "destination_ambiguous": "有多个交易目标符合请求。",

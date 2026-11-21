@@ -218,7 +218,7 @@ func TestLocalNode_AgentGroupDeleteRefusalPrecedesCurrencyGuard(t *testing.T) {
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency: "EUR", UpperBound: "10",
-			}, domain.MissingAccountCreate, testCaller); err != nil {
+			}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 				t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 			}
 		},
@@ -228,7 +228,7 @@ func TestLocalNode_AgentGroupDeleteRefusalPrecedesCurrencyGuard(t *testing.T) {
 			prepareGroupDeleteRebuild(n, probe, newFakeEngine())
 			if _, err := n.PutRateLimit(ctx, rateLimit(
 				domain.ScopeBroker, "", "", 100, time.Second,
-			), domain.MissingAccountCreate, testCaller); err != nil {
+			), domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 				t.Fatalf("PutRateLimit: %v", err)
 			}
 		},
@@ -288,7 +288,7 @@ func TestLocalNode_AgentDeleteGroupRefusesGroupPnlBound(t *testing.T) {
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 			Currency: "USD", UpperBound: "10",
-		}, domain.MissingAccountCreate, testCaller); err != nil {
+		}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 		}
 		prepareGroupDeleteRebuild(n, probe, newResolvingEngine())
@@ -360,7 +360,7 @@ func TestLocalNode_AgentDeleteGroupRefusedWhileRateBarrierExists(t *testing.T) {
 		prepareGroupDeleteRebuild(n, probe, newResolvingEngine())
 		if _, err := n.PutRateLimit(ctx, rateLimit(
 			domain.ScopeBroker, "", "", 100, time.Second,
-		), domain.MissingAccountCreate, testCaller); err != nil {
+		), domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 			t.Fatalf("PutRateLimit: %v", err)
 		}
 		prepareGroupDeleteRebuild(n, probe, newResolvingEngine())
@@ -416,7 +416,7 @@ func TestLocalNode_AgentDeleteGroupRefusedWhileRateBarrierExists(t *testing.T) {
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "other",
 			Currency: "USD", UpperBound: "10",
-		}, domain.MissingAccountCreate, testCaller); err != nil {
+		}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 		}
 		prepareGroupDeleteRebuild(n, probe, newResolvingEngine())
@@ -1131,9 +1131,25 @@ func newLimitNode(t *testing.T, stored AccountLimits) (*localNode, *rebuildProbe
 }
 
 // requireStored fails the test unless the node's store holds want, a barrier
-// of any kind, exactly.
+// of any kind, exactly; for an AccountLimits set it requires each of its
+// barriers to be stored.
 func requireStored(t *testing.T, n *localNode, want any) {
 	t.Helper()
+	if want, ok := want.(AccountLimits); ok {
+		for _, limit := range want.RateLimits {
+			requireStored(t, n, limit)
+		}
+		for _, limit := range want.OrderSizeLimits {
+			requireStored(t, n, limit)
+		}
+		for _, limit := range want.PositionLimits {
+			requireStored(t, n, limit)
+		}
+		for _, limit := range want.SpotFundsPnlBoundsLimits {
+			requireStored(t, n, limit)
+		}
+		return
+	}
 	limits, err := n.listLimits(context.Background(), "")
 	if err != nil {
 		t.Fatalf("listLimits: %v", err)
@@ -1144,6 +1160,8 @@ func requireStored(t *testing.T, n *localNode, want any) {
 		stored = slices.Contains(limits.RateLimits, want)
 	case domain.LimitOrderSize:
 		stored = slices.Contains(limits.OrderSizeLimits, want)
+	case domain.LimitPosition:
+		stored = slices.Contains(limits.PositionLimits, want)
 	case domain.LimitSpotFundsPnlBounds:
 		stored = slices.Contains(limits.SpotFundsPnlBoundsLimits, want)
 	default:
@@ -1204,7 +1222,7 @@ func TestLocalNode_AgentRateLimitTightensOnly(t *testing.T) {
 			),
 			"longer window": rateLimit(domain.ScopeBroker, "", "", 100, 2*time.Second),
 		} {
-			_, err := n.PutRateLimit(ctx, looser, domain.MissingAccountCreate, agentCaller)
+			_, err := n.PutRateLimit(ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller)
 			requireLoosening(t, "PutRateLimit("+name+")", err)
 		}
 		unchanged()
@@ -1213,7 +1231,7 @@ func TestLocalNode_AgentRateLimitTightensOnly(t *testing.T) {
 			rateLimit(domain.ScopeAccount, "acc", "", 1000, time.Second),
 		} {
 			if _, err := n.PutRateLimit(
-				ctx, accepted, domain.MissingAccountCreate, agentCaller,
+				ctx, accepted, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			); err != nil {
 				t.Fatalf("PutRateLimit(%+v): %v", accepted, err)
 			}
@@ -1226,7 +1244,7 @@ func TestLocalNode_AgentRateLimitTightensOnly(t *testing.T) {
 			n, _ := newNode(t)
 			looser := rateLimit(domain.ScopeBroker, "", "", 1000, time.Millisecond)
 			if _, err := n.PutRateLimit(
-				ctx, looser, domain.MissingAccountCreate, caller,
+				ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, caller,
 			); err != nil {
 				t.Fatalf("PutRateLimit: %v", err)
 			}
@@ -1263,14 +1281,14 @@ func TestLocalNode_AgentOrderSizeLimitTightensOnly(t *testing.T) {
 			"dropped notional": broker("100", ""),
 		} {
 			_, err := n.PutOrderSizeLimit(
-				ctx, looser, domain.MissingAccountCreate, agentCaller,
+				ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			)
 			requireLoosening(t, "PutOrderSizeLimit("+name+")", err)
 		}
 		unchanged()
 		stricter := broker("50", "1000.0")
 		if _, err := n.PutOrderSizeLimit(
-			ctx, stricter, domain.MissingAccountCreate, agentCaller,
+			ctx, stricter, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 		); err != nil {
 			t.Fatalf("PutOrderSizeLimit: %v", err)
 		}
@@ -1282,7 +1300,7 @@ func TestLocalNode_AgentOrderSizeLimitTightensOnly(t *testing.T) {
 			n, _ := newNode(t)
 			looser := broker("1000", "")
 			if _, err := n.PutOrderSizeLimit(
-				ctx, looser, domain.MissingAccountCreate, caller,
+				ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, caller,
 			); err != nil {
 				t.Fatalf("PutOrderSizeLimit: %v", err)
 			}
@@ -1333,7 +1351,7 @@ func TestLocalNode_AgentAccountOrderSizeCapTightensAssetCap(t *testing.T) {
 			"account_settlement_asset": settlement("1000.01"),
 		} {
 			_, err := n.PutOrderSizeLimit(
-				ctx, looser, domain.MissingAccountCreate, agentCaller,
+				ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			)
 			requireLoosening(t, "PutOrderSizeLimit("+name+")", err)
 		}
@@ -1342,7 +1360,7 @@ func TestLocalNode_AgentAccountOrderSizeCapTightensAssetCap(t *testing.T) {
 			underlying("99"), settlement("999"),
 		} {
 			if _, err := n.PutOrderSizeLimit(
-				ctx, stricter, domain.MissingAccountCreate, agentCaller,
+				ctx, stricter, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			); err != nil {
 				t.Fatalf("PutOrderSizeLimit(%+v): %v", stricter, err)
 			}
@@ -1357,7 +1375,7 @@ func TestLocalNode_AgentAccountOrderSizeCapTightensAssetCap(t *testing.T) {
 				underlying("1000"), settlement("10000"),
 			} {
 				if _, err := n.PutOrderSizeLimit(
-					ctx, looser, domain.MissingAccountCreate, caller,
+					ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, caller,
 				); err != nil {
 					t.Fatalf("PutOrderSizeLimit(%+v): %v", looser, err)
 				}
@@ -1391,7 +1409,7 @@ func TestLocalNode_AgentFirstOrderSizeLimitRefusedWhileRateBarrierExists(t *test
 		prepareGroupDeleteRebuild(n, probe, newFakeEngine())
 		builds := probe.builds
 		if _, err := n.PutOrderSizeLimit(
-			ctx, first, domain.MissingAccountCreate, caller,
+			ctx, first, domain.LimitWriteReplace, domain.MissingAccountCreate, caller,
 		); err != nil {
 			t.Fatalf("PutOrderSizeLimit: %v", err)
 		}
@@ -1406,7 +1424,7 @@ func TestLocalNode_AgentFirstOrderSizeLimitRefusedWhileRateBarrierExists(t *test
 		n, probe := newLimitNode(t, rateBarrier)
 		prepareGroupDeleteRebuild(n, probe, newFakeEngine())
 		unchanged := refusalKeepsRiskState(t, n, probe)
-		_, err := n.PutOrderSizeLimit(ctx, first, domain.MissingAccountCreate, agentCaller)
+		_, err := n.PutOrderSizeLimit(ctx, first, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller)
 		requireLoosening(t, "PutOrderSizeLimit", err)
 		unchanged()
 	})
@@ -1453,14 +1471,14 @@ func TestLocalNode_AgentSpotFundsPnlBoundsTightensOnly(t *testing.T) {
 			"another currency":    global("EUR", "-100", "100"),
 		} {
 			_, err := n.PutSpotFundsPnlBoundsLimit(
-				ctx, looser, domain.MissingAccountCreate, agentCaller,
+				ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			)
 			requireLoosening(t, "PutSpotFundsPnlBoundsLimit("+name+")", err)
 		}
 		unchanged()
 		stricter := global("USD", "-50", "50.0")
 		if _, err := n.PutSpotFundsPnlBoundsLimit(
-			ctx, stricter, domain.MissingAccountCreate, agentCaller,
+			ctx, stricter, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 		); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 		}
@@ -1472,7 +1490,7 @@ func TestLocalNode_AgentSpotFundsPnlBoundsTightensOnly(t *testing.T) {
 			n, _ := newNode(t)
 			looser := global("USD", "-1000", "")
 			if _, err := n.PutSpotFundsPnlBoundsLimit(
-				ctx, looser, domain.MissingAccountCreate, caller,
+				ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, caller,
 			); err != nil {
 				t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 			}
@@ -1551,7 +1569,7 @@ func TestLocalNode_AgentAccountPnlBoundTightensResolvedTier(t *testing.T) {
 			"pooled below the global bound":  {account("pooled", "USD", "-2000", "1000"), "-1000"},
 		} {
 			_, err := n.PutSpotFundsPnlBoundsLimit(
-				ctx, tc.looser, domain.MissingAccountCreate, agentCaller,
+				ctx, tc.looser, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			)
 			requireLoosening(t, "PutSpotFundsPnlBoundsLimit("+name+")", err)
 			if want := "below the current " + tc.against + ":"; !strings.Contains(err.Error(), want) {
@@ -1568,7 +1586,7 @@ func TestLocalNode_AgentAccountPnlBoundTightensResolvedTier(t *testing.T) {
 			account("euro", "EUR", "-5000", ""),
 		} {
 			if _, err := n.PutSpotFundsPnlBoundsLimit(
-				ctx, accepted, domain.MissingAccountCreate, agentCaller,
+				ctx, accepted, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			); err != nil {
 				t.Fatalf("PutSpotFundsPnlBoundsLimit(%+v): %v", accepted, err)
 			}
@@ -1581,7 +1599,7 @@ func TestLocalNode_AgentAccountPnlBoundTightensResolvedTier(t *testing.T) {
 			n, _ := newNode(t)
 			looser := account("member", "USD", "-10000", "")
 			if _, err := n.PutSpotFundsPnlBoundsLimit(
-				ctx, looser, domain.MissingAccountCreate, caller,
+				ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, caller,
 			); err != nil {
 				t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 			}
@@ -1625,14 +1643,14 @@ func TestLocalNode_AgentGroupPnlBoundTightensGlobal(t *testing.T) {
 			"looser":           desk("USD", "-200", "100"),
 		} {
 			_, err := n.PutSpotFundsPnlBoundsLimit(
-				ctx, looser, domain.MissingAccountCreate, agentCaller,
+				ctx, looser, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			)
 			requireLoosening(t, "PutSpotFundsPnlBoundsLimit("+name+")", err)
 		}
 		unchanged()
 		stricter := desk("USD", "-50", "50")
 		if _, err := n.PutSpotFundsPnlBoundsLimit(
-			ctx, stricter, domain.MissingAccountCreate, agentCaller,
+			ctx, stricter, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 		); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 		}
@@ -1644,7 +1662,7 @@ func TestLocalNode_AgentGroupPnlBoundTightensGlobal(t *testing.T) {
 			n, _ := newNode(t)
 			other := desk("EUR", "-1000", "")
 			if _, err := n.PutSpotFundsPnlBoundsLimit(
-				ctx, other, domain.MissingAccountCreate, caller,
+				ctx, other, domain.LimitWriteReplace, domain.MissingAccountCreate, caller,
 			); err != nil {
 				t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 			}
@@ -1698,7 +1716,7 @@ func TestLocalNode_AgentPnlBoundForUnknownAccount(t *testing.T) {
 			bound.Currency = tc.currency
 			unchanged := refusalKeepsRiskState(t, n, probe)
 			_, err := n.PutSpotFundsPnlBoundsLimit(
-				ctx, bound, domain.MissingAccountCreate, agentCaller,
+				ctx, bound, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller,
 			)
 			requireLoosening(t, "PutSpotFundsPnlBoundsLimit", err)
 			if !strings.Contains(err.Error(), tc.refusal) {
@@ -1794,7 +1812,7 @@ func TestLocalNode_AgentLimitFailsOnUnreadableState(t *testing.T) {
 			put: func(n *localNode) error {
 				_, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 					Scope: domain.ScopeBroker, MaxQuantity: "10",
-				}, domain.MissingAccountCreate, agentCaller)
+				}, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller)
 				return err
 			},
 		},
@@ -1810,7 +1828,7 @@ func TestLocalNode_AgentLimitFailsOnUnreadableState(t *testing.T) {
 			put: func(n *localNode) error {
 				_, err := n.PutSpotFundsPnlBoundsLimit(ctx, pnlBound(
 					domain.ScopeAccount, "acc", "USD", "-50", "50",
-				), domain.MissingAccountCreate, agentCaller)
+				), domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller)
 				return err
 			},
 		},
@@ -1826,7 +1844,7 @@ func TestLocalNode_AgentLimitFailsOnUnreadableState(t *testing.T) {
 			put: func(n *localNode) error {
 				_, err := n.PutSpotFundsPnlBoundsLimit(ctx, pnlBound(
 					domain.ScopeAccount, "ghost", "USD", "-50", "50",
-				), domain.MissingAccountCreate, agentCaller)
+				), domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller)
 				return err
 			},
 		},
@@ -2562,6 +2580,7 @@ func TestLocalNode_AgentAutoCreateAccountRefused(t *testing.T) {
 		"rate barrier": func(n *localNode, account domain.AccountID, _ string) error {
 			_, err := n.PutRateLimit(
 				ctx, rateLimit(domain.ScopeAccount, account, "", 10, time.Second),
+				domain.LimitWriteReplace,
 				domain.MissingAccountCreate, agentCaller,
 			)
 			return err

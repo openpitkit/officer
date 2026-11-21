@@ -860,7 +860,7 @@ func TestLocalNode_ForcedDeleteGroupAuditsDetachedAccounts(t *testing.T) {
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-10",
-	}, domain.MissingAccountCreate, testCaller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
@@ -868,7 +868,7 @@ func TestLocalNode_ForcedDeleteGroupAuditsDetachedAccounts(t *testing.T) {
 		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "member-a", Currency: "USD", UpperBound: "20"},
 	} {
 		if _, err := n.PutSpotFundsPnlBoundsLimit(
-			ctx, limit, domain.MissingAccountCreate, testCaller,
+			ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller,
 		); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit(%+v): %v", limit, err)
 		}
@@ -948,7 +948,7 @@ func TestLocalNode_DeleteGroupBuildFailureLeavesStoreAndEngineUntouched(t *testi
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", UpperBound: "10",
-	}, domain.MissingAccountCreate, testCaller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	buildErr := errors.New("group cascade build failure")

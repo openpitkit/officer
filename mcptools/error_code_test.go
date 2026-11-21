@@ -59,6 +59,7 @@ func TestToolErrorMatchesREST(t *testing.T) {
 		{"ErrForbidden", wrapped(domain.ErrForbidden), "forbidden", ""},
 		{"ErrHasDependents", wrapped(domain.ErrHasDependents), "has_dependents", ""},
 		{"ErrInvalid", wrapped(domain.ErrInvalid), "validation", ""},
+		{"ErrLimitExists", wrapped(domain.ErrLimitExists), "limit_exists", ""},
 		{"ErrLoosening", wrapped(domain.ErrLoosening), "loosening_refused", ""},
 		{"ErrNoChange", wrapped(domain.ErrNoChange), "internal", ""},
 		{"ErrNoDestination", wrapped(domain.ErrNoDestination), "no_destination", ""},

@@ -2715,45 +2715,87 @@ describe("limits client", () => {
     ]);
   });
 
-  it("upserts rate limits through the typed policy endpoint", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({
-        rateLimit: {
+  it.each([
+    ["addLimit", "POST", 201],
+    ["putLimit", "PUT", 200],
+  ] as const)(
+    "writes rate limits through %s (%s, %i)",
+    async (operation, method, status) => {
+      const stored = {
+        scope: "account",
+        account: "desk-alpha",
+        asset: "",
+        windowMs: 60000,
+        maxOrders: 20,
+      };
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({ rateLimit: stored }, status),
+      );
+
+      const limit = await api()[operation](
+        {
+          policy: "rate_limit",
           scope: "account",
           account: "desk-alpha",
           asset: "",
-          windowMs: 60000,
-          maxOrders: 20,
+          values: { max_orders: "20", window: "1m" },
         },
-      }),
-    );
+        "reject",
+      );
 
-    const { putLimit } = api();
-    const limit = await putLimit(
-      {
+      expect(fetch).toHaveBeenCalledExactlyOnceWith(
+        "/app/api/v1/limits/rate?missingAccount=reject",
+        expect.objectContaining({ method, body: JSON.stringify(stored) }),
+      );
+      expect(limit).toEqual({
         policy: "rate_limit",
         scope: "account",
         account: "desk-alpha",
         asset: "",
         values: { max_orders: "20", window: "1m" },
-      },
-      "reject",
+      });
+    },
+  );
+
+  it("decodes and localizes limit_exists without retrying the request", async () => {
+    const i18n = createInstance();
+    await i18n.init({
+      lng: "ru",
+      resources: appLocaleResources,
+      interpolation: { escapeValue: false },
+    });
+    vi.mocked(fetch).mockResolvedValueOnce(
+      errorResponse(409, "limit_exists", {}, "the rate limit already exists"),
+    );
+    const client = createOfficerApi(
+      createApiClient({
+        baseUrl: "/app/api/v1",
+        fetch: globalThis.fetch,
+        translate: (key, params) => i18n.t(key, params),
+      }),
     );
 
-    expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/limits/rate?missingAccount=reject",
-      expect.objectContaining({
-        method: "PUT",
-        body: JSON.stringify({
+    await expect(
+      client.addLimit(
+        {
+          policy: "rate_limit",
           scope: "account",
           account: "desk-alpha",
           asset: "",
-          windowMs: 60000,
-          maxOrders: 20,
-        }),
-      }),
+          values: { max_orders: "20", window: "1m" },
+        },
+        "reject",
+      ),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "limit_exists",
+      status: 409,
+      message: "Такая политика уже есть. Измените существующую политику.",
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/app/api/v1/limits/rate?missingAccount=reject",
+      expect.objectContaining({ method: "POST" }),
     );
-    expect(limit.values.window).toBe("1m");
   });
 
   it("resends the rate limit with missingAccount=create after account creation is confirmed", async () => {
@@ -3086,6 +3128,24 @@ describe("limits client", () => {
       const { fetchLimits } = api();
 
       await expect(fetchLimits()).rejects.toThrow(message);
+    });
+
+    it("refuses to add a mode before sending a request", async () => {
+      await expect(
+        api().addLimit(
+          {
+            policy: "spot_funds_limit_mode",
+            scope: "global",
+            account: "",
+            asset: "",
+            values: { mode: "track_only" },
+          },
+          "reject",
+        ),
+      ).rejects.toThrow(
+        "Spot Funds limit mode has no add operation; change it with putLimit.",
+      );
+      expect(fetch).not.toHaveBeenCalled();
     });
 
     it("puts the mode to its own endpoint with no missingAccount query", async () => {

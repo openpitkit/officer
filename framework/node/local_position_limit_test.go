@@ -58,7 +58,7 @@ func TestLocalNode_PositionLimitCRUD(t *testing.T) {
 	other := first
 	other.Account, other.Asset = "other", "USD"
 	for _, limit := range []domain.LimitPosition{first, replacement, other} {
-		if sink, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil || sink != nil {
+		if sink, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil || sink != nil {
 			t.Fatalf("PutPositionLimit = %T, %v, want online configure", sink, err)
 		}
 		rows, err := st.ListAudit(ctx, 1)
@@ -119,7 +119,7 @@ func TestLocalNode_PositionLimitMissingAccount(t *testing.T) {
 			eng.enforceResolver = true
 			n, st := newTestNode(t, eng)
 			limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "fresh", Asset: "AAPL", MaxPosition: "0"}
-			_, err := n.PutPositionLimit(ctx, limit, missing, testCaller)
+			_, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, missing, testCaller)
 			if missing == domain.MissingAccountReject {
 				if !errors.Is(err, domain.ErrAccountMissing) {
 					t.Fatalf("PutPositionLimit = %v, want ErrAccountMissing", err)
@@ -156,14 +156,14 @@ func TestLocalNode_PositionLimitTightensOnly(t *testing.T) {
 	limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100"}
 	for _, maximum := range []string{"100", "50", "0"} {
 		limit.MaxPosition = maximum
-		if _, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountReject, agentCaller); err != nil {
+		if _, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountReject, agentCaller); err != nil {
 			t.Fatalf("agent put %s: %v", maximum, err)
 		}
 	}
 	unchanged := refusalKeepsRiskState(t, n, probe)
 	calls := len(eng.configureCalls)
 	limit.MaxPosition = "0.00000001"
-	_, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountReject, agentCaller)
+	_, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountReject, agentCaller)
 	requireLoosening(t, "raise position limit", err)
 	_, err = n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset}, agentCaller)
 	requireLoosening(t, "delete position limit", err)
@@ -195,7 +195,7 @@ func TestLocalNode_PositionLimitConfigureFailureRebuilds(t *testing.T) {
 					limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100"}
 					var want []domain.LimitPosition
 					if operation != "create" {
-						if _, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+						if _, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 							t.Fatal(err)
 						}
 						want = []domain.LimitPosition{limit}
@@ -207,7 +207,7 @@ func TestLocalNode_PositionLimitConfigureFailureRebuilds(t *testing.T) {
 						_, err = n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset}, testCaller)
 					} else {
 						limit.MaxPosition = "200"
-						_, err = n.PutPositionLimit(ctx, limit, domain.MissingAccountCreate, testCaller)
+						_, err = n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 					}
 					if !errors.Is(err, failure.cause) {
 						t.Fatalf("configure error = %v, want wrapping %v", err, failure.cause)
@@ -238,7 +238,7 @@ func TestLocalNode_PositionLimitRebuildFailureFatals(t *testing.T) {
 	n.fatal = func(err error) { fatalErr = err }
 	_, err := n.PutPositionLimit(ctx, domain.LimitPosition{
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
-	}, domain.MissingAccountCreate, testCaller)
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, configureErr) || !errors.Is(err, rebuildErr) ||
 		!errors.Is(fatalErr, configureErr) || !errors.Is(fatalErr, rebuildErr) {
 		t.Fatalf("configure/rebuild error = %v, fatal = %v, want both failures and fail-stop", err, fatalErr)

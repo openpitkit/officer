@@ -223,7 +223,7 @@ func TestSetAccountCurrencyOnControlPlane(t *testing.T) {
 	if err := service.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "desk-2", Currency: "USD", LowerBound: "-1",
-	}, domain.MissingAccountReject); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 		t.Fatalf("bound desk-2: %v", err)
 	}
 	if err := refusedAsREST("desk-2", "EUR", "USD"); !errors.Is(err, domain.ErrCurrencyValuedLimit) {
@@ -461,7 +461,7 @@ func TestUpdateAssetToolRefusesCodeChangeOfBarrierAsset(t *testing.T) {
 	}
 	if err := service.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 		Scope: domain.ScopeUnderlyingAsset, Asset: "ETH", MaxQuantity: "1",
-	}, domain.MissingAccountReject); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 		t.Fatalf("cap ETH: %v", err)
 	}
 

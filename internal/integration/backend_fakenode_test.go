@@ -590,7 +590,7 @@ func (n *fakeNode) ListPolicyRows(
 }
 
 func (n *fakeNode) PutRateLimit(
-	_ context.Context, limit domain.LimitRate,
+	_ context.Context, limit domain.LimitRate, _ domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutRateLimit", limit.Account, missing)
@@ -603,7 +603,7 @@ func (n *fakeNode) PutRateLimit(
 }
 
 func (n *fakeNode) PutPositionLimit(
-	_ context.Context, limit domain.LimitPosition,
+	_ context.Context, limit domain.LimitPosition, _ domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutPositionLimit", limit.Account, missing)
@@ -613,7 +613,7 @@ func (n *fakeNode) PutPositionLimit(
 }
 
 func (n *fakeNode) PutOrderSizeLimit(
-	_ context.Context, limit domain.LimitOrderSize,
+	_ context.Context, limit domain.LimitOrderSize, _ domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutOrderSizeLimit", limit.Account, missing)
@@ -626,7 +626,7 @@ func (n *fakeNode) PutOrderSizeLimit(
 }
 
 func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
-	_ context.Context, limit domain.LimitSpotFundsPnlBounds,
+	_ context.Context, limit domain.LimitSpotFundsPnlBounds, _ domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall(

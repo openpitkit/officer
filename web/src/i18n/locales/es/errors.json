@@ -31,6 +31,7 @@
     "not_found": "No se encontró el recurso solicitado.",
     "has_dependents": "El recurso tiene filas dependientes.",
     "conflict": "La solicitud entra en conflicto con el estado actual.",
+    "limit_exists": "Esta política ya existe. Edite la política existente.",
     "fee_account_required": "Se requiere una cuenta de comisiones.",
     "trading_mode_mismatch": "La conexión usa un modo de negociación distinto.",
     "destination_ambiguous": "Varios destinos de negociación coinciden con la solicitud.",

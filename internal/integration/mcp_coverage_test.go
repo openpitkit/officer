@@ -402,19 +402,19 @@ func (s *setMDErrSource) ApplyAdjustment(ctx context.Context, account domain.Acc
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy) error {
+func (s *setMDErrSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy) error {
+func (s *setMDErrSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
+func (s *setMDErrSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+func (s *setMDErrSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 

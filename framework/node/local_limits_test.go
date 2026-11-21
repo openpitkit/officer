@@ -98,7 +98,7 @@ func TestLocalNode_PnlBoundAccountCurrency(t *testing.T) {
 					Axis: axis, Scope: domain.ScopeAccount, Account: "acc",
 					Currency: tc.bound, LowerBound: "-100",
 				}
-				sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, bound, domain.MissingAccountCreate, testCaller)
+				sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, bound, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 				if sink != nil {
 					t.Fatalf("sink = %T, want nil", sink)
 				}
@@ -154,7 +154,7 @@ func TestLocalNode_PnlBoundOtherScopesIgnoreAccountCurrency(t *testing.T) {
 				if scope == domain.ScopeAccountGroup {
 					bound.AccountGroup = "desk"
 				}
-				if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, bound, domain.MissingAccountCreate, testCaller); err != nil {
+				if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, bound, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 					t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 				}
 			})
@@ -175,7 +175,7 @@ func TestLocalNode_PnlBoundCurrencyRefusalPrecedesTightenOnly(t *testing.T) {
 	}
 	for _, caller := range []domain.Caller{testCaller, agentCaller} {
 		_, err := n.PutSpotFundsPnlBoundsLimit(ctx,
-			pnlBound(domain.ScopeAccount, "acc", "EUR", "-200", "100"), domain.MissingAccountCreate, caller)
+			pnlBound(domain.ScopeAccount, "acc", "EUR", "-200", "100"), domain.LimitWriteReplace, domain.MissingAccountCreate, caller)
 		var mismatch domain.PnlBoundCurrencyMismatchError
 		if !errors.As(err, &mismatch) || mismatch.Account != "acc" ||
 			mismatch.AccountCurrency != "USD" || mismatch.BoundCurrency != "EUR" || errors.Is(err, domain.ErrLoosening) {
@@ -200,7 +200,7 @@ func TestLocalNode_PutRateLimitAppliesAndAudits(t *testing.T) {
 	preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
-	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 
@@ -230,7 +230,7 @@ func TestLocalNode_PutAssetRateLimitAutoCreatesUnknownAsset(t *testing.T) {
 	ctx := context.Background()
 
 	limit := rateLimit(domain.ScopeAsset, "", "GOLD", 100, time.Second)
-	if _, err := n.PutRateLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 
@@ -262,7 +262,7 @@ func TestLocalNode_PutRateLimitEngineFailureRevertsStore(t *testing.T) {
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
-	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.MissingAccountCreate, testCaller); err == nil {
+	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err == nil {
 		t.Fatalf("PutRateLimit: want error on engine failure")
 	}
 
@@ -297,6 +297,7 @@ func TestLocalNode_FailedRateLimitKeepsExplicitlyCreatedAccount(t *testing.T) {
 	_, err := n.PutRateLimit(
 		ctx,
 		rateLimit(domain.ScopeAccount, "fresh", "", 100, time.Second),
+		domain.LimitWriteReplace,
 		domain.MissingAccountCreate,
 		testCaller,
 	)
@@ -322,7 +323,7 @@ func TestLocalNode_PutRateLimitConfiguresPolicyFromStore(t *testing.T) {
 	ctx := context.Background()
 
 	limit := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)
-	if _, err := n.PutRateLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	if old.running {
@@ -348,7 +349,7 @@ func TestLocalNode_PutRateLimitNotImplementedRebuildsFromStore(t *testing.T) {
 	n.build = fakeBuild(next, &rebuilt)
 
 	limit := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)
-	sink, err := n.PutRateLimit(ctx, limit, domain.MissingAccountCreate, testCaller)
+	sink, err := n.PutRateLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
@@ -440,10 +441,10 @@ func TestLocalNode_PutRateLimitSamePolicyDifferentAccountsRetunesOnePolicy(t *te
 	seedTestAccount(t, n.realm, "acc-2")
 	first := rateLimit(domain.ScopeAccount, "acc-1", "", 100, time.Second)
 	second := rateLimit(domain.ScopeAccount, "acc-2", "", 10, time.Second)
-	if _, err := n.PutRateLimit(ctx, first, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, first, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit first: %v", err)
 	}
-	if _, err := n.PutRateLimit(ctx, second, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, second, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit second: %v", err)
 	}
 
@@ -477,13 +478,13 @@ func TestLocalNode_PutRateLimitEngineFailureRestoresPrevious(t *testing.T) {
 	ctx := context.Background()
 
 	first := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)
-	if _, err := n.PutRateLimit(ctx, first, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, first, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit first: %v", err)
 	}
 
 	current.failConfigure = true
 	second := rateLimit(domain.ScopeBroker, "", "", 5, 2*time.Second)
-	if _, err := n.PutRateLimit(ctx, second, domain.MissingAccountCreate, testCaller); err == nil {
+	if _, err := n.PutRateLimit(ctx, second, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err == nil {
 		t.Fatalf("PutRateLimit second: want error")
 	}
 
@@ -506,7 +507,7 @@ func TestLocalNode_DeleteLimitAppliesAndAudits(t *testing.T) {
 	preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
-	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 
@@ -541,7 +542,7 @@ func TestLocalNode_DeleteLastLimitRebuildsFromStore(t *testing.T) {
 	current, _ := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
-	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 
@@ -585,7 +586,7 @@ func TestLocalNode_PutAccountAssetRateLimit(t *testing.T) {
 	// enforces that both dictionary rows exist before the barrier is keyed to them.
 	seedTestAccount(t, st, "acc-1")
 	limit := rateLimit(domain.ScopeAccountAsset, "acc-1", "AAPL", 50, time.Second)
-	if _, err := n.PutRateLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit account-asset: %v", err)
 	}
 	if len(snapshot.RateLimits) != 1 || snapshot.RateLimits[0] != limit {
@@ -603,7 +604,7 @@ func TestLocalNode_PutOrderSizeLimit(t *testing.T) {
 	ctx := context.Background()
 
 	size := domain.LimitOrderSize{Scope: domain.ScopeBroker, MaxQuantity: "100"}
-	if _, err := n.PutOrderSizeLimit(ctx, size, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutOrderSizeLimit(ctx, size, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
 
@@ -672,7 +673,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) 
 		Currency:   "USD",
 		LowerBound: "-100",
 	}
-	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.MissingAccountCreate, testCaller)
+	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
@@ -727,7 +728,7 @@ func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
-	}, domain.MissingAccountCreate, testCaller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	account, ok, err := st.GetAccount(ctx, "acc-1")
@@ -778,7 +779,7 @@ func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterConfigure(t *testing.T) 
 		Scope: domain.ScopeAccount, Account: "acc-1",
 		Currency:   "USD",
 		LowerBound: "-100",
-	}, domain.MissingAccountCreate, testCaller)
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit error = %v, want audit failure", err)
 	}
@@ -847,7 +848,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore(t *testing.
 		Account:    account,
 		Currency:   "USD",
 		LowerBound: "-100",
-	}, domain.MissingAccountCreate, testCaller)
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if err == nil {
 		t.Fatal("PutSpotFundsPnlBoundsLimit succeeded, want the engine failure")
 	}
@@ -901,7 +902,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
 		Account:    account,
 		Currency:   "USD",
 		LowerBound: "-100",
-	}, domain.MissingAccountCreate, testCaller)
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, configureErr) || !errors.Is(err, rebuildErr) {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit error = %v, want configure and rebuild failures", err)
 	}
@@ -928,7 +929,7 @@ func TestLocalNode_NotImplementedSpotFundsConfigureDoesNotRebuild(t *testing.T) 
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
-	}, domain.MissingAccountCreate, testCaller)
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("error = %v, want ErrNotImplemented", err)
 	}
@@ -966,7 +967,7 @@ func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
-	}, domain.MissingAccountCreate, testCaller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 
@@ -1027,7 +1028,7 @@ func TestLocalNode_PolicyConfigurationBlockReasonIsRestorable(t *testing.T) {
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
 		LowerBound: "-100",
-	}, domain.MissingAccountCreate, testCaller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 
@@ -1059,7 +1060,7 @@ func TestLocalNode_DeleteLastSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *test
 		Currency:   "USD",
 		LowerBound: "-100",
 	}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	setLiveConfigureProbe(t, n, eng)
@@ -1110,7 +1111,7 @@ func TestLocalNode_DeleteSpotFundsPnlBoundsLimitNotImplementedRevertsWithoutRebu
 		Currency:   "USD",
 		LowerBound: "-100",
 	}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	setLiveConfigureProbe(t, n, eng)

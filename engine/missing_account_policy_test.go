@@ -154,7 +154,7 @@ func TestPutOrderSizeLimit_CreatedAccountBarrierIsEnforced(t *testing.T) {
 		Account:     account,
 		Asset:       "BTC",
 		MaxQuantity: "1",
-	}, domain.MissingAccountCreate, caller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
 	assertAutoCreatedByBarrier(t, n, account)
@@ -195,7 +195,7 @@ func TestPutRateLimit_CreatedAccountBarrierIsEnforced(t *testing.T) {
 		Account:   account,
 		MaxOrders: 1,
 		Window:    time.Hour,
-	}, domain.MissingAccountCreate, caller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	assertAutoCreatedByBarrier(t, n, account)
@@ -244,7 +244,7 @@ func TestPutSpotFundsPnlBoundsLimit_CreatedAccountBarrierIsEnforced(t *testing.T
 		Account:    account,
 		Currency:   "USDT",
 		LowerBound: "-1",
-	}, domain.MissingAccountCreate, caller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	assertAutoCreatedByBarrier(t, n, account)
@@ -308,7 +308,7 @@ func TestPutSpotFundsPnlBoundsLimit_UnrealizedAndTotalBlockOnNextOrder(t *testin
 				Account:    account,
 				Currency:   "USDT",
 				LowerBound: "-10",
-			}, domain.MissingAccountCreate, caller); err != nil {
+			}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil {
 				t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 			}
 			fundMissingAccount(t, n, caller, account)
@@ -383,7 +383,7 @@ func TestPutSpotFundsPnlBoundsLimit_RestartWithinBoundStaysUnblocked(t *testing.
 		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 			Axis: axis, Scope: domain.ScopeAccount, Account: account,
 			Currency: "USDT", LowerBound: "-1000",
-		}, domain.MissingAccountCreate, caller); err != nil {
+		}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", axis, err)
 		}
 	}
@@ -420,7 +420,7 @@ func TestPutSpotFundsPnlBoundsLimit_RealizedBlocksAtPreTrade(t *testing.T) {
 		Account:    account,
 		Currency:   "USDT",
 		LowerBound: "-1",
-	}, domain.MissingAccountCreate, caller); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	fundMissingAccount(t, n, caller, account)
@@ -514,7 +514,7 @@ func TestPutSpotFundsPnlBoundsLimit_RejectLeavesNoAccount(t *testing.T) {
 		Account:    account,
 		Currency:   "USDT",
 		LowerBound: "-1",
-	}, domain.MissingAccountReject, caller)
+	}, domain.LimitWriteReplace, domain.MissingAccountReject, caller)
 	if err == nil {
 		t.Fatal("PutSpotFundsPnlBoundsLimit: want ErrAccountMissing, got nil")
 	}

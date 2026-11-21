@@ -34,6 +34,23 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+func TestDescribeErrLimitExists(t *testing.T) {
+	t.Parallel()
+	for _, err := range []error{
+		domain.ErrLimitExists,
+		fmt.Errorf("rate broker: %w", domain.ErrLimitExists),
+		errors.Join(domain.ErrLimitExists, domain.ErrAlreadyExists),
+	} {
+		want := PublicError{http.StatusConflict, "limit_exists", err.Error()}
+		if got := DescribeErr(err); got != want {
+			t.Fatalf("DescribeErr(%v) = %+v, want %+v", err, got, want)
+		}
+	}
+	if !domain.IsSentinel(domain.ErrLimitExists) {
+		t.Fatal("ErrLimitExists is not registered")
+	}
+}
+
 func TestDescribeErrPnlBoundCurrencyMismatch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

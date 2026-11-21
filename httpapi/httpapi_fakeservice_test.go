@@ -551,14 +551,14 @@ func (f *fakeService) ListPolicyRows(
 	return store.PolicyListPage{Rows: f.policyRows, Total: len(f.policyRows)}, nil
 }
 func (f *fakeService) PutRateLimit(
-	_ context.Context, l domain.LimitRate, missing domain.MissingAccountPolicy,
+	_ context.Context, l domain.LimitRate, _ domain.LimitWrite, missing domain.MissingAccountPolicy,
 ) error {
 	f.rateLimitPut = l
 	f.missingAccount = missing
 	return f.putLimErr
 }
 func (f *fakeService) PutOrderSizeLimit(
-	_ context.Context, l domain.LimitOrderSize, missing domain.MissingAccountPolicy,
+	_ context.Context, l domain.LimitOrderSize, _ domain.LimitWrite, missing domain.MissingAccountPolicy,
 ) error {
 	f.orderSizeLimitPut = l
 	f.missingAccount = missing
@@ -566,7 +566,7 @@ func (f *fakeService) PutOrderSizeLimit(
 }
 
 func (f *fakeService) PutPositionLimit(
-	_ context.Context, l domain.LimitPosition, missing domain.MissingAccountPolicy,
+	_ context.Context, l domain.LimitPosition, _ domain.LimitWrite, missing domain.MissingAccountPolicy,
 ) error {
 	f.positionLimitPut = l
 	f.missingAccount = missing
@@ -593,6 +593,7 @@ func (f *fakeService) PutSpotFundsLimitMode(_ context.Context, limit domain.Limi
 func (f *fakeService) PutSpotFundsPnlBoundsLimit(
 	_ context.Context,
 	l domain.LimitSpotFundsPnlBounds,
+	_ domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
 ) error {
 	f.spotFundsPnlBoundsLimitPut = l

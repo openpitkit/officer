@@ -41,7 +41,7 @@ func TestLocalNode_RestoreBackupPositionLimitOnlyConfiguresOnline(t *testing.T) 
 	limit := domain.LimitPosition{
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
 	}
-	if _, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatal(err)
 	}
 	archive, err := n.ExportBackup(ctx, backup.Scope{All: true}, testCaller)
@@ -90,7 +90,7 @@ func TestLocalNode_RestoreBackupPublishesNewPositionLimitAxesOnline(t *testing.T
 	existing := domain.LimitPosition{
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
 	}
-	if _, err := n.PutPositionLimit(ctx, existing, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutPositionLimit(ctx, existing, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatal(err)
 	}
 	archive, err := n.ExportBackup(ctx, backup.Scope{All: true}, testCaller)
@@ -149,7 +149,7 @@ func TestLocalNode_RestoreBackupDropsAssetPositionLimit(t *testing.T) {
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "MSFT", MaxPosition: "25",
 	}
 	for _, limit := range []domain.LimitPosition{removed, kept} {
-		if _, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
+		if _, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -696,7 +696,7 @@ func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
 	prepared := newFakeEngine()
 	prepared.enforceResolver = true
 	n.build = fakeBuild(prepared, new(engine.Snapshot))
-	if _, err := n.PutRateLimit(ctx, initialRate, domain.MissingAccountCreate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, initialRate, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	eng = prepared

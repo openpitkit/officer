@@ -552,6 +552,7 @@ func TestLocalNode_PolicyLifecycleRebuildPreservesQuotes(t *testing.T) {
 	if _, err := n.PutRateLimit(
 		ctx,
 		rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
+		domain.LimitWriteReplace,
 		domain.MissingAccountCreate,
 		testCaller,
 	); err != nil {

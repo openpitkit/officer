@@ -105,7 +105,7 @@ func TestExclusiveOperationsBesideOrderFlow(t *testing.T) {
 			Account:    mover,
 			Currency:   "USDT",
 			LowerBound: fmt.Sprintf("-%d", 100+round),
-		}, domain.MissingAccountReject, caller); err != nil {
+		}, domain.LimitWriteReplace, domain.MissingAccountReject, caller); err != nil {
 			close(stop)
 			wg.Wait()
 			t.Fatalf("round %d: PutSpotFundsPnlBoundsLimit: %v", round, err)

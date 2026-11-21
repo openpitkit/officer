@@ -2213,6 +2213,24 @@ func TestDestinationSentinels(t *testing.T) {
 	}
 }
 
+func TestLimitWriteValidate(t *testing.T) {
+	t.Parallel()
+	for _, write := range []domain.LimitWrite{
+		domain.LimitWriteAdd, domain.LimitWriteChange, domain.LimitWriteReplace,
+	} {
+		if err := write.Validate(); err != nil {
+			t.Errorf("intent %q: %v", write, err)
+		}
+	}
+	for _, write := range []domain.LimitWrite{"", "unknown"} {
+		err := write.Validate()
+		want := fmt.Sprintf("unknown limit write intent %q: %s", write, domain.ErrInvalid)
+		if !errors.Is(err, domain.ErrInvalid) || err.Error() != want {
+			t.Errorf("intent %q error = %v, want %q", write, err, want)
+		}
+	}
+}
+
 func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -2237,6 +2255,7 @@ func TestEveryDomainSentinelIsRegistered(t *testing.T) {
 		"ErrInvalidPassword":            domain.ErrInvalidPassword,
 		"ErrInvalidRecoveryCode":        domain.ErrInvalidRecoveryCode,
 		"ErrLoosening":                  domain.ErrLoosening,
+		"ErrLimitExists":                domain.ErrLimitExists,
 		"ErrNoChange":                   domain.ErrNoChange,
 		"ErrNoDestination":              domain.ErrNoDestination,
 		"ErrNonReleaseArchive":          domain.ErrNonReleaseArchive,

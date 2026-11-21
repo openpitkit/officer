@@ -39,9 +39,9 @@ import (
 	"go.openpit.dev/officer/internal/accountmode"
 )
 
-// setLimitDriver calls set_limit through src and checks the barriers of one
-// kind that the service stores against what each call sends.
-type setLimitDriver[Limit comparable] struct {
+// limitWriteDriver calls add_limit or update_limit and checks the barriers of
+// one kind that the service stores against what each call sends.
+type limitWriteDriver[Limit comparable] struct {
 	t   *testing.T
 	src frameworkmcp.Source
 	// stored reads every barrier of the kind the service stores.
@@ -50,34 +50,34 @@ type setLimitDriver[Limit comparable] struct {
 	body func(Limit) map[string]any
 }
 
-// accepts calls set_limit with in and requires it to answer text and the body
+// accepts requires the tool to answer text and the body
 // REST answers for want, which the service stores as the only barrier of the
 // kind.
-func (d setLimitDriver[Limit]) accepts(in map[string]any, text string, want Limit) {
+func (d limitWriteDriver[Limit]) accepts(tool string, in map[string]any, text string, want Limit) {
 	d.t.Helper()
-	res := callTool[map[string]any](d.t, d.src, "set_limit", in)
+	res := callTool[map[string]any](d.t, d.src, tool, in)
 	if res.IsError {
-		d.t.Fatalf("set_limit %v: %s", in, textContent(res.Content))
+		d.t.Fatalf("%s %v: %s", tool, in, textContent(res.Content))
 	}
 	if got := summaryText(res.Content); got != text {
-		d.t.Fatalf("set_limit %v text = %q, want %q", in, got, text)
+		d.t.Fatalf("%s %v text = %q, want %q", tool, in, got, text)
 	}
 	if got := d.stored(); !slices.Equal(got, []Limit{want}) {
-		d.t.Fatalf("set_limit %v stored %+v, want %+v", in, got, want)
+		d.t.Fatalf("%s %v stored %+v, want %+v", tool, in, got, want)
 	}
 	assertResultBody(d.t, res.Wire, d.body(want))
 }
 
-// refuses calls set_limit with in and requires a tool error opening with code
+// refuses requires a tool error opening with code
 // that leaves the barriers of the kind as kept.
-func (d setLimitDriver[Limit]) refuses(in map[string]any, code string, kept ...Limit) {
+func (d limitWriteDriver[Limit]) refuses(tool string, in map[string]any, code string, kept ...Limit) {
 	d.t.Helper()
-	res := callTool[map[string]any](d.t, d.src, "set_limit", in)
+	res := callTool[map[string]any](d.t, d.src, tool, in)
 	if text := textContent(res.Content); !res.IsError || !strings.HasPrefix(text, code+": ") {
-		d.t.Fatalf("set_limit %v = %q (tool error %t), want %s", in, text, res.IsError, code)
+		d.t.Fatalf("%s %v = %q (tool error %t), want %s", tool, in, text, res.IsError, code)
 	}
 	if got := d.stored(); !slices.Equal(got, kept) {
-		d.t.Fatalf("set_limit %v left %+v stored, want %+v", in, got, kept)
+		d.t.Fatalf("%s %v left %+v stored, want %+v", tool, in, got, kept)
 	}
 }
 
@@ -93,8 +93,8 @@ func storedLimits(t *testing.T, service *backend.Service) node.AccountLimits {
 
 func rateLimitDriver(
 	t *testing.T, service *backend.Service, src frameworkmcp.Source,
-) setLimitDriver[domain.LimitRate] {
-	return setLimitDriver[domain.LimitRate]{
+) limitWriteDriver[domain.LimitRate] {
+	return limitWriteDriver[domain.LimitRate]{
 		t: t, src: src,
 		stored: func() []domain.LimitRate { return storedLimits(t, service).RateLimits },
 		body: func(limit domain.LimitRate) map[string]any {
@@ -105,8 +105,8 @@ func rateLimitDriver(
 
 func orderSizeLimitDriver(
 	t *testing.T, service *backend.Service, src frameworkmcp.Source,
-) setLimitDriver[domain.LimitOrderSize] {
-	return setLimitDriver[domain.LimitOrderSize]{
+) limitWriteDriver[domain.LimitOrderSize] {
+	return limitWriteDriver[domain.LimitOrderSize]{
 		t: t, src: src,
 		stored: func() []domain.LimitOrderSize { return storedLimits(t, service).OrderSizeLimits },
 		body: func(limit domain.LimitOrderSize) map[string]any {
@@ -117,8 +117,8 @@ func orderSizeLimitDriver(
 
 func positionLimitDriver(
 	t *testing.T, service *backend.Service, src frameworkmcp.Source,
-) setLimitDriver[domain.LimitPosition] {
-	return setLimitDriver[domain.LimitPosition]{
+) limitWriteDriver[domain.LimitPosition] {
+	return limitWriteDriver[domain.LimitPosition]{
 		t: t, src: src,
 		stored: func() []domain.LimitPosition { return storedLimits(t, service).PositionLimits },
 		body: func(limit domain.LimitPosition) map[string]any {
@@ -132,7 +132,7 @@ func positionLimitDriver(
 // axis's key.
 func spotFundsPnlBoundsDriver(
 	t *testing.T, service *backend.Service, src frameworkmcp.Source, axis domain.SpotFundsPnlAxis,
-) setLimitDriver[domain.LimitSpotFundsPnlBounds] {
+) limitWriteDriver[domain.LimitSpotFundsPnlBounds] {
 	key := map[domain.SpotFundsPnlAxis]string{
 		domain.SpotFundsPnlAxisRealized:   "spotFundsPnlBoundsLimit",
 		domain.SpotFundsPnlAxisUnrealized: "spotFundsUnrealizedPnlBoundsLimit",
@@ -141,7 +141,7 @@ func spotFundsPnlBoundsDriver(
 	if key == "" {
 		t.Fatalf("no put result key for P&L axis %q", axis)
 	}
-	return setLimitDriver[domain.LimitSpotFundsPnlBounds]{
+	return limitWriteDriver[domain.LimitSpotFundsPnlBounds]{
 		t: t, src: src,
 		stored: func() []domain.LimitSpotFundsPnlBounds {
 			var stored []domain.LimitSpotFundsPnlBounds
@@ -167,25 +167,47 @@ func requireNoLimits(t *testing.T, service *backend.Service) {
 	}
 }
 
-// TestSetLimitRateOnControlPlane drives set_limit with the rate_limit policy
-// through the control-plane Source into a local service, as an agent: a new
-// barrier and a stricter one are stored exactly as sent and answered with
-// REST's body, which get_limits reads back in the same shape. More orders and
-// another window on the broker scope are refused with loosening_refused, a
-// field of another policy with validation, sent empty as well, and each leaves
-// the barrier as it was.
-func TestSetLimitRateOnControlPlane(t *testing.T) {
+// getStoredLimitsThroughMCP returns the barriers get_limits reports.
+func getStoredLimitsThroughMCP(t *testing.T, src frameworkmcp.Source) httpx.AccountLimitsDTO {
+	t.Helper()
+	listed := callTool[struct {
+		Limits httpx.AccountLimitsDTO `json:"limits"`
+	}](t, src, "get_limits", map[string]any{})
+	if listed.IsError {
+		t.Fatalf("get_limits: %s", textContent(listed.Content))
+	}
+	return listed.StructuredContent.Limits
+}
+
+// TestUpdateLimitRateOnControlPlane drives add_limit and update_limit for
+// rate_limit through the control-plane Source into a local service, as an
+// agent: a new barrier and a stricter one are stored exactly as sent and
+// answered with REST's body, which get_limits reads back in the same shape.
+// More orders and another window on the broker scope are refused with
+// loosening_refused, a field of another policy with validation, sent empty as
+// well, and each leaves the barrier as it was. The first order-size barrier is
+// refused with loosening_refused while the rate barrier exists.
+func TestUpdateLimitRateOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	rate := rateLimitDriver(t, service, src)
 
-	rate.accepts(map[string]any{
+	first := domain.LimitRate{Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10}
+	rate.accepts("add_limit", map[string]any{
 		"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 10,
-	}, "rate_limit broker set", domain.LimitRate{
-		Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10,
-	})
+	}, "rate_limit broker added", first)
+	orderSizeLimitDriver(t, service, src).refuses("add_limit", map[string]any{
+		"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1",
+	}, "loosening_refused")
+	rate.refuses("add_limit", map[string]any{
+		"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 9,
+	}, "limit_exists", first)
+	listed := getStoredLimitsThroughMCP(t, src)
+	if got, want := listed.RateLimits, []httpx.RateLimitDTO{httpx.ToRateLimitDTO(first)}; !slices.Equal(got, want) {
+		t.Fatalf("get_limits after duplicate add = %+v, want %+v", got, want)
+	}
 	stricter := domain.LimitRate{Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 5}
-	rate.accepts(map[string]any{
+	rate.accepts("update_limit", map[string]any{
 		"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 5,
 	}, "rate_limit broker set", stricter)
 
@@ -196,11 +218,11 @@ func TestSetLimitRateOnControlPlane(t *testing.T) {
 		// too.
 		{"policy": "rate_limit", "scope": "broker", "windowMs": 120000, "maxOrders": 5},
 	} {
-		rate.refuses(in, "loosening_refused", stricter)
+		rate.refuses("update_limit", in, "loosening_refused", stricter)
 	}
 	// An empty field decodes as an omitted one, and is refused all the same.
 	for _, quantity := range []string{"1", ""} {
-		rate.refuses(map[string]any{
+		rate.refuses("update_limit", map[string]any{
 			"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 4,
 			"maxQuantity": quantity,
 		}, "validation", stricter)
@@ -218,28 +240,66 @@ func TestSetLimitRateOnControlPlane(t *testing.T) {
 	}})
 }
 
-// TestSetLimitOrderSizeOnControlPlane drives set_limit with the
-// order_size_limit policy through the control-plane Source into a local
+func TestUpdateLimitRefusesAbsentKey(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	rateLimitDriver(t, service, src).refuses("update_limit", map[string]any{
+		"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 10,
+	}, "not_found")
+	requireNoLimits(t, service)
+}
+
+func TestAddLimitRefusesSpotFundsMode(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	mode := spotFundsLimitModeDriver(t, service, src)
+	for _, tc := range []struct {
+		in   map[string]any
+		want string
+	}{
+		{spotFundsLimitModeIn("enforce"), `validation: policy "spot_funds_limit_mode" must be`},
+		{
+			map[string]any{
+				"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 10,
+				"mode": "enforce",
+			},
+			"validation: mode is not a field of policy rate_limit",
+		},
+	} {
+		res := callTool[map[string]any](t, src, "add_limit", tc.in)
+		if text := textContent(res.Content); !res.IsError || !strings.HasPrefix(text, tc.want) {
+			t.Fatalf("add_limit %v = %q (tool error %t), want %q", tc.in, text, res.IsError, tc.want)
+		}
+		if got := mode.stored(); len(got) != 0 {
+			t.Fatalf("add_limit %v left a stored mode %+v", tc.in, got)
+		}
+		requireNoLimits(t, service)
+	}
+}
+
+// TestUpdateLimitOrderSizeOnControlPlane drives add_limit and update_limit with
+// the order_size_limit policy through the control-plane Source into a local
 // service, as an agent: a new barrier and a stricter one are stored exactly as
 // sent, digits float64 cannot hold included, and answered with REST's body. A
 // cap raised by the last of those digits and a dropped cap are refused with
 // loosening_refused, a field of another policy with validation, sent as zero
-// as well, and each leaves the barrier as it was.
-func TestSetLimitOrderSizeOnControlPlane(t *testing.T) {
+// as well, and each leaves the barrier as it was. An account cap added above
+// the asset cap it overrides is refused with loosening_refused.
+func TestUpdateLimitOrderSizeOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	size := orderSizeLimitDriver(t, service, src)
 
-	size.accepts(map[string]any{
+	size.accepts("add_limit", map[string]any{
 		"policy": "order_size_limit", "scope": "broker",
 		"maxQuantity": "10.0000000000000000001", "maxNotional": "1000",
-	}, "order_size_limit broker set", domain.LimitOrderSize{
+	}, "order_size_limit broker added", domain.LimitOrderSize{
 		Scope: domain.ScopeBroker, MaxQuantity: "10.0000000000000000001", MaxNotional: "1000",
 	})
 	stricter := domain.LimitOrderSize{
 		Scope: domain.ScopeBroker, MaxQuantity: "5.0000000000000000001", MaxNotional: "1000",
 	}
-	size.accepts(map[string]any{
+	size.accepts("update_limit", map[string]any{
 		"policy": "order_size_limit", "scope": "broker",
 		"maxQuantity": "5.0000000000000000001", "maxNotional": "1000",
 	}, "order_size_limit broker set", stricter)
@@ -253,18 +313,40 @@ func TestSetLimitOrderSizeOnControlPlane(t *testing.T) {
 		// The notional cap dropped.
 		{"policy": "order_size_limit", "scope": "broker", "maxQuantity": "5"},
 	} {
-		size.refuses(in, "loosening_refused", stricter)
+		size.refuses("update_limit", in, "loosening_refused", stricter)
 	}
 	// A zero field decodes as an omitted one, and is refused all the same.
 	for _, window := range []int{1000, 0} {
-		size.refuses(map[string]any{
+		size.refuses("update_limit", map[string]any{
 			"policy": "order_size_limit", "scope": "broker",
 			"maxQuantity": "4", "maxNotional": "1000", "windowMs": window,
 		}, "validation", stricter)
 	}
+
+	t.Run("account cap above asset cap", func(t *testing.T) {
+		service, src := controlPlaneTools(t)
+		if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: "USD"}); err != nil {
+			t.Fatalf("create asset USD: %v", err)
+		}
+		if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "acc-1", Currency: "USD"}); err != nil {
+			t.Fatalf("create account: %v", err)
+		}
+		size := orderSizeLimitDriver(t, service, src)
+		assetCap := domain.LimitOrderSize{
+			Scope: domain.ScopeUnderlyingAsset, Asset: "USD", MaxQuantity: "2",
+		}
+		size.accepts("add_limit", map[string]any{
+			"policy": "order_size_limit", "scope": "underlying_asset",
+			"asset": "USD", "maxQuantity": "2",
+		}, "order_size_limit underlying_asset added", assetCap)
+		size.refuses("add_limit", map[string]any{
+			"policy": "order_size_limit", "scope": "account_underlying_asset",
+			"account": "acc-1", "asset": "USD", "maxQuantity": "3", "missingAccount": "reject",
+		}, "loosening_refused", assetCap)
+	})
 }
 
-func TestSetLimitPositionOnControlPlane(t *testing.T) {
+func TestUpdateLimitPositionOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk"}); err != nil {
@@ -274,14 +356,18 @@ func TestSetLimitPositionOnControlPlane(t *testing.T) {
 		t.Fatal(err)
 	}
 	position := positionLimitDriver(t, service, src)
-	for _, ceiling := range []string{"10.0000000000000000001", "5.0000000000000000001", "0"} {
+	for _, step := range []struct{ tool, verb, ceiling string }{
+		{"add_limit", "added", "10.0000000000000000001"},
+		{"update_limit", "set", "5.0000000000000000001"},
+		{"update_limit", "set", "0"},
+	} {
 		stored := domain.LimitPosition{
-			Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: ceiling,
+			Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: step.ceiling,
 		}
-		position.accepts(map[string]any{
+		position.accepts(step.tool, map[string]any{
 			"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
-			"maxPosition": ceiling, "missingAccount": "reject",
-		}, "position_limit account_asset set", stored)
+			"maxPosition": step.ceiling, "missingAccount": "reject",
+		}, "position_limit account_asset "+step.verb, stored)
 		assertResultBody(t, callToolOK(t, src, "get_limits", map[string]any{"account": "desk"}),
 			map[string]any{"limits": httpx.ToAccountLimitsDTO(node.AccountLimits{
 				PositionLimits: []domain.LimitPosition{stored},
@@ -295,7 +381,7 @@ func TestSetLimitPositionOnControlPlane(t *testing.T) {
 	}
 	zero := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "0"}
 	for _, ceiling := range []string{"-1", "not-a-decimal", ""} {
-		position.refuses(map[string]any{
+		position.refuses("update_limit", map[string]any{
 			"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
 			"maxPosition": ceiling, "missingAccount": "reject",
 		}, "validation", zero)
@@ -313,7 +399,7 @@ func TestPositionLimitReadSummaries(t *testing.T) {
 	}
 	if err := service.PutPositionLimit(systemCtx(), domain.LimitPosition{
 		Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "1",
-	}, domain.MissingAccountReject); err != nil {
+	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 		t.Fatal(err)
 	}
 	for tool, want := range map[string]string{
@@ -326,7 +412,7 @@ func TestPositionLimitReadSummaries(t *testing.T) {
 	}
 }
 
-func TestSetLimitPositionRefusesForeignFields(t *testing.T) {
+func TestUpdateLimitPositionRefusesForeignFields(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk"}); err != nil {
@@ -341,19 +427,19 @@ func TestSetLimitPositionRefusesForeignFields(t *testing.T) {
 		{"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1", "maxPosition": "1"},
 		{"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1", "maxPosition": ""},
 	} {
-		positionLimitDriver(t, service, src).refuses(in, "validation")
+		positionLimitDriver(t, service, src).refuses("update_limit", in, "validation")
 		requireNoLimits(t, service)
 	}
 }
 
-// TestSetLimitSpotFundsPnlBoundsOnControlPlane drives set_limit with the
-// spot_funds_pnl_bounds_kill_switch policy through the control-plane Source
+// TestUpdateLimitSpotFundsPnlBoundsOnControlPlane drives both limit writes for
+// the spot_funds_pnl_bounds_kill_switch policy through the control-plane Source
 // into a local service, as an agent: a new bound and a stricter one are stored
 // exactly as sent and answered with REST's body. A lower bound lowered by
 // 1e-19, a dropped bound and bounds in another currency are refused with
 // loosening_refused, a field of another policy with validation, sent empty or
 // null as well, and each leaves the bound as it was.
-func TestSetLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
+func TestUpdateLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	for _, code := range []string{"USD", "EUR"} {
@@ -374,15 +460,21 @@ func TestSetLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 	}
 	const text = "spot_funds_pnl_bounds_kill_switch global set"
 
-	bounds.accepts(global("USD", "-100", "100"), text, domain.LimitSpotFundsPnlBounds{
+	first := domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100", UpperBound: "100",
-	})
+	}
+	bounds.accepts("add_limit", global("USD", "-100", "100"), "spot_funds_pnl_bounds_kill_switch global added", first)
+	bounds.refuses("add_limit", global("USD", "-75", "100"), "limit_exists", first)
+	listed := getStoredLimitsThroughMCP(t, src)
+	if got, want := listed.SpotFundsPnlBoundsLimits, []httpx.SpotFundsPnlBoundsLimitDTO{httpx.ToSpotFundsPnlBoundsLimitDTO(first)}; !slices.Equal(got, want) {
+		t.Fatalf("get_limits after duplicate add = %+v, want %+v", got, want)
+	}
 	stricter := domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-50", UpperBound: "100",
 	}
-	bounds.accepts(global("USD", "-50", "100"), text, stricter)
+	bounds.accepts("update_limit", global("USD", "-50", "100"), text, stricter)
 
 	for _, in := range []map[string]any{
 		// The lower bound lowered by 1e-19.
@@ -392,19 +484,19 @@ func TestSetLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 		// The bounds moved to another currency.
 		global("EUR", "-50", "100"),
 	} {
-		bounds.refuses(in, "loosening_refused", stricter)
+		bounds.refuses("update_limit", in, "loosening_refused", stricter)
 	}
 	// An empty or null field decodes as an omitted one, and is refused all the
 	// same.
 	for _, asset := range []any{"USD", "", nil} {
 		foreign := global("USD", "-40", "100")
 		foreign["asset"] = asset
-		bounds.refuses(foreign, "validation", stricter)
+		bounds.refuses("update_limit", foreign, "validation", stricter)
 	}
 }
 
-// TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane drives set_limit with
-// the unrealized and total P&L-bound kill switches through the control-plane
+// TestUpdateLimitUnrealizedAndTotalPnlBoundsOnControlPlane drives both writes
+// for the unrealized and total P&L-bound kill switches through the control-plane
 // Source, as an agent. Each axis is a policy of its own: a realized bound at
 // the same address neither replaces nor constrains it. A new bound and a
 // stricter one are stored as sent and answered under the axis's key; a lower
@@ -412,7 +504,7 @@ func TestSetLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 // refused with loosening_refused, and an account bound looser than the global
 // bound of its axis is refused too. Each refusal leaves the bounds of the axis,
 // and the realized bound, as they were.
-func TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
+func TestUpdateLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 	t.Parallel()
 	for _, axis := range []domain.SpotFundsPnlAxis{
 		domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal,
@@ -433,10 +525,10 @@ func TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 				Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10", UpperBound: "10",
 			}
 			spotFundsPnlBoundsDriver(t, service, src, domain.SpotFundsPnlAxisRealized).accepts(
-				map[string]any{
+				"add_limit", map[string]any{
 					"policy": "spot_funds_pnl_bounds_kill_switch", "scope": "global",
 					"currency": "USD", "lowerBound": "-10", "upperBound": "10",
-				}, "spot_funds_pnl_bounds_kill_switch global set", realized)
+				}, "spot_funds_pnl_bounds_kill_switch global added", realized)
 
 			policy := string(axis.Policy())
 			bounds := spotFundsPnlBoundsDriver(t, service, src, axis)
@@ -453,7 +545,7 @@ func TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 				return in
 			}
 			// Looser than the realized bound at the same address.
-			bounds.accepts(in("global", "USD", "-100", "100"), policy+" global set",
+			bounds.accepts("add_limit", in("global", "USD", "-100", "100"), policy+" global added",
 				domain.LimitSpotFundsPnlBounds{
 					Axis: axis, Scope: domain.ScopeGlobal,
 					Currency: "USD", LowerBound: "-100", UpperBound: "100",
@@ -462,7 +554,7 @@ func TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 				Axis: axis, Scope: domain.ScopeGlobal,
 				Currency: "USD", LowerBound: "-50", UpperBound: "100",
 			}
-			bounds.accepts(in("global", "USD", "-50", "100"), policy+" global set", stricter)
+			bounds.accepts("update_limit", in("global", "USD", "-50", "100"), policy+" global set", stricter)
 
 			for _, loose := range []map[string]any{
 				// The lower bound lowered by 1e-19.
@@ -471,11 +563,11 @@ func TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 				in("global", "USD", "-50", ""),
 				// The bounds moved to another currency.
 				in("global", "EUR", "-50", "100"),
-				// An account bound looser than the global bound of its axis.
-				in("account", "USD", "-60", "100"),
 			} {
-				bounds.refuses(loose, "loosening_refused", stricter)
+				bounds.refuses("update_limit", loose, "loosening_refused", stricter)
 			}
+			// An account bound looser than the global bound of its axis.
+			bounds.refuses("add_limit", in("account", "USD", "-60", "100"), "loosening_refused", stricter)
 			realizedStored := spotFundsPnlBoundsDriver(
 				t, service, src, domain.SpotFundsPnlAxisRealized,
 			).stored()
@@ -486,36 +578,36 @@ func TestSetLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 	}
 }
 
-// TestSetLimitRefusesUnknownPolicy drives set_limit naming a policy it does
-// not set: the call is refused with validation naming the policy, and stores
+// TestUpdateLimitRefusesUnknownPolicy calls update_limit with a policy it does
+// not accept: the call is refused with validation naming the policy, and stores
 // nothing.
-func TestSetLimitRefusesUnknownPolicy(t *testing.T) {
+func TestUpdateLimitRefusesUnknownPolicy(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
-	res := callTool[map[string]any](t, src, "set_limit", map[string]any{
+	res := callTool[map[string]any](t, src, "update_limit", map[string]any{
 		"policy": "kill_switch", "scope": "broker", "windowMs": 60000, "maxOrders": 10,
 	})
 	requireToolError(t, res.IsError)
 	if text := textContent(res.Content); !strings.HasPrefix(text, `validation: policy "kill_switch"`) {
-		t.Fatalf("set_limit of an unknown policy = %q, want validation naming it", text)
+		t.Fatalf("update_limit of an unknown policy = %q, want validation naming it", text)
 	}
 	requireNoLimits(t, service)
 }
 
-// TestSetLimitRefusesUnrepresentableWindow drives set_limit with a rate window
+// TestAddLimitRefusesUnrepresentableWindow calls add_limit with a rate window
 // whose nanoseconds do not fit time.Duration: 2^58 + 60000 milliseconds, which
 // a wrapping conversion would turn into a window of one minute. The call is
 // refused with validation and stores nothing.
-func TestSetLimitRefusesUnrepresentableWindow(t *testing.T) {
+func TestAddLimitRefusesUnrepresentableWindow(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
-	rateLimitDriver(t, service, src).refuses(map[string]any{
+	rateLimitDriver(t, service, src).refuses("add_limit", map[string]any{
 		"policy": "rate_limit", "scope": "broker",
 		"windowMs": int64(288230376151771744), "maxOrders": 10,
 	}, "validation")
 }
 
-// TestSetLimitRefusesBoundsTheEngineCannotParse drives set_limit with Spot
+// TestAddLimitRefusesBoundsTheEngineCannotParse drives add_limit with Spot
 // Funds P&L bounds the engine cannot hold as written: a lower bound whose
 // exponent a comparison would rescale by for minutes is refused with
 // validation within a second, and one in exponent notation, which the engine's
@@ -524,7 +616,7 @@ func TestSetLimitRefusesUnrepresentableWindow(t *testing.T) {
 // order-size barrier then shows that the build count sees a rebuild. It does
 // not run in parallel, so the deadline measures the refusal and not the
 // scheduler.
-func TestSetLimitRefusesBoundsTheEngineCannotParse(t *testing.T) {
+func TestAddLimitRefusesBoundsTheEngineCannotParse(t *testing.T) {
 	var builds atomic.Int64
 	build := engine.NewOpenPitEngineBuildFunc()
 	target, _ := newLocalNodeBuiltBy(t, func(snap fwengine.Snapshot) (fwengine.Engine, error) {
@@ -546,20 +638,20 @@ func TestSetLimitRefusesBoundsTheEngineCannotParse(t *testing.T) {
 	}
 
 	start := time.Now()
-	bounds.refuses(global("-1e-2000000000"), "validation")
+	bounds.refuses("add_limit", global("-1e-2000000000"), "validation")
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("the refusal took %s, want it within a second", elapsed)
 	}
-	bounds.refuses(global("-1e2"), "validation")
+	bounds.refuses("add_limit", global("-1e2"), "validation")
 	if got := builds.Load(); got != built {
 		t.Fatalf("engine builds went from %d to %d, want the refusals to rebuild none", built, got)
 	}
 
 	// The count sees a rebuild: the first order-size barrier is installed by
 	// one.
-	orderSizeLimitDriver(t, service, src).accepts(map[string]any{
+	orderSizeLimitDriver(t, service, src).accepts("add_limit", map[string]any{
 		"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1",
-	}, "order_size_limit broker set", domain.LimitOrderSize{
+	}, "order_size_limit broker added", domain.LimitOrderSize{
 		Scope: domain.ScopeBroker, MaxQuantity: "1",
 	})
 	if builds.Load() == built {
@@ -567,12 +659,12 @@ func TestSetLimitRefusesBoundsTheEngineCannotParse(t *testing.T) {
 	}
 }
 
-// TestSetLimitDisabledChangesNothing drives set_limit through the
-// control-plane Source of a service as it ships, with set_limit disabled, and
+// TestLimitWritesDisabledChangeNothing drives both limit writes through the
+// control-plane Source of a service as it ships, with both disabled, and
 // after the operator switches it on, stores a barrier through it and switches
 // it off again: while it is disabled the agent receives the panel's notice as
 // a tool error, and the call changes no barrier.
-func TestSetLimitDisabledChangesNothing(t *testing.T) {
+func TestLimitWritesDisabledChangeNothing(t *testing.T) {
 	t.Parallel()
 	ctx := systemCtx()
 	target, _ := newLocalNode(t)
@@ -584,29 +676,40 @@ func TestSetLimitDisabledChangesNothing(t *testing.T) {
 			"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": maxOrders,
 		}
 	}
-	// disabled calls set_limit with in and requires the panel's notice that
+	// disabled calls the tool with in and requires the panel's notice that
 	// leaves the barriers as kept.
-	disabled := func(in map[string]any, kept ...domain.LimitRate) {
+	disabled := func(tool string, in map[string]any, kept ...domain.LimitRate) {
 		t.Helper()
-		res := callTool[map[string]any](t, src, "set_limit", in)
-		requireDisabledNotice(t, res.IsError, res.Content, "set_limit")
+		res := callTool[map[string]any](t, src, tool, in)
+		requireDisabledNotice(t, res.IsError, res.Content, tool)
 		if got := rate.stored(); !slices.Equal(got, kept) {
-			t.Fatalf("disabled set_limit left %+v stored, want %+v", got, kept)
+			t.Fatalf("disabled %s left %+v stored, want %+v", tool, got, kept)
 		}
 	}
 
-	disabled(broker(10))
+	disabled("add_limit", broker(10))
+	disabled("update_limit", broker(10))
 
-	if err := service.SetMcpAccess(ctx, "set_limit", true); err != nil {
-		t.Fatalf("switch on set_limit: %v", err)
+	if err := service.SetMcpAccess(ctx, "add_limit", true); err != nil {
+		t.Fatalf("switch on add_limit: %v", err)
 	}
 	stored := domain.LimitRate{Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10}
-	rate.accepts(broker(10), "rate_limit broker set", stored)
-
-	if err := service.SetMcpAccess(ctx, "set_limit", false); err != nil {
-		t.Fatalf("switch off set_limit: %v", err)
+	rate.accepts("add_limit", broker(10), "rate_limit broker added", stored)
+	disabled("update_limit", broker(5), stored)
+	if err := service.SetMcpAccess(ctx, "add_limit", false); err != nil {
+		t.Fatalf("switch off add_limit: %v", err)
 	}
-	disabled(broker(5), stored)
+	if err := service.SetMcpAccess(ctx, "update_limit", true); err != nil {
+		t.Fatalf("switch on update_limit: %v", err)
+	}
+	stored.MaxOrders = 5
+	rate.accepts("update_limit", broker(5), "rate_limit broker set", stored)
+
+	if err := service.SetMcpAccess(ctx, "update_limit", false); err != nil {
+		t.Fatalf("switch off update_limit: %v", err)
+	}
+	disabled("update_limit", broker(3), stored)
+	disabled("add_limit", broker(3), stored)
 }
 
 // requireSpotFundsLimitMode fails the test unless the service stores want as
@@ -633,13 +736,13 @@ func putSpotFundsLimitMode(t *testing.T, service *backend.Service, mode domain.S
 	}
 }
 
-// spotFundsLimitModeDriver drives set_limit with the spot_funds_limit_mode
+// spotFundsLimitModeDriver drives update_limit with the spot_funds_limit_mode
 // policy and reads the meta-policy back from the unified policy list, where
 // it is one global row while a mode is stored.
 func spotFundsLimitModeDriver(
 	t *testing.T, service *backend.Service, src frameworkmcp.Source,
-) setLimitDriver[domain.LimitSpotFundsLimitMode] {
-	return setLimitDriver[domain.LimitSpotFundsLimitMode]{
+) limitWriteDriver[domain.LimitSpotFundsLimitMode] {
+	return limitWriteDriver[domain.LimitSpotFundsLimitMode]{
 		t: t, src: src,
 		stored: func() []domain.LimitSpotFundsLimitMode {
 			state, err := service.SpotFundsLimitMode(systemCtx())
@@ -657,7 +760,7 @@ func spotFundsLimitModeDriver(
 	}
 }
 
-// spotFundsLimitModeIn is the set_limit arguments for the meta-policy.
+// spotFundsLimitModeIn is the update_limit arguments for the meta-policy.
 func spotFundsLimitModeIn(mode string) map[string]any {
 	return map[string]any{"policy": "spot_funds_limit_mode", "scope": "global", "mode": mode}
 }
@@ -685,22 +788,22 @@ func TestGetSpotFundsLimitModeOnControlPlane(t *testing.T) {
 	}
 }
 
-// TestSetLimitSpotFundsLimitModeOnControlPlane drives set_limit with the
+// TestUpdateLimitSpotFundsLimitModeOnControlPlane drives update_limit with the
 // spot_funds_limit_mode policy through the control-plane Source of a service,
 // as an agent. On a fresh service the agent may store enforce, the mode an
 // absent row already means; after the operator stores track_only the agent's
 // switch back to enforce succeeds, answers REST's body and is listed as the
 // one global row, which get_limits carries beside the other barriers.
-func TestSetLimitSpotFundsLimitModeOnControlPlane(t *testing.T) {
+func TestUpdateLimitSpotFundsLimitModeOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	mode := spotFundsLimitModeDriver(t, service, src)
 	const text = "spot_funds_limit_mode global set"
 	enforce := domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce}
 
-	mode.accepts(spotFundsLimitModeIn("enforce"), text, enforce)
+	mode.accepts("update_limit", spotFundsLimitModeIn("enforce"), text, enforce)
 	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
-	mode.accepts(spotFundsLimitModeIn("enforce"), text, enforce)
+	mode.accepts("update_limit", spotFundsLimitModeIn("enforce"), text, enforce)
 	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
 
 	wire := callToolOK(t, src, "get_limits", map[string]any{})
@@ -715,44 +818,44 @@ func TestSetLimitSpotFundsLimitModeOnControlPlane(t *testing.T) {
 	}})
 }
 
-// TestSetLimitSpotFundsLimitModeRefusesLooseningOnControlPlane drives
-// set_limit with the spot_funds_limit_mode policy through the control-plane
+// TestUpdateLimitSpotFundsLimitModeRefusesLooseningOnControlPlane drives
+// update_limit with the spot_funds_limit_mode policy through the control-plane
 // Source of a service: the core refuses an agent's switch from enforce to
 // track_only with loosening_refused, both with no row stored and with enforce
 // stored, and the mode stays enforce. This is the tighten-only registry's
-// proof that set_limit cannot loosen the mode.
-func TestSetLimitSpotFundsLimitModeRefusesLooseningOnControlPlane(t *testing.T) {
+// proof that update_limit cannot loosen the mode.
+func TestUpdateLimitSpotFundsLimitModeRefusesLooseningOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	mode := spotFundsLimitModeDriver(t, service, src)
-	mode.refuses(spotFundsLimitModeIn("track_only"), "loosening_refused")
+	mode.refuses("update_limit", spotFundsLimitModeIn("track_only"), "loosening_refused")
 	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
 
 	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
 	enforce := domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce}
-	mode.refuses(spotFundsLimitModeIn("track_only"), "loosening_refused", enforce)
+	mode.refuses("update_limit", spotFundsLimitModeIn("track_only"), "loosening_refused", enforce)
 	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
 }
 
-// TestSetLimitSpotFundsLimitModeRefusesInvalidOnControlPlane drives set_limit
-// with the spot_funds_limit_mode policy through the control-plane Source of a
-// service: an unsupported or absent mode and a scope other than global return
-// the core's validation errors, every field the meta-policy does not carry -
-// an axis or another policy's value, sent empty as well - is refused by the
-// tool, the mode field is refused for every other policy, and none of the
-// calls stores a row.
-func TestSetLimitSpotFundsLimitModeRefusesInvalidOnControlPlane(t *testing.T) {
+// TestUpdateLimitSpotFundsLimitModeRefusesInvalidOnControlPlane calls
+// update_limit with the spot_funds_limit_mode policy through the control-plane
+// Source of a service: an unsupported or absent mode and a scope other than
+// global return the core's validation errors. Each field the meta-policy does
+// not carry - an axis or another policy's value, sent empty as well - is
+// refused by the tool, the mode field is refused for every other policy, and
+// none of the calls stores a row.
+func TestUpdateLimitSpotFundsLimitModeRefusesInvalidOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	mode := spotFundsLimitModeDriver(t, service, src)
-	unsupported := callTool[map[string]any](t, src, "set_limit", spotFundsLimitModeIn("unsupported"))
+	unsupported := callTool[map[string]any](t, src, "update_limit", spotFundsLimitModeIn("unsupported"))
 	requireToolError(t, unsupported.IsError)
 	if text := textContent(unsupported.Content); text != `validation: mode "unsupported" must be "enforce" or "track_only": invalid` {
 		t.Fatalf("unsupported mode = %q, want core validation naming the mode", text)
 	}
 	absent := spotFundsLimitModeIn("")
 	delete(absent, "mode")
-	missing := callTool[map[string]any](t, src, "set_limit", absent)
+	missing := callTool[map[string]any](t, src, "update_limit", absent)
 	requireToolError(t, missing.IsError)
 	if text := textContent(missing.Content); text != "validation: mode is required: invalid" {
 		t.Fatalf("absent mode = %q, want core refusal of required mode", text)
@@ -760,7 +863,7 @@ func TestSetLimitSpotFundsLimitModeRefusesInvalidOnControlPlane(t *testing.T) {
 	for _, scope := range []any{"account", "broker", ""} {
 		args := spotFundsLimitModeIn("enforce")
 		args["scope"] = scope
-		mode.refuses(args, "validation")
+		mode.refuses("update_limit", args, "validation")
 	}
 	for _, field := range []string{
 		"account", "asset", "accountGroup", "windowMs", "maxOrders",
@@ -773,10 +876,10 @@ func TestSetLimitSpotFundsLimitModeRefusesInvalidOnControlPlane(t *testing.T) {
 		for _, value := range values {
 			args := spotFundsLimitModeIn("enforce")
 			args[field] = value
-			res := callTool[map[string]any](t, src, "set_limit", args)
+			res := callTool[map[string]any](t, src, "update_limit", args)
 			want := "validation: " + field + " is not a field of policy spot_funds_limit_mode"
 			if text := textContent(res.Content); !res.IsError || !strings.HasPrefix(text, want) {
-				t.Fatalf("set_limit with %s=%v = %q (tool error %t), want %q", field, value, text, res.IsError, want)
+				t.Fatalf("update_limit with %s=%v = %q (tool error %t), want %q", field, value, text, res.IsError, want)
 			}
 		}
 	}
@@ -784,10 +887,10 @@ func TestSetLimitSpotFundsLimitModeRefusesInvalidOnControlPlane(t *testing.T) {
 		{"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 10, "mode": "enforce"},
 		{"policy": "order_size_limit", "scope": "broker", "maxQuantity": "5", "mode": ""},
 	} {
-		res := callTool[map[string]any](t, src, "set_limit", in)
+		res := callTool[map[string]any](t, src, "update_limit", in)
 		if text := textContent(res.Content); !res.IsError ||
 			!strings.HasPrefix(text, "validation: mode is not a field of policy "+in["policy"].(string)) {
-			t.Fatalf("set_limit %v = %q (tool error %t), want mode refused", in, text, res.IsError)
+			t.Fatalf("update_limit %v = %q (tool error %t), want mode refused", in, text, res.IsError)
 		}
 	}
 	if got := mode.stored(); len(got) != 0 {
@@ -796,35 +899,35 @@ func TestSetLimitSpotFundsLimitModeRefusesInvalidOnControlPlane(t *testing.T) {
 	requireNoLimits(t, service)
 }
 
-// TestSetLimitSpotFundsLimitModeDisabledChangesNothing drives set_limit with
-// the spot_funds_limit_mode policy through the control-plane Source of a
+// TestUpdateLimitSpotFundsLimitModeDisabledChangesNothing calls update_limit
+// with the spot_funds_limit_mode policy through the control-plane Source of a
 // service as it ships and after the operator enables the tool, uses it and
 // disables it again: each disabled switch from track_only to enforce returns
 // the panel's notice as a tool error and leaves track_only stored.
-func TestSetLimitSpotFundsLimitModeDisabledChangesNothing(t *testing.T) {
+func TestUpdateLimitSpotFundsLimitModeDisabledChangesNothing(t *testing.T) {
 	t.Parallel()
 	target, _ := newLocalNode(t)
 	service := newOfficerService(t, target, nil, nil)
 	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
 	src := frameworkmcp.SourceFor(service)
-	res := callTool[map[string]any](t, src, "set_limit", spotFundsLimitModeIn("enforce"))
-	requireDisabledNotice(t, res.IsError, res.Content, "set_limit")
+	res := callTool[map[string]any](t, src, "update_limit", spotFundsLimitModeIn("enforce"))
+	requireDisabledNotice(t, res.IsError, res.Content, "update_limit")
 	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
 
-	if err := service.SetMcpAccess(systemCtx(), "set_limit", true); err != nil {
+	if err := service.SetMcpAccess(systemCtx(), "update_limit", true); err != nil {
 		t.Fatal(err)
 	}
-	wire := callToolOK(t, src, "set_limit", spotFundsLimitModeIn("enforce"))
+	wire := callToolOK(t, src, "update_limit", spotFundsLimitModeIn("enforce"))
 	assertResultBody(t, wire, map[string]any{
 		"spotFundsLimitMode": map[string]any{"scope": "global", "mode": "enforce"},
 	})
 	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeEnforce)
-	if err := service.SetMcpAccess(systemCtx(), "set_limit", false); err != nil {
+	if err := service.SetMcpAccess(systemCtx(), "update_limit", false); err != nil {
 		t.Fatal(err)
 	}
 	putSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
-	res = callTool[map[string]any](t, src, "set_limit", spotFundsLimitModeIn("enforce"))
-	requireDisabledNotice(t, res.IsError, res.Content, "set_limit")
+	res = callTool[map[string]any](t, src, "update_limit", spotFundsLimitModeIn("enforce"))
+	requireDisabledNotice(t, res.IsError, res.Content, "update_limit")
 	requireSpotFundsLimitMode(t, service, domain.SpotFundsLimitModeTrackOnly)
 }
 
@@ -871,20 +974,20 @@ func oneAccountControlPlaneTools(t *testing.T) (*backend.Service, frameworkmcp.S
 	return service, enabledControlPlaneSource{frameworkmcp.SourceFor(service)}
 }
 
-// TestSetLimitWithOneAccount drives set_limit through the control-plane Source
+// TestAddLimitWithOneAccount drives add_limit through the control-plane Source
 // of a service in single-account mode: an account-scope barrier that names no
 // account lands on the one account, and an account_group bound, whose group
 // the input cannot carry there, is refused as the core refuses it over REST
 // and stores nothing.
-func TestSetLimitWithOneAccount(t *testing.T) {
+func TestAddLimitWithOneAccount(t *testing.T) {
 	t.Parallel()
 	service, src := oneAccountControlPlaneTools(t)
 	if features := src.AccountFeatures(); features != oneAccountFeatures {
 		t.Fatalf("account features = %+v, want %+v", features, oneAccountFeatures)
 	}
-	rateLimitDriver(t, service, src).accepts(map[string]any{
+	rateLimitDriver(t, service, src).accepts("add_limit", map[string]any{
 		"policy": "rate_limit", "scope": "account", "windowMs": 1000, "maxOrders": 5,
-	}, "rate_limit account set", domain.LimitRate{
+	}, "rate_limit account added", domain.LimitRate{
 		Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
 		Window: time.Second, MaxOrders: 5,
 	})
@@ -895,38 +998,38 @@ func TestSetLimitWithOneAccount(t *testing.T) {
 	restCtx := auth.ContextWithCaller(context.Background(), domain.Caller{
 		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
 	})
-	positionLimitDriver(t, service, src).accepts(map[string]any{
+	positionLimitDriver(t, service, src).accepts("add_limit", map[string]any{
 		"policy": "position_limit", "scope": "account_asset", "asset": "USD", "maxPosition": "0",
-	}, "position_limit account_asset set", domain.LimitPosition{
+	}, "position_limit account_asset added", domain.LimitPosition{
 		Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account, Asset: "USD", MaxPosition: "0",
 	})
 	rest := httpx.DescribeErr(service.PutSpotFundsPnlBoundsLimit(restCtx, domain.LimitSpotFundsPnlBounds{
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, Currency: "USD", LowerBound: "-1",
-	}, ""))
+	}, domain.LimitWriteReplace, ""))
 	if rest.Code != "validation" {
 		t.Fatalf("service account_group bound = %+v, want a validation refusal", rest)
 	}
-	res := callTool[map[string]any](t, src, "set_limit", map[string]any{
+	res := callTool[map[string]any](t, src, "add_limit", map[string]any{
 		"policy": "spot_funds_pnl_bounds_kill_switch", "scope": "account_group",
 		"currency": "USD", "lowerBound": "-1",
 	})
 	requireToolError(t, res.IsError)
 	if got, want := textContent(res.Content), rest.Code+": "+rest.Message; got != want {
-		t.Fatalf("set_limit of an account_group bound = %q, want REST's %q", got, want)
+		t.Fatalf("add_limit of an account_group bound = %q, want REST's %q", got, want)
 	}
 	if got := storedLimits(t, service).SpotFundsPnlBoundsLimits; len(got) != 0 {
 		t.Fatalf("stored bounds %+v, want none", got)
 	}
 }
 
-// TestSetLimitMissingAccountWithOneAccount drives set_limit through the
-// control-plane Source of a service in single-account mode, with a
+// TestLimitWritesMissingAccountWithOneAccount drives both limit writes through
+// the control-plane Source of a service in single-account mode, with a
 // missingAccount that is no policy: an account-scope barrier that names no
 // account ignores it, as REST ignores the query parameter of a request that
 // names none, and lands on the one account; one that names the account is
 // refused with validation and changes nothing.
-func TestSetLimitMissingAccountWithOneAccount(t *testing.T) {
+func TestLimitWritesMissingAccountWithOneAccount(t *testing.T) {
 	t.Parallel()
 	service, src := oneAccountControlPlaneTools(t)
 	rate := rateLimitDriver(t, service, src)
@@ -934,11 +1037,11 @@ func TestSetLimitMissingAccountWithOneAccount(t *testing.T) {
 		Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
 		Window: time.Second, MaxOrders: 5,
 	}
-	rate.accepts(map[string]any{
+	rate.accepts("add_limit", map[string]any{
 		"policy": "rate_limit", "scope": "account", "windowMs": 1000, "maxOrders": 5,
 		"missingAccount": "bogus",
-	}, "rate_limit account set", stored)
-	rate.refuses(map[string]any{
+	}, "rate_limit account added", stored)
+	rate.refuses("update_limit", map[string]any{
 		"policy": "rate_limit", "scope": "account", "account": string(oneAccountFeatures.Account),
 		"windowMs": 1000, "maxOrders": 4, "missingAccount": "bogus",
 	}, "validation", stored)
@@ -950,21 +1053,21 @@ func TestSetLimitMissingAccountWithOneAccount(t *testing.T) {
 	positionStored := domain.LimitPosition{
 		Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account, Asset: "ETH", MaxPosition: "1",
 	}
-	position.accepts(map[string]any{
+	position.accepts("add_limit", map[string]any{
 		"policy": "position_limit", "scope": "account_asset", "asset": "ETH", "maxPosition": "1",
 		"missingAccount": "bogus",
-	}, "position_limit account_asset set", positionStored)
-	position.refuses(map[string]any{
+	}, "position_limit account_asset added", positionStored)
+	position.refuses("update_limit", map[string]any{
 		"policy": "position_limit", "scope": "account_asset", "account": string(oneAccountFeatures.Account),
 		"asset": "ETH", "maxPosition": "0", "missingAccount": "bogus",
 	}, "validation", positionStored)
 }
 
-// TestSetLimitRefusesUndeclaredField calls set_limit with an argument it does
-// not declare, in the default composition and in single-account mode, whose
+// TestUpdateLimitRefusesUndeclaredField calls update_limit with an undeclared
+// argument, in the default composition and in single-account mode, whose
 // schema leaves that refusal to decoding: the call fails as a protocol error
 // naming the argument, and nothing is stored.
-func TestSetLimitRefusesUndeclaredField(t *testing.T) {
+func TestUpdateLimitRefusesUndeclaredField(t *testing.T) {
 	t.Parallel()
 	for name, tools := range map[string]func(*testing.T) (*backend.Service, frameworkmcp.Source){
 		"default":     controlPlaneTools,
@@ -976,7 +1079,7 @@ func TestSetLimitRefusesUndeclaredField(t *testing.T) {
 			ctx := testCtx(t)
 			session, closeSession := officerSession(t, ctx, src)
 			_, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-				Name: "set_limit",
+				Name: "update_limit",
 				Arguments: map[string]any{
 					"policy": "rate_limit", "scope": "broker", "windowMs": 60000,
 					"maxOrders": 10, "undeclared": 0,

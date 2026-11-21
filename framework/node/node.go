@@ -259,41 +259,48 @@ type Node interface {
 		ctx context.Context, filter store.PolicyListFilter,
 	) (store.PolicyListPage, error)
 
-	// PutRateLimit upserts the whole rate-limit barrier in the store,
-	// reconfigures the live rate-limit policy from the persisted full barrier
+	// PutRateLimit writes the whole rate-limit barrier with the given intent,
+	// rejecting Add on an existing key with domain.ErrLimitExists and Change on
+	// a missing key with domain.ErrNotFound. Invalid intents return
+	// domain.ErrInvalid.
+	// It reconfigures the live rate-limit policy from the persisted full barrier
 	// set, audits the action, and returns a replacement market-data sink only
 	// when the engine was rebuilt. When the barrier's scope carries an account
 	// axis, missing decides whether an account that does not exist yet is
 	// registered first or reported as domain.ErrAccountMissing; a created account
 	// is published at once, so the barrier is live from this call.
 	PutRateLimit(
-		ctx context.Context, limit domain.LimitRate,
+		ctx context.Context, limit domain.LimitRate, write domain.LimitWrite,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (marketdata.Sink, error)
 
-	// PutOrderSizeLimit upserts the whole order-size barrier and reconfigures the
-	// live order-size policy, as PutRateLimit does for the rate policy, including
-	// its handling of missing.
+	// PutOrderSizeLimit writes the order-size barrier with the given intent and
+	// reconfigures the live policy, including PutRateLimit's handling of missing.
+	// Intent errors follow PutRateLimit.
 	PutOrderSizeLimit(
-		ctx context.Context, limit domain.LimitOrderSize,
+		ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (marketdata.Sink, error)
 
-	// PutPositionLimit upserts the position ceiling and reconfigures the live
-	// SpotFunds policy from every persisted pair, then audits the action.
+	// PutPositionLimit writes the position ceiling with the given intent and
+	// reconfigures the live SpotFunds policy from every persisted pair, then
+	// audits the action.
+	// Intent errors follow PutRateLimit.
 	// missing follows PutRateLimit. A replacement market-data sink is returned
 	// only when the engine was rebuilt.
 	PutPositionLimit(
-		ctx context.Context, limit domain.LimitPosition,
+		ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (marketdata.Sink, error)
 
-	// PutSpotFundsPnlBoundsLimit upserts the whole SpotFunds self-computed
-	// P&L-bounds barrier and reconfigures the live SpotFunds policy. missing
-	// follows PutRateLimit; only the account scope carries an account axis here.
+	// PutSpotFundsPnlBoundsLimit writes the whole SpotFunds self-computed
+	// P&L-bounds barrier with the given intent, then reconfigures the live policy.
+	// Intent errors follow PutRateLimit.
+	// missing follows PutRateLimit; only the account scope carries an account axis.
 	PutSpotFundsPnlBoundsLimit(
 		ctx context.Context,
 		limit domain.LimitSpotFundsPnlBounds,
+		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
 		caller domain.Caller,
 	) (marketdata.Sink, error)

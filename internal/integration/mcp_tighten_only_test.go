@@ -55,23 +55,27 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 		reason: "Only the policy of a visible test-class connection is replaced through Service.ReplaceTestExecutionPolicy; credentials, enable, instruments, grants and fee accounts retain their existing tighten-only refusals.",
 		proof:  TestMCPTestPolicyLimitI9,
 	},
-	"set_limit": {
-		reason: "The core refuses a barrier looser than the one it replaces or " +
+	"add_limit": {
+		reason: "The core refuses a duplicate key, a new barrier looser than the one it " +
 			"overrides, and the first order-size barrier while a rate-limit barrier " +
 			"is configured, as its engine rebuild resets every rate window " +
-			"(framework/node/local_limits.go: PutRateLimit, guardTightenOnlyOrderSize, " +
-			"guardTightenOnlySpotFundsPnlBounds, PutPositionLimit for the position " +
-			"guard, through the NoLooserThan methods of " +
-			"framework/domain/limits.go), and the Spot Funds limit-mode switch from " +
+			"(framework/node/local_limits.go: checkLimitWrite, guardTightenOnlyOrderSize, " +
+			"guardTightenOnlySpotFundsPnlBounds).",
+		proof: TestUpdateLimitUnrealizedAndTotalPnlBoundsOnControlPlane,
+	},
+	"update_limit": {
+		reason: "The core requires an existing key and refuses a barrier looser than " +
+			"the one it changes (framework/node/local_limits.go and the NoLooserThan " +
+			"methods of framework/domain/limits.go). It refuses the Spot Funds limit-mode switch from " +
 			"enforce to track_only, as it lifts the funds refusal for every account " +
 			"(framework/node/local_spot_funds_limit_mode.go: SetSpotFundsLimitMode, " +
 			"through framework/domain/limits.go: SpotFundsLimitMode.NoLooserThan); " +
 			"the tool removes no barrier.",
 		proof: func(t *testing.T) {
 			t.Parallel()
-			t.Run("rate limit", TestSetLimitRateOnControlPlane)
-			t.Run("position limit", TestSetLimitPositionRefusesLooseningOnControlPlane)
-			t.Run("spot funds limit mode", TestSetLimitSpotFundsLimitModeRefusesLooseningOnControlPlane)
+			t.Run("rate limit", TestUpdateLimitRateOnControlPlane)
+			t.Run("position limit", TestUpdateLimitPositionRefusesLooseningOnControlPlane)
+			t.Run("spot funds limit mode", TestUpdateLimitSpotFundsLimitModeRefusesLooseningOnControlPlane)
 		},
 	},
 	"create_account": {
@@ -344,7 +348,7 @@ var tightenOnlyClassification = map[string]tightenOnlyEntry{
 	},
 }
 
-func TestSetLimitPositionRefusesLooseningOnControlPlane(t *testing.T) {
+func TestUpdateLimitPositionRefusesLooseningOnControlPlane(t *testing.T) {
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "desk"}); err != nil {
@@ -357,20 +361,20 @@ func TestSetLimitPositionRefusesLooseningOnControlPlane(t *testing.T) {
 	stored := domain.LimitPosition{
 		Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "5.0000000000000000001",
 	}
-	position.accepts(map[string]any{
+	position.accepts("add_limit", map[string]any{
 		"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
 		"maxPosition": stored.MaxPosition, "missingAccount": "reject",
-	}, "position_limit account_asset set", stored)
-	position.refuses(map[string]any{
+	}, "position_limit account_asset added", stored)
+	position.refuses("update_limit", map[string]any{
 		"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
 		"maxPosition": "5.0000000000000000002", "missingAccount": "reject",
 	}, "loosening_refused", stored)
 	stored.MaxPosition = "4.0000000000000000001"
-	position.accepts(map[string]any{
+	position.accepts("update_limit", map[string]any{
 		"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
 		"maxPosition": stored.MaxPosition, "missingAccount": "reject",
 	}, "position_limit account_asset set", stored)
-	position.accepts(map[string]any{
+	position.accepts("update_limit", map[string]any{
 		"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
 		"maxPosition": stored.MaxPosition, "missingAccount": "reject",
 	}, "position_limit account_asset set", stored)

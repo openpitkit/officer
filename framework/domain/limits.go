@@ -39,6 +39,29 @@ func (s LimitScope) HasAccountAxis() bool {
 		s == ScopeAccountSettlementAsset
 }
 
+// LimitWrite states whether a keyed limit must be new, already exist, or may
+// be replaced regardless of its presence. Its zero value is invalid.
+type LimitWrite string
+
+const (
+	// LimitWriteAdd refuses a key that already has a rule.
+	LimitWriteAdd LimitWrite = "add"
+	// LimitWriteChange requires a rule under the same key.
+	LimitWriteChange LimitWrite = "change"
+	// LimitWriteReplace writes a rule whether or not the key exists.
+	LimitWriteReplace LimitWrite = "replace"
+)
+
+// Validate rejects any intent other than add, change or replace.
+func (w LimitWrite) Validate() error {
+	switch w {
+	case LimitWriteAdd, LimitWriteChange, LimitWriteReplace:
+		return nil
+	default:
+		return fmt.Errorf("unknown limit write intent %q: %w", w, ErrInvalid)
+	}
+}
+
 // LimitRate is the typed rate-limit barrier: at most MaxOrders new orders per
 // Window for the addressed scope - a fixed window, started by the first order
 // after the previous one expires, for the broker and asset scopes, and a

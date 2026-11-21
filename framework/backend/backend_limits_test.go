@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -36,6 +37,8 @@ type limitTestNode struct {
 
 	deleteCalls    int
 	putCalls       int
+	putWrite       domain.LimitWrite
+	putErr         error
 	modeState      domain.SpotFundsLimitModeState
 	modeErr        error
 	modeReadCalls  int
@@ -200,11 +203,98 @@ func (n *limitTestNode) DeleteLimit(
 func (n *limitTestNode) PutSpotFundsPnlBoundsLimit(
 	_ context.Context,
 	_ domain.LimitSpotFundsPnlBounds,
+	write domain.LimitWrite,
 	_ domain.MissingAccountPolicy,
 	_ domain.Caller,
 ) (marketdata.Sink, error) {
+	return n.recordLimitWrite(write)
+}
+
+func (n *limitTestNode) PutRateLimit(
+	_ context.Context, _ domain.LimitRate, write domain.LimitWrite,
+	_ domain.MissingAccountPolicy, _ domain.Caller,
+) (marketdata.Sink, error) {
+	return n.recordLimitWrite(write)
+}
+
+func (n *limitTestNode) PutOrderSizeLimit(
+	_ context.Context, _ domain.LimitOrderSize, write domain.LimitWrite,
+	_ domain.MissingAccountPolicy, _ domain.Caller,
+) (marketdata.Sink, error) {
+	return n.recordLimitWrite(write)
+}
+
+func (n *limitTestNode) PutPositionLimit(
+	_ context.Context, _ domain.LimitPosition, write domain.LimitWrite,
+	_ domain.MissingAccountPolicy, _ domain.Caller,
+) (marketdata.Sink, error) {
+	return n.recordLimitWrite(write)
+}
+
+func (n *limitTestNode) recordLimitWrite(write domain.LimitWrite) (marketdata.Sink, error) {
 	n.putCalls++
-	return nil, nil
+	n.putWrite = write
+	return nil, n.putErr
+}
+
+func TestServiceLimitWriteIntent(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		put  func(*Service, domain.LimitWrite) error
+	}{
+		{"rate", func(s *Service, write domain.LimitWrite) error {
+			return s.PutRateLimit(systemCtx(), domain.LimitRate{
+				Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 10,
+			}, write, "")
+		}},
+		{"order-size", func(s *Service, write domain.LimitWrite) error {
+			return s.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
+				Scope: domain.ScopeBroker, MaxQuantity: "10",
+			}, write, "")
+		}},
+		{"position", func(s *Service, write domain.LimitWrite) error {
+			return s.PutPositionLimit(systemCtx(), domain.LimitPosition{
+				Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "10",
+			}, write, domain.MissingAccountCreate)
+		}},
+		{"pnl", func(s *Service, write domain.LimitWrite) error {
+			return s.PutSpotFundsPnlBoundsLimit(systemCtx(), domain.LimitSpotFundsPnlBounds{
+				Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal,
+				Currency: "USD", LowerBound: "-10",
+			}, write, "")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			n := &limitTestNode{}
+			svc := newLimitTestService(t, n)
+			for _, write := range []domain.LimitWrite{"", "unknown"} {
+				if err := tc.put(svc, write); !errors.Is(err, domain.ErrInvalid) {
+					t.Fatalf("invalid intent %q = %v, want ErrInvalid", write, err)
+				}
+				if n.putCalls != 0 {
+					t.Fatal("invalid intent reached the node")
+				}
+			}
+			for _, write := range []domain.LimitWrite{
+				domain.LimitWriteAdd, domain.LimitWriteChange, domain.LimitWriteReplace,
+			} {
+				for _, want := range []error{nil, domain.ErrLimitExists, domain.ErrNotFound} {
+					n.putErr = want
+					before := n.putCalls
+					if err := tc.put(svc, write); !errors.Is(err, want) {
+						t.Fatalf("intent %q error = %v, want %v", write, err, want)
+					}
+					if n.putCalls != before+1 || n.putWrite != write {
+						t.Fatalf("node received %d writes with intent %q, want one with %q",
+							n.putCalls-before, n.putWrite, write)
+					}
+				}
+			}
+		})
+	}
 }
 
 func newLimitTestService(t *testing.T, n *limitTestNode) *Service {
@@ -450,7 +540,7 @@ func TestServicePutSpotFundsPnlBoundsLimitValidatesCurrencyBeforeNode(t *testing
 				Scope:      domain.ScopeGlobal,
 				Currency:   tc.currency,
 				LowerBound: "-1",
-			}, domain.MissingAccountCreate)
+			}, domain.LimitWriteReplace, domain.MissingAccountCreate)
 			if tc.wantErr {
 				if !errors.Is(err, domain.ErrInvalid) {
 					t.Fatalf("PutSpotFundsPnlBoundsLimit = %v, want ErrInvalid", err)

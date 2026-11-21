@@ -189,6 +189,7 @@ const useSpotFundsModeMock = vi.mocked(useSpotFundsLimitMode);
 const fetchAccountsMock = vi.fn();
 const fetchAssetsMock = vi.fn();
 const fetchGroupsMock = vi.fn();
+const addLimitMock = vi.fn();
 const putLimitMock = vi.fn();
 const deleteLimitMock = vi.fn();
 
@@ -241,6 +242,7 @@ function renderLimits(
       api: {
         fetchAccounts: fetchAccountsMock,
         fetchAssets: fetchAssetsMock,
+        addLimit: addLimitMock,
         putLimit: options.putLimit ?? putLimitMock,
         deleteLimit: deleteLimitMock,
         ...(options.includeGroupsApi ? { fetchGroups: fetchGroupsMock } : {}),
@@ -250,24 +252,28 @@ function renderLimits(
 }
 
 function renderLimitDialog(editing: Limit | null) {
+  const onOpenChange = vi.fn();
+  const onSaved = vi.fn();
   render(
     <I18nextProvider i18n={i18n}>
       <LimitDialog
         open
         editing={editing}
         policyCounts={{ order_size_limit: 1 }}
-        onOpenChange={() => {}}
-        onSaved={() => {}}
+        onOpenChange={onOpenChange}
+        onSaved={onSaved}
       />
     </I18nextProvider>,
     {
       api: {
         fetchAccounts: fetchAccountsMock,
         fetchAssets: fetchAssetsMock,
+        addLimit: addLimitMock,
         putLimit: putLimitMock,
       },
     },
   );
+  return { onOpenChange, onSaved };
 }
 
 beforeEach(async () => {
@@ -285,6 +291,7 @@ beforeEach(async () => {
   fetchAccountsMock.mockResolvedValue([]);
   fetchAssetsMock.mockResolvedValue([]);
   fetchGroupsMock.mockResolvedValue([]);
+  addLimitMock.mockResolvedValue(undefined);
   putLimitMock.mockResolvedValue(undefined);
   deleteLimitMock.mockResolvedValue(undefined);
 });
@@ -764,7 +771,7 @@ describe("LimitDialog framework controls", () => {
       screen.queryByRole("button", { name: "Rebuild and apply" }),
     ).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(putLimitMock).toHaveBeenCalledWith(
+      expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "position_limit",
           scope: "account_asset",
@@ -776,6 +783,37 @@ describe("LimitDialog framework controls", () => {
         "reject",
       ),
     );
+    expect(putLimitMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  });
+
+  it("keeps the add dialog open after a duplicate policy is rejected", async () => {
+    const user = userEvent.setup();
+    addLimitMock.mockRejectedValueOnce(
+      new ApiError(i18n.t("errors:code.limit_exists"), "limit_exists", 409),
+    );
+    const { onOpenChange, onSaved } = renderLimitDialog(null);
+    const dialog = screen.getByRole("dialog");
+    await chooseInDialog(user, dialog, 0, "Position limit");
+    await user.type(within(dialog).getByLabelText("Account"), "acc-1");
+    await user.type(within(dialog).getByLabelText("Asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("max position"), "10");
+    const addButton = within(dialog).getByRole("button", {
+      name: "Add policy",
+    });
+    await user.click(addButton);
+
+    expect(
+      await within(dialog).findByText(
+        "This policy already exists. Edit the existing policy instead.",
+      ),
+    ).toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+    expect(addButton).toBeEnabled();
+    expect(addLimitMock).toHaveBeenCalledTimes(1);
+    expect(putLimitMock).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
   });
 
   it.each(["+", "-"])(
@@ -790,6 +828,7 @@ describe("LimitDialog framework controls", () => {
       expect(ceiling).toHaveValue("");
       await user.type(ceiling, "10.000000010");
       expect(ceiling).toHaveValue("10.000000010");
+      expect(addLimitMock).not.toHaveBeenCalled();
       expect(putLimitMock).not.toHaveBeenCalled();
     },
   );
@@ -814,6 +853,7 @@ describe("LimitDialog framework controls", () => {
       expect(
         within(dialog).getByRole("button", { name: "Add policy" }),
       ).toBeDisabled();
+      expect(addLimitMock).not.toHaveBeenCalled();
       expect(putLimitMock).not.toHaveBeenCalled();
     },
   );
@@ -890,6 +930,7 @@ describe("LimitDialog framework controls", () => {
         "reject",
       ),
     );
+    expect(addLimitMock).not.toHaveBeenCalled();
   });
 
   it("deletes the last position ceiling without a rebuild warning", async () => {
@@ -948,7 +989,7 @@ describe("LimitDialog framework controls", () => {
     );
 
     await waitFor(() =>
-      expect(putLimitMock).toHaveBeenCalledWith(
+      expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "order_size_limit",
           scope: "underlying_asset",
@@ -1008,7 +1049,7 @@ describe("LimitDialog framework controls", () => {
     );
 
     await waitFor(() =>
-      expect(putLimitMock).toHaveBeenCalledWith(
+      expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "order_size_limit",
           scope: "settlement_asset",
@@ -1213,7 +1254,7 @@ describe("LimitDialog framework controls", () => {
         screen.queryByRole("button", { name: "Rebuild and apply" }),
       ).not.toBeInTheDocument();
       await waitFor(() =>
-        expect(putLimitMock).toHaveBeenCalledWith(
+        expect(addLimitMock).toHaveBeenCalledWith(
           {
             policy,
             scope: "account",
@@ -1327,13 +1368,14 @@ describe("LimitDialog framework controls", () => {
     expect(
       within(dialog).getByRole("button", { name: "Add policy" }),
     ).toBeDisabled();
+    expect(addLimitMock).not.toHaveBeenCalled();
     expect(putLimitMock).not.toHaveBeenCalled();
   });
 
   it("offers to create a missing account and resubmits with missingAccount=create", async () => {
     const user = userEvent.setup();
     fetchAccountsMock.mockResolvedValue([]);
-    putLimitMock.mockRejectedValueOnce(
+    addLimitMock.mockRejectedValueOnce(
       new ApiError(
         'block account: account "acc-new" does not exist',
         "account_missing",
@@ -1342,7 +1384,7 @@ describe("LimitDialog framework controls", () => {
         "acc-new",
       ),
     );
-    putLimitMock.mockResolvedValueOnce({
+    addLimitMock.mockResolvedValueOnce({
       policy: "spot_funds_pnl_bounds_kill_switch",
       scope: "account",
       account: "acc-new",
@@ -1380,7 +1422,10 @@ describe("LimitDialog framework controls", () => {
     expect(
       within(confirmDialog).getByText(/does not exist yet/),
     ).toBeInTheDocument();
-    expect(putLimitMock).toHaveBeenCalledTimes(1);
+    expect(addLimitMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ account: "acc-new" }),
+      "reject",
+    );
 
     await user.click(
       within(confirmDialog).getByRole("button", {
@@ -1388,8 +1433,8 @@ describe("LimitDialog framework controls", () => {
       }),
     );
 
-    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(2));
-    expect(putLimitMock).toHaveBeenNthCalledWith(
+    await waitFor(() => expect(addLimitMock).toHaveBeenCalledTimes(2));
+    expect(addLimitMock).toHaveBeenNthCalledWith(
       2,
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
@@ -1401,6 +1446,7 @@ describe("LimitDialog framework controls", () => {
       },
       "create",
     );
+    expect(putLimitMock).not.toHaveBeenCalled();
   });
 
   it("locks the PnL currency while account barrier identity stays locked", async () => {
@@ -1442,7 +1488,7 @@ describe("LimitDialog framework controls", () => {
 
   it("shows the server validation error for an unknown PnL currency", async () => {
     const user = userEvent.setup();
-    putLimitMock.mockRejectedValueOnce(
+    addLimitMock.mockRejectedValueOnce(
       new ApiError("currency XYZ is unknown", "validation", 422),
     );
     renderLimits();
@@ -1764,7 +1810,7 @@ describe("Limits with accounts hidden", () => {
       within(dialog).getByRole("button", { name: "Add policy" }),
     );
     await waitFor(() =>
-      expect(putLimitMock).toHaveBeenCalledWith(
+      expect(addLimitMock).toHaveBeenCalledWith(
         expect.objectContaining({
           account: "main",
           values: { currency: "EUR", lower_bound: "-100" },
@@ -1909,7 +1955,7 @@ describe("Limits with accounts hidden", () => {
     );
 
     await waitFor(() =>
-      expect(putLimitMock).toHaveBeenCalledWith(
+      expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "rate_limit",
           scope: "account",
@@ -1937,7 +1983,7 @@ describe("Limits with accounts hidden", () => {
     );
 
     await waitFor(() =>
-      expect(putLimitMock).toHaveBeenCalledWith(
+      expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "rate_limit",
           scope: "broker",

@@ -31,6 +31,7 @@
     "not_found": "The requested resource was not found.",
     "has_dependents": "The resource has dependent rows.",
     "conflict": "The request conflicts with the current state.",
+    "limit_exists": "This policy already exists. Edit the existing policy instead.",
     "fee_account_required": "A fee account is required.",
     "trading_mode_mismatch": "The connection uses a different trading mode.",
     "destination_ambiguous": "Multiple trading destinations match the request.",

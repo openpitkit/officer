@@ -759,7 +759,7 @@ func TestGetLimitsSourceFailure(t *testing.T) {
 	}
 }
 
-// -- get_spot_funds_limit_mode / set_limit spot_funds_limit_mode --
+// -- get_spot_funds_limit_mode / update_limit spot_funds_limit_mode --
 
 func TestGetSpotFundsLimitModeMapsSourceState(t *testing.T) {
 	t.Parallel()
@@ -782,7 +782,7 @@ func TestSpotFundsLimitModeSourceFailures(t *testing.T) {
 	}
 	for name, in := range map[string]map[string]any{
 		"get_spot_funds_limit_mode": {},
-		"set_limit":                 {"policy": "spot_funds_limit_mode", "scope": "global", "mode": "enforce"},
+		"update_limit":              {"policy": "spot_funds_limit_mode", "scope": "global", "mode": "enforce"},
 	} {
 		res := callTool[map[string]any](t, src, name, in)
 		requireToolError(t, res.IsError)
@@ -792,11 +792,11 @@ func TestSpotFundsLimitModeSourceFailures(t *testing.T) {
 	}
 }
 
-// TestSetLimitSpotFundsLimitModeForwardsVerbatim proves set_limit hands the
-// meta-policy's scope and mode to the source verbatim, leaving validation to
+// TestUpdateLimitSpotFundsLimitModeForwardsVerbatim proves update_limit hands
+// the meta-policy's scope and mode to the source verbatim, leaving validation to
 // the core, and answers the stored row the source reads back, not the one
 // sent.
-func TestSetLimitSpotFundsLimitModeForwardsVerbatim(t *testing.T) {
+func TestUpdateLimitSpotFundsLimitModeForwardsVerbatim(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"enforce", "track_only", " enforce ", "unsupported", ""} {
 		src := &fakeSource{limits: node.AccountLimits{
@@ -804,7 +804,7 @@ func TestSetLimitSpotFundsLimitModeForwardsVerbatim(t *testing.T) {
 				{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce},
 			},
 		}}
-		wire := callToolOK(t, src, "set_limit", map[string]any{
+		wire := callToolOK(t, src, "update_limit", map[string]any{
 			"policy": "spot_funds_limit_mode", "scope": "global", "mode": mode,
 		})
 		assertResultBody(t, wire, map[string]any{
@@ -1575,35 +1575,35 @@ func (s *captureNSource) ApplyAdjustment(ctx context.Context, account domain.Acc
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
 
-func (s *fakeSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy) error {
+func (s *fakeSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy) error {
+func (s *captureNSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *fakeSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy) error {
+func (s *fakeSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *fakeSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
+func (s *fakeSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy) error {
+func (s *captureNSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
+func (s *captureNSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *fakeSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+func (s *fakeSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+func (s *captureNSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 

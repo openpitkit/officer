@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -92,7 +93,13 @@ func okxTestTrade(i int) okxTrade {
 
 func TestOKXProviderConstruction(t *testing.T) {
 	providers := FirstPartyProviders()
-	p := providers[len(providers)-1]
+	i := slices.IndexFunc(providers, func(p fwtrading.Provider) bool {
+		return p.Type == domain.TradingProviderOKX
+	})
+	if i < 0 {
+		t.Fatal("OKX provider is not registered")
+	}
+	p := providers[i]
 	if p.Type != "okx" || p.Title != "OKX" || p.VenueAccounts || p.UnlinkedFees ||
 		!p.VerifiesSymbols || !p.SearchesSymbols || p.Build == nil {
 		t.Fatal("OKX provider inventory contract")

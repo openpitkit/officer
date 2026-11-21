@@ -1151,19 +1151,19 @@ func (s *customHostSource) ApplyAdjustment(ctx context.Context, account domain.A
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy) error {
+func (s *customHostSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, missing domain.MissingAccountPolicy) error {
+func (s *customHostSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, missing domain.MissingAccountPolicy) error {
+func (s *customHostSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, missing domain.MissingAccountPolicy) error {
+func (s *customHostSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
 	return domain.ErrNotImplemented
 }
 

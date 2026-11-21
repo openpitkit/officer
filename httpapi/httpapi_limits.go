@@ -88,11 +88,12 @@ func handleListLimits(svc backend.ControlPlane) http.HandlerFunc {
 	}
 }
 
-// handlePutRateLimit handles
-// PUT /api/v1/limits/rate[?missingAccount=create|reject]. The body is the typed
-// rate-limit barrier; the backend validates scope/axes and upserts it. The query
-// parameter is required when the scope names an account.
-func handlePutRateLimit(svc backend.ControlPlane) http.HandlerFunc {
+// handlePutRateLimit serves POST and PUT on /api/v1/limits/rate. The route
+// supplies the write intent and success status. POST adds a barrier and returns
+// 201, refusing an existing key. PUT creates or replaces a barrier and returns
+// 200. The missingAccount query parameter is required when the scope names an
+// account.
+func handlePutRateLimit(svc backend.ControlPlane, write domain.LimitWrite, status int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req httpx.RateLimitDTO
 		if !httpx.DecodeBody(w, r, &req) {
@@ -108,7 +109,7 @@ func handlePutRateLimit(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.PutRateLimit(r.Context(), limit, missing); err != nil {
+		if err := svc.PutRateLimit(r.Context(), limit, write, missing); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -118,15 +119,16 @@ func handlePutRateLimit(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		stored := httpx.ToRateLimitDTO(persisted)
-		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{RateLimit: &stored})
+		httpx.WriteJSON(w, status, httpx.PutLimitResultDTO{RateLimit: &stored})
 	}
 }
 
-// handlePutOrderSizeLimit handles
-// PUT /api/v1/limits/order-size[?missingAccount=create|reject]. The body is the
-// typed order-size barrier; the backend validates scope/axes and upserts it. The
-// query parameter is required when the scope names an account.
-func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
+// handlePutOrderSizeLimit serves POST and PUT on /api/v1/limits/order-size.
+// The route supplies the write intent and success status. POST adds a barrier
+// and returns 201, refusing an existing key. PUT creates or replaces a barrier
+// and returns 200. The missingAccount query parameter is required when the
+// scope names an account.
+func handlePutOrderSizeLimit(svc backend.ControlPlane, write domain.LimitWrite, status int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req httpx.OrderSizeLimitDTO
 		if !httpx.DecodeBody(w, r, &req) {
@@ -138,7 +140,7 @@ func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.PutOrderSizeLimit(r.Context(), limit, missing); err != nil {
+		if err := svc.PutOrderSizeLimit(r.Context(), limit, write, missing); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -148,11 +150,16 @@ func handlePutOrderSizeLimit(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		stored := httpx.ToOrderSizeLimitDTO(persisted)
-		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{OrderSizeLimit: &stored})
+		httpx.WriteJSON(w, status, httpx.PutLimitResultDTO{OrderSizeLimit: &stored})
 	}
 }
 
-func handlePutPositionLimit(svc backend.ControlPlane) http.HandlerFunc {
+// handlePutPositionLimit serves POST and PUT on /api/v1/limits/position. The
+// route supplies the write intent and success status. POST adds a barrier and
+// returns 201, refusing an existing key. PUT creates or replaces a barrier and
+// returns 200. The missingAccount query parameter is required when the scope
+// names an account.
+func handlePutPositionLimit(svc backend.ControlPlane, write domain.LimitWrite, status int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req httpx.PositionLimitDTO
 		if !httpx.DecodeBody(w, r, &req) {
@@ -164,7 +171,7 @@ func handlePutPositionLimit(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.PutPositionLimit(r.Context(), limit, missing); err != nil {
+		if err := svc.PutPositionLimit(r.Context(), limit, write, missing); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -174,19 +181,19 @@ func handlePutPositionLimit(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		stored := httpx.ToPositionLimitDTO(persisted)
-		httpx.WriteJSON(w, http.StatusOK, httpx.PutLimitResultDTO{PositionLimit: &stored})
+		httpx.WriteJSON(w, status, httpx.PutLimitResultDTO{PositionLimit: &stored})
 	}
 }
 
-// handlePutSpotFundsPnlBoundsLimit handles
-// PUT /api/v1/limits/spot-funds-pnl-bounds,
-// /limits/spot-funds-unrealized-pnl-bounds and
-// /limits/spot-funds-total-pnl-bounds[?missingAccount=create|reject], one route
-// per P&L axis. The body is the typed SpotFunds self-computed P&L-bounds
-// barrier of the route's axis; the backend validates scope/axes and upserts it.
-// The query parameter is required when the scope names an account.
+// handlePutSpotFundsPnlBoundsLimit serves POST and PUT on
+// /api/v1/limits/spot-funds-pnl-bounds,
+// /api/v1/limits/spot-funds-unrealized-pnl-bounds and
+// /api/v1/limits/spot-funds-total-pnl-bounds. The route supplies the P&L axis,
+// write intent and success status. POST adds a barrier and returns 201, refusing
+// an existing key. PUT creates or replaces a barrier and returns 200. The
+// missingAccount query parameter is required when the scope names an account.
 func handlePutSpotFundsPnlBoundsLimit(
-	svc backend.ControlPlane, axis domain.SpotFundsPnlAxis,
+	svc backend.ControlPlane, axis domain.SpotFundsPnlAxis, write domain.LimitWrite, status int,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req httpx.SpotFundsPnlBoundsLimitDTO
@@ -200,7 +207,7 @@ func handlePutSpotFundsPnlBoundsLimit(
 			return
 		}
 		if err := svc.PutSpotFundsPnlBoundsLimit(
-			r.Context(), limit, missing,
+			r.Context(), limit, write, missing,
 		); err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -217,7 +224,7 @@ func handlePutSpotFundsPnlBoundsLimit(
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, result)
+		httpx.WriteJSON(w, status, result)
 	}
 }
 

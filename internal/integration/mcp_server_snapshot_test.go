@@ -52,13 +52,13 @@ func TestServerToolSnapshot(t *testing.T) {
 		{
 			name: "get_account_state",
 			description: "Return account row and its account-scoped risk barriers, " +
-				"each with the fields set_limit takes, the rate window as windowMs " +
+				"each with the fields add_limit and update_limit take, the rate window as windowMs " +
 				"in milliseconds. Read-only - no secrets, no order-flow control.",
 		},
 		{
 			name: "get_limits",
 			description: "Return risk barriers and P&L-bound currencies, optionally " +
-				"filtered by account; each barrier has the fields set_limit takes, " +
+				"filtered by account; each barrier has the fields add_limit and update_limit take, " +
 				"the rate window as windowMs in milliseconds. Read-only - no " +
 				"secrets, no order-flow control.",
 		},
@@ -141,34 +141,47 @@ func TestServerToolSnapshot(t *testing.T) {
 				"order is placed, no funds are reserved.",
 		},
 		{
-			name: "set_limit",
-			description: "Create a risk barrier, or make the one stored at the same " +
-				"address stricter, and return it as stored. policy names the kind - " +
-				"rate_limit, order_size_limit, position_limit, one of the P&L-bound kill " +
-				"switches spot_funds_pnl_bounds_kill_switch (realized P&L), " +
+			name: "add_limit",
+			description: "Create a risk barrier at a new address and return it as stored. " +
+				"If a barrier already exists at that address, limit_exists is returned and nothing changes. " +
+				"Use update_limit to change a stored barrier. " +
+				"The policy argument accepts rate_limit, order_size_limit, position_limit, " +
+				"spot_funds_pnl_bounds_kill_switch (realized P&L), " +
 				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
-				"spot_funds_total_pnl_bounds_kill_switch (total P&L), or " +
-				"spot_funds_limit_mode - " +
-				"and the other arguments are that kind's fields; a field of another " +
-				"kind is refused with validation. Anything that loosens risk is " +
-				"refused with loosening_refused and changes nothing. A barrier that " +
-				"replaces the one at its address must be no looser: for rate_limit " +
-				"no more orders and, on the broker and asset scopes, the same " +
-				"window, on the account and account_asset scopes a window no " +
-				"shorter; for order_size_limit every current cap kept and none " +
-				"raised; for position_limit a ceiling no higher; for a P&L-bound kill switch the same currency, " +
-				"every current bound kept, the lower bound no lower and the upper " +
-				"bound no higher. A new account_underlying_asset or " +
-				"account_settlement_asset cap must be no higher than the " +
-				"underlying_asset or settlement_asset cap on the same asset that it " +
-				"overrides, and a new account_group or account bound must be in the " +
-				"currency of, and no looser than, the bound it takes over from: for " +
-				"a group the global bound, for an account the bound that applies to " +
-				"it now. An account P&L bound must use the account's effective " +
+				"spot_funds_total_pnl_bounds_kill_switch (total P&L). " +
+				"The other arguments are that kind's fields. A field of another kind is refused with validation. " +
+				"Anything that loosens risk is refused with loosening_refused and changes nothing. " +
+				"A new account_underlying_asset or account_settlement_asset cap " +
+				"must be no higher than the underlying_asset or settlement_asset cap on " +
+				"the same asset that it overrides. A new account_group or account P&L " +
+				"bound must be in the currency of, and no looser than, the bound it takes " +
+				"over from. A group takes over from the global bound, and an account takes " +
+				"over from its currently applicable bound. An account P&L bound must use the account's effective " +
 				"currency: its own, else its group's, else the default group's. A different " +
 				"bound currency or no resolved currency is refused with pnl_bound_currency_mismatch. " +
-				"The first order-size barrier is refused while any " +
-				"rate-limit barrier is configured. spot_funds_limit_mode is the " +
+				"The first order-size barrier is refused while any rate-limit barrier is configured. " +
+				"Mutates Officer control-plane config; protected and disabled by default.",
+		},
+		{
+			name: "update_limit",
+			description: "Change the risk barrier stored at the given address and return it as stored. " +
+				"For keyed policies, if no barrier exists there, not_found is returned. Use add_limit to create one. " +
+				"The policy argument accepts rate_limit, order_size_limit, position_limit, " +
+				"spot_funds_pnl_bounds_kill_switch (realized P&L), " +
+				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
+				"spot_funds_total_pnl_bounds_kill_switch (total P&L), or spot_funds_limit_mode. " +
+				"The other arguments are that kind's fields. A field of another kind is refused with validation. " +
+				"Anything that loosens risk is refused with loosening_refused and changes nothing. " +
+				"For rate_limit, allow no more orders and keep, on the broker and asset " +
+				"scopes, the same window, on the account and account_asset scopes a " +
+				"window no shorter. For order_size_limit, keep every current cap and raise none. " +
+				"For position_limit, keep the ceiling at or below its current value. " +
+				"For a P&L-bound kill switch, keep the same currency and every current bound. " +
+				"The lower bound can only stay the same or rise, and the upper bound can only stay the same or fall. " +
+				"An account P&L bound must use the account's effective " +
+				"currency: its own, else its group's, else the default group's. A different " +
+				"bound currency or no resolved currency is refused with pnl_bound_currency_mismatch. " +
+				"spot_funds_limit_mode is the " +
 				"Officer policy that decides whether Spot Funds checks funds, on the " +
 				"global scope only, with the one field mode: enforce (Check funds) " +
 				"refuses an order that lacks funds or holdings; track_only (Accounting " +
@@ -448,15 +461,35 @@ func TestServerToolSnapshot(t *testing.T) {
 		gotByName[got.Name] = got
 	}
 	t.Run("position-limit-schema", func(t *testing.T) {
-		input, _ := decodeInputShape(t, gotByName["set_limit"])
-		for field, guidance := range map[string]string{
-			"policy":      "position_limit",
-			"scope":       "account_asset for position_limit",
-			"asset":       "position_limit: the asset whose position is bounded",
-			"maxPosition": "position_limit: non-negative ceiling on the worst-case position as an exact decimal string in plain notation, without an exponent; zero is valid",
-		} {
-			if !strings.Contains(input.Properties[field].Description, guidance) {
-				t.Errorf("set_limit.%s description must include %q", field, guidance)
+		for _, tool := range []string{"add_limit", "update_limit"} {
+			input, _ := decodeInputShape(t, gotByName[tool])
+			for field, guidance := range map[string]string{
+				"policy":      "position_limit",
+				"scope":       "account_asset for position_limit",
+				"asset":       "position_limit: the asset whose position is bounded",
+				"maxPosition": "position_limit: non-negative ceiling on the worst-case position as an exact decimal string in plain notation, without an exponent; zero is valid",
+			} {
+				if !strings.Contains(input.Properties[field].Description, guidance) {
+					t.Errorf("%s.%s description must include %q", tool, field, guidance)
+				}
+			}
+		}
+	})
+	t.Run("limit-mode-schema", func(t *testing.T) {
+		add, _ := decodeInputShape(t, gotByName["add_limit"])
+		set, _ := decodeInputShape(t, gotByName["update_limit"])
+		if _, ok := add.Properties["mode"]; ok {
+			t.Error("add_limit schema includes mode")
+		}
+		if _, ok := set.Properties["mode"]; !ok {
+			t.Error("update_limit schema lacks mode")
+		}
+		for _, field := range []string{"policy", "scope"} {
+			if strings.Contains(add.Properties[field].Description, "spot_funds_limit_mode") {
+				t.Errorf("add_limit.%s description lists spot_funds_limit_mode", field)
+			}
+			if !strings.Contains(set.Properties[field].Description, "spot_funds_limit_mode") {
+				t.Errorf("update_limit.%s description omits spot_funds_limit_mode", field)
 			}
 		}
 	})

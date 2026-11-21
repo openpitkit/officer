@@ -373,7 +373,7 @@ func accountScopeSites() []scopeSite {
 				return svc.PutRateLimit(ctx, domain.LimitRate{
 					Scope: domain.ScopeAccount, Account: req.account,
 					Window: time.Second, MaxOrders: 10,
-				}, req.policy)
+				}, domain.LimitWriteReplace, req.policy)
 			},
 			asked:   []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
 			reached: []string{`PutRateLimit "scoped-acc" "reject"`},
@@ -384,7 +384,7 @@ func accountScopeSites() []scopeSite {
 				return svc.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 					Scope:   domain.ScopeAccountSettlementAsset,
 					Account: req.account, Asset: "USD", MaxNotional: "1000",
-				}, req.policy)
+				}, domain.LimitWriteReplace, req.policy)
 			},
 			asked:   []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
 			reached: []string{`PutOrderSizeLimit "scoped-acc" "reject"`},
@@ -396,7 +396,7 @@ func accountScopeSites() []scopeSite {
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccount, Account: req.account,
 					Currency: "USD", LowerBound: "-1",
-				}, req.policy)
+				}, domain.LimitWriteReplace, req.policy)
 			},
 			asked:   []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
 			reached: []string{`PutSpotFundsPnlBoundsLimit "scoped-acc" "" "reject"`},
@@ -408,7 +408,7 @@ func accountScopeSites() []scopeSite {
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccountGroup, AccountGroup: scopeClientGroup,
 					Currency: "USD", LowerBound: "-1",
-				}, req.policy)
+				}, domain.LimitWriteReplace, req.policy)
 			},
 			asked:   []scopeCall{group, policy(scopeClientPolicy)},
 			reached: []string{`PutSpotFundsPnlBoundsLimit "" "client-desk" "reject"`},
@@ -842,7 +842,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 			run: func(ctx context.Context, svc *backend.Service) error {
 				return svc.PutRateLimit(ctx, domain.LimitRate{
 					Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 10,
-				}, "")
+				}, domain.LimitWriteReplace, "")
 			},
 			reached: `PutRateLimit "" "reject"`,
 		},
@@ -851,7 +851,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 			run: func(ctx context.Context, svc *backend.Service) error {
 				return svc.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 					Scope: domain.ScopeBroker, MaxQuantity: "10",
-				}, "")
+				}, domain.LimitWriteReplace, "")
 			},
 			reached: `PutOrderSizeLimit "" "reject"`,
 		},
@@ -861,7 +861,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1",
-				}, "")
+				}, domain.LimitWriteReplace, "")
 			},
 			reached: `PutSpotFundsPnlBoundsLimit "" "" "reject"`,
 		},

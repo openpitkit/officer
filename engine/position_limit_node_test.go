@@ -30,7 +30,7 @@ func seedPositionLimitNode(t *testing.T, n node.Node, caller domain.Caller) doma
 	t.Helper()
 	ctx := context.Background()
 	limit := positionLimit("position-acc", "BTC", "100")
-	if _, err := n.PutPositionLimit(ctx, limit, domain.MissingAccountCreate, caller); err != nil {
+	if _, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil {
 		t.Fatal(err)
 	}
 	fundMissingAccount(t, n, caller, limit.Account)
@@ -78,7 +78,7 @@ func TestPositionLimitNodeBoundaryOpenOrderChangeAndClear(t *testing.T) {
 	checkNodePositionLimit(t, n, "5.00000001", false)
 	checkNodePositionLimit(t, n, "5", true)
 	limit.MaxPosition = "120"
-	if _, err := n.PutPositionLimit(context.Background(), limit, domain.MissingAccountReject, caller); err != nil {
+	if _, err := n.PutPositionLimit(context.Background(), limit, domain.LimitWriteReplace, domain.MissingAccountReject, caller); err != nil {
 		t.Fatal(err)
 	}
 	checkNodePositionLimit(t, n, "25", true)

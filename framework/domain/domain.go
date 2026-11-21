@@ -97,7 +97,9 @@ var (
 	ErrAuditIdentityUnavailable = registerSentinel(errors.New("audit target identity unavailable"))
 	ErrNotFound                 = registerSentinel(errors.New("not found"))
 	ErrAlreadyExists            = registerSentinel(errors.New("already exists"))
-	ErrInvalid                  = registerSentinel(errors.New("invalid"))
+	// ErrLimitExists marks a barrier add at an occupied key (409 limit_exists).
+	ErrLimitExists = registerSentinel(errors.New("limit already exists; change it instead"))
+	ErrInvalid     = registerSentinel(errors.New("invalid"))
 	// ErrForbidden marks a request whose caller is known but not authorized for
 	// the requested route or command.
 	ErrForbidden = registerSentinel(errors.New("forbidden"))

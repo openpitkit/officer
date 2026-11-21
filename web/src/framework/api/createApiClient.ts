@@ -23,6 +23,7 @@ export type ApiErrorCode =
   | "not_found"
   | "has_dependents"
   | "conflict"
+  | "limit_exists"
   | "currency_change_blocked"
   | "fee_account_required"
   | "non_release_archive"
@@ -192,6 +193,7 @@ function asCode(v: unknown): ApiErrorCode {
     case "not_found":
     case "has_dependents":
     case "conflict":
+    case "limit_exists":
     case "currency_change_blocked":
     case "fee_account_required":
     case "non_release_archive":
@@ -240,6 +242,8 @@ function defaultTranslate(
     not_found: "The requested resource was not found.",
     has_dependents: "The resource has dependent rows.",
     conflict: "The request conflicts with the current state.",
+    limit_exists:
+      "This policy already exists. Edit the existing policy instead.",
     currency_change_blocked:
       "The currency change is blocked by the following account state.",
     fee_account_required: "A fee account is required.",
@@ -317,6 +321,7 @@ function defaultMessage(
 
 function clientOwnedMessage(code: ApiErrorCode): boolean {
   return (
+    code === "limit_exists" ||
     code === "currency_change_blocked" ||
     code === "terminal_order" ||
     code === "approval_required" ||

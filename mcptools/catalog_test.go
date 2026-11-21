@@ -134,9 +134,18 @@ func TestCatalogParity(t *testing.T) {
 			DefaultEnabled:   true,
 		},
 		{
-			Name:             "set_limit",
-			Title:            "Set limit",
-			AgentDescription: "Tighten a risk barrier: add one or make it stricter, or switch Spot Funds back to Check funds; loosening and removal are refused.",
+			Name:             "add_limit",
+			Title:            "Add limit",
+			AgentDescription: "Add a risk barrier at a new address. A duplicate returns limit_exists. Use update_limit to change it.",
+			Mutating:         true,
+			Protective:       true,
+			Implemented:      true,
+			DefaultEnabled:   false,
+		},
+		{
+			Name:             "update_limit",
+			Title:            "Update limit",
+			AgentDescription: "Tighten an existing risk barrier or switch Spot Funds back to Check funds. For keyed policies, a missing barrier returns not_found. Use add_limit to create it.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,
@@ -347,7 +356,8 @@ func TestImplementedDescriptorOrder(t *testing.T) {
 		"list_accounts",
 		"list_groups",
 		"check_order",
-		"set_limit",
+		"add_limit",
+		"update_limit",
 		"create_account",
 		"update_account",
 		"delete_account",
@@ -376,9 +386,9 @@ func TestImplementedDescriptorOrder(t *testing.T) {
 func TestEffectiveMerge(t *testing.T) {
 	cat := openCatalog()
 	stored := map[string]bool{
-		"health":      false,
-		"set_limit":   true,
-		"nonexistent": true,
+		"health":       false,
+		"update_limit": true,
+		"nonexistent":  true,
 	}
 	eff := cat.Effective(stored)
 
@@ -388,8 +398,11 @@ func TestEffectiveMerge(t *testing.T) {
 	if eff["health"] != false {
 		t.Errorf("health override not applied: %v", eff["health"])
 	}
-	if eff["set_limit"] != true {
-		t.Errorf("set_limit override not applied: %v", eff["set_limit"])
+	if eff["update_limit"] != true {
+		t.Errorf("update_limit override not applied: %v", eff["update_limit"])
+	}
+	if eff["add_limit"] {
+		t.Errorf("add_limit should default off, got %v", eff["add_limit"])
 	}
 	if eff["get_limits"] != true {
 		t.Errorf("get_limits should default on, got %v", eff["get_limits"])

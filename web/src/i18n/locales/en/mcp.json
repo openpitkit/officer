@@ -68,8 +68,11 @@
     "check_order": {
       "description": "Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons); changes no state."
     },
-    "set_limit": {
-      "description": "Tighten a risk barrier: add one or make it stricter, or switch Spot Funds back to Check funds; loosening and removal are refused."
+    "add_limit": {
+      "description": "Add a risk barrier at a new address. A duplicate returns limit_exists. Use update_limit to change it."
+    },
+    "update_limit": {
+      "description": "Tighten an existing risk barrier or switch Spot Funds back to Check funds. For keyed policies, a missing barrier returns not_found. Use add_limit to create it."
     },
     "submit_order": {
       "description": "Submit an order intent through pre-trade and obtain an approval envelope."

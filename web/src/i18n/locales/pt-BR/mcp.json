@@ -68,8 +68,11 @@
     "check_order": {
       "description": "Executar uma simulação pré-negociação sem efeitos para uma ordem (aprovação/rejeição + motivos); não altera nenhum estado."
     },
-    "set_limit": {
-      "description": "Restringir uma barreira de risco: adicionar uma ou torná-la mais rígida, ou voltar o Spot Funds ao modo Verificar fundos; afrouxar e remover são recusados."
+    "add_limit": {
+      "description": "Adicionar uma barreira de risco em um novo endereço. Se já houver uma barreira nesse endereço, a operação retorna limit_exists. Para alterá-la, use update_limit."
+    },
+    "update_limit": {
+      "description": "Tornar uma barreira de risco existente mais rígida ou voltar o Spot Funds ao modo Verificar fundos. Nas políticas com chave, se a barreira não existir, a operação retorna not_found. Para criá-la, use add_limit."
     },
     "submit_order": {
       "description": "Enviar uma intenção de ordem pelo controle pré-negociação e obter um envelope de aprovação."

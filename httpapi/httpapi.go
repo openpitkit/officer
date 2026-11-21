@@ -105,12 +105,30 @@ func RegisterRoutes(
 	register(registry, "orders.events.reproduction.get", http.MethodGet, "/orders/{id}/events/{eventId}/reproduction", handleGetOrderEventReproduction(svc))
 	register(registry, "orders.execution-reports.post", http.MethodPost, "/orders/{id}/execution-reports", handleApplyExecutionReport(svc))
 
-	register(registry, "limits.rate.put", http.MethodPut, "/limits/rate", handlePutRateLimit(svc))
-	register(registry, "limits.order-size.put", http.MethodPut, "/limits/order-size", handlePutOrderSizeLimit(svc))
-	register(registry, "limits.position.put", http.MethodPut, "/limits/position", handlePutPositionLimit(svc))
-	register(registry, "limits.spot-funds-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisRealized))
-	register(registry, "limits.spot-funds-unrealized-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-unrealized-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisUnrealized))
-	register(registry, "limits.spot-funds-total-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-total-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisTotal))
+	register(registry, "limits.rate.post", http.MethodPost, "/limits/rate",
+		handlePutRateLimit(svc, domain.LimitWriteAdd, http.StatusCreated))
+	register(registry, "limits.rate.put", http.MethodPut, "/limits/rate",
+		handlePutRateLimit(svc, domain.LimitWriteReplace, http.StatusOK))
+	register(registry, "limits.order-size.post", http.MethodPost, "/limits/order-size",
+		handlePutOrderSizeLimit(svc, domain.LimitWriteAdd, http.StatusCreated))
+	register(registry, "limits.order-size.put", http.MethodPut, "/limits/order-size",
+		handlePutOrderSizeLimit(svc, domain.LimitWriteReplace, http.StatusOK))
+	register(registry, "limits.position.post", http.MethodPost, "/limits/position",
+		handlePutPositionLimit(svc, domain.LimitWriteAdd, http.StatusCreated))
+	register(registry, "limits.position.put", http.MethodPut, "/limits/position",
+		handlePutPositionLimit(svc, domain.LimitWriteReplace, http.StatusOK))
+	register(registry, "limits.spot-funds-pnl-bounds.post", http.MethodPost, "/limits/spot-funds-pnl-bounds",
+		handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisRealized, domain.LimitWriteAdd, http.StatusCreated))
+	register(registry, "limits.spot-funds-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-pnl-bounds",
+		handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisRealized, domain.LimitWriteReplace, http.StatusOK))
+	register(registry, "limits.spot-funds-unrealized-pnl-bounds.post", http.MethodPost, "/limits/spot-funds-unrealized-pnl-bounds",
+		handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisUnrealized, domain.LimitWriteAdd, http.StatusCreated))
+	register(registry, "limits.spot-funds-unrealized-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-unrealized-pnl-bounds",
+		handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisUnrealized, domain.LimitWriteReplace, http.StatusOK))
+	register(registry, "limits.spot-funds-total-pnl-bounds.post", http.MethodPost, "/limits/spot-funds-total-pnl-bounds",
+		handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisTotal, domain.LimitWriteAdd, http.StatusCreated))
+	register(registry, "limits.spot-funds-total-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-total-pnl-bounds",
+		handlePutSpotFundsPnlBoundsLimit(svc, domain.SpotFundsPnlAxisTotal, domain.LimitWriteReplace, http.StatusOK))
 	registerDuringSetup(registry, "limits.spot-funds-limit-mode.get", http.MethodGet, "/limits/spot-funds-limit-mode", handleGetSpotFundsLimitMode(svc))
 	registerDuringSetup(registry, "limits.spot-funds-limit-mode.put", http.MethodPut, "/limits/spot-funds-limit-mode", handlePutSpotFundsLimitMode(svc))
 	register(registry, "limits.delete", http.MethodDelete, "/limits", handleDeleteLimit(svc))

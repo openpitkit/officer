@@ -58,7 +58,7 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 		Account:     "acc-1",
 		MaxQuantity: "1",
 	}
-	if err := svc.PutOrderSizeLimit(ctx, bad, domain.MissingAccountCreate); !errors.Is(err, domain.ErrInvalid) {
+	if err := svc.PutOrderSizeLimit(ctx, bad, domain.LimitWriteReplace, domain.MissingAccountCreate); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 	if len(fn.putOrderSizeLimitCalls) != 0 {
@@ -76,7 +76,7 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 	} {
 		t.Run("position/"+tc.name, func(t *testing.T) {
 			limit := domain.LimitPosition{Scope: tc.scope, Account: "acc-1", Asset: "BTC", MaxPosition: tc.maxPosition}
-			if err := svc.PutPositionLimit(ctx, limit, tc.missing); !errors.Is(err, domain.ErrInvalid) {
+			if err := svc.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, tc.missing); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("PutPositionLimit = %v, want ErrInvalid", err)
 			}
 			if len(fn.putPositionLimitCalls) != 0 {
@@ -101,14 +101,14 @@ func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 		MaxOrders: 100,
 		Window:    time.Second,
 	}
-	if err := svc.PutRateLimit(ctx, limit, domain.MissingAccountCreate); err != nil {
+	if err := svc.PutRateLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate); err != nil {
 		t.Fatalf("PutRateLimit for non-existent account: %v", err)
 	}
 	if len(fn.putRateLimitCalls) != 1 {
 		t.Fatalf("want 1 PutRateLimit call, got %d", len(fn.putRateLimitCalls))
 	}
 	position := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-new", Asset: "BTC", MaxPosition: "0"}
-	if err := svc.PutPositionLimit(ctx, position, domain.MissingAccountCreate); err != nil {
+	if err := svc.PutPositionLimit(ctx, position, domain.LimitWriteReplace, domain.MissingAccountCreate); err != nil {
 		t.Fatalf("PutPositionLimit for non-existent account: %v", err)
 	}
 	if len(fn.putPositionLimitCalls) != 1 || fn.putPositionLimitCalls[0] != position {
@@ -126,7 +126,7 @@ func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 		MaxOrders: 100,
 		Window:    time.Second,
 	}
-	if err := svc.PutRateLimit(ctx, limit, domain.MissingAccountCreate); err != nil {
+	if err := svc.PutRateLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	if len(fn.putRateLimitCalls) != 1 {
@@ -138,7 +138,7 @@ func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 	}
 	for _, missing := range []domain.MissingAccountPolicy{domain.MissingAccountCreate, domain.MissingAccountReject} {
 		position := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "123.000000000000000001"}
-		if err := svc.PutPositionLimit(ctx, position, missing); err != nil {
+		if err := svc.PutPositionLimit(ctx, position, domain.LimitWriteReplace, missing); err != nil {
 			t.Fatalf("PutPositionLimit: %v", err)
 		}
 		if got := fn.putPositionLimitCalls[len(fn.putPositionLimitCalls)-1]; got != position {
@@ -155,7 +155,7 @@ func TestService_PutPositionLimitScopesAccountAndMissingPolicy(t *testing.T) {
 	scope := &recordingScope{account: scopeResolvedAccount, policy: domain.MissingAccountReject}
 	svc, fn, _ := newScopeTestService(t, scope)
 	limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: scopeClientAccount, Asset: "BTC", MaxPosition: "10"}
-	if err := svc.PutPositionLimit(systemCtx(), limit, domain.MissingAccountCreate); err != nil {
+	if err := svc.PutPositionLimit(systemCtx(), limit, domain.LimitWriteReplace, domain.MissingAccountCreate); err != nil {
 		t.Fatal(err)
 	}
 	limit.Account = scopeResolvedAccount
@@ -180,7 +180,7 @@ func TestService_PutLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 		MaxOrders: 100,
 		Window:    time.Second,
 	}
-	if err := svc.PutRateLimit(ctx, limit, domain.MissingAccountCreate); err != nil {
+	if err := svc.PutRateLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
@@ -208,7 +208,7 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 	}
 	putDone := make(chan error, 1)
 	go func() {
-		putDone <- svc.PutRateLimit(systemCtx(), limit, domain.MissingAccountCreate)
+		putDone <- svc.PutRateLimit(systemCtx(), limit, domain.LimitWriteReplace, domain.MissingAccountCreate)
 	}()
 	<-md.stopEntered // PutRateLimit entered market-data reconnect.
 
@@ -257,7 +257,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 	go func() {
 		rateDone <- svc.PutRateLimit(systemCtx(), domain.LimitRate{
 			Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
-		}, domain.MissingAccountCreate)
+		}, domain.LimitWriteReplace, domain.MissingAccountCreate)
 	}()
 	<-rateEntered // PutRateLimit entered node mutation.
 
@@ -268,7 +268,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 			Account:     "acc-1",
 			Asset:       "AAPL",
 			MaxQuantity: "1",
-		}, domain.MissingAccountCreate)
+		}, domain.LimitWriteReplace, domain.MissingAccountCreate)
 	}()
 	select {
 	case <-orderEntered:

@@ -75,7 +75,7 @@ func TestLocalNode_PutRateLimitCreatesNamedAccount(t *testing.T) {
 
 	limit := rateLimit(domain.ScopeAccount, "fresh", "", 100, time.Second)
 	if _, err := n.PutRateLimit(
-		ctx, limit, domain.MissingAccountCreate, testCaller,
+		ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
@@ -106,6 +106,7 @@ func TestLocalNode_PutRateLimitRejectsMissingAccount(t *testing.T) {
 	_, err := n.PutRateLimit(
 		ctx,
 		rateLimit(domain.ScopeAccount, "fresh", "", 100, time.Second),
+		domain.LimitWriteReplace,
 		domain.MissingAccountReject,
 		testCaller,
 	)
@@ -146,7 +147,7 @@ func TestLocalNode_PutOrderSizeLimitCreatesNamedAccount(t *testing.T) {
 		MaxQuantity: "10",
 	}
 	if _, err := n.PutOrderSizeLimit(
-		ctx, limit, domain.MissingAccountCreate, testCaller,
+		ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
@@ -179,7 +180,7 @@ func TestLocalNode_PutOrderSizeLimitRejectsMissingAccount(t *testing.T) {
 		Account:     "fresh",
 		Asset:       "AAPL",
 		MaxQuantity: "10",
-	}, domain.MissingAccountReject, testCaller)
+	}, domain.LimitWriteReplace, domain.MissingAccountReject, testCaller)
 	if !errors.Is(err, domain.ErrAccountMissing) {
 		t.Fatalf("PutOrderSizeLimit = %v, want ErrAccountMissing", err)
 	}
@@ -215,7 +216,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitCreatesNamedAccount(t *testing.T) {
 		LowerBound: "-100",
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(
-		ctx, limit, domain.MissingAccountCreate, testCaller,
+		ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
@@ -273,7 +274,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitRejectsMissingAccount(t *testing.T)
 				Account:    "fresh",
 				Currency:   "USD",
 				LowerBound: "-100",
-			}, domain.MissingAccountReject, testCaller)
+			}, domain.LimitWriteReplace, domain.MissingAccountReject, testCaller)
 			if !errors.Is(err, domain.ErrAccountMissing) {
 				t.Fatalf("PutSpotFundsPnlBoundsLimit = %v, want ErrAccountMissing", err)
 			}
@@ -302,7 +303,7 @@ func TestLocalNode_PutBrokerRateLimitIgnoresMissingAccountChoice(t *testing.T) {
 	ctx := context.Background()
 
 	limit := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)
-	if _, err := n.PutRateLimit(ctx, limit, "", testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, limit, domain.LimitWriteReplace, "", testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 

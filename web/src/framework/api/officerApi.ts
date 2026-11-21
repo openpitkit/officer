@@ -4754,15 +4754,40 @@ async function fetchLimits(
   return (await fetchPoliciesPage(client, input, signal)).items;
 }
 
-/** PUT /limits/{policy}: upsert a typed barrier. */
-async function putLimit(
+async function writeLimit(
   client: ApiClient,
+  method: "POST" | "PUT",
   limit: Limit,
   missingAccount: MissingAccountPolicy,
 ): Promise<Limit> {
   const { path, body } = limitEndpointBody(client, limit, missingAccount);
-  const v = await client.request(path, { method: "PUT", body });
+  const v = await client.request(path, { method, body });
   return normalizePutLimitResponse(limit.policy, v);
+}
+
+/** POST /limits/{policy}: add a typed barrier at an unused key. */
+async function addLimit(
+  client: ApiClient,
+  limit: Limit,
+  missingAccount: MissingAccountPolicy,
+): Promise<Limit> {
+  if (limit.policy === "spot_funds_limit_mode") {
+    throw new ApiError(
+      "Spot Funds limit mode has no add operation; change it with putLimit.",
+      "validation",
+      400,
+    );
+  }
+  return writeLimit(client, "POST", limit, missingAccount);
+}
+
+/** PUT /limits/{policy}: upsert a typed barrier. */
+function putLimit(
+  client: ApiClient,
+  limit: Limit,
+  missingAccount: MissingAccountPolicy,
+): Promise<Limit> {
+  return writeLimit(client, "PUT", limit, missingAccount);
 }
 
 /** DELETE /limits identified by its target tuple. */
@@ -5147,6 +5172,7 @@ export function createOfficerApi(client: ApiClient) {
     fetchTrades: bind(fetchTrades),
     fetchPoliciesPage: bind(fetchPoliciesPage),
     fetchLimits: bind(fetchLimits),
+    addLimit: bind(addLimit),
     putLimit: bind(putLimit),
     deleteLimit: bind(deleteLimit),
     getMcpCommands: bind(getMcpCommands),
