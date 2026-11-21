@@ -394,6 +394,8 @@ type SubmitOrderResult struct {
 	Reasons []domain.OrderReject
 	// Reviews carries the ordered engine marks for a review verdict.
 	Reviews []domain.ReviewMark
+	// AlertFailure reports an alert failure after the order was committed.
+	AlertFailure *backend.AlertFailure
 }
 
 // SubmitDropCopyOrderResult identifies the unsigned drop-copy order recorded by
@@ -1189,6 +1191,7 @@ func (s controlPlaneSource) SubmitOrder(
 		Verdict:         approval.Verdict,
 		Reasons:         approval.Reasons,
 		Reviews:         approval.Reviews,
+		AlertFailure:    approval.AlertFailure,
 	}, nil
 }
 

@@ -276,7 +276,9 @@ func (n *localNode) submitOrder(
 	caller domain.Caller,
 	destination *domain.TradingDestination,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
-) (domain.Order, engine.OrderResult, error) {
+) (resultOrder domain.Order, resultDecision engine.OrderResult, resultErr error) {
+	ctx, finish := PostCommitNotifications(ctx)
+	defer n.finishSubmitReviewNotifications(ctx, finish, &resultOrder, &resultDecision.Reviews, caller, &resultErr)
 	// Resolve the account and register both order assets before the chain source
 	// is converted to its stable SDK identifiers.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
@@ -826,7 +828,9 @@ func (n *localNode) submitImmediate(
 	caller domain.Caller,
 	destination *domain.TradingDestination,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
-) (domain.Order, engine.ImmediateResult, error) {
+) (resultOrder domain.Order, resultDecision engine.ImmediateResult, resultErr error) {
+	ctx, finish := PostCommitNotifications(ctx)
+	defer n.finishSubmitReviewNotifications(ctx, finish, &resultOrder, &resultDecision.Reviews, caller, &resultErr)
 	// An immediate fill is booked at the order's own price, so an order without
 	// one is refused before anything is written or reserved.
 	if o.Price == "" {

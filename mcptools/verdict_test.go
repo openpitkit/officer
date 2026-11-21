@@ -37,11 +37,12 @@ import (
 
 type reviewToolSource struct {
 	testPolicyWireSource
-	verdict domain.Verdict
-	reviews []domain.ReviewMark
-	send    *backend.VenueSend
-	check   domain.CheckResult
-	detail  domain.OrderDetail
+	alertFailure *backend.AlertFailure
+	verdict      domain.Verdict
+	reviews      []domain.ReviewMark
+	send         *backend.VenueSend
+	check        domain.CheckResult
+	detail       domain.OrderDetail
 }
 
 func (s reviewToolSource) CheckOrder(context.Context, domain.OrderProbe) (domain.CheckResult, error) {
@@ -163,16 +164,67 @@ func callReviewTool(t *testing.T, src reviewToolSource, name string, args any, w
 func (s reviewToolSource) SubmitOrder(context.Context, domain.Order, string, domain.MissingAccountPolicy) (frameworkmcp.SubmitOrderResult, error) {
 	return frameworkmcp.SubmitOrderResult{
 		OrderExternalID: "review-order", Verdict: s.verdict, Reviews: s.reviews,
+		AlertFailure: s.alertFailure,
 	}, nil
 }
 
 func (s reviewToolSource) SendPaperOrder(context.Context, domain.Order, backend.SendDestination) (backend.VenueSendResult, error) {
 	return backend.VenueSendResult{
 		Approval: backend.SignedApproval{
+			AlertFailure:    s.alertFailure,
 			OrderExternalID: "review-order", Verdict: s.verdict, Reviews: s.reviews,
 		},
 		Send: s.send,
 	}, nil
+}
+
+func (s reviewToolSource) SendLiveOrder(ctx context.Context, order domain.Order, dest backend.SendDestination) (backend.VenueSendResult, error) {
+	return s.SendPaperOrder(ctx, order, dest)
+}
+
+func TestOrderAlertFailureMCP(t *testing.T) {
+	for _, tool := range []struct {
+		name  string
+		input any
+	}{
+		{"submit_order", submitOrderInput{
+			Account: "desk", BaseAsset: "AAPL", QuoteAsset: "USD", Side: "buy",
+			AmountKind: "quantity", AmountValue: "10", Mode: "hold", MissingAccount: "reject",
+		}},
+		{"send_paper_order", sendVenueOrderInput{
+			Account: "desk", BaseAsset: "AAPL", QuoteAsset: "USD", Side: "buy",
+			AmountKind: "quantity", AmountValue: "10",
+			Destination: sendDestinationInput{Connection: "paper", Route: map[string]any{}},
+		}},
+		{"send_live_order", sendVenueOrderInput{
+			Account: "desk", BaseAsset: "AAPL", QuoteAsset: "USD", Side: "buy",
+			AmountKind: "quantity", AmountValue: "10",
+			Destination: sendDestinationInput{Connection: "live", Route: map[string]any{}},
+		}},
+	} {
+		for _, step := range []string{"", "publish", "close"} {
+			t.Run(tool.name+"/"+step, func(t *testing.T) {
+				src := reviewToolSource{verdict: domain.VerdictReview, reviews: reviewToolMarks()}
+				if step != "" {
+					src.alertFailure = &backend.AlertFailure{Step: step, Message: "alert service unavailable"}
+				}
+				raw := callReviewTool(t, src, tool.name, tool.input, orderReviewText("review-order", 2), false)
+				got, present := raw["alertFailure"]
+				if present != (src.alertFailure != nil) {
+					t.Fatalf("alertFailure=%s present=%t", got, present)
+				}
+				if present {
+					var failure httpx.AlertFailureDTO
+					if err := json.Unmarshal(got, &failure); err != nil {
+						t.Fatal(err)
+					}
+					if failure.Step != step || failure.Message != src.alertFailure.Message {
+						t.Fatalf("alertFailure=%+v", failure)
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestSubmitOrderReviewText(t *testing.T) {

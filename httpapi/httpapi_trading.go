@@ -565,6 +565,7 @@ func handleSendVenueOrder(svc backend.ControlPlane, send venueSend) http.Handler
 		}
 		approval := result.Approval
 		out := sendVenueOrderResponseDTO{signedApprovalDTO: signedApprovalDTO{
+			AlertFailure:   httpx.ToAlertFailureDTO(approval.AlertFailure),
 			SignedApproval: approval.SignedApproval, KeyID: approval.KeyID,
 			OrderExternalID: approval.OrderExternalID, Verdict: string(approval.Verdict),
 			Reasons: httpx.ToOrderRejectDTOs(approval.Reasons),

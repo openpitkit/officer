@@ -225,7 +225,7 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		if !ok {
 			return errors.New("officer: the realm store does not implement alerts.Store")
 		}
-		mixedType := mixedTradingAccessType(func(ctx context.Context, account domain.AccountID) (bool, error) {
+		alertAccountVisible := func(ctx context.Context, account domain.AccountID) (bool, error) {
 			if alertAccounts == nil {
 				return false, errors.New("officer: alert account visibility is not bound")
 			}
@@ -241,8 +241,11 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 				}
 			}
 			return false, nil
-		})
-		alertTypes := append([]alerts.Type{mixedType}, cfg.AlertTypes...)
+		}
+		alertTypes := append([]alerts.Type{
+			mixedTradingAccessType(alertAccountVisible),
+			orderAwaitingReviewType(alertAccountVisible, n),
+		}, cfg.AlertTypes...)
 		alertService, err = alerts.New(alertState, alertTypes, cfg.AlertChannels)
 		if err != nil {
 			return fmt.Errorf("officer: build alert service: %w", err)
@@ -250,6 +253,11 @@ func Register(b *frameworkapp.Builder, cfg Config) error {
 		if host, ok := n.(node.TradingAccessObserverHost); ok {
 			if err := host.InstallTradingAccessObserver(publishMixedTradingAccess(alertService)); err != nil {
 				return fmt.Errorf("officer: attach trading access alert producer: %w", err)
+			}
+		}
+		if host, ok := n.(node.OrderReviewObserverHost); ok {
+			if err := host.InstallOrderReviewObserver(orderReviewAlertProducer{service: alertService}); err != nil {
+				return fmt.Errorf("officer: attach order review alert producer: %w", err)
 			}
 		}
 		if cfg.AlertServiceReady != nil {

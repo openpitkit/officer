@@ -344,7 +344,8 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "submit_order",
 			description: "Submit an order intent through pre-trade and obtain an " +
 				"approval envelope. Mutates engine state and records the pre-trade " +
-				"lock; protected and disabled by default.",
+				"lock; protected and disabled by default. Returns optional " +
+				"alertFailure (step and message) when the order succeeded but its alert failed.",
 		},
 		{
 			name: "submit_drop_copy_order",
@@ -393,13 +394,16 @@ func TestServerToolSnapshot(t *testing.T) {
 			description string
 		}{name: "send_paper_order", description: "Check, hold and send an order to a paper venue. Returns the approval and " +
 			"acknowledged, refused or unknown send outcome. Mutating, protected and " +
-			"disabled by default. send_live_order is the live counterpart."},
+			"disabled by default. send_live_order is the live counterpart. Returns " +
+			"optional alertFailure (step and message) when the order succeeded " +
+			"but its alert failed."},
 		struct {
 			name        string
 			description string
 		}{name: "send_live_order", description: "Check, hold and send an order to a live venue, with real money. Returns " +
 			"the approval and acknowledged, refused or unknown send outcome. " +
-			"Mutating, protected and disabled by default."},
+			"Mutating, protected and disabled by default. Returns optional " +
+			"alertFailure (step and message) when the order succeeded but its alert failed."},
 		struct {
 			name        string
 			description string

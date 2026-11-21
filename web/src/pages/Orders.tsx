@@ -60,6 +60,7 @@ import {
   type TradesFilter,
 } from "@/framework";
 import type {
+  AlertFailure,
   CheckResult,
   CheckReject,
   Commission,
@@ -281,6 +282,10 @@ function providerTitle(
       (provider) => provider.type === providerType,
     )?.title ?? providerType
   );
+}
+
+function alertFailureMessage(t: TFunction<"orders">, failure: AlertFailure) {
+  return t(`alertFailure.${failure.step}`, { message: failure.message });
 }
 
 function venueSendBanner(
@@ -1069,6 +1074,12 @@ function SubmitOrderDialog({
           onCreated();
           throw new ApiError("Missing trading decision verdict", "internal");
       }
+      if (result.alertFailure) {
+        banner = {
+          tone: "warn",
+          text: `${banner.text} ${alertFailureMessage(t, result.alertFailure)}`,
+        };
+      }
       onCreated();
       reset();
       onClose();
@@ -1162,6 +1173,13 @@ function SubmitOrderDialog({
       if (controller.signal.aborted) {
         return;
       }
+      const alertFailure = result.approval?.alertFailure;
+      const warning = [
+        result.warning,
+        alertFailure ? alertFailureMessage(t, alertFailure) : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
       onCreated();
       reset();
       onClose();
@@ -1169,15 +1187,15 @@ function SubmitOrderDialog({
         result.order.id,
         result.approval?.verdict === "review"
           ? {
-              text: result.warning
+              text: warning
                 ? t("addOrder.addedAwaitingReviewWithWarning", {
-                    warning: result.warning,
+                    warning,
                   })
                 : t("addOrder.addedAwaitingReview"),
               tone: "warn",
             }
-          : result.warning
-            ? { text: result.warning, tone: "ok" }
+          : warning
+            ? { text: warning, tone: alertFailure ? "warn" : "ok" }
             : undefined,
       );
     } catch (err) {
@@ -3002,12 +3020,14 @@ function OrderDetailDialog({
     setReviewAction(action);
     setReviewError(null);
     let banner: DetailBanner | undefined;
+    let alertFailure: AlertFailure | undefined;
     try {
       try {
         if (action === "confirm" || action === "force") {
           const decide =
             action === "force" ? forceOrderReview : confirmOrderReview;
           const result = await decide(orderExternalId);
+          alertFailure = result.alertFailure;
           if (
             !controller.signal.aborted &&
             result.decision.verdict === "accept"
@@ -3058,7 +3078,8 @@ function OrderDetailDialog({
             }
           }
         } else {
-          await cancelOrderReview(orderExternalId);
+          const result = await cancelOrderReview(orderExternalId);
+          alertFailure = result.alertFailure;
         }
       } catch (err) {
         if (!controller.signal.aborted) {
@@ -3076,6 +3097,13 @@ function OrderDetailDialog({
           );
         }
       } finally {
+        if (alertFailure) {
+          const warning = alertFailureMessage(t, alertFailure);
+          banner = {
+            tone: "warn",
+            text: banner ? `${banner.text} ${warning}` : warning,
+          };
+        }
         onReviewDecisionCompleted(
           orderExternalId,
           controller.signal.aborted ? undefined : { banner },
@@ -4936,7 +4964,7 @@ export function Orders() {
   const advancedFilterDialogRef = useRef<HTMLDivElement | null>(null);
   const openedTradeExternalIdRef = useRef<string | null>(null);
 
-  const [params] = useSearchParams();
+  const [params, setSearchParams] = useSearchParams();
   const globalAccountFilter = useGlobalAccountFilter();
   const { showsAccounts } = accountScope();
   const tradingResult = useTrading();
@@ -5669,6 +5697,15 @@ export function Orders() {
   const [detailSuccessBanner, setDetailSuccessBanner] = useState<
     DetailBanner | undefined
   >(undefined);
+  const linkedOrder = params.get("order");
+  useEffect(() => {
+    if (linkedOrder !== null) {
+      // A router navigation may target another order without remounting.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDetailOrderExternalId(linkedOrder);
+      setDetailSuccessBanner(undefined);
+    }
+  }, [linkedOrder]);
   const [execReportOrderExternalId, setExecReportOrderExternalId] = useState<
     string | null
   >(null);
@@ -5689,10 +5726,18 @@ export function Orders() {
     setDetailOrderExternalId(externalId);
   }
 
-  function closeDetail() {
+  const closeDetail = useCallback(() => {
     setDetailOrderExternalId(null);
     setDetailSuccessBanner(undefined);
-  }
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("order");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
 
   function openExecReport(
     externalId: string,
@@ -5719,7 +5764,7 @@ export function Orders() {
     orderExternalId: string,
     values: ExecReportInitialValues,
   ) {
-    setDetailOrderExternalId(null);
+    closeDetail();
     setExecReportInitialValues(values);
     setExecReportOrderExternalId(orderExternalId);
   }
@@ -6351,8 +6396,7 @@ export function Orders() {
         return;
       }
       if (detailOrderExternalId !== null) {
-        setDetailOrderExternalId(null);
-        setDetailSuccessBanner(undefined);
+        closeDetail();
         return;
       }
       if (execReportOrderExternalId !== null) {
@@ -6367,7 +6411,12 @@ export function Orders() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [detailOrderExternalId, execReportOrderExternalId, submitOpen]);
+  }, [
+    closeDetail,
+    detailOrderExternalId,
+    execReportOrderExternalId,
+    submitOpen,
+  ]);
 
   return (
     <Page

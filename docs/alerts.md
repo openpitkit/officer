@@ -105,6 +105,38 @@ hidden to standalone token-mode MCP agents in single-account mode. A missing or
 failed visibility binding fails closed. Visible accounts and multi-account mode
 retain normal warning reads and acknowledgement.
 
+The standalone composition also registers `order_awaiting_review`. Submit,
+send-paper and send-live publish it after committing an order that enters
+`awaiting_review`. Its event ID is the order's external ID. The payload contains
+only identifiers: `order` (that external ID), `account` (the account code) and
+`markCode` (the first review mark's code).
+
+After an accepted review confirmation, force or review cancel, the producer
+resolves the event through `close` with the deciding caller's attribution, after
+the operation and any venue send complete. A confirmation that rejects leaves
+the order waiting and the alert open. The only action is `close`, taking an
+empty object. It succeeds only when the order no longer waits for review or no
+longer exists; while the order waits, it returns 409 `conflict` and keeps the
+alert open.
+
+An alert failure after the order decision commits does not undo the decision or
+a venue send. The caller receives the optional `alertFailure` member with
+`step` (`publish` or `close`) and `message`, keeping the operation's status code.
+`publish` also covers delivery failure after storage; the alert then exists and
+is listed.
+Closing when no open alert exists is a failure, not a no-op. Custom node hosts
+may implement `node.OrderReviewObserverHost` to attach this producer, as with
+`node.TradingAccessObserverHost`; hosts without it receive no review alerts.
+
+Visibility follows the order's account through the same scoped account read as
+`mixed_trading_access`. An alert whose account was deleted is hidden from every
+reader and cannot be closed until an account with the same code exists again.
+Accepted gaps, with no reconciliation, are a crash between an order's commit
+and its alert publication or close, a restore that splits orders from alerts, an
+account or instrument cascade delete, and a race where a review decision commits
+before alert creation (the decision reports `alertFailure` with step `close`,
+the late alert stays open, and the operator's Close succeeds).
+
 Normal all-section backups preserve open events, every principal's read marks
 and delivery outcomes. These live under `activity_history`, like orders and
 their approvals, and are realm-wide even when an account selector is present.

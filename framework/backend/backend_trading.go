@@ -272,7 +272,7 @@ func (s *Service) requireNonReleaseTradingConfirmation(caller domain.Caller, con
 // In a non-release build, enabling requires the operator's confirmation through
 // the panel.
 func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection, nonReleaseConfirmed bool) (result domain.TradingConnection, resultErr error) {
-	ctx, finish := node.TradingAccessNotifications(ctx)
+	ctx, finish := node.PostCommitNotifications(ctx)
 	defer func() {
 		if err := finish(); err != nil {
 			resultErr = errors.Join(resultErr, err)
@@ -444,7 +444,7 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 // mode an enable also writes the scope account's grant (see
 // grantScopeAccountLocked), so a connection stored before it trades too.
 func (s *Service) SetTradingConnectionEnabled(ctx context.Context, id string, enabled, nonReleaseConfirmed bool) (resultErr error) {
-	ctx, finish := node.TradingAccessNotifications(ctx)
+	ctx, finish := node.PostCommitNotifications(ctx)
 	defer func() {
 		if err := finish(); err != nil {
 			resultErr = errors.Join(resultErr, err)
@@ -653,7 +653,7 @@ func (s *Service) SearchTradingSymbols(ctx context.Context, id, query string) (T
 // connection and provider checks, the node refuses a tighten-only caller's
 // grant with domain.ErrLoosening.
 func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAccess) (resultErr error) {
-	ctx, finish := node.TradingAccessNotifications(ctx)
+	ctx, finish := node.PostCommitNotifications(ctx)
 	defer func() {
 		if err := finish(); err != nil {
 			resultErr = errors.Join(resultErr, err)

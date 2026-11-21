@@ -1,4 +1,10 @@
 {
+  "orderAwaitingReview": {
+    "title": "Order awaiting review: {{order}}",
+    "detail": "Order {{order}}, account {{account}}, mark {{markCode}}.",
+    "openOrder": "Open order",
+    "invalid": "The order review alert has an invalid payload."
+  },
   "mixedTradingAccess": {
     "title": "Paper and live access: {{account}}",
     "detail": "Account {{account}} now has access to both paper and live venue accounts. Group access and disabled connections are included. Acknowledgement records awareness and leaves access unchanged.",

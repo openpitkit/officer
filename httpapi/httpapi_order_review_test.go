@@ -33,6 +33,56 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
+func TestOrderAlertFailureREST(t *testing.T) {
+	for _, operation := range []string{"submit", "send-paper", "send-live", "confirm", "force", "cancel"} {
+		for _, step := range []string{"", "publish", "close"} {
+			t.Run(operation+"/"+step, func(t *testing.T) {
+				var failure *backend.AlertFailure
+				if step != "" {
+					failure = &backend.AlertFailure{Step: step, Message: "alert service unavailable"}
+				}
+				approval := backend.SignedApproval{
+					Verdict: domain.VerdictReview, AlertFailure: failure,
+					OrderExternalID: "review-order", Reviews: restReviewMarks(),
+				}
+				svc := &fakeService{
+					signedApproval:     approval,
+					venueSendResult:    backend.VenueSendResult{Approval: approval},
+					submitOrder:        domain.Order{ExternalID: "review-order", Status: domain.OrderStatusCommitted},
+					reviewAlertFailure: failure,
+				}
+				path := "/orders/" + operation
+				status := http.StatusCreated
+				request := `{"account":"desk","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"10"`
+				switch operation {
+				case "submit":
+					path += "?missingAccount=create"
+					request += `,"mode":"hold"}`
+				case "send-paper", "send-live":
+					request += `,"destination":{"connection":"paper","route":{}}}`
+				default:
+					path = "/orders/review-order/review/" + operation
+					status = http.StatusOK
+					request = ""
+					svc.venueSendResult.Approval.Verdict = domain.VerdictAccept
+				}
+				rec := callTrading(t, svc, "/api/v1", http.MethodPost, path, request)
+				if rec.Code != status {
+					t.Fatalf("status=%d; want %d: %s", rec.Code, status, rec.Body.String())
+				}
+				body := bodyMap(t, rec.Result())
+				got, present := body["alertFailure"]
+				if present != (failure != nil) {
+					t.Fatalf("alertFailure=%v present=%t", got, present)
+				}
+				if present && !reflect.DeepEqual(got, map[string]any{"step": step, "message": failure.Message}) {
+					t.Fatalf("alertFailure=%v", got)
+				}
+			})
+		}
+	}
+}
+
 func restReviewMarks() []domain.ReviewMark {
 	return []domain.ReviewMark{{
 		OrderReject: domain.OrderReject{Code: "size", Scope: "order", Policy: "size", Reason: "check size", Details: "limit exceeded"},
@@ -423,6 +473,8 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
 		{"ConfirmOrderReviewResponse", confirmOrderReviewResponseDTO{}},
 		{"EventReproductionResponse", eventReproductionResponseDTO{}},
 		{"SignedApproval", signedApprovalDTO{}},
+		{"AlertFailure", httpx.AlertFailureDTO{}},
+		{"OrderMutationResponse", orderMutationResponseDTO{}},
 		{"CheckResult", checkResultDTO{}},
 	} {
 		wantRequired, wantProperties := jsonMembers(reflect.TypeOf(schema.value))
@@ -430,5 +482,17 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
 		if !reflect.DeepEqual(gotRequired, wantRequired) || !reflect.DeepEqual(gotProperties, wantProperties) {
 			t.Fatalf("schema %s: required=%v properties=%v; DTO required=%v properties=%v", schema.name, gotRequired, gotProperties, wantRequired, wantProperties)
 		}
+	}
+	schemas, ok := openAPIComponents(strings.Split(spec, "\n"), "schemas")
+	if !ok {
+		t.Fatal("OpenAPI schemas are missing")
+	}
+	for _, name := range []string{"SignedApproval", "ConfirmOrderReviewResponse", "OrderMutationResponse"} {
+		if !strings.Contains(schemas[name], "alertFailure:\n          $ref: \"#/components/schemas/AlertFailure\"") {
+			t.Fatalf("%s must reference the shared AlertFailure schema", name)
+		}
+	}
+	if !strings.Contains(spec, "SendVenueOrderResponse:\n      allOf:\n        - $ref: \"#/components/schemas/SignedApproval\"") {
+		t.Fatal("venue sends must inherit SignedApproval, including alertFailure")
 	}
 }

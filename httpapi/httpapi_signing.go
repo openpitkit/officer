@@ -234,6 +234,7 @@ func handleSubmitOrder(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusCreated, signedApprovalDTO{
+			AlertFailure:    httpx.ToAlertFailureDTO(approval.AlertFailure),
 			SignedApproval:  approval.SignedApproval,
 			KeyID:           approval.KeyID,
 			OrderExternalID: approval.OrderExternalID,
@@ -400,7 +401,8 @@ func handleDecideOrderReview(
 		approval := result.Approval
 		reasons := append([]httpx.OrderRejectDTO{}, httpx.ToOrderRejectDTOs(approval.Reasons)...)
 		httpx.WriteJSON(w, http.StatusOK, confirmOrderReviewResponseDTO{
-			Order: httpx.ToOrderDTO(order, presentation.displayPrice, presentation.signed),
+			AlertFailure: httpx.ToAlertFailureDTO(approval.AlertFailure),
+			Order:        httpx.ToOrderDTO(order, presentation.displayPrice, presentation.signed),
 			Decision: reviewDecisionDTO{
 				Verdict: string(approval.Verdict), Reasons: reasons,
 				SignedApproval: approval.SignedApproval, KeyID: approval.KeyID, Signed: approval.Signed,
@@ -417,13 +419,14 @@ func handleCancelOrderReview(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
-		order, att, err := svc.CancelOrderReview(r.Context(), orderID)
+		order, att, alertFailure, err := svc.CancelOrderReview(r.Context(), orderID)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
 		presentation := orderPresentationByID(r.Context(), svc, order.ExternalID)
 		httpx.WriteJSON(w, http.StatusOK, orderMutationResponseDTO{
+			AlertFailure:      httpx.ToAlertFailureDTO(alertFailure),
 			Order:             httpx.ToOrderDTO(order, presentation.displayPrice, presentation.signed),
 			SignedAttestation: att.SignedAttestation, AttestationKeyID: att.KeyID, Signed: att.Signed,
 		})

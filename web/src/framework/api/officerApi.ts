@@ -17,6 +17,7 @@
 
 import { ApiError, type ApiClient } from "./createApiClient";
 import type {
+  AlertFailure,
   Account,
   AccountBlockSource,
   AccountListFilters,
@@ -3952,6 +3953,17 @@ export interface CreateOrderResult {
   approval?: SignedApproval;
 }
 
+function normalizeAlertFailure(v: unknown): AlertFailure {
+  if (
+    !isObject(v) ||
+    (v.step !== "publish" && v.step !== "close") ||
+    typeof v.message !== "string"
+  ) {
+    throw new ApiError("Invalid alertFailure in the API response", "internal");
+  }
+  return { step: v.step, message: v.message };
+}
+
 function normalizeSignedApproval(v: unknown): SignedApproval {
   const response = isObject(v) ? v : {};
   const wrapped = pick(
@@ -3963,6 +3975,9 @@ function normalizeSignedApproval(v: unknown): SignedApproval {
   );
   const o = isObject(wrapped) ? wrapped : response;
   return {
+    ...(o.alertFailure !== undefined
+      ? { alertFailure: normalizeAlertFailure(o.alertFailure) }
+      : {}),
     signedApproval: asString(
       pick(o, "signedApproval", "SignedApproval", "signed_approval"),
     ),
@@ -4525,6 +4540,9 @@ function normalizeOrderMutationResponse(
     return null;
   }
   return {
+    ...(v.alertFailure !== undefined
+      ? { alertFailure: normalizeAlertFailure(v.alertFailure) }
+      : {}),
     order: normalizeOrder(pick(v, "order", "Order")),
     signedAttestation: asString(
       pick(v, "signedAttestation", "SignedAttestation", "signed_attestation"),
@@ -4799,6 +4817,9 @@ function normalizeConfirmOrderReviewResponse(
   const result: ConfirmOrderReviewResponse = {
     order: normalizeOrder(v.order),
     decision,
+    ...(v.alertFailure !== undefined
+      ? { alertFailure: normalizeAlertFailure(v.alertFailure) }
+      : {}),
   };
   if (v.venueSend !== undefined) {
     if (decision.verdict !== "accept") {

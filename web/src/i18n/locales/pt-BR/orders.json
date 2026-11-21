@@ -1,4 +1,8 @@
 {
+  "alertFailure": {
+    "publish": "A ação sobre a ordem foi concluída, mas não foi possível criar ou entregar o alerta de revisão: {{message}}",
+    "close": "A ação sobre a ordem foi concluída, mas não foi possível fechar o alerta de revisão: {{message}}"
+  },
   "tradingLoadFailed": "Não foi possível carregar as conexões de negociação: {{error}}",
   "title": "Ordens",
   "subtitle": "Visão do plano de dados: as ordens que passam pelo Officer, seus eventos de ciclo de vida e os negócios resultantes. Selecione uma linha de ordem para ver a linha do tempo de eventos e as execuções.",

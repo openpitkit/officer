@@ -208,6 +208,7 @@ type fakeService struct {
 	reviewForceCalls     int
 	reviewCancelCalls    int
 	reviewErr            error
+	reviewAlertFailure   *backend.AlertFailure
 	cancelLeavesQuantity string
 	// Public-key-by-id resolution. publicKeysByID maps keyId to its exported
 	// public material; a missing id reports domain.ErrNotFound so the rotation and
@@ -1106,10 +1107,10 @@ func (f *fakeService) ForceOrderReview(_ context.Context, orderID string) (domai
 	return f.submitOrder, f.venueSendResult, f.reviewErr
 }
 
-func (f *fakeService) CancelOrderReview(_ context.Context, orderID string) (domain.Order, backend.Attestation, error) {
+func (f *fakeService) CancelOrderReview(_ context.Context, orderID string) (domain.Order, backend.Attestation, *backend.AlertFailure, error) {
 	f.reviewOrderID = orderID
 	f.reviewCancelCalls++
-	return f.submitOrder, f.attestation, f.reviewErr
+	return f.submitOrder, f.attestation, f.reviewAlertFailure, f.reviewErr
 }
 
 func (f *fakeService) CommandEnabled(context.Context, string) (bool, error) {

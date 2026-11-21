@@ -1,4 +1,8 @@
 {
+  "alertFailure": {
+    "publish": "The order action succeeded, but the review alert could not be created or delivered: {{message}}",
+    "close": "The order action succeeded, but the review alert could not be closed: {{message}}"
+  },
   "tradingLoadFailed": "Trading connections could not be loaded: {{error}}",
   "title": "Orders",
   "subtitle": "Data-plane view: orders flowing through Officer, their lifecycle events, and the resulting trades. Select an order row to see its event timeline and fills.",

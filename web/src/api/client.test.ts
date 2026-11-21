@@ -6164,6 +6164,103 @@ describe("Orders confirmOrder and cancelOrder", () => {
 });
 
 describe("Order review client", () => {
+  it.each([
+    "submitOrder",
+    "sendPaperOrder",
+    "sendLiveOrder",
+    "confirmOrderReview",
+    "forceOrderReview",
+    "cancelOrderReview",
+  ] as const)(
+    "strictly decodes optional alertFailure on %s",
+    async (operation) => {
+      const request = () => {
+        if (operation === "submitOrder") {
+          return api()
+            .submitOrder({ ...input, mode: "hold" }, "reject")
+            .then((result) => result.approval);
+        }
+        if (operation === "sendPaperOrder" || operation === "sendLiveOrder") {
+          return api()[operation]({
+            ...input,
+            destination: {
+              connection: "paper",
+              venueAccount: "desk",
+              route: {},
+            },
+          });
+        }
+        return api()[operation](order.id);
+      };
+      const response = {
+        id: order.id,
+        verdict: "review",
+        reviews: [mark],
+        order,
+        decision: {
+          verdict: "accept",
+          reasons: [],
+          signedApproval: "approval",
+          keyId: "key",
+          signed: true,
+        },
+        signed: true,
+      };
+      for (const step of [undefined, "publish", "close"] as const) {
+        const alertFailure = step
+          ? { step, message: "alert service unavailable" }
+          : undefined;
+        vi.mocked(fetch).mockResolvedValueOnce(
+          jsonResponse({
+            ...response,
+            ...(alertFailure ? { alertFailure } : {}),
+          }),
+        );
+        const result = await request();
+        if (alertFailure) {
+          expect(result).toHaveProperty("alertFailure", alertFailure);
+        } else {
+          expect(result).not.toHaveProperty("alertFailure");
+        }
+      }
+      for (const alertFailure of [
+        null,
+        [],
+        "failure",
+        {},
+        { step: "retry", message: "unavailable" },
+        { step: "publish" },
+        { step: "close", message: 42 },
+      ]) {
+        vi.mocked(fetch).mockResolvedValueOnce(
+          jsonResponse({ ...response, alertFailure }),
+        );
+        await expect(request()).rejects.toMatchObject({
+          code: "internal",
+          message: "Invalid alertFailure in the API response",
+        });
+      }
+    },
+  );
+
+  it("preserves alertFailure when enriching a created order fails", async () => {
+    const alertFailure = {
+      step: "publish",
+      message: "alert service unavailable",
+    };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse({ id: order.id, verdict: "review", alertFailure }),
+      )
+      .mockRejectedValueOnce(new Error("detail unavailable"));
+    const result = await api().createOrder(
+      { ...input, mode: "hold" },
+      "reject",
+    );
+    expect(result.approval?.alertFailure).toEqual(alertFailure);
+    expect(result.warning).toContain("detail unavailable");
+  });
+
   const order = {
     id: "order/1",
     leavesQuantity: "10",

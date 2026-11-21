@@ -1,4 +1,10 @@
 {
+  "orderAwaitingReview": {
+    "title": "订单等待审核：{{order}}",
+    "detail": "订单 {{order}}，账户 {{account}}，标记代码 {{markCode}}。",
+    "openOrder": "打开订单",
+    "invalid": "订单审核提醒的数据无效。"
+  },
   "mixedTradingAccess": {
     "title": "模拟与实盘访问权限：{{account}}",
     "detail": "账户 {{account}} 现在同时拥有交易平台模拟账户和实盘账户的访问权限。包括群组权限和已停用的连接。确认仅记录已知悉，不会更改访问权限。",

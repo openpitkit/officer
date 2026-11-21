@@ -64,7 +64,7 @@ func (s *Service) RestoreBackup(
 	archive backup.Archive,
 	opts backup.RestoreOptions,
 ) (result backup.RestoreSummary, resultErr error) {
-	ctx, finish := node.TradingAccessNotifications(ctx)
+	ctx, finish := node.PostCommitNotifications(ctx)
 	defer func() {
 		if err := finish(); err != nil {
 			resultErr = errors.Join(resultErr, err)

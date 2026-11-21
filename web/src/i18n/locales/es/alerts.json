@@ -1,4 +1,10 @@
 {
+  "orderAwaitingReview": {
+    "title": "Orden pendiente de revisión: {{order}}",
+    "detail": "Orden {{order}}, cuenta {{account}}, código de marca {{markCode}}.",
+    "openOrder": "Abrir orden",
+    "invalid": "La alerta de revisión de la orden contiene datos no válidos."
+  },
   "mixedTradingAccess": {
     "title": "Acceso simulado y real: {{account}}",
     "detail": "La cuenta {{account}} ahora tiene acceso a cuentas simuladas y reales de centros de negociación. Se incluyen el acceso del grupo y las conexiones desactivadas. La confirmación registra la toma de conocimiento y no modifica el acceso.",

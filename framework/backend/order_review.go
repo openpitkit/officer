@@ -26,6 +26,7 @@ import (
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/node"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
 )
@@ -142,6 +143,14 @@ func (s *Service) ForceOrderReview(
 func (s *Service) decideOrderReview(
 	ctx context.Context, orderID string, force bool,
 ) (order domain.Order, result VenueSendResult, err error) {
+	ctx, finish := node.PostCommitNotifications(ctx)
+	var redact *strings.Replacer
+	defer func() {
+		err = redactTradingSend(redact, result.Send, err)
+	}()
+	defer func() {
+		result.Approval.AlertFailure, err = finishOrderReviewNotifications(err, finish())
+	}()
 	action, operation := "confirmed", "confirm"
 	requestType := domain.AttestationRequestReviewConfirm
 	decideHold := s.node.ConfirmOrderReview
@@ -163,10 +172,6 @@ func (s *Service) decideOrderReview(
 	if err != nil {
 		return domain.Order{}, VenueSendResult{}, err
 	}
-	var redact *strings.Replacer
-	defer func() {
-		err = redactTradingSend(redact, result.Send, err)
-	}()
 	destination := stored.Review.Destination
 	if destination != nil {
 		if err := s.requireTradingRuntime(); err != nil {
@@ -261,14 +266,18 @@ func (s *Service) decideOrderReview(
 // signed (or eSign-off) review_cancel attestation.
 func (s *Service) CancelOrderReview(
 	ctx context.Context, orderID string,
-) (domain.Order, Attestation, error) {
+) (resultOrder domain.Order, resultAtt Attestation, alertFailure *AlertFailure, resultErr error) {
+	ctx, finish := node.PostCommitNotifications(ctx)
+	defer func() {
+		alertFailure, resultErr = finishOrderReviewNotifications(resultErr, finish())
+	}()
 	stored, review, signer, caller, err := s.orderReviewForDecision(ctx, orderID, "cancelled")
 	if err != nil {
-		return domain.Order{}, Attestation{}, err
+		return domain.Order{}, Attestation{}, nil, err
 	}
 	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
-		return domain.Order{}, Attestation{}, err
+		return domain.Order{}, Attestation{}, nil, err
 	}
 	var att Attestation
 	attest := eventAttestor(
@@ -287,12 +296,12 @@ func (s *Service) CancelOrderReview(
 	)
 	order, err := s.node.CancelOrderReview(ctx, stored.Order.ExternalID, caller, attest)
 	if err != nil {
-		return domain.Order{}, Attestation{}, err
+		return domain.Order{}, Attestation{}, nil, err
 	}
 	if att.SignedAttestation == "" {
-		return domain.Order{}, Attestation{}, missingAttestationError(domain.AttestationRequestReviewCancel)
+		return domain.Order{}, Attestation{}, nil, missingAttestationError(domain.AttestationRequestReviewCancel)
 	}
-	return order, att, nil
+	return order, att, nil, nil
 }
 
 func (s *Service) orderReviewForDecision(

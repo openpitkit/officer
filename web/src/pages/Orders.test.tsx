@@ -23,11 +23,12 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { renderWithApi as render } from "@/test/apiClient";
 import { filterSetShare, shareLinkParams } from "@/test/pageHelpers";
 import { holdPolling } from "@/test/polling";
 import { I18nextProvider } from "react-i18next";
-import { MemoryRouter } from "react-router-dom";
+import { Link, MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -51,6 +52,7 @@ import { SidebarProvider } from "@/components/SidebarContext";
 import i18n from "@/i18n";
 import { formatDateTime } from "@/i18n/format";
 import { Orders } from "@/pages/Orders";
+import { Detail as OrderReviewAlertDetail } from "@/alerts/OrderReviewAlert";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import { setAccountScope } from "@/lib/accountScope";
@@ -341,7 +343,7 @@ function setStoredPreference(key: string, value: string) {
   document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)}; Path=/; SameSite=Lax`;
 }
 
-function renderOrders(initialEntry: string) {
+function renderOrders(initialEntry: string, navigation?: ReactNode) {
   render(
     <I18nextProvider i18n={i18n}>
       <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
@@ -350,6 +352,7 @@ function renderOrders(initialEntry: string) {
           tradeStyleStorageKey="pit-test-style"
         >
           <MemoryRouter initialEntries={[initialEntry]}>
+            {navigation}
             <SidebarProvider>
               <Orders />
             </SidebarProvider>
@@ -5454,6 +5457,301 @@ describe("Order review panel", () => {
     signed: false,
   };
 
+  it.each(["confirm", "force", "cancel"] as const)(
+    "shows alert failures without treating a successful %s as an error",
+    async (action) => {
+      const user = userEvent.setup();
+      const dialog = await openSampleOrderDetail(user, {
+        ...waiting,
+        review: { ...review, held: true },
+      });
+      const resolvedOrder = {
+        ...sampleOrder,
+        status: action === "cancel" ? "cancelled" : "committed",
+      };
+      const mutation =
+        action === "cancel"
+          ? cancelOrderReviewMock
+          : action === "force"
+            ? forceOrderReviewMock
+            : confirmOrderReviewMock;
+      mutation.mockResolvedValue({
+        order: resolvedOrder,
+        decision: acceptedDecision,
+        alertFailure: { step: "close", message: "alert service unavailable" },
+      });
+      fetchOrderDetailMock.mockResolvedValue({
+        order: resolvedOrder,
+        events: [],
+        trades: [],
+      });
+      const label =
+        action === "cancel"
+          ? "Cancel order"
+          : action === "force"
+            ? "Force"
+            : "Confirm";
+      await user.click(
+        await within(dialog).findByRole("button", { name: label }),
+      );
+      if (action !== "confirm") {
+        const confirmation = await screen.findByRole("alertdialog");
+        await user.click(
+          within(confirmation).getByRole("button", { name: label }),
+        );
+      }
+      const warningText =
+        "The order action succeeded, but the review alert could not be closed: alert service unavailable";
+      const expectedBannerText =
+        action === "cancel"
+          ? warningText
+          : `Approved. The caller can now send this order. ${warningText}`;
+      const warning = await within(dialog).findByText(expectedBannerText, {
+        exact: true,
+      });
+      expect(warning).toHaveClass("border-[var(--warn)]");
+      expect(mutation).toHaveBeenCalledTimes(1);
+      expect(
+        within(dialog).queryByText("Review decision failed"),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("does not show an alert failure warning after a successful decision without one", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+    confirmOrderReviewMock.mockResolvedValue({
+      order: { ...sampleOrder, status: "committed" },
+      decision: acceptedDecision,
+    });
+    fetchOrderDetailMock.mockResolvedValue({
+      order: sampleOrder,
+      events: [],
+      trades: [],
+    });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Confirm" }),
+    );
+    await within(dialog).findByText(
+      "Approved. The caller can now send this order.",
+    );
+    expect(
+      within(dialog).queryByText(/review alert could not/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens the alert's order when the search parameter changes on the mounted Orders page", async () => {
+    const user = userEvent.setup();
+    fetchOrderDetailMock.mockImplementation(async (id: string) => ({
+      order: { ...sampleOrder, id },
+      events: [],
+      trades: [],
+    }));
+    renderOrders(
+      "/orders?order=first-order",
+      <OrderReviewAlertDetail
+        alert={{
+          id: sampleOrder.id,
+          type: "order_awaiting_review",
+          at: sampleOrder.at,
+          source: "panel",
+          read: false,
+          actions: ["close"],
+          deliveries: [],
+          payload: {
+            order: sampleOrder.id,
+            account: "desk-alpha",
+            markCode: "size",
+          },
+        }}
+        pending={false}
+        resolve={vi.fn()}
+      />,
+    );
+    const first = await screen.findByRole("dialog", {
+      name: "Order first-order",
+    });
+    await within(first).findByText("Accepted");
+    await user.click(
+      within(first).getAllByRole("button", { name: "Close" }).at(-1)!,
+    );
+    await user.click(screen.getByRole("button", { name: "Open order" }));
+    const second = await screen.findByRole("dialog", {
+      name: `Order ${sampleOrder.id}`,
+    });
+    await within(second).findByText("Accepted");
+    expect(fetchOrderDetailMock).toHaveBeenCalledWith(
+      sampleOrder.id,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it.each(["button", "Escape"])(
+    "reopens the same linked order after closing with %s and preserves other parameters",
+    async (close) => {
+      const user = userEvent.setup();
+      fetchOrderDetailMock.mockResolvedValue(waiting);
+      function Navigation() {
+        const location = useLocation();
+        return (
+          <>
+            <output aria-label="Current URL">{location.search}</output>
+            <Link to={`?order=${sampleOrder.id}`}>Open order again</Link>
+          </>
+        );
+      }
+      renderOrders(
+        `/orders?order=${sampleOrder.id}&account=desk-alpha`,
+        <Navigation />,
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: `Order ${sampleOrder.id}`,
+      });
+      await within(dialog).findByRole("region", { name: "Order review" });
+      if (close === "Escape") {
+        await user.keyboard("{Escape}");
+      } else {
+        await user.click(
+          within(dialog).getAllByRole("button", { name: "Close" }).at(-1)!,
+        );
+      }
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(screen.getByLabelText("Current URL")).toHaveTextContent(
+          /^\?account=desk-alpha$/,
+        );
+      });
+      await user.click(screen.getByRole("link", { name: "Open order again" }));
+      const reopened = await screen.findByRole("dialog", {
+        name: `Order ${sampleOrder.id}`,
+      });
+      await within(reopened).findByRole("region", { name: "Order review" });
+    },
+  );
+
+  it.each([true, false])(
+    "opens a successful review submit with publish alert failure=%s",
+    async (hasAlertFailure) => {
+      const user = userEvent.setup();
+      createOrderMock.mockResolvedValue({
+        order: waiting.order,
+        approval: {
+          verdict: "review",
+          reviews: review.marks,
+          ...(hasAlertFailure
+            ? {
+                alertFailure: {
+                  step: "publish",
+                  message: "alert service unavailable",
+                },
+              }
+            : {}),
+        },
+      });
+      fetchOrderDetailMock.mockResolvedValue(waiting);
+      renderOrders("/orders");
+      const submit = await openDialog(user);
+      await fillOrderFields(user, submit);
+      await user.type(
+        within(submit).getByLabelText("Limit price (required to settle)"),
+        "100",
+      );
+      await user.click(
+        within(submit).getByRole("button", { name: /add order/i }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: `Order ${sampleOrder.id}`,
+      });
+      const success = "Order added and awaiting operator review.";
+      const warning =
+        "The order action succeeded, but the review alert could not be created or delivered: alert service unavailable";
+      expect(
+        await within(dialog).findByText(
+          hasAlertFailure ? `${success} ${warning}` : success,
+        ),
+      ).toHaveClass("border-[var(--warn)]");
+      if (!hasAlertFailure) {
+        expect(
+          within(dialog).queryByText(
+            /review alert could not be created or delivered/,
+          ),
+        ).not.toBeInTheDocument();
+      }
+      expect(
+        await within(dialog).findByText("Size needs review"),
+      ).toBeInTheDocument();
+      expect(createOrderMock).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByRole("dialog", { name: "Add order" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([true, false])(
+    "opens a successful paper review send with publish alert failure=%s",
+    async (hasAlertFailure) => {
+      const user = userEvent.setup();
+      fetchOrderDetailMock.mockResolvedValue(waiting);
+      fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+      sendPaperOrderMock.mockResolvedValue({
+        id: sampleOrder.id,
+        verdict: "review",
+        reviews: review.marks,
+        reasons: [],
+        signedApproval: "",
+        keyId: "",
+        ...(hasAlertFailure
+          ? {
+              alertFailure: {
+                step: "publish",
+                message: "alert service unavailable",
+              },
+            }
+          : {}),
+      });
+      renderOrders("/orders");
+      const submit = await openDialog(user);
+      await fillOrderFields(user, submit);
+      await enablePaperSending(user, submit);
+      await chooseTimeInForce(user, submit, "DAY - Day");
+      await user.click(
+        within(submit).getByRole("button", { name: "Submit PAPER order" }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: `Order ${sampleOrder.id}`,
+      });
+      const success =
+        "The order is awaiting operator review. Nothing was sent to the venue.";
+      const warning =
+        "The order action succeeded, but the review alert could not be created or delivered: alert service unavailable";
+      expect(
+        await within(dialog).findByText(
+          hasAlertFailure ? `${success} ${warning}` : success,
+        ),
+      ).toHaveClass("border-[var(--warn)]");
+      if (!hasAlertFailure) {
+        expect(
+          within(dialog).queryByText(
+            /review alert could not be created or delivered/,
+          ),
+        ).not.toBeInTheDocument();
+      }
+      expect(
+        await within(dialog).findByText("Size needs review"),
+      ).toBeInTheDocument();
+      expect(sendPaperOrderMock).toHaveBeenCalledTimes(1);
+      expect(sendLiveOrderMock).not.toHaveBeenCalled();
+      expect(
+        within(dialog).queryByText(
+          "Pre-trade checks rejected the order. Nothing was sent to the venue.",
+        ),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("dialog", { name: "Add order" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it.each([
     [false, false, "Preview: would reject"],
     [false, true, "Preview: would reject"],
@@ -5505,44 +5803,6 @@ describe("Order review panel", () => {
       }
     },
   );
-
-  it("opens a manual review send with the waiting banner and marks", async () => {
-    const user = userEvent.setup();
-    fetchOrderDetailMock.mockResolvedValue(waiting);
-    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
-    sendPaperOrderMock.mockResolvedValue({
-      id: sampleOrder.id,
-      verdict: "review",
-      reviews: review.marks,
-      reasons: [],
-      signedApproval: "",
-      keyId: "",
-    });
-    renderOrders("/orders");
-    const submit = await openDialog(user);
-    await fillOrderFields(user, submit);
-    await enablePaperSending(user, submit);
-    await chooseTimeInForce(user, submit, "DAY - Day");
-    await user.click(
-      within(submit).getByRole("button", { name: "Submit PAPER order" }),
-    );
-    const dialog = await screen.findByRole("dialog", {
-      name: `Order ${sampleOrder.id}`,
-    });
-    expect(
-      await within(dialog).findByText(
-        "The order is awaiting operator review. Nothing was sent to the venue.",
-      ),
-    ).toHaveClass("border-[var(--warn)]");
-    expect(
-      within(dialog).queryByText(
-        "Pre-trade checks rejected the order. Nothing was sent to the venue.",
-      ),
-    ).not.toBeInTheDocument();
-    expect(
-      await within(dialog).findByText("Size needs review"),
-    ).toBeInTheDocument();
-  });
 
   it.each([
     [undefined, true],

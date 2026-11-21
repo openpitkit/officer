@@ -192,7 +192,9 @@ func (n *localNode) recordReviewRejection(
 func (n *localNode) ConfirmOrderReview(
 	ctx context.Context, order domain.ExternalID, caller domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
-) (domain.Order, engine.OrderResult, error) {
+) (resultOrder domain.Order, resultDecision engine.OrderResult, resultErr error) {
+	ctx, finish := PostCommitNotifications(ctx)
+	defer n.finishDecisionReviewNotifications(ctx, finish, &resultOrder, caller, &resultErr)
 	detail, err := n.realm.GetOrder(ctx, order)
 	if err != nil {
 		return domain.Order{}, engine.OrderResult{}, fmt.Errorf("get order: %w", err)
@@ -286,7 +288,9 @@ func (n *localNode) ConfirmOrderReview(
 func (n *localNode) ConfirmImmediateReview(
 	ctx context.Context, order domain.ExternalID, caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
-) (domain.Order, engine.ImmediateResult, error) {
+) (resultOrder domain.Order, resultDecision engine.ImmediateResult, resultErr error) {
+	ctx, finish := PostCommitNotifications(ctx)
+	defer n.finishDecisionReviewNotifications(ctx, finish, &resultOrder, caller, &resultErr)
 	detail, err := n.realm.GetOrder(ctx, order)
 	if err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("get order: %w", err)
@@ -428,7 +432,9 @@ func (n *localNode) runImmediateReviewReport(
 func (n *localNode) ForceOrderReview(
 	ctx context.Context, order domain.ExternalID, caller domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
-) (domain.Order, engine.OrderResult, error) {
+) (resultOrder domain.Order, resultDecision engine.OrderResult, resultErr error) {
+	ctx, finish := PostCommitNotifications(ctx)
+	defer n.finishDecisionReviewNotifications(ctx, finish, &resultOrder, caller, &resultErr)
 	ctx = context.WithoutCancel(ctx)
 	detail, err := n.realm.GetOrder(ctx, order)
 	if err != nil {
@@ -490,7 +496,9 @@ func (n *localNode) ForceOrderReview(
 func (n *localNode) ForceImmediateReview(
 	ctx context.Context, order domain.ExternalID, caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
-) (domain.Order, engine.ImmediateResult, error) {
+) (resultOrder domain.Order, resultDecision engine.ImmediateResult, resultErr error) {
+	ctx, finish := PostCommitNotifications(ctx)
+	defer n.finishDecisionReviewNotifications(ctx, finish, &resultOrder, caller, &resultErr)
 	ctx = context.WithoutCancel(ctx)
 	detail, err := n.realm.GetOrder(ctx, order)
 	if err != nil {
@@ -528,7 +536,9 @@ func (n *localNode) ForceImmediateReview(
 
 func (n *localNode) CancelOrderReview(
 	ctx context.Context, order domain.ExternalID, caller domain.Caller, attest store.EventAttestor,
-) (domain.Order, error) {
+) (resultOrder domain.Order, resultErr error) {
+	ctx, finish := PostCommitNotifications(ctx)
+	defer n.finishDecisionReviewNotifications(ctx, finish, &resultOrder, caller, &resultErr)
 	ctx = context.WithoutCancel(ctx)
 	detail, err := n.realm.GetOrder(ctx, order)
 	if err != nil {

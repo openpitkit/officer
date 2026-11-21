@@ -100,7 +100,8 @@ const setMarketDataInstrumentToolDescription = "Enable or disable one " +
 const submitOrderToolName = "submit_order"
 const submitOrderToolDescription = "Submit an order intent through pre-trade " +
 	"and obtain an approval envelope. Mutates engine state and records the " +
-	"pre-trade lock; protected and disabled by default."
+	"pre-trade lock; protected and disabled by default. Returns optional " +
+	"alertFailure (step and message) when the order succeeded but its alert failed."
 
 const submitDropCopyOrderToolName = "submit_drop_copy_order"
 const submitDropCopyOrderToolDescription = "Submit a drop-copy order through " +
@@ -437,13 +438,16 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 	registerTool(reg, descriptor("send_paper_order", "Send paper order",
 		"Check, hold and send an order to a paper venue. Returns the approval and "+
 			"acknowledged, refused or unknown send outcome. Mutating, protected and "+
-			"disabled by default. send_live_order is the live counterpart.",
+			"disabled by default. send_live_order is the live counterpart. Returns "+
+			"optional alertFailure (step and message) when the order succeeded "+
+			"but its alert failed.",
 		"Check, hold and send an order to a paper venue.",
 		true, true, true, false), sendVenueOrderHandler(frameworkmcp.Source.SendPaperOrder))
 	registerTool(reg, descriptor("send_live_order", "Send live order",
 		"Check, hold and send an order to a live venue, with real money. Returns "+
 			"the approval and acknowledged, refused or unknown send outcome. "+
-			"Mutating, protected and disabled by default.",
+			"Mutating, protected and disabled by default. Returns optional "+
+			"alertFailure (step and message) when the order succeeded but its alert failed.",
 		"Check, hold and send an order to a live venue, with real money.",
 		true, true, true, false), sendVenueOrderHandler(frameworkmcp.Source.SendLiveOrder))
 	registerTool(reg, descriptor("get_trading", "Get trading",
@@ -787,6 +791,7 @@ type submitDropCopyOrderInput struct {
 }
 
 type submitOrderOutput struct {
+	AlertFailure    *httpx.AlertFailureDTO `json:"alertFailure,omitempty"`
 	SignedApproval  string                 `json:"signedApproval"`
 	KeyID           string                 `json:"keyId"`
 	OrderExternalID string                 `json:"id"`
@@ -1400,6 +1405,7 @@ func submitOrderHandler(
 			return "", submitOrderOutput{}, toolError(err)
 		}
 		out := submitOrderOutput{
+			AlertFailure:    httpx.ToAlertFailureDTO(res.AlertFailure),
 			SignedApproval:  res.SignedApproval,
 			KeyID:           res.KeyID,
 			OrderExternalID: res.OrderExternalID,
@@ -2054,6 +2060,7 @@ type sendDestinationInput struct {
 }
 
 type sendVenueOrderOutput struct {
+	AlertFailure    *httpx.AlertFailureDTO `json:"alertFailure,omitempty"`
 	SignedApproval  string                 `json:"signedApproval"`
 	KeyID           string                 `json:"keyId"`
 	OrderExternalID string                 `json:"id"`
@@ -2115,6 +2122,7 @@ func sendVenueOrder(ctx context.Context, src frameworkmcp.Source, send venueSend
 	}
 	approval := result.Approval
 	out := sendVenueOrderOutput{
+		AlertFailure:   httpx.ToAlertFailureDTO(approval.AlertFailure),
 		SignedApproval: approval.SignedApproval, KeyID: approval.KeyID, OrderExternalID: approval.OrderExternalID,
 		Verdict: string(approval.Verdict), Reasons: httpx.ToOrderRejectDTOs(approval.Reasons),
 		Reviews: httpx.ToReviewMarkDTOs(approval.Reviews),

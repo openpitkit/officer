@@ -951,14 +951,17 @@ func toExecutionReportRequestDTO(
 }
 
 // orderMutationResponseDTO is the response of POST /orders/{id}/confirm
-// and .../cancel: the updated order plus the attestation envelope proving which
-// workflow shortcut Officer recorded. SignedAttestation is present on success;
-// signing or attestation persistence failures fail the request.
+// and .../cancel workflow shortcuts and .../review/cancel: the updated order
+// plus the attestation envelope proving which action Officer recorded.
+// SignedAttestation is present on success; signing or attestation persistence
+// failures fail the request. AlertFailure is set only by review cancel when
+// the decision committed but its alert close failed.
 type orderMutationResponseDTO struct {
-	Order             httpx.OrderDTO `json:"order"`
-	SignedAttestation string         `json:"signedAttestation,omitempty"`
-	AttestationKeyID  string         `json:"attestationKeyId,omitempty"`
-	Signed            bool           `json:"signed"`
+	AlertFailure      *httpx.AlertFailureDTO `json:"alertFailure,omitempty"`
+	Order             httpx.OrderDTO         `json:"order"`
+	SignedAttestation string                 `json:"signedAttestation,omitempty"`
+	AttestationKeyID  string                 `json:"attestationKeyId,omitempty"`
+	Signed            bool                   `json:"signed"`
 }
 
 // --- signing keys -----------------------------------------------------------
@@ -1061,6 +1064,7 @@ type submitOrderFieldsDTO struct {
 // signedApprovalDTO is the response of POST /orders/submit. The authorised order
 // is referenced by its opaque external id, never a surrogate id.
 type signedApprovalDTO struct {
+	AlertFailure    *httpx.AlertFailureDTO `json:"alertFailure,omitempty"`
 	Reviews         []httpx.ReviewMarkDTO  `json:"reviews,omitempty"`
 	SignedApproval  string                 `json:"signedApproval"`
 	KeyID           string                 `json:"keyId"`
@@ -1070,9 +1074,10 @@ type signedApprovalDTO struct {
 }
 
 type confirmOrderReviewResponseDTO struct {
-	Order     httpx.OrderDTO    `json:"order"`
-	Decision  reviewDecisionDTO `json:"decision"`
-	VenueSend *venueSendDTO     `json:"venueSend,omitempty"`
+	AlertFailure *httpx.AlertFailureDTO `json:"alertFailure,omitempty"`
+	Order        httpx.OrderDTO         `json:"order"`
+	Decision     reviewDecisionDTO      `json:"decision"`
+	VenueSend    *venueSendDTO          `json:"venueSend,omitempty"`
 }
 
 type reviewDecisionDTO struct {

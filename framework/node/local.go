@@ -84,6 +84,7 @@ type localNode struct {
 	fatal                 func(error)
 	pnlResetOwner         PnlResetSchedulerOwner
 	tradingAccessObserver func(context.Context, domain.Account, domain.Caller) error
+	orderReviewObserver   OrderReviewObserver
 
 	mutate     sync.Mutex
 	reportMu   sync.Mutex
@@ -535,7 +536,7 @@ func (n *localNode) RestoreBackup(
 	opts backup.RestoreOptions,
 	caller domain.Caller,
 ) (restoredSummary backup.RestoreSummary, restoredSink marketdata.Sink, resultErr error) {
-	ctx, finish := TradingAccessNotifications(ctx)
+	ctx, finish := PostCommitNotifications(ctx)
 	defer func() {
 		if err := finish(); err != nil {
 			resultErr = errors.Join(resultErr, err)

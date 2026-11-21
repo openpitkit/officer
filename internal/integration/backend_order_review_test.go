@@ -265,7 +265,7 @@ func TestService_CancelOrderReview(t *testing.T) {
 				original := verifiedReviewTestPayload(t, signer, review.SignedApproval, n.orders[id])
 				caller := domain.Caller{Source: domain.SourceAPI, Principal: "review-operator"}
 				audits := len(n.auditCalls)
-				order, att, err := svc.CancelOrderReview(auth.ContextWithCaller(context.Background(), caller), review.OrderExternalID)
+				order, att, _, err := svc.CancelOrderReview(auth.ContextWithCaller(context.Background(), caller), review.OrderExternalID)
 				if err != nil || order.Status != domain.OrderStatusCancelled || order.Leaves != "0" || att.Signed == off {
 					t.Fatalf("cancel order=%+v att=%+v err=%v", order, att, err)
 				}
@@ -460,7 +460,7 @@ func TestService_OrderReviewRefusals(t *testing.T) {
 				case "force":
 					_, _, err = svc.ForceOrderReview(ctx, review.OrderExternalID)
 				default:
-					_, _, err = svc.CancelOrderReview(ctx, review.OrderExternalID)
+					_, _, _, err = svc.CancelOrderReview(ctx, review.OrderExternalID)
 				}
 				if err == nil || (want != nil && !errors.Is(err, want)) || len(n.accountCalls) != 0 || len(n.attestations) != attestations || !reflect.DeepEqual(n.orders[id], before) {
 					t.Fatalf("review refusal err=%v want=%v calls=%v order=%+v", err, want, n.accountCalls, n.orders[id])
@@ -493,7 +493,7 @@ func TestService_OrderReviewMissingAttestationFailsClosed(t *testing.T) {
 				_, _, err = svc.ForceOrderReview(systemCtx(), review.OrderExternalID)
 			default:
 				request = domain.AttestationRequestReviewCancel
-				_, _, err = svc.CancelOrderReview(systemCtx(), review.OrderExternalID)
+				_, _, _, err = svc.CancelOrderReview(systemCtx(), review.OrderExternalID)
 			}
 			if err == nil || !strings.Contains(err.Error(), string(request)) {
 				t.Fatalf("missing attestation err=%v, want %s failure", err, request)
@@ -509,7 +509,7 @@ func TestService_CancelTradingOrderReviewWithoutRuntime(t *testing.T) {
 	n.orderReviews[id] = domain.OrderReview{Mode: domain.SubmitModeHold, Destination: &domain.TradingDestination{
 		Connection: "removed-connection", VenueAccount: "old-account", Route: "{}",
 	}}
-	order, _, err := svc.CancelOrderReview(systemCtx(), review.OrderExternalID)
+	order, _, _, err := svc.CancelOrderReview(systemCtx(), review.OrderExternalID)
 	if err != nil || order.Status != domain.OrderStatusCancelled {
 		t.Fatalf("cancel waiting trading order without a runtime: order=%+v err=%v", order, err)
 	}
@@ -534,7 +534,7 @@ func TestService_OrderReviewNodeError(t *testing.T) {
 			case "force":
 				_, _, err = svc.ForceOrderReview(systemCtx(), review.OrderExternalID)
 			default:
-				_, _, err = svc.CancelOrderReview(systemCtx(), review.OrderExternalID)
+				_, _, _, err = svc.CancelOrderReview(systemCtx(), review.OrderExternalID)
 			}
 			if err != failure || len(n.auditCalls) != audits {
 				t.Fatalf("node error=%v, want unchanged %v; audits=%v", err, failure, n.auditCalls)

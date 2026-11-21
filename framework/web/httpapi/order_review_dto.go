@@ -24,6 +24,20 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+// AlertFailureDTO reports an alert failure after an order operation succeeded.
+type AlertFailureDTO struct {
+	Step    string `json:"step"`
+	Message string `json:"message"`
+}
+
+// ToAlertFailureDTO preserves absence and the backend's post-commit failure.
+func ToAlertFailureDTO(failure *backend.AlertFailure) *AlertFailureDTO {
+	if failure == nil {
+		return nil
+	}
+	return &AlertFailureDTO{Step: failure.Step, Message: failure.Message}
+}
+
 // ReviewMarkDTO is a policy review mark shared by REST and MCP.
 type ReviewMarkDTO struct {
 	OrderRejectDTO

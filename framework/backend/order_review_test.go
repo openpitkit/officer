@@ -364,7 +364,7 @@ func TestOrderReviewHeldCrossCheck(t *testing.T) {
 				case "confirm":
 					_, _, err = s.ConfirmOrderReview(systemCtx(), before.ExternalID.String())
 				case "cancel":
-					_, _, err = s.CancelOrderReview(systemCtx(), before.ExternalID.String())
+					_, _, _, err = s.CancelOrderReview(systemCtx(), before.ExternalID.String())
 				case "force":
 					_, _, err = s.ForceOrderReview(systemCtx(), before.ExternalID.String())
 				}

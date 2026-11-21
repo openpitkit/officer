@@ -561,6 +561,13 @@ lift the block before forcing it. A trading force has the same binding and venue
 pre-check refusals as confirm (403, 404, 409, leaving the order waiting) and the
 same 500 rule: check `GET /orders/{id}` before retrying.
 
+Submit, send-paper, send-live, review confirm, force and review cancel responses
+may include `alertFailure` with `step` (`publish` or `close`) and `message`, only
+when the order decision committed but its alert step failed. The status code is
+unchanged. This member is absent from the ordinary `/confirm` and `/cancel`
+shortcuts and from event reproduction. See [Actionable alerts](alerts.md) for
+the review alert and its lifecycle.
+
 ## Backups
 
 A release build copies the database before a migration. `GET
@@ -707,6 +714,9 @@ or the venue refused but cancellation is not recorded yet or could not be
 confirmed; `error` says why. `GET /orders/{id}` is authoritative, and the runtime
 reconciles orders that reached the send step, retrying cancellation after a
 refusal.
+MCP results for `submit_order`, `send_paper_order` and `send_live_order` also
+include the optional `alertFailure` member when the committed order's alert step
+fails.
 
 ## Adding and editing keyed limits
 

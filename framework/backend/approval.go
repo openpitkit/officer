@@ -45,6 +45,13 @@ const (
 // approvalPayloadVersion is the canonical payload schema version.
 const approvalPayloadVersion = 1
 
+// AlertFailure is an alert step that failed after the order was committed.
+// The order operation itself succeeded.
+type AlertFailure struct {
+	Step    string
+	Message string
+}
+
 // SignedApproval is the backend-facing result of issuing a signed approval. The
 // surface layers map it onto their wire DTO. SignedApproval is the
 // base64url-encoded signed (or eSign-off) envelope; KeyID is the signing key id
@@ -66,6 +73,46 @@ type SignedApproval struct {
 	Reviews []domain.ReviewMark
 	// Signed reports whether the envelope carries an Ed25519 signature.
 	Signed bool
+	// AlertFailure is nil when the committed order's alert step succeeded.
+	AlertFailure *AlertFailure
+}
+
+func finishOrderReviewNotifications(operationErr, notificationErr error) (*AlertFailure, error) {
+	if notificationErr == nil {
+		return nil, operationErr
+	}
+	if operationErr != nil {
+		return nil, errors.Join(operationErr, notificationErr)
+	}
+	children := []error{notificationErr}
+	if joined, ok := notificationErr.(interface{ Unwrap() []error }); ok {
+		children = joined.Unwrap()
+	}
+	var failure *domain.OrderReviewAlertError
+	var otherErrors []error
+	for _, child := range children {
+		if alertErr, ok := child.(*domain.OrderReviewAlertError); ok {
+			if failure != nil {
+				return nil, errors.Join(notificationErr,
+					fmt.Errorf("backend: multiple order review alert failures in one operation"))
+			}
+			failure = alertErr
+		} else if child != nil {
+			otherErrors = append(otherErrors, child)
+		}
+	}
+	var other error
+	switch len(otherErrors) {
+	case 0:
+	case 1:
+		other = otherErrors[0]
+	default:
+		other = errors.Join(otherErrors...)
+	}
+	if failure != nil {
+		return &AlertFailure{Step: failure.Step, Message: failure.Cause.Error()}, other
+	}
+	return nil, other
 }
 
 type eventPayloadBuilder func(domain.OrderEvent) (domain.ApprovalPayload, bool, error)
@@ -354,7 +401,11 @@ func (s *Service) submitOrder(
 	mode string,
 	missing domain.MissingAccountPolicy,
 	destination *domain.TradingDestination,
-) (SignedApproval, error) {
+) (approval SignedApproval, resultErr error) {
+	ctx, finish := node.PostCommitNotifications(ctx)
+	defer func() {
+		approval.AlertFailure, resultErr = finishOrderReviewNotifications(resultErr, finish())
+	}()
 	if isDropCopyOrder(o) {
 		return SignedApproval{}, dropCopySigningError()
 	}

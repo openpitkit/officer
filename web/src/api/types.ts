@@ -733,7 +733,14 @@ export interface ExecutionReportResult {
   signed: boolean;
 }
 
+/** An alert operation failed after the order operation succeeded. */
+export interface AlertFailure {
+  step: "publish" | "close";
+  message: string;
+}
+
 export interface SignedApproval {
+  alertFailure?: AlertFailure;
   signedApproval: string;
   keyId: string;
   id: string;
@@ -1031,6 +1038,7 @@ export interface OrderReview {
 
 /** Recorded review decision and, for accepted trading orders, send outcome. */
 export interface ConfirmOrderReviewResponse {
+  alertFailure?: AlertFailure;
   order: Order;
   decision: {
     verdict: "accept" | "reject";
@@ -1390,6 +1398,7 @@ export interface EventAttestation {
 
 /** The exact POST /orders/submit response a robot / agent received (submit). */
 export interface SignedApprovalResponse {
+  alertFailure?: AlertFailure;
   /** Signed approval envelope, base64url, verbatim. */
   signedApproval: string;
   /** Signing key UUID, or empty string under eSign-off. */
@@ -1460,6 +1469,7 @@ export interface ExecutionReportResponse {
 /** The confirm / cancel facet of a reproduction response: the resolved order plus
  *  the signed attestation the robot received verbatim. */
 export interface OrderMutationResponse {
+  alertFailure?: AlertFailure;
   order: Order;
   signedAttestation: string;
   attestationKeyId: string;

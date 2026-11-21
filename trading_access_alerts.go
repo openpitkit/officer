@@ -37,17 +37,8 @@ type mixedTradingAccessPayload struct {
 
 func mixedTradingAccessType(visible func(context.Context, domain.AccountID) (bool, error)) alerts.Type {
 	return alerts.Type{
-		Name: mixedTradingAccessAlert,
-		Visible: func(ctx context.Context, event alerts.Event) (bool, error) {
-			if visible == nil {
-				return false, fmt.Errorf("mixed trading access account visibility is not bound: %w", domain.ErrInvalid)
-			}
-			var payload mixedTradingAccessPayload
-			if err := json.Unmarshal(event.Payload, &payload); err != nil {
-				return false, err
-			}
-			return visible(ctx, payload.Account)
-		},
+		Name:    mixedTradingAccessAlert,
+		Visible: accountAlertVisibility(visible, "mixed trading access"),
 		Validate: func(raw json.RawMessage) error {
 			var payload struct {
 				Account *domain.AccountID `json:"account"`
@@ -63,19 +54,36 @@ func mixedTradingAccessType(visible func(context.Context, domain.AccountID) (boo
 		},
 		Actions: map[string]alerts.Action{
 			"acknowledge": {
-				Validate: func(raw json.RawMessage) error {
-					var input map[string]json.RawMessage
-					if err := json.Unmarshal(raw, &input); err != nil || input == nil || len(input) != 0 {
-						return fmt.Errorf("acknowledgement requires an empty object: %w", domain.ErrInvalid)
-					}
-					return nil
-				},
+				Validate: validateEmptyAlertInput,
 				Resolve: func(context.Context, alerts.Event, json.RawMessage) (json.RawMessage, error) {
 					return json.RawMessage(`{"acknowledged":true}`), nil
 				},
 			},
 		},
 	}
+}
+
+func accountAlertVisibility(visible func(context.Context, domain.AccountID) (bool, error), name string) func(context.Context, alerts.Event) (bool, error) {
+	return func(ctx context.Context, event alerts.Event) (bool, error) {
+		if visible == nil {
+			return false, fmt.Errorf("%s account visibility is not bound: %w", name, domain.ErrInvalid)
+		}
+		var payload struct {
+			Account domain.AccountID `json:"account"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return false, err
+		}
+		return visible(ctx, payload.Account)
+	}
+}
+
+func validateEmptyAlertInput(raw json.RawMessage) error {
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &input); err != nil || input == nil || len(input) != 0 {
+		return fmt.Errorf("alert action requires an empty object: %w", domain.ErrInvalid)
+	}
+	return nil
 }
 
 func publishMixedTradingAccess(service *alerts.Service) func(context.Context, domain.Account, domain.Caller) error {

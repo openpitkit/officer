@@ -312,5 +312,7 @@ type ControlPlane interface {
 	// settlement data, an invalid mode or verdict, or no attestation is an error.
 	ForceOrderReview(ctx context.Context, orderID string) (domain.Order, VenueSendResult, error)
 	// CancelOrderReview cancels a waiting order without sending or holding it.
-	CancelOrderReview(ctx context.Context, orderID string) (domain.Order, Attestation, error)
+	// The *AlertFailure result is non-nil only when the cancel committed and
+	// the alert close step failed.
+	CancelOrderReview(ctx context.Context, orderID string) (domain.Order, Attestation, *AlertFailure, error)
 }

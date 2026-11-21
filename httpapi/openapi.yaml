@@ -4263,6 +4263,7 @@ paths:
       description: >
         Success records the decision result and removes the unresolved alert.
         Invalid input or an action failure leaves it unresolved.
+        An action may refuse with 409 when its precondition does not hold.
       tags: [alerts]
       requestBody:
         required: true
@@ -4289,6 +4290,8 @@ paths:
           $ref: "#/components/responses/ForeignRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
         "422":
@@ -9222,6 +9225,8 @@ components:
       type: object
       required: [order, decision]
       properties:
+        alertFailure:
+          $ref: "#/components/schemas/AlertFailure"
         order:
           $ref: "#/components/schemas/Order"
         decision:
@@ -9342,6 +9347,12 @@ components:
         The updated order plus the signed attestation over the confirmation or
         cancellation shortcut, returned as proof of what Officer recorded.
       properties:
+        alertFailure:
+          $ref: "#/components/schemas/AlertFailure"
+          description: >
+            Live review-cancel alert failure only; absent from the confirm and
+            cancel workflow shortcuts and event reproduction because the alert
+            outcome is not part of the signed record.
         order:
           $ref: "#/components/schemas/Order"
         signedAttestation:
@@ -11373,6 +11384,21 @@ components:
           type: string
           description: Persisted order status.
 
+    AlertFailure:
+      type: object
+      required: [step, message]
+      description: >
+        Emitted only by submit, send-paper, send-live and review confirm, force
+        or cancel when the alert step failed after the order decision committed.
+        Never emitted by the confirm or cancel workflow shortcuts or by event
+        reproduction: the alert outcome is not part of the signed record.
+      properties:
+        step:
+          type: string
+          enum: [publish, close]
+        message:
+          type: string
+
     SignedApproval:
       type: object
       required: [signedApproval, keyId, id, verdict]
@@ -11384,6 +11410,12 @@ components:
         Event reproduction may return an empty verdict when the reproduced event
         has no pre-trade verdict, including submitted lifecycle events.
       properties:
+        alertFailure:
+          $ref: "#/components/schemas/AlertFailure"
+          description: >
+            Live submit, send-paper or send-live alert failure only; absent from
+            event reproduction because the alert outcome is not part of the
+            signed record.
         signedApproval:
           type: string
           description: Signed approval envelope, base64url, verbatim.
@@ -11538,9 +11570,10 @@ components:
     EventReproductionResponse:
       type: object
       description: >
-        The exact type-specific live API response the robot received for the
-        attested request. Exactly one facet is populated, matching the request
-        type; the envelope is carried verbatim in the response's
+        The type-specific live API response the robot received for the attested
+        request, omitting alertFailure because the alert outcome is not signed.
+        Exactly one facet is populated, matching the request type; the envelope
+        is carried verbatim in the response's
         `signedApproval` or `signedAttestation` field.
         reviewConfirm and reviewForce are exceptions: like submitResponse they
         reproduce the signed decision, carrying neither order nor venueSend, because
@@ -11569,9 +11602,10 @@ components:
       required: [requestType, event, attestation, request, response, canonicalApproval, publicKey, eSign, signature, reason]
       description: >
         The controller-facing reproduction bundle for a single order-history
-        event's attestation: byte-for-byte what a robot or AI agent received from
-        the live APIs for the request that produced this event, assembled from
-        persisted state through the same serializers the live endpoints use so it
+        event's attestation: what a robot or AI agent received from the live APIs
+        for the request that produced this event, omitting the unsigned
+        alertFailure outcome and assembled from persisted state through the same
+        serializers the live endpoints use so it
         can never drift from real API output. Only public artifacts appear;
         private key material never does. `attestation`, `request`, `response`,
         `canonicalApproval` and `publicKey` are `null` when the event carries no

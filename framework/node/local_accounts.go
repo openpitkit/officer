@@ -40,7 +40,7 @@ import (
 func (n *localNode) CreateAccount(
 	ctx context.Context, account domain.Account, caller domain.Caller,
 ) (result domain.Account, resultErr error) {
-	ctx, finish := TradingAccessNotifications(ctx)
+	ctx, finish := PostCommitNotifications(ctx)
 	defer func() {
 		if err := finish(); err != nil {
 			resultErr = errors.Join(resultErr, err)
@@ -709,7 +709,7 @@ func (n *localNode) SetAccountGroup(
 	ctx context.Context, account domain.AccountID, groupCode string,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (resultErr error) {
-	ctx, finish := TradingAccessNotifications(ctx)
+	ctx, finish := PostCommitNotifications(ctx)
 	defer func() {
 		if err := finish(); err != nil {
 			resultErr = errors.Join(resultErr, err)

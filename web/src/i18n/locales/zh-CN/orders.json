@@ -1,4 +1,8 @@
 {
+  "alertFailure": {
+    "publish": "订单操作已成功，但无法创建或送达审核提醒：{{message}}",
+    "close": "订单操作已成功，但无法关闭审核提醒：{{message}}"
+  },
   "tradingLoadFailed": "无法加载交易连接：{{error}}",
   "title": "订单",
   "subtitle": "数据平面视图：流经 Officer 的订单、其生命周期事件及成交记录。点击订单行可查看事件时间线与成交明细。",
