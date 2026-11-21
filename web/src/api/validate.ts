@@ -320,7 +320,7 @@ export function validateLimit(limit: Limit): FieldError | null {
   }
 
   if (isSpotFundsPnl) {
-    const accountGroup = limit.accountGroup?.trim() ?? "";
+    const accountGroup = limit.accountGroup.trim();
     if (scope === "account_group") {
       const err = validateAccountGroup(accountGroup);
       if (err) {
@@ -330,7 +330,7 @@ export function validateLimit(limit: Limit): FieldError | null {
       return { key: "limit.scopeNoAccountGroup", values: { scope } };
     }
   } else {
-    if ((limit.accountGroup ?? "").trim().length > 0) {
+    if (limit.accountGroup.trim().length > 0) {
       return { key: "limit.policyNoAccountGroup", values: { policy } };
     }
   }

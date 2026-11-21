@@ -298,7 +298,7 @@ func (s *Service) DeleteLimit(ctx context.Context, target node.LimitTarget) erro
 	if err != nil {
 		return err
 	}
-	if err := validateLimitTarget(target); err != nil {
+	if _, err := target.Key(); err != nil {
 		return err
 	}
 	s.marketDataMu.Lock()
@@ -339,22 +339,4 @@ func (s *Service) finishLimitChangeLocked(sink marketdata.Sink, err error) error
 		return errors.Join(err, restoreErr)
 	}
 	return restoreErr
-}
-
-// validateLimitTarget checks the delete target's policy, scope, and axes.
-func validateLimitTarget(target node.LimitTarget) error {
-	if target.Policy == domain.PolicyOrderSizeLimit {
-		if err := domain.ValidateOrderSizeMode(target.Mode); err != nil {
-			return err
-		}
-	} else if target.Mode != "" {
-		return domain.NewValidationError("/mode", "unsupported_value", "mode is only valid for order-size limits")
-	}
-	return domain.ValidateLimitScopeAndAxes(
-		target.Policy,
-		target.Scope,
-		target.Account,
-		target.Asset,
-		target.AccountGroup,
-	)
 }

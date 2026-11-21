@@ -66,10 +66,9 @@ type AccountLimits struct {
 	SpotFundsLimitModes []domain.LimitSpotFundsLimitMode
 }
 
-// LimitTarget addresses a single typed barrier for deletion: the policy it
-// belongs to plus the composite the store keys it by. The optional Account,
-// AccountGroup, and Asset axes are present exactly when the policy and scope
-// carry them.
+// LimitTarget is the delete request's shape; barrier identity is derived only
+// through Key. The node reads Policy to refuse permanent-policy deletion, and
+// the backend resolves Account before calling the node.
 type LimitTarget struct {
 	// Policy is the policy the barrier belongs to (e.g. domain.PolicyRateLimit).
 	Policy string
@@ -83,6 +82,13 @@ type LimitTarget struct {
 	AccountGroup string
 	// Asset is the asset axis; empty unless Scope carries it.
 	Asset string
+}
+
+// Key is the only way a target becomes a barrier identity.
+func (t LimitTarget) Key() (domain.LimitKey, error) {
+	return domain.NewLimitKey(
+		t.Policy, t.Mode, t.Scope, t.Account, t.AccountGroup, t.Asset,
+	)
 }
 
 // Node is the execution target of one realm: an engine plus that realm's

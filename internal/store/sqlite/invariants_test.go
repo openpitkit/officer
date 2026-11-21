@@ -793,14 +793,10 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 		t.Fatalf("policy list missing spot funds account seed row: %+v", page.Rows)
 	}
 
-	if err := rs.DeleteSpotFundsPnlBoundsLimit(
-		ctx,
-		domain.SpotFundsPnlAxisRealized,
-		domain.ScopeAccount,
-		"acc-1",
-		"",
+	if err := rs.DeleteLimit(
+		ctx, mustSQLLimitKey(t, domain.PolicySpotFundsPnlBoundsKillSwitch, "", domain.ScopeAccount, "acc-1", "", ""),
 	); err != nil {
-		t.Fatalf("DeleteSpotFundsPnlBoundsLimit: %v", err)
+		t.Fatalf("DeleteLimit: %v", err)
 	}
 	limits, err = rs.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {

@@ -475,25 +475,21 @@ func (r *memoryRealm) RecordAccountAdjustment(
 	snapshot := r.exportData(ctx)
 	if in.UpsertBalance != nil {
 		if err := r.UpsertBalance(ctx, *in.UpsertBalance); err != nil {
-			r.restoreData(snapshot, backup.RestoreModeOverwrite)
-			return domain.AccountAdjustmentRecord{}, err
+			return domain.AccountAdjustmentRecord{}, errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 		}
 	}
 	if in.DeleteBalance != nil {
 		if err := r.DeleteBalance(ctx, in.DeleteBalance.Account, in.DeleteBalance.Asset); err != nil &&
 			!errors.Is(err, domain.ErrNotFound) {
-			r.restoreData(snapshot, backup.RestoreModeOverwrite)
-			return domain.AccountAdjustmentRecord{}, err
+			return domain.AccountAdjustmentRecord{}, errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 		}
 	}
 	stored, err := r.AppendAdjustment(ctx, in.Adjustment)
 	if err != nil {
-		r.restoreData(snapshot, backup.RestoreModeOverwrite)
-		return domain.AccountAdjustmentRecord{}, err
+		return domain.AccountAdjustmentRecord{}, errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 	}
 	if err := r.AppendAudit(ctx, in.Audit); err != nil {
-		r.restoreData(snapshot, backup.RestoreModeOverwrite)
-		return domain.AccountAdjustmentRecord{}, err
+		return domain.AccountAdjustmentRecord{}, errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 	}
 	return stored, nil
 }

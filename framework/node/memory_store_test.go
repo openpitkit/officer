@@ -81,10 +81,10 @@ type memoryRealm struct {
 	accounts     map[domain.AccountID]domain.Account
 	balances     map[string]domain.Balance
 
-	rateLimits               map[string]domain.LimitRate
-	orderSizeLimits          map[string]domain.LimitOrderSize
-	positionLimits           map[string]domain.LimitPosition
-	spotFundsPnlBoundsLimits map[string]domain.LimitSpotFundsPnlBounds
+	rateLimits               map[domain.LimitKey]domain.LimitRate
+	orderSizeLimits          map[domain.LimitKey]domain.LimitOrderSize
+	positionLimits           map[domain.LimitKey]domain.LimitPosition
+	spotFundsPnlBoundsLimits map[domain.LimitKey]domain.LimitSpotFundsPnlBounds
 
 	adjustments  []domain.AccountAdjustmentRecord
 	orders       map[domain.ExternalID]domain.Order
@@ -153,10 +153,10 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		groups:                   map[string]domain.AccountGroup{},
 		accounts:                 map[domain.AccountID]domain.Account{},
 		balances:                 map[string]domain.Balance{},
-		rateLimits:               map[string]domain.LimitRate{},
-		orderSizeLimits:          map[string]domain.LimitOrderSize{},
-		positionLimits:           map[string]domain.LimitPosition{},
-		spotFundsPnlBoundsLimits: map[string]domain.LimitSpotFundsPnlBounds{},
+		rateLimits:               map[domain.LimitKey]domain.LimitRate{},
+		orderSizeLimits:          map[domain.LimitKey]domain.LimitOrderSize{},
+		positionLimits:           map[domain.LimitKey]domain.LimitPosition{},
+		spotFundsPnlBoundsLimits: map[domain.LimitKey]domain.LimitSpotFundsPnlBounds{},
 		orders:                   map[domain.ExternalID]domain.Order{},
 		orderReviews:             map[domain.ExternalID]domain.OrderReview{},
 		reports:                  map[domain.ExternalID]domain.ExternalID{},
@@ -212,19 +212,6 @@ func (r *memoryRealm) nextExternalID() domain.ExternalID {
 
 func balanceKey(account domain.AccountID, asset string) string {
 	return string(account) + "\x00" + asset
-}
-
-func limitKey(scope domain.LimitScope, account domain.AccountID, asset string, mode domain.RuleMode) string {
-	return string(scope) + "\x00" + string(account) + "\x00" + asset + "\x00" + string(mode)
-}
-
-func spotFundsPnlBoundsLimitKey(
-	axis domain.SpotFundsPnlAxis,
-	scope domain.LimitScope,
-	account domain.AccountID,
-	accountGroup string,
-) string {
-	return string(axis) + "\x00" + string(scope) + "\x00" + string(account) + "\x00" + accountGroup
 }
 
 func instrumentKey(instance domain.ExternalID, externalSymbol string) string {

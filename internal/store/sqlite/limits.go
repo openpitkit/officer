@@ -416,16 +416,24 @@ func (r *realmStore) PutRateLimit(ctx context.Context, limit domain.LimitRate) e
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	key, err := limit.Key()
+	if err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, db, limit.Account, limit.Asset)
+	ids, err := resolveLimitKeyIDs(ctx, db, key)
 	if err != nil {
 		return err
 	}
-	return putLimitRow(ctx, db, "limit_rate",
-		limit.Scope, accountID, assetID,
+	predicate, err := limitKeyWhere(key, ids)
+	if err != nil {
+		return err
+	}
+	accountID, assetID := ids.account, ids.asset
+	return putLimitRow(ctx, db, predicate,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
 				ctx,
@@ -438,33 +446,36 @@ func (r *realmStore) PutRateLimit(ctx context.Context, limit domain.LimitRate) e
 			)
 			return err
 		},
-		nil,
 	)
 }
 
-// DeleteRateLimit removes the rate-limit barrier with the given composite.
+// DeleteLimit removes the barrier addressed by key from its policy's table.
 // Returns domain.ErrNotFound when absent.
-func (r *realmStore) DeleteRateLimit(
-	ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
-) error {
+func (r *realmStore) DeleteLimit(ctx context.Context, key domain.LimitKey) error {
+	// Reject keys without a barrier table before even opening the database.
+	if _, err := limitTableForPolicy(key.Policy()); err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, db, account, asset)
+	ids, err := resolveLimitKeyIDs(ctx, db, key)
 	if err != nil {
 		return err
 	}
-	res, err := db.ExecContext(
-		ctx,
-		`DELETE FROM limit_rate
-		 WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
-		scope, accountID, assetID,
+	predicate, err := limitKeyWhere(key, ids)
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(ctx,
+		`DELETE FROM `+predicate.table+` WHERE `+predicate.where,
+		predicate.args...,
 	)
 	if err != nil {
-		return fmt.Errorf("store: delete rate limit: %w", err)
+		return fmt.Errorf("store: delete %s: %w", predicate.noun, err)
 	}
-	return notFoundIfNoRows(res, "rate limit", string(scope))
+	return notFoundIfNoRows(res, predicate.noun, predicate.subject)
 }
 
 func scanRateLimit(rows *sql.Rows) (domain.LimitRate, error) {
@@ -542,16 +553,24 @@ func (r *realmStore) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOr
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	key, err := limit.Key()
+	if err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, db, limit.Account, limit.Asset)
+	ids, err := resolveLimitKeyIDs(ctx, db, key)
 	if err != nil {
 		return err
 	}
-	return putLimitRow(ctx, db, "limit_order_size",
-		limit.Scope, accountID, assetID,
+	predicate, err := limitKeyWhere(key, ids)
+	if err != nil {
+		return err
+	}
+	accountID, assetID := ids.account, ids.asset
+	return putLimitRow(ctx, db, predicate,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
 				ctx,
@@ -565,37 +584,7 @@ func (r *realmStore) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOr
 			)
 			return err
 		},
-		&limit.Mode,
 	)
-}
-
-// DeleteOrderSizeLimit removes the order-size barrier at (scope, account, asset, mode).
-// Returns domain.ErrNotFound when absent and domain.ErrInvalid for an empty or unsupported mode.
-func (r *realmStore) DeleteOrderSizeLimit(
-	ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
-	mode domain.RuleMode,
-) error {
-	if err := domain.ValidateOrderSizeMode(mode); err != nil {
-		return fmt.Errorf("store: delete order size limit: %w", err)
-	}
-	db, err := r.db()
-	if err != nil {
-		return err
-	}
-	accountID, assetID, err := resolveLimitAxes(ctx, db, account, asset)
-	if err != nil {
-		return err
-	}
-	res, err := db.ExecContext(
-		ctx,
-		`DELETE FROM limit_order_size
-		 WHERE scope = ? AND account_id IS ? AND asset_id IS ? AND mode = ?`,
-		scope, accountID, assetID, mode,
-	)
-	if err != nil {
-		return fmt.Errorf("store: delete order size limit: %w", err)
-	}
-	return notFoundIfNoRows(res, "order size limit", string(scope))
 }
 
 func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
@@ -662,16 +651,24 @@ func (r *realmStore) PutPositionLimit(ctx context.Context, limit domain.LimitPos
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	key, err := limit.Key()
+	if err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, db, limit.Account, limit.Asset)
+	ids, err := resolveLimitKeyIDs(ctx, db, key)
 	if err != nil {
 		return err
 	}
-	return putLimitRow(ctx, db, "limit_position",
-		limit.Scope, accountID, assetID,
+	predicate, err := limitKeyWhere(key, ids)
+	if err != nil {
+		return err
+	}
+	accountID, assetID := ids.account, ids.asset
+	return putLimitRow(ctx, db, predicate,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
 				ctx,
@@ -682,28 +679,7 @@ func (r *realmStore) PutPositionLimit(ctx context.Context, limit domain.LimitPos
 			)
 			return err
 		},
-		nil,
 	)
-}
-
-// DeletePositionLimit removes the ceiling for the account and asset.
-func (r *realmStore) DeletePositionLimit(ctx context.Context, account domain.AccountID, asset string) error {
-	db, err := r.db()
-	if err != nil {
-		return err
-	}
-	accountID, assetID, err := resolveLimitAxes(ctx, db, account, asset)
-	if err != nil {
-		return err
-	}
-	res, err := db.ExecContext(ctx,
-		`DELETE FROM limit_position WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
-		domain.ScopeAccountAsset, accountID, assetID,
-	)
-	if err != nil {
-		return fmt.Errorf("store: delete position limit: %w", err)
-	}
-	return notFoundIfNoRows(res, "position limit", account.String()+":"+asset)
 }
 
 // --- SpotFunds P&L-bounds barriers (limit_spot_funds_pnl_bound) -------------
@@ -762,13 +738,15 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	key, err := limit.Key()
+	if err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	accountID, groupID, err := resolveSubjectIDs(
-		ctx, db, limit.Account, limit.AccountGroup,
-	)
+	ids, err := resolveLimitKeyIDs(ctx, db, key)
 	if err != nil {
 		return err
 	}
@@ -776,8 +754,13 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 	if err != nil {
 		return err
 	}
-	return putSpotFundsPnlBoundsRow(
-		ctx, db, limit.Axis, limit.Scope, accountID, groupID,
+	predicate, err := limitKeyWhere(key, ids)
+	if err != nil {
+		return err
+	}
+	accountID, groupID := ids.account, ids.group
+	return putLimitRow(
+		ctx, db, predicate,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
 				ctx,
@@ -791,39 +774,6 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 			return err
 		},
 	)
-}
-
-// DeleteSpotFundsPnlBoundsLimit removes the SpotFunds self-computed P&L-bounds
-// barrier with the given composite, the axis included. Returns
-// domain.ErrNotFound when absent.
-func (r *realmStore) DeleteSpotFundsPnlBoundsLimit(
-	ctx context.Context,
-	axis domain.SpotFundsPnlAxis,
-	scope domain.LimitScope,
-	account domain.AccountID,
-	accountGroup string,
-) error {
-	db, err := r.db()
-	if err != nil {
-		return err
-	}
-	accountID, groupID, err := resolveSubjectIDs(ctx, db, account, accountGroup)
-	if err != nil {
-		return err
-	}
-	res, err := db.ExecContext(
-		ctx,
-		`DELETE FROM limit_spot_funds_pnl_bound
-		 WHERE axis = ?
-		   AND scope = ?
-		   AND account_id IS ?
-		   AND account_group_id IS ?`,
-		axis, scope, accountID, groupID,
-	)
-	if err != nil {
-		return fmt.Errorf("store: delete spot funds pnl bounds limit: %w", err)
-	}
-	return notFoundIfNoRows(res, "spot funds pnl bounds limit", string(scope))
 }
 
 func scanSpotFundsPnlBoundsLimit(
@@ -858,21 +808,66 @@ func scanSpotFundsPnlBoundsLimit(
 
 // --- Limits-group shared helpers --------------------------------------------
 
-// limitKeyWhere keys on scope, account and asset, plus mode when non-nil.
-// nil is for tables without a mode column. An empty non-nil mode
-// matches no row; the subsequent INSERT fails the mode CHECK constraint.
-func limitKeyWhere(
-	scope domain.LimitScope,
-	accountID, assetID sql.NullInt64,
-	mode *domain.RuleMode,
-) (string, []any) {
-	where := `scope = ? AND account_id IS ? AND asset_id IS ?`
-	args := []any{scope, accountID, assetID}
-	if mode != nil {
-		where += ` AND mode = ?`
-		args = append(args, *mode)
+type limitKeyIDs struct {
+	account, asset, group sql.NullInt64
+}
+
+type limitKeyPredicate struct {
+	table, where, noun, subject string
+	args                        []any
+}
+
+type limitTable struct {
+	name, noun string
+	hasMode    bool
+	hasPnlAxis bool
+}
+
+func limitTableForPolicy(policy string) (limitTable, error) {
+	switch policy {
+	case domain.PolicyRateLimit:
+		return limitTable{name: "limit_rate", noun: "rate limit"}, nil
+	case domain.PolicyOrderSizeLimit:
+		return limitTable{name: "limit_order_size", noun: "order size limit", hasMode: true}, nil
+	case domain.PolicyPositionLimit:
+		return limitTable{name: "limit_position", noun: "position limit"}, nil
+	case domain.PolicySpotFundsPnlBoundsKillSwitch,
+		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
+		return limitTable{name: "limit_spot_funds_pnl_bound", noun: "spot funds pnl bounds limit", hasPnlAxis: true}, nil
 	}
-	return where, args
+	return limitTable{}, fmt.Errorf("store: policy %q has no limit barrier table: %w", policy, domain.ErrInvalid)
+}
+
+// limitKeyWhere chooses the barrier table and its complete key predicate.
+// Keys without a barrier table are invalid, including the zero key.
+func limitKeyWhere(key domain.LimitKey, ids limitKeyIDs) (limitKeyPredicate, error) {
+	table, err := limitTableForPolicy(key.Policy())
+	if err != nil {
+		return limitKeyPredicate{}, err
+	}
+	predicate := limitKeyPredicate{
+		table: table.name, noun: table.noun, subject: string(key.Scope()),
+	}
+	if table.hasPnlAxis {
+		axis, ok := domain.SpotFundsPnlAxisOf(key.Policy())
+		if !ok {
+			return limitKeyPredicate{}, fmt.Errorf("store: policy %q has no spot funds pnl axis: %w", key.Policy(), domain.ErrInvalid)
+		}
+		predicate.where = `axis = ? AND scope = ? AND account_id IS ? AND account_group_id IS ?`
+		predicate.args = []any{axis, key.Scope(), ids.account, ids.group}
+		return predicate, nil
+	}
+	predicate.where = `scope = ? AND account_id IS ? AND asset_id IS ?`
+	predicate.args = []any{key.Scope(), ids.account, ids.asset}
+	if table.hasMode {
+		predicate.where += ` AND mode = ?`
+		predicate.args = append(predicate.args, key.Mode())
+	}
+	if key.Policy() == domain.PolicyPositionLimit {
+		predicate.subject = key.Account().String() + ":" + key.Asset()
+	}
+	return predicate, nil
 }
 
 // putLimitRow upserts one limit row in table using DELETE-then-INSERT inside a
@@ -880,21 +875,16 @@ func limitKeyWhere(
 // constraints: two rows with the same (scope, NULL, NULL) are considered
 // different by the ON CONFLICT clause, so the standard upsert idiom silently
 // inserts a duplicate. The delete-first approach is safe under SQLite's
-// single-writer serialisation; it correctly handles all NULL combinations of
-// the (scope, account_id, asset_id) composite key. insertFn executes the INSERT
-// through the provided execer after the prior row (if any) is deleted.
-// A non-nil mode adds the mode column to the key; nil is for tables without
-// that column.
+// single-writer serialisation. The complete key predicate comes from
+// limitKeyWhere. insertFn executes the INSERT through the provided execer after
+// the prior row (if any) is deleted.
 func putLimitRow(
 	ctx context.Context,
 	db *sql.DB,
-	table string,
-	scope domain.LimitScope,
-	accountID, assetID sql.NullInt64,
+	predicate limitKeyPredicate,
 	insertFn func(context.Context, sqlExecer) error,
-	mode *domain.RuleMode,
 ) (err error) {
-	where, args := limitKeyWhere(scope, accountID, assetID, mode)
+	table := predicate.table
 	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin put limit %s: %w", table, err)
@@ -903,8 +893,8 @@ func putLimitRow(
 
 	if _, err := tx.ExecContext(
 		ctx,
-		`DELETE FROM `+table+` WHERE `+where,
-		args...,
+		`DELETE FROM `+table+` WHERE `+predicate.where,
+		predicate.args...,
 	); err != nil {
 		return fmt.Errorf("store: delete old limit %s: %w", table, err)
 	}
@@ -917,63 +907,24 @@ func putLimitRow(
 	return nil
 }
 
-// resolveLimitAxes resolves account and asset codes to their nullable surrogate
-// ids for a limit row insert or delete. An empty code maps to a NULL axis (the
-// scope-wide case); a non-empty unknown code wraps domain.ErrInvalid.
-func resolveLimitAxes(
-	ctx context.Context, q sqlQueryer,
-	account domain.AccountID, asset string,
-) (sql.NullInt64, sql.NullInt64, error) {
-	var accountID, assetID sql.NullInt64
-	if account != "" {
-		id, err := resolveAccountID(ctx, q, account)
-		if err != nil {
-			return sql.NullInt64{}, sql.NullInt64{}, err
-		}
-		accountID = sql.NullInt64{Int64: id, Valid: true}
-	}
-	if asset != "" {
-		id, err := resolveAssetID(ctx, q, asset)
-		if err != nil {
-			return sql.NullInt64{}, sql.NullInt64{}, err
-		}
-		assetID = sql.NullInt64{Int64: id, Valid: true}
-	}
-	return accountID, assetID, nil
-}
-
-func putSpotFundsPnlBoundsRow(
-	ctx context.Context,
-	db *sql.DB,
-	axis domain.SpotFundsPnlAxis,
-	scope domain.LimitScope,
-	accountID, groupID sql.NullInt64,
-	insertFn func(context.Context, sqlExecer) error,
-) (err error) {
-	tx, err := beginTx(ctx, db, nil)
+// resolveLimitKeyIDs resolves the key's non-empty codes to nullable surrogate
+// ids. A non-empty unknown code wraps domain.ErrInvalid.
+func resolveLimitKeyIDs(
+	ctx context.Context, q sqlQueryer, key domain.LimitKey,
+) (limitKeyIDs, error) {
+	accountID, groupID, err := resolveSubjectIDs(ctx, q, key.Account(), key.AccountGroup())
 	if err != nil {
-		return fmt.Errorf("store: begin put spot funds pnl bounds limit: %w", err)
+		return limitKeyIDs{}, err
 	}
-	defer rollbackTransaction(ctx, &err, tx)
-
-	if _, err := tx.ExecContext(
-		ctx,
-		`DELETE FROM limit_spot_funds_pnl_bound
-		 WHERE axis = ?
-		   AND scope = ?
-		   AND account_id IS ?
-		   AND account_group_id IS ?`,
-		axis, scope, accountID, groupID,
-	); err != nil {
-		return fmt.Errorf("store: delete old spot funds pnl bounds limit: %w", err)
+	ids := limitKeyIDs{account: accountID, group: groupID}
+	if key.Asset() != "" {
+		id, err := resolveAssetID(ctx, q, key.Asset())
+		if err != nil {
+			return limitKeyIDs{}, err
+		}
+		ids.asset = sql.NullInt64{Int64: id, Valid: true}
 	}
-	if err := insertFn(ctx, tx); err != nil {
-		return fmt.Errorf("store: insert spot funds pnl bounds limit: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit put spot funds pnl bounds limit: %w", err)
-	}
-	return nil
+	return ids, nil
 }
 
 func resolveSubjectIDs(

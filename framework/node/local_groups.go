@@ -675,11 +675,13 @@ func (n *localNode) groupProtection(
 		return fmt.Errorf("group %q is blocked: %w", group.Code, domain.ErrLoosening)
 	}
 	for _, axis := range domain.SpotFundsPnlAxes {
-		_, bound, err := n.readSpotFundsPnlBoundsBarrier(ctx, LimitTarget{
-			Policy:       axis.Policy(),
-			Scope:        domain.ScopeAccountGroup,
-			AccountGroup: group.Code,
-		})
+		key, err := domain.NewLimitKey(axis.Policy(), "", domain.ScopeAccountGroup, "", group.Code, "")
+		if err != nil {
+			return fmt.Errorf(
+				"read spot funds pnl-bounds limits for group %q: %w", group.Code, err,
+			)
+		}
+		_, bound, err := n.readSpotFundsPnlBoundsBarrier(ctx, key)
 		if err != nil {
 			return fmt.Errorf(
 				"read spot funds pnl-bounds limits for group %q: %w", group.Code, err,

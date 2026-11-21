@@ -40,20 +40,28 @@ type limitWriteCase struct {
 
 func TestCheckLimitWriteErrorText(t *testing.T) {
 	t.Parallel()
+	keyFor := func(scope domain.LimitScope, account domain.AccountID) domain.LimitKey {
+		t.Helper()
+		key, err := domain.NewLimitKey(domain.PolicyRateLimit, "", scope, account, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
 	for _, tc := range []struct {
-		name   string
-		target LimitTarget
-		key    string
+		name     string
+		limitKey domain.LimitKey
+		key      string
 	}{
 		{
-			name:   "broker",
-			target: LimitTarget{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker},
-			key:    "rate_limit at broker",
+			name:     "broker",
+			limitKey: keyFor(domain.ScopeBroker, ""),
+			key:      "rate_limit at broker",
 		},
 		{
-			name:   "account",
-			target: LimitTarget{Policy: domain.PolicyRateLimit, Scope: domain.ScopeAccount, Account: "acc-1"},
-			key:    `rate_limit at account "acc-1"`,
+			name:     "account",
+			limitKey: keyFor(domain.ScopeAccount, "acc-1"),
+			key:      `rate_limit at account "acc-1"`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,7 +74,7 @@ func TestCheckLimitWriteErrorText(t *testing.T) {
 				{domain.LimitWriteAdd, true, domain.ErrLimitExists},
 				{domain.LimitWriteChange, false, domain.ErrNotFound},
 			} {
-				err := checkLimitWrite(refusal.write, tc.target, refusal.exists)
+				err := checkLimitWrite(refusal.write, tc.limitKey, refusal.exists)
 				want := tc.key + ": " + refusal.want.Error()
 				if !errors.Is(err, refusal.want) || err.Error() != want {
 					t.Fatalf("intent %q error = %v, want %q", refusal.write, err, want)

@@ -351,26 +351,30 @@ func storedLimitAccount(
 	return account
 }
 
-// persistedLimit reads back a barrier using its normalized stored address.
-func persistedLimit[T any](
+// persistedLimit matches a barrier by domain.LimitKey equality against stored
+// rows. The target must already carry its stored account (storedLimitAccount).
+func persistedLimit[Limit domain.KeyedLimit](
 	ctx context.Context, svc LimitReader,
-	scope domain.LimitScope, account domain.AccountID, asset string, mode domain.RuleMode,
-	slice func(node.AccountLimits) []T,
-	address func(T) (domain.LimitScope, domain.AccountID, string, domain.RuleMode),
-) (T, error) {
-	var zero T
-	account = storedLimitAccount(svc, scope, account)
-	limits, err := svc.ListLimits(ctx, account)
+	target Limit,
+	slice func(node.AccountLimits) []Limit,
+) (Limit, error) {
+	var zero Limit
+	key, err := target.Key()
 	if err != nil {
 		return zero, err
 	}
-	for _, limit := range slice(limits) {
-		limitScope, limitAccount, limitAsset, limitMode := address(limit)
-		if sameLimitAddress(limitScope, limitAccount, limitAsset, limitMode, scope, account, asset, mode) {
-			return limit, nil
-		}
+	limits, err := svc.ListLimits(ctx, key.Account())
+	if err != nil {
+		return zero, err
 	}
-	return zero, domain.ErrNotFound
+	limit, found, err := domain.FindLimit(slice(limits), key)
+	if err != nil {
+		return zero, err
+	}
+	if !found {
+		return zero, domain.ErrNotFound
+	}
+	return limit, nil
 }
 
 // PersistedRateLimit reads back the rate-limit barrier stored at target's
@@ -378,11 +382,9 @@ func persistedLimit[T any](
 func PersistedRateLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitRate,
 ) (domain.LimitRate, error) {
-	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset, "",
-		func(limits node.AccountLimits) []domain.LimitRate { return limits.RateLimits },
-		func(limit domain.LimitRate) (domain.LimitScope, domain.AccountID, string, domain.RuleMode) {
-			return limit.Scope, limit.Account, limit.Asset, ""
-		})
+	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
+	return persistedLimit(ctx, svc, target,
+		func(limits node.AccountLimits) []domain.LimitRate { return limits.RateLimits })
 }
 
 // PersistedOrderSizeLimit reads back the order-size barrier stored at
@@ -390,11 +392,9 @@ func PersistedRateLimit(
 func PersistedOrderSizeLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitOrderSize,
 ) (domain.LimitOrderSize, error) {
-	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset, target.Mode,
-		func(limits node.AccountLimits) []domain.LimitOrderSize { return limits.OrderSizeLimits },
-		func(limit domain.LimitOrderSize) (domain.LimitScope, domain.AccountID, string, domain.RuleMode) {
-			return limit.Scope, limit.Account, limit.Asset, limit.Mode
-		})
+	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
+	return persistedLimit(ctx, svc, target,
+		func(limits node.AccountLimits) []domain.LimitOrderSize { return limits.OrderSizeLimits })
 }
 
 // PersistedPositionLimit reads back the addressed barrier, including an account
@@ -402,11 +402,9 @@ func PersistedOrderSizeLimit(
 func PersistedPositionLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitPosition,
 ) (domain.LimitPosition, error) {
-	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset, "",
-		func(limits node.AccountLimits) []domain.LimitPosition { return limits.PositionLimits },
-		func(limit domain.LimitPosition) (domain.LimitScope, domain.AccountID, string, domain.RuleMode) {
-			return limit.Scope, limit.Account, limit.Asset, ""
-		})
+	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
+	return persistedLimit(ctx, svc, target,
+		func(limits node.AccountLimits) []domain.LimitPosition { return limits.PositionLimits })
 }
 
 // PersistedSpotFundsPnlBoundsLimit reads back the SpotFunds P&L-bounds
@@ -416,33 +414,8 @@ func PersistedSpotFundsPnlBoundsLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitSpotFundsPnlBounds,
 ) (domain.LimitSpotFundsPnlBounds, error) {
 	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	limits, err := svc.ListLimits(ctx, target.Account)
-	if err != nil {
-		return domain.LimitSpotFundsPnlBounds{}, err
-	}
-	for _, limit := range limits.SpotFundsPnlBoundsLimits {
-		if sameSpotFundsPnlBoundsAddress(limit, target) {
-			return limit, nil
-		}
-	}
-	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotFound
-}
-
-func sameLimitAddress(
-	leftScope domain.LimitScope, leftAccount domain.AccountID, leftAsset string,
-	leftMode domain.RuleMode,
-	rightScope domain.LimitScope, rightAccount domain.AccountID, rightAsset string,
-	rightMode domain.RuleMode,
-) bool {
-	return leftScope == rightScope && leftAccount == rightAccount && leftAsset == rightAsset && leftMode == rightMode
-}
-
-func sameSpotFundsPnlBoundsAddress(
-	left domain.LimitSpotFundsPnlBounds,
-	right domain.LimitSpotFundsPnlBounds,
-) bool {
-	return left.Axis == right.Axis &&
-		left.Scope == right.Scope &&
-		left.Account == right.Account &&
-		left.AccountGroup == right.AccountGroup
+	return persistedLimit(ctx, svc, target,
+		func(limits node.AccountLimits) []domain.LimitSpotFundsPnlBounds {
+			return limits.SpotFundsPnlBoundsLimits
+		})
 }

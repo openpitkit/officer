@@ -659,6 +659,7 @@ describe("Setup", () => {
       policy: "spot_funds_limit_mode",
       scope: "global",
       account: "",
+      accountGroup: "",
       asset: "",
     };
 

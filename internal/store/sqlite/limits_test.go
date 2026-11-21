@@ -89,8 +89,8 @@ func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
 	}
 
 	// Delete removes the row.
-	if err := rs.DeleteRateLimit(ctx, domain.ScopeAccountAsset, "acc-1", "AAPL"); err != nil {
-		t.Fatalf("DeleteRateLimit: %v", err)
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, "", domain.ScopeAccountAsset, "acc-1", "", "AAPL")); err != nil {
+		t.Fatalf("DeleteLimit: %v", err)
 	}
 	list, _ = rs.ListRateLimits(ctx, "")
 	if len(list) != 0 {
@@ -98,8 +98,8 @@ func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
 	}
 
 	// Double delete is ErrNotFound.
-	if err := rs.DeleteRateLimit(ctx, domain.ScopeAccountAsset, "acc-1", "AAPL"); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("DeleteRateLimit(missing) error = %v, want ErrNotFound", err)
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, "", domain.ScopeAccountAsset, "acc-1", "", "AAPL")); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteLimit(missing) error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestRateLimitBrokerScopeNullAxes(t *testing.T) {
 		t.Fatalf("broker limit axes = account=%q asset=%q", list[0].Account, list[0].Asset)
 	}
 	// Deleting by (broker, "", "") should find the row.
-	if err := rs.DeleteRateLimit(ctx, domain.ScopeBroker, "", ""); err != nil {
-		t.Fatalf("DeleteRateLimit(broker): %v", err)
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, "", domain.ScopeBroker, "", "", "")); err != nil {
+		t.Fatalf("DeleteLimit(broker): %v", err)
 	}
 }
 
@@ -266,25 +266,19 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("after upsert len = %d, want 2 semantic rows", len(list))
 	}
 
-	if err := rs.DeleteOrderSizeLimit(
-		ctx, domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL", domain.RuleModeReject,
-	); err != nil {
-		t.Fatalf("DeleteOrderSizeLimit: %v", err)
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyOrderSizeLimit, domain.RuleModeReject, domain.ScopeAccountUnderlyingAsset, "acc-1", "", "AAPL")); err != nil {
+		t.Fatalf("DeleteLimit: %v", err)
 	}
 	list, _ = rs.ListOrderSizeLimits(ctx, "")
 	if len(list) != 1 || list[0] != settlement {
 		t.Fatalf("after underlying delete = %+v, want settlement row", list)
 	}
 
-	if err := rs.DeleteOrderSizeLimit(
-		ctx, domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL", domain.RuleModeReject,
-	); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("DeleteOrderSizeLimit(missing) = %v, want ErrNotFound", err)
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyOrderSizeLimit, domain.RuleModeReject, domain.ScopeAccountUnderlyingAsset, "acc-1", "", "AAPL")); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteLimit(missing) = %v, want ErrNotFound", err)
 	}
-	if err := rs.DeleteOrderSizeLimit(
-		ctx, domain.ScopeAccountSettlementAsset, "acc-1", "AAPL", domain.RuleModeReject,
-	); err != nil {
-		t.Fatalf("DeleteOrderSizeLimit(settlement): %v", err)
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyOrderSizeLimit, domain.RuleModeReject, domain.ScopeAccountSettlementAsset, "acc-1", "", "AAPL")); err != nil {
+		t.Fatalf("DeleteLimit(settlement): %v", err)
 	}
 }
 
@@ -364,18 +358,18 @@ func TestOrderSizeLimitModeKey(t *testing.T) {
 				}
 				assertLimits(reject, review)
 			}
-			if err := rs.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, ""); !errors.Is(err, domain.ErrInvalid) {
+			if _, err := domain.NewLimitKey(domain.PolicyOrderSizeLimit, "", target.Scope, target.Account, "", target.Asset); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("delete without mode = %v, want ErrInvalid", err)
 			}
 			assertLimits(reject, review)
-			if err := rs.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, review.Mode); err != nil {
+			if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyOrderSizeLimit, review.Mode, target.Scope, target.Account, "", target.Asset)); err != nil {
 				t.Fatal(err)
 			}
 			assertLimits(reject)
 			if err := rs.PutOrderSizeLimit(ctx, review); err != nil {
 				t.Fatal(err)
 			}
-			if err := rs.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, reject.Mode); err != nil {
+			if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyOrderSizeLimit, reject.Mode, target.Scope, target.Account, "", target.Asset)); err != nil {
 				t.Fatal(err)
 			}
 			assertLimits(review)
@@ -453,12 +447,12 @@ func TestPositionLimitPutListDeleteRoundTrip(t *testing.T) {
 		}
 		assertLimits("", want)
 	}
-	if err := rs.DeletePositionLimit(ctx, "acc-1", "AAPL"); err != nil {
-		t.Fatalf("DeletePositionLimit: %v", err)
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, "", domain.ScopeAccountAsset, "acc-1", "", "AAPL")); err != nil {
+		t.Fatalf("DeleteLimit: %v", err)
 	}
 	assertLimits("", want[1:])
-	if err := rs.DeletePositionLimit(ctx, "acc-1", "AAPL"); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("DeletePositionLimit(missing) = %v, want ErrNotFound", err)
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, "", domain.ScopeAccountAsset, "acc-1", "", "AAPL")); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteLimit(missing) = %v, want ErrNotFound", err)
 	}
 }
 
@@ -485,8 +479,8 @@ func TestPositionLimitInvalidRejected(t *testing.T) {
 		t.Fatalf("invalid writes left limits = %+v, err = %v", list, err)
 	}
 	for _, pair := range [][2]string{{"missing", "AAPL"}, {"acc-1", "missing"}} {
-		if err := rs.DeletePositionLimit(ctx, domain.AccountID(pair[0]), pair[1]); !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("DeletePositionLimit(%q) = %v, want ErrInvalid", pair, err)
+		if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, "", domain.ScopeAccountAsset, domain.AccountID(pair[0]), "", pair[1])); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("DeleteLimit(%q) = %v, want ErrInvalid", pair, err)
 		}
 	}
 }

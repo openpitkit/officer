@@ -59,6 +59,7 @@ import type {
   GroupListFilters,
   Health,
   Limit,
+  LimitTarget,
   TradingMode,
   TestExecutionPolicy,
   TestExecutionPolicyState,
@@ -972,6 +973,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
       mode: null,
       scope: limit.scope,
       account: limit.account,
+      accountGroup: "",
       asset: limit.asset,
       values: {
         max_orders: String(limit.maxOrders),
@@ -983,6 +985,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
       mode: limit.mode,
       scope: limit.scope,
       account: limit.account,
+      accountGroup: "",
       asset: limit.asset,
       values: {
         max_quantity: limit.maxQuantity,
@@ -994,6 +997,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
       mode: null,
       scope: limit.scope,
       account: limit.account,
+      accountGroup: "",
       asset: limit.asset,
       values: { max_position: limit.maxPosition },
     })),
@@ -1289,7 +1293,7 @@ function limitEndpointBody(
       body: {
         scope: limit.scope,
         account: limit.account,
-        accountGroup: limit.accountGroup ?? "",
+        accountGroup: limit.accountGroup,
         currency: limit.values.currency,
         lowerBound: limit.values.lower_bound ?? "",
         upperBound: limit.values.upper_bound ?? "",
@@ -5031,14 +5035,7 @@ function putLimit(
 /** DELETE /limits identified by its target tuple. */
 async function deleteLimit(
   client: ApiClient,
-  target: {
-    mode: OrderSizeLimitMode | null;
-    policy: string;
-    scope: string;
-    account: string;
-    accountGroup?: string;
-    asset: string;
-  },
+  target: LimitTarget,
 ): Promise<void> {
   const params = new URLSearchParams({
     policy: target.policy,

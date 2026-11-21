@@ -99,6 +99,56 @@ Its fixture runs through `check-semgrep`.
 
 This rule has no approval marker or baseline.
 
+### Limit barrier keys
+
+Keep barrier identity in `domain.LimitKey`: use `domain.NewLimitKey`, a barrier's
+`Key()` or `domain.StoredLimitKey`, then compare/index the resulting values.
+SQLite predicates use `limitKeyWhere(domain.LimitKey, limitKeyIDs)`. Panel code
+uses `limitTarget`, `limitTargetKey` and `sameLimitTarget` from
+`web/src/api/limitTarget.ts`.
+
+The rules flag these shapes outside their owners:
+
+- `limit-key-literal`: Go key literals; zero-key error returns need a recognised
+  constructor, sentinel, address-of composite literal (`&T{...}`) or non-nil guard.
+- `limit-target-literal`: Go target literals except the query-to-DELETE DTO shape.
+- `limit-key-string-join`: Go concatenations, `fmt.Sprintf`, `strings.Join` and
+  joined map keys with two axes and scope/axis vocabulary or a limit receiver.
+- `limit-key-axis-compare`: paired comparisons with a `Scope`/`Axis` field,
+  a limit/target-typed owner or a typed-slice range; selector/scalar pairs require
+  parameter scalars. Prefix-paired scalar names require `Scope`/`Axis`.
+- `limit-key-composite`: inline composite map indexes, equality and `delete` keys.
+  They need a `Scope`/`Axis` field, a limit/target-typed owner or a typed-slice range.
+- `limit-key-sql`: a heuristic AND-chain check for scope/axis and subject-ID
+  placeholders; parenthesised groups are traversed; clause boundaries end the scan.
+- `limit-target-template-key`: panel templates, `+`, joins and JSON array keys.
+- `limit-target-axis-compare`: paired panel comparisons, including parameter scalars.
+- `limit-target-object`: target copies at `deleteLimit` calls or `LimitTarget` annotations.
+
+Panel keys/comparisons need `policy` or a typed `Limit`/`LimitTarget` context,
+including typed-array callbacks and `for...of`. Go `fmt.Sprintf` formats with
+whitespace are treated as prose. Panel `.join` separators count as keys unless
+they are string literals containing whitespace.
+
+Known misses: field-name mismatches; local/destructured scalars; loose-axis call
+arguments; keys assigned before indexing and map-literal keys; declaration/new
+zero keys; query-to-DTO handler shapes; formatted SQL columns or predicates
+without scope/axis; other encodings/accessor chains. Package-level value fields
+such as `packageError.ErrCause` still receive the sentinel exemption; parameter
+and receiver qualifiers are checked. Mixed member/parameter
+pairs remain omitted: they need a new member-position/signature product.
+Both misses are pinned with `todoruleid` fixtures.
+
+Known rule bugs marked `todook`: early-success/switch proofs on zero-key error
+returns, panel prose templates/concatenations over two axes, and derived Go
+operands. A function of an axis, an emptiness test or a length test also matches
+as an axis. Go prose built with `+` or `strings.Join` over two axes also fires,
+including joins with a whitespace separator.
+SQL `OR` in the predicates' enclosing parentheses can also be mistaken for AND
+linkage, including inside a subquery.
+
+Run the oracle and tree scan with `check-semgrep`. No approval marker or baseline.
+
 ### `test-slog-default-restore`
 
 `checks/semgrep/test-slog-default-restore.yml` forbids direct `slog.SetDefault`

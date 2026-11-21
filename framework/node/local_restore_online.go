@@ -154,19 +154,19 @@ func restoreAddsAssets(
 func classifyRestoreRuntimeDelta(
 	before restoreRuntimeSnapshot,
 	after restoreRuntimeSnapshot,
-) restoreRuntimePlan {
+) (restoreRuntimePlan, error) {
 	plan := restoreRuntimePlan{}
 	for code, account := range before.accounts {
 		next, ok := after.accounts[code]
 		if !ok {
 			plan.rebuild = true
 			plan.reason = "restore deletes an account"
-			return plan
+			return plan, nil
 		}
 		if account.EngineAccountID != next.EngineAccountID {
 			plan.rebuild = true
 			plan.reason = "restore changes a stable account engine id"
-			return plan
+			return plan, nil
 		}
 	}
 	accountIDOwners := make(map[domain.EngineAccountID]domain.AccountID, len(before.accounts))
@@ -177,7 +177,7 @@ func classifyRestoreRuntimeDelta(
 		if owner, ok := accountIDOwners[account.EngineAccountID]; ok && owner != code {
 			plan.rebuild = true
 			plan.reason = "restore reassigns a live account engine id"
-			return plan
+			return plan, nil
 		}
 	}
 	for code, group := range before.groups {
@@ -185,7 +185,7 @@ func classifyRestoreRuntimeDelta(
 			group.EngineGroupID != next.EngineGroupID {
 			plan.rebuild = true
 			plan.reason = "restore changes a stable group engine id"
-			return plan
+			return plan, nil
 		}
 	}
 	groupIDOwners := make(map[domain.EngineGroupID]string, len(before.groups))
@@ -196,38 +196,60 @@ func classifyRestoreRuntimeDelta(
 		if owner, ok := groupIDOwners[group.EngineGroupID]; ok && owner != code {
 			plan.rebuild = true
 			plan.reason = "restore reassigns a live group engine id"
-			return plan
+			return plan, nil
 		}
 	}
 
 	plan.assetsChanged = len(
 		sortedNewAssetCodes(before.data.Assets, after.data.Assets),
 	) > 0
-	plan.rateChanged = !reflect.DeepEqual(
-		rateLimitMap(before.data.RateLimits), rateLimitMap(after.data.RateLimits),
-	)
-	plan.orderSizeChanged = !reflect.DeepEqual(
-		orderSizeLimitMap(before.data.OrderSizeLimits),
-		orderSizeLimitMap(after.data.OrderSizeLimits),
-	)
-	plan.positionChanged = !reflect.DeepEqual(
-		positionLimitMap(before.data.PositionLimits), positionLimitMap(after.data.PositionLimits),
-	)
-	plan.spotFundsChanged = !reflect.DeepEqual(
-		spotFundsLimitMap(before.data.SpotFundsPnlBounds()),
-		spotFundsLimitMap(after.data.SpotFundsPnlBounds()),
-	)
+	beforeRate, err := limitMap(before.data.RateLimits)
+	if err != nil {
+		return restoreRuntimePlan{}, err
+	}
+	afterRate, err := limitMap(after.data.RateLimits)
+	if err != nil {
+		return restoreRuntimePlan{}, err
+	}
+	plan.rateChanged = !reflect.DeepEqual(beforeRate, afterRate)
+	beforeOrderSize, err := limitMap(before.data.OrderSizeLimits)
+	if err != nil {
+		return restoreRuntimePlan{}, err
+	}
+	afterOrderSize, err := limitMap(after.data.OrderSizeLimits)
+	if err != nil {
+		return restoreRuntimePlan{}, err
+	}
+	plan.orderSizeChanged = !reflect.DeepEqual(beforeOrderSize, afterOrderSize)
+	beforePosition, err := limitMap(before.data.PositionLimits)
+	if err != nil {
+		return restoreRuntimePlan{}, err
+	}
+	afterPosition, err := limitMap(after.data.PositionLimits)
+	if err != nil {
+		return restoreRuntimePlan{}, err
+	}
+	plan.positionChanged = !reflect.DeepEqual(beforePosition, afterPosition)
+	beforeSpotFunds, err := limitMap(before.data.SpotFundsPnlBounds())
+	if err != nil {
+		return restoreRuntimePlan{}, err
+	}
+	afterSpotFunds, err := limitMap(after.data.SpotFundsPnlBounds())
+	if err != nil {
+		return restoreRuntimePlan{}, err
+	}
+	plan.spotFundsChanged = !reflect.DeepEqual(beforeSpotFunds, afterSpotFunds)
 	if plan.rateChanged &&
 		(len(before.data.RateLimits) == 0) != (len(after.data.RateLimits) == 0) {
 		plan.rebuild = true
 		plan.reason = "restore adds or removes the rate-limit policy"
-		return plan
+		return plan, nil
 	}
 	if plan.orderSizeChanged &&
 		!reflect.DeepEqual(orderSizeModes(before.data.OrderSizeLimits), orderSizeModes(after.data.OrderSizeLimits)) {
 		plan.rebuild = true
 		plan.reason = "restore changes the order-size mode set"
-		return plan
+		return plan, nil
 	}
 	plan.marketDataChanged = !reflect.DeepEqual(
 		marketDataRuntimeShape(before.marketDataInstances, before.data.MarketDataInstruments),
@@ -238,7 +260,7 @@ func classifyRestoreRuntimeDelta(
 	plan.runtimeChanged = restoreRuntimeShapeChanged(before, after) ||
 		plan.assetsChanged || plan.rateChanged || plan.orderSizeChanged || plan.positionChanged ||
 		plan.spotFundsChanged || plan.marketDataChanged
-	return plan
+	return plan, nil
 }
 
 func restoreRuntimeShapeChanged(
@@ -318,28 +340,16 @@ func balanceRuntimeMap(balances []backup.Balance) map[string]domain.Balance {
 	return out
 }
 
-func rateLimitMap(limits []domain.LimitRate) map[string]domain.LimitRate {
-	out := make(map[string]domain.LimitRate, len(limits))
+func limitMap[Limit domain.KeyedLimit](limits []Limit) (map[domain.LimitKey]Limit, error) {
+	out := make(map[domain.LimitKey]Limit, len(limits))
 	for _, limit := range limits {
-		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.Asset] = limit
+		key, err := domain.StoredLimitKey(limit)
+		if err != nil {
+			return nil, err
+		}
+		out[key] = limit
 	}
-	return out
-}
-
-func positionLimitMap(limits []domain.LimitPosition) map[string]string {
-	out := make(map[string]string, len(limits))
-	for _, limit := range limits {
-		out[limit.Account.String()+"\x00"+limit.Asset] = limit.MaxPosition
-	}
-	return out
-}
-
-func orderSizeLimitMap(limits []domain.LimitOrderSize) map[string]domain.LimitOrderSize {
-	out := make(map[string]domain.LimitOrderSize, len(limits))
-	for _, limit := range limits {
-		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.Asset+"\x00"+string(limit.Mode)] = limit
-	}
-	return out
+	return out, nil
 }
 
 func orderSizeModes(limits []domain.LimitOrderSize) map[domain.RuleMode]bool {
@@ -348,17 +358,6 @@ func orderSizeModes(limits []domain.LimitOrderSize) map[domain.RuleMode]bool {
 		modes[limit.Mode] = true
 	}
 	return modes
-}
-
-func spotFundsLimitMap(
-	limits []domain.LimitSpotFundsPnlBounds,
-) map[string]domain.LimitSpotFundsPnlBounds {
-	out := make(map[string]domain.LimitSpotFundsPnlBounds, len(limits))
-	for _, limit := range limits {
-		out[string(limit.Axis)+"\x00"+string(limit.Scope)+"\x00"+
-			limit.Account.String()+"\x00"+limit.AccountGroup] = limit
-	}
-	return out
 }
 
 type restoreMarketDataShape struct {

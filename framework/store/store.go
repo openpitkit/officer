@@ -1530,11 +1530,11 @@ type RealmStore interface {
 	// wrapping domain.ErrInvalid.
 	PutRateLimit(ctx context.Context, limit domain.LimitRate) error
 
-	// DeleteRateLimit removes the rate-limit barrier with the given composite.
-	// Returns domain.ErrNotFound when absent.
-	DeleteRateLimit(
-		ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
-	) error
+	// DeleteLimit removes the barrier key addresses from the table of its policy.
+	// It returns domain.ErrNotFound when absent, and domain.ErrInvalid for the
+	// zero key or a key of a policy with no barrier table, before any storage
+	// access.
+	DeleteLimit(ctx context.Context, key domain.LimitKey) error
 
 	// ListOrderSizeLimits returns every order-size barrier, optionally narrowed to
 	// the given account.
@@ -1546,14 +1546,6 @@ type RealmStore interface {
 	// (scope, account, asset, mode).
 	PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error
 
-	// DeleteOrderSizeLimit removes the order-size barrier with the given
-	// (scope, account, asset, mode) composite. Returns domain.ErrNotFound when
-	// absent and domain.ErrInvalid for an empty or unsupported mode.
-	DeleteOrderSizeLimit(
-		ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
-		mode domain.RuleMode,
-	) error
-
 	// ListPositionLimits returns every position barrier, optionally narrowed to
 	// the given account.
 	ListPositionLimits(ctx context.Context, account domain.AccountID) ([]domain.LimitPosition, error)
@@ -1561,10 +1553,6 @@ type RealmStore interface {
 	// PutPositionLimit upserts a position barrier keyed by (account, asset).
 	// Unknown account or asset codes are an error wrapping domain.ErrInvalid.
 	PutPositionLimit(ctx context.Context, limit domain.LimitPosition) error
-
-	// DeletePositionLimit removes the barrier for (account, asset).
-	// Returns domain.ErrNotFound when absent.
-	DeletePositionLimit(ctx context.Context, account domain.AccountID, asset string) error
 
 	// ListSpotFundsPnlBoundsLimits returns every SpotFunds self-computed P&L
 	// barrier of every axis, optionally narrowed to the given account.
@@ -1575,16 +1563,6 @@ type RealmStore interface {
 	// PutSpotFundsPnlBoundsLimit upserts one SpotFunds self-computed P&L
 	// barrier keyed by its composite, the axis included.
 	PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds) error
-
-	// DeleteSpotFundsPnlBoundsLimit removes the SpotFunds self-computed P&L
-	// barrier with the given composite. Returns domain.ErrNotFound when absent.
-	DeleteSpotFundsPnlBoundsLimit(
-		ctx context.Context,
-		axis domain.SpotFundsPnlAxis,
-		scope domain.LimitScope,
-		account domain.AccountID,
-		accountGroup string,
-	) error
 
 	// --- Account adjustments (machine record, addressed by external id) ---
 

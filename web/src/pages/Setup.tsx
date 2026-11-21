@@ -567,6 +567,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
                           mode: null,
                           scope: "global",
                           account: "",
+                          accountGroup: "",
                           asset: "",
                           values: { mode: pick },
                         },

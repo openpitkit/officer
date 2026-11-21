@@ -265,7 +265,7 @@ function fromLimit(limit: Limit): FormState {
     policy: limit.policy as Policy,
     scope: limit.scope as Scope,
     account: limit.account,
-    accountGroup: limit.accountGroup ?? "",
+    accountGroup: limit.accountGroup,
     asset: limit.asset,
     values: { ...limit.values },
   };

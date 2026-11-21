@@ -37,6 +37,7 @@ import type {
   SortOrder,
 } from "@/api/types";
 import { barrierCount, useLimitsPage } from "@/api/useLimits";
+import { limitTarget, limitTargetKey } from "@/api/limitTarget";
 import { useSpotFundsLimitMode } from "@/api/spotFundsLimitMode";
 import {
   isOrderSizeLimitMode,
@@ -217,8 +218,8 @@ function policyRowHref(limit: Limit): string {
     if (limit.account !== "") {
       query.set("account", limit.account);
     }
-    if ((limit.accountGroup ?? "") !== "") {
-      query.set("accountGroup", limit.accountGroup ?? "");
+    if (limit.accountGroup !== "") {
+      query.set("accountGroup", limit.accountGroup);
     }
   }
   query.set("policy", limit.policy);
@@ -286,14 +287,7 @@ function DeleteConfirm({
     setBusy(true);
     setError(null);
     try {
-      await deleteLimit({
-        mode: target.mode,
-        policy: target.policy,
-        scope: target.scope,
-        account: target.account,
-        accountGroup: target.accountGroup,
-        asset: target.asset,
-      });
+      await deleteLimit(limitTarget(target));
       onOpenChange(false);
       onDone();
     } catch (err) {
@@ -459,7 +453,7 @@ function PoliciesTable({
       </TableHeader>
       <TableBody>
         {limits.map((limit) => {
-          const accountAxis = limit.account || limit.accountGroup || "";
+          const accountAxis = limit.account || limit.accountGroup;
           const assetAxis = limit.asset;
           const isAccountFilterable = limit.account.length > 0;
           const isAssetFilterable = limit.asset.length > 0;
@@ -468,7 +462,7 @@ function PoliciesTable({
           const readOnly = !showsAccounts && limit.scope === "account_group";
           return (
             <TableRow
-              key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.accountGroup ?? ""}|${limit.asset}|${limit.mode}`}
+              key={limitTargetKey(limit)}
               className="hover:bg-transparent"
             >
               <TableCell>

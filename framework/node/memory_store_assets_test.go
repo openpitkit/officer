@@ -157,28 +157,40 @@ func (r *memoryRealm) UpdateAsset(
 			r.balances[balanceKey(balance.Account, balance.Asset)] = balance
 		}
 		for key, limit := range r.rateLimits {
-			if limit.Asset != oldCode {
+			if key.Asset() != oldCode {
 				continue
 			}
 			delete(r.rateLimits, key)
 			limit.Asset = asset.Code
-			r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
+			nextKey, err := domain.StoredLimitKey(limit)
+			if err != nil {
+				return domain.Asset{}, err
+			}
+			r.rateLimits[nextKey] = limit
 		}
 		for key, limit := range r.orderSizeLimits {
-			if limit.Asset != oldCode {
+			if key.Asset() != oldCode {
 				continue
 			}
 			delete(r.orderSizeLimits, key)
 			limit.Asset = asset.Code
-			r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset, limit.Mode)] = limit
+			nextKey, err := domain.StoredLimitKey(limit)
+			if err != nil {
+				return domain.Asset{}, err
+			}
+			r.orderSizeLimits[nextKey] = limit
 		}
 		for key, limit := range r.positionLimits {
-			if limit.Asset != oldCode {
+			if key.Asset() != oldCode {
 				continue
 			}
 			delete(r.positionLimits, key)
 			limit.Asset = asset.Code
-			r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
+			nextKey, err := domain.StoredLimitKey(limit)
+			if err != nil {
+				return domain.Asset{}, err
+			}
+			r.positionLimits[nextKey] = limit
 		}
 		for key, limit := range r.spotFundsPnlBoundsLimits {
 			if limit.Currency == oldCode {
@@ -342,18 +354,18 @@ func (r *memoryRealm) cascadeDeleteAsset(code string) {
 			delete(r.balances, key)
 		}
 	}
-	for key, limit := range r.rateLimits {
-		if limit.Asset == code {
+	for key := range r.rateLimits {
+		if key.Asset() == code {
 			delete(r.rateLimits, key)
 		}
 	}
-	for key, limit := range r.orderSizeLimits {
-		if limit.Asset == code {
+	for key := range r.orderSizeLimits {
+		if key.Asset() == code {
 			delete(r.orderSizeLimits, key)
 		}
 	}
-	for key, limit := range r.positionLimits {
-		if limit.Asset == code {
+	for key := range r.positionLimits {
+		if key.Asset() == code {
 			delete(r.positionLimits, key)
 		}
 	}

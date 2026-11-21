@@ -43,7 +43,11 @@ type orderSizeDeleteService struct {
 
 func (s *orderSizeDeleteService) DeleteLimit(ctx context.Context, target node.LimitTarget) error {
 	s.deleteLimitTarget = target
-	return s.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, target.Mode)
+	key, err := target.Key()
+	if err != nil {
+		return err
+	}
+	return s.realm.DeleteLimit(ctx, key)
 }
 
 func TestDeleteOrderSizeLimitDefaultsToReject(t *testing.T) {

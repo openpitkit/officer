@@ -266,44 +266,30 @@ func (rt *restoreTx) prunePositions(
 	return nil
 }
 
-// pruneLimits deletes the in-scope limit barriers the archive omits across the
-// three typed limit tables. A barrier is keyed by (scope, account, asset); a
-// barrier with no account axis is realm-wide and pruned only when the account
-// selector imposes no narrowing.
+// pruneLimits deletes the in-scope barriers the archive omits from limit_rate,
+// limit_order_size, limit_position and limit_spot_funds_pnl_bound. Each barrier
+// is identified by its domain.LimitKey, including every axis, order-size mode,
+// P&L policy and account group. A realm-wide barrier has neither an account
+// nor an account group and is pruned only when the selector imposes no
+// narrowing. An account_group P&L barrier is in scope when the selector imposes
+// no narrowing, when its group is selected, or when it is the group of an
+// in-scope archived account.
 func (rt *restoreTx) pruneLimits(
 	ctx context.Context, selector backup.EntitySelector, accounts accountScope, data backup.Data,
 ) error {
-	rateKeep := make(map[string]bool, len(data.RateLimits))
-	for _, l := range data.RateLimits {
-		rateKeep[limitKey(string(l.Scope), l.Account, l.Asset, "")] = true
-	}
-	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_rate", rateKeep); err != nil {
+	rateKeep := archiveLimitKeepSet(data.RateLimits)
+	if err := rt.pruneLimitTable(ctx, selector, accounts, domain.PolicyRateLimit, rateKeep); err != nil {
 		return err
 	}
-	sizeKeep := make(map[string]bool, len(data.OrderSizeLimits))
-	for _, l := range data.OrderSizeLimits {
-		sizeKeep[limitKey(string(l.Scope), l.Account, l.Asset, l.Mode)] = true
-	}
-	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_order_size", sizeKeep); err != nil {
+	sizeKeep := archiveLimitKeepSet(data.OrderSizeLimits)
+	if err := rt.pruneLimitTable(ctx, selector, accounts, domain.PolicyOrderSizeLimit, sizeKeep); err != nil {
 		return err
 	}
-	positionKeep := make(map[string]bool, len(data.PositionLimits))
-	for _, l := range data.PositionLimits {
-		positionKeep[limitKey(string(l.Scope), l.Account, l.Asset, "")] = true
-	}
-	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_position", positionKeep); err != nil {
+	positionKeep := archiveLimitKeepSet(data.PositionLimits)
+	if err := rt.pruneLimitTable(ctx, selector, accounts, domain.PolicyPositionLimit, positionKeep); err != nil {
 		return err
 	}
-	spotFundsPnlBounds := data.SpotFundsPnlBounds()
-	spotFundsKeep := make(map[string]bool, len(spotFundsPnlBounds))
-	for _, l := range spotFundsPnlBounds {
-		spotFundsKeep[spotFundsPnlBoundsLimitKey(
-			string(l.Axis),
-			string(l.Scope),
-			l.Account,
-			l.AccountGroup,
-		)] = true
-	}
+	spotFundsKeep := archiveLimitKeepSet(data.SpotFundsPnlBounds())
 	groupScope := make(map[string]bool, len(selector.Groups)+len(data.Accounts))
 	for _, group := range selector.Groups {
 		groupScope[group] = true
@@ -322,18 +308,39 @@ func (rt *restoreTx) pruneLimits(
 	)
 }
 
-// pruneLimitTable deletes the in-scope rows of one limit table whose
-// (scope, account, asset) key the archive does not carry. The account/asset
-// axes are read back as codes (NULL = empty) to rebuild the portable key. A
-// realm-wide barrier (empty account) is in scope only when the selector imposes
-// no narrowing, matching the export filter; an account-bound barrier is in
-// scope when its account is.
+// archiveLimitKeepSet collects valid archive keys for pruning. Use it only in
+// a restore transaction where restoreLimits validates the same barriers and
+// rejects invalid ones before commit; otherwise omitting invalid keys could
+// prune matching live rows.
+func archiveLimitKeepSet[Limit domain.KeyedLimit](limits []Limit) map[domain.LimitKey]bool {
+	keep := make(map[domain.LimitKey]bool, len(limits))
+	for _, limit := range limits {
+		key, err := limit.Key()
+		if err != nil {
+			continue
+		}
+		keep[key] = true
+	}
+	return keep
+}
+
+// pruneLimitTable deletes in-scope rows from limit_rate, limit_order_size or
+// limit_position whose domain.LimitKey the archive does not carry, including
+// the policy and order-size mode. The account/asset axes are read back as codes
+// (NULL = empty) to rebuild the portable key. A realm-wide barrier (empty
+// account) is in scope only when the selector imposes no narrowing, matching
+// the export filter; an account-bound barrier is in scope when its account is.
 func (rt *restoreTx) pruneLimitTable(
 	ctx context.Context, selector backup.EntitySelector, accounts accountScope,
-	table string, keep map[string]bool,
+	policy string, keep map[domain.LimitKey]bool,
 ) error {
+	description, err := limitTableForPolicy(policy)
+	if err != nil {
+		return err
+	}
+	table := description.name
 	modeColumn := `''`
-	if table == "limit_order_size" {
+	if description.hasMode {
 		modeColumn = `t.mode`
 	}
 	rows, err := rt.tx.QueryContext(
@@ -373,8 +380,17 @@ func (rt *restoreTx) pruneLimitTable(
 		return fmt.Errorf("store: close %s rows for pruning: %w", table, err)
 	}
 	for _, l := range out {
-		if keep[limitKey(l.scope, domain.AccountID(l.a), l.ast, l.mode)] ||
-			!limitAxisInScope(selector, accounts, l.a) {
+		if !limitAxisInScope(selector, accounts, l.a) {
+			continue
+		}
+		key, err := domain.NewLimitKey(policy, l.mode, domain.LimitScope(l.scope), domain.AccountID(l.a), "", l.ast)
+		if err != nil {
+			// Follow StoredLimitKey's corruption contract: name the stored
+			// row and discard the parse error's validation chain.
+			return fmt.Errorf("store: prune %s row id %d (scope %q, account %q, asset %q, mode %q) holds an invalid limit key: %v",
+				table, l.id, l.scope, l.a, l.ast, l.mode, err)
+		}
+		if keep[key] {
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
@@ -391,7 +407,7 @@ func (rt *restoreTx) pruneSpotFundsPnlBoundsLimits(
 	selector backup.EntitySelector,
 	accounts accountScope,
 	groupScope map[string]bool,
-	keep map[string]bool,
+	keep map[domain.LimitKey]bool,
 ) error {
 	rows, err := rt.tx.QueryContext(
 		ctx,
@@ -434,18 +450,18 @@ func (rt *restoreTx) pruneSpotFundsPnlBoundsLimits(
 		return fmt.Errorf("store: close spot funds pnl bounds rows for pruning: %w", err)
 	}
 	for _, l := range out {
-		if keep[spotFundsPnlBoundsLimitKey(
-			l.axis,
-			l.scope,
-			domain.AccountID(l.account),
-			l.group,
-		)] || !spotFundsPnlBoundsAxisInScope(
-			selector,
-			accounts,
-			groupScope,
-			l.account,
-			l.group,
-		) {
+		if !spotFundsPnlBoundsAxisInScope(selector, accounts, groupScope, l.account, l.group) {
+			continue
+		}
+		key, err := (domain.LimitSpotFundsPnlBounds{
+			Axis: domain.SpotFundsPnlAxis(l.axis), Scope: domain.LimitScope(l.scope),
+			Account: domain.AccountID(l.account), AccountGroup: l.group,
+		}).Key()
+		if err != nil {
+			return fmt.Errorf("store: prune limit_spot_funds_pnl_bound row id %d (axis %q, scope %q, account %q, group %q) holds an invalid limit key: %v",
+				l.id, l.axis, l.scope, l.account, l.group, err)
+		}
+		if keep[key] {
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
@@ -991,21 +1007,6 @@ func scanStrings(rows *sql.Rows, err error) (result []string, resultErr error) {
 		return nil, fmt.Errorf("store: prune iterate strings: %w", err)
 	}
 	return out, nil
-}
-
-// limitKey builds the portable (scope, account, asset, mode) barrier key.
-// Mode is empty for tables other than limit_order_size; empty account/asset
-// codes denote an absent axis.
-func limitKey(scope string, account domain.AccountID, asset string, mode domain.RuleMode) string {
-	return scope + "\x00" + account.String() + "\x00" + asset + "\x00" + string(mode)
-}
-
-func spotFundsPnlBoundsLimitKey(
-	axis, scope string,
-	account domain.AccountID,
-	group string,
-) string {
-	return axis + "\x00" + scope + "\x00" + account.String() + "\x00" + group
 }
 
 // auditRowInScope reports whether an audit row is in scope. A row with no

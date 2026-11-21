@@ -1,0 +1,1026 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# Guard hand-built limit identities with exclude-only paths so new production directories are covered.
+# Exclude tests/oracle and the domain constructor/panel helper that own key construction.
+# New sites use domain.NewLimitKey/Key, limitKeyWhere or the panel limitTarget helpers.
+# Error-return shapes stay explicit: unchecked errors may be nil; constructors and guards permit placeholders.
+# Type lists stay explicit: a type metavariable inside a typed metavariable broke target parsing in Semgrep 1.175.0 (checks/semgrep/requirements.txt).
+
+# symmetric_eq covers both == and != orientations in the reversed member/scalar oracle.
+
+rules:
+  - id: limit-key-literal
+    message: Construct barrier keys through domain.NewLimitKey or Key; zero error results need a non-nil error shape.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: "LimitKey{...}"
+              - pattern: "domain.LimitKey{...}"
+          - pattern-not: "LimitKey{}"
+          - pattern-not: "domain.LimitKey{}"
+      - patterns:
+          - pattern-either:
+              - pattern: "LimitKey{}"
+              - pattern: "domain.LimitKey{}"
+          - pattern-not-inside: "return LimitKey{}, $ERR"
+          - pattern-not-inside: "return domain.LimitKey{}, $ERR"
+      - patterns:
+          - pattern: "return $KEY, $ERR"
+          - metavariable-pattern:
+              metavariable: $KEY
+              pattern-either:
+                - pattern: "LimitKey{}"
+                - pattern: "domain.LimitKey{}"
+          - pattern-not: "return $KEY, &$TYPE{...}"
+          - metavariable-regex:
+              metavariable: $ERR
+              regex: "^(?!(?:(?:fmt\\.Errorf|errors\\.New|(?:[a-zA-Z_]\\w*\\.)?New\\w*Error)\\s*\\(|(?:[a-zA-Z_]\\w*\\.)?Err[A-Z]\\w*$))"
+          - pattern-not-inside: |
+              if $ERR != nil {
+                ...
+                return $KEY, $ERR
+                ...
+              }
+          - pattern-not-inside: |
+              if nil != $ERR {
+                ...
+                return $KEY, $ERR
+                ...
+              }
+          - pattern-not-inside: |
+              if $INIT; $ERR != nil {
+                ...
+                return $KEY, $ERR
+                ...
+              }
+          - pattern-not-inside: |
+              if $ERR != nil && $COND {
+                ...
+                return $KEY, $ERR
+                ...
+              }
+          - pattern-not-inside: |
+              if $COND && $ERR != nil {
+                ...
+                return $KEY, $ERR
+                ...
+              }
+      - patterns:
+          - pattern: "return $KEY, $Q.$F"
+          - metavariable-pattern:
+              metavariable: $KEY
+              pattern-either:
+                - pattern: "LimitKey{}"
+                - pattern: "domain.LimitKey{}"
+          - metavariable-regex:
+              metavariable: $F
+              regex: "^Err[A-Z]"
+          - pattern-either:
+              - pattern-inside: "func $FN(..., $Q $QUALIFIER_TYPE, ...) $RET { ... }"
+              - pattern-inside: "func ($RECEIVER $RECEIVER_TYPE) $FN(..., $Q $QUALIFIER_TYPE, ...) $RET { ... }"
+              - pattern-inside: "func(..., $Q $QUALIFIER_TYPE, ...) $RET { ... }"
+              - pattern-inside: "func ($Q $QUALIFIER_TYPE) $FN(...) $RET { ... }"
+              - pattern-inside: "func $FN(..., $Q $QUALIFIER_TYPE, ...) { ... }"
+              - pattern-inside: "func ($RECEIVER $RECEIVER_TYPE) $FN(..., $Q $QUALIFIER_TYPE, ...) { ... }"
+              - pattern-inside: "func(..., $Q $QUALIFIER_TYPE, ...) { ... }"
+              - pattern-inside: "func ($Q $QUALIFIER_TYPE) $FN(...) { ... }"
+          - pattern-not-inside: |
+              if $Q.$F != nil {
+                ...
+                return $KEY, $Q.$F
+                ...
+              }
+          - pattern-not-inside: |
+              if nil != $Q.$F {
+                ...
+                return $KEY, $Q.$F
+                ...
+              }
+          - pattern-not-inside: |
+              if $INIT; $Q.$F != nil {
+                ...
+                return $KEY, $Q.$F
+                ...
+              }
+          - pattern-not-inside: |
+              if $Q.$F != nil && $COND {
+                ...
+                return $KEY, $Q.$F
+                ...
+              }
+          - pattern-not-inside: |
+              if $COND && $Q.$F != nil {
+                ...
+                return $KEY, $Q.$F
+                ...
+              }
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+        - "/framework/domain/limit_key.go"
+
+  - id: limit-target-literal
+    message: Derive barrier identity through domain.NewLimitKey or Key; LimitTarget is only the DELETE request DTO.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: "LimitTarget{...}"
+              - pattern: "node.LimitTarget{...}"
+          - pattern-not-inside: |
+              func $HANDLER($SERVICE backend.ControlPlane) http.HandlerFunc { ... }
+      - patterns:
+          - pattern-either:
+              - pattern: "LimitTarget{...}"
+              - pattern: "node.LimitTarget{...}"
+          - pattern-inside: |
+              func $HANDLER($SERVICE backend.ControlPlane) http.HandlerFunc { ... }
+          - pattern-not: |
+              node.LimitTarget{
+                Policy: $QUERY.Get("policy"),
+                Mode: domain.RuleMode($QUERY.Get("mode")),
+                Scope: domain.LimitScope($QUERY.Get("scope")),
+                Account: domain.AccountID($QUERY.Get("account")),
+                AccountGroup: $QUERY.Get("accountGroup"),
+                Asset: $QUERY.Get("asset"),
+              }
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+
+  - id: limit-key-string-join
+    message: Use domain.NewLimitKey or Key and map by domain.LimitKey instead of joining barrier axes.
+    severity: ERROR
+    languages: [go]
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: "$A + $B"
+                      - patterns:
+                          - pattern: "fmt.Sprintf($FORMAT, ..., $A, ..., $B, ...)"
+                          - metavariable-regex:
+                              metavariable: $FORMAT
+                              regex: "^\\S+$"
+                      - pattern: "strings.Join([]string{..., $A, ..., $B, ...}, ...)"
+                      - pattern: "$MAP[$F(..., $A, ..., $B, ...)]"
+                  - metavariable-pattern:
+                      metavariable: $A
+                      pattern-either:
+                        - patterns:
+                            - pattern: "$OWNER.$FIELD"
+                            - metavariable-regex:
+                                metavariable: $FIELD
+                                regex: "^(Scope|Axis|scope|axis)$"
+                        - patterns:
+                            - pattern: "$ID"
+                            - metavariable-regex:
+                                metavariable: $ID
+                                regex: "^(scope|axis)$"
+                            - pattern-not-inside: "$ID.$FIELD"
+                        - patterns:
+                            - pattern: "$OWNER.$FIELD"
+                            - metavariable-regex:
+                                metavariable: $FIELD
+                                regex: "^(Scope|Account|AccountID|AccountGroup|Asset|Mode|Axis|scope|account|accountID|accountGroup|account_group|asset|mode|axis|group)$"
+                            - metavariable-pattern:
+                                metavariable: $OWNER
+                                pattern-either:
+                                  - pattern: "($VALUE : domain.LimitRate)"
+                                  - pattern: "($VALUE : *domain.LimitRate)"
+                                  - pattern: "($VALUE : domain.LimitPosition)"
+                                  - pattern: "($VALUE : *domain.LimitPosition)"
+                                  - pattern: "($VALUE : domain.LimitOrderSize)"
+                                  - pattern: "($VALUE : *domain.LimitOrderSize)"
+                                  - pattern: "($VALUE : domain.LimitSpotFundsPnlBounds)"
+                                  - pattern: "($VALUE : *domain.LimitSpotFundsPnlBounds)"
+                                  - pattern: "($VALUE : node.LimitTarget)"
+                                  - pattern: "($VALUE : *node.LimitTarget)"
+                                  - pattern: "($VALUE : LimitTarget)"
+                                  - pattern: "($VALUE : *LimitTarget)"
+                                  - pattern: "($VALUE : LimitRate)"
+                                  - pattern: "($VALUE : *LimitRate)"
+                                  - pattern: "($VALUE : LimitPosition)"
+                                  - pattern: "($VALUE : *LimitPosition)"
+                                  - pattern: "($VALUE : LimitOrderSize)"
+                                  - pattern: "($VALUE : *LimitOrderSize)"
+                                  - pattern: "($VALUE : LimitSpotFundsPnlBounds)"
+                                  - pattern: "($VALUE : *LimitSpotFundsPnlBounds)"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "$A + $B"
+                      - patterns:
+                          - pattern: "fmt.Sprintf($FORMAT, ..., $A, ..., $B, ...)"
+                          - metavariable-regex:
+                              metavariable: $FORMAT
+                              regex: "^\\S+$"
+                      - pattern: "strings.Join([]string{..., $A, ..., $B, ...}, ...)"
+                      - pattern: "$MAP[$F(..., $A, ..., $B, ...)]"
+                  - metavariable-pattern:
+                      metavariable: $B
+                      pattern-either:
+                        - patterns:
+                            - pattern: "$OWNER.$FIELD"
+                            - metavariable-regex:
+                                metavariable: $FIELD
+                                regex: "^(Scope|Axis|scope|axis)$"
+                        - patterns:
+                            - pattern: "$ID"
+                            - metavariable-regex:
+                                metavariable: $ID
+                                regex: "^(scope|axis)$"
+                            - pattern-not-inside: "$ID.$FIELD"
+                        - patterns:
+                            - pattern: "$OWNER.$FIELD"
+                            - metavariable-regex:
+                                metavariable: $FIELD
+                                regex: "^(Scope|Account|AccountID|AccountGroup|Asset|Mode|Axis|scope|account|accountID|accountGroup|account_group|asset|mode|axis|group)$"
+                            - metavariable-pattern:
+                                metavariable: $OWNER
+                                pattern-either:
+                                  - pattern: "($VALUE : domain.LimitRate)"
+                                  - pattern: "($VALUE : *domain.LimitRate)"
+                                  - pattern: "($VALUE : domain.LimitPosition)"
+                                  - pattern: "($VALUE : *domain.LimitPosition)"
+                                  - pattern: "($VALUE : domain.LimitOrderSize)"
+                                  - pattern: "($VALUE : *domain.LimitOrderSize)"
+                                  - pattern: "($VALUE : domain.LimitSpotFundsPnlBounds)"
+                                  - pattern: "($VALUE : *domain.LimitSpotFundsPnlBounds)"
+                                  - pattern: "($VALUE : node.LimitTarget)"
+                                  - pattern: "($VALUE : *node.LimitTarget)"
+                                  - pattern: "($VALUE : LimitTarget)"
+                                  - pattern: "($VALUE : *LimitTarget)"
+                                  - pattern: "($VALUE : LimitRate)"
+                                  - pattern: "($VALUE : *LimitRate)"
+                                  - pattern: "($VALUE : LimitPosition)"
+                                  - pattern: "($VALUE : *LimitPosition)"
+                                  - pattern: "($VALUE : LimitOrderSize)"
+                                  - pattern: "($VALUE : *LimitOrderSize)"
+                                  - pattern: "($VALUE : LimitSpotFundsPnlBounds)"
+                                  - pattern: "($VALUE : *LimitSpotFundsPnlBounds)"
+          - metavariable-pattern:
+              metavariable: $A
+              patterns:
+                - pattern: "$VALUE"
+                - metavariable-regex:
+                    metavariable: $VALUE
+                    regex: "^(?:[a-zA-Z_]\\w*\\.)?(?:Scope|Account|AccountID|AccountGroup|Asset|Mode|Axis|scope|account|accountID|accountGroup|account_group|asset|mode|axis|group)(?:\\(.*\\)|\\.String\\(\\))?$"
+                - pattern-not-inside: "$VALUE.$FIELD"
+          - metavariable-pattern:
+              metavariable: $B
+              patterns:
+                - pattern: "$VALUE"
+                - metavariable-regex:
+                    metavariable: $VALUE
+                    regex: "^(?:[a-zA-Z_]\\w*\\.)?(?:Scope|Account|AccountID|AccountGroup|Asset|Mode|Axis|scope|account|accountID|accountGroup|account_group|asset|mode|axis|group)(?:\\(.*\\)|\\.String\\(\\))?$"
+                - pattern-not-inside: "$VALUE.$FIELD"
+      - patterns:
+          - pattern-either:
+              - pattern: "<... $OWNER.$F1 ...> + ... + <... $OWNER.$F2 ...>"
+              - patterns:
+                  - pattern: "fmt.Sprintf($FORMAT, ..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...)"
+                  - metavariable-regex:
+                      metavariable: $FORMAT
+                      regex: "^\\S+$"
+              - pattern: "strings.Join([]string{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...}, ...)"
+              - pattern: "$MAP[$CALL(..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...)]"
+          - metavariable-regex:
+              metavariable: $F1
+              regex: "^(Scope|Account|AccountID|AccountGroup|Asset|Mode|Axis|scope|account|accountID|accountGroup|account_group|asset|mode|axis|group)$"
+          - metavariable-regex:
+              metavariable: $F2
+              regex: "^(Scope|Account|AccountID|AccountGroup|Asset|Mode|Axis|scope|account|accountID|accountGroup|account_group|asset|mode|axis|group)$"
+          - metavariable-comparison:
+              comparison: "str($F1) != str($F2)"
+          - pattern-inside: "for $I, $OWNER := range $LIST { ... }"
+          - metavariable-pattern:
+              metavariable: $LIST
+              pattern-either:
+                - pattern: "($VALUE : []domain.LimitRate)"
+                - pattern: "($VALUE : []LimitRate)"
+                - pattern: "($VALUE : []domain.LimitPosition)"
+                - pattern: "($VALUE : []LimitPosition)"
+                - pattern: "($VALUE : []domain.LimitOrderSize)"
+                - pattern: "($VALUE : []LimitOrderSize)"
+                - pattern: "($VALUE : []domain.LimitSpotFundsPnlBounds)"
+                - pattern: "($VALUE : []LimitSpotFundsPnlBounds)"
+                - pattern: "($VALUE : []node.LimitTarget)"
+                - pattern: "($VALUE : []*domain.LimitRate)"
+                - pattern: "($VALUE : []*domain.LimitPosition)"
+                - pattern: "($VALUE : []*domain.LimitOrderSize)"
+                - pattern: "($VALUE : []*domain.LimitSpotFundsPnlBounds)"
+                - pattern: "($VALUE : []LimitTarget)"
+                - pattern: "($VALUE : []*node.LimitTarget)"
+                - pattern: "($VALUE : []*LimitRate)"
+                - pattern: "($VALUE : []*LimitPosition)"
+                - pattern: "($VALUE : []*LimitOrderSize)"
+                - pattern: "($VALUE : []*LimitSpotFundsPnlBounds)"
+                - pattern: "($VALUE : []*LimitTarget)"
+
+  - id: limit-key-axis-compare
+    message: Compare complete domain.LimitKey values from Key or domain.NewLimitKey.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && <... $OWNER.$F1 ...> == <... $OTHER.$F1 ...> && ... && <... $OWNER.$F2 ...> == <... $OTHER.$F2 ...> && ..."
+                      - pattern: "... || <... $OWNER.$F1 ...> != <... $OTHER.$F1 ...> || ... || <... $OWNER.$F2 ...> != <... $OTHER.$F2 ...> || ..."
+                  - metavariable-comparison:
+                      comparison: "re.match(\"^(Scope|Axis)$\", str($F1)) or re.match(\"^(Scope|Axis)$\", str($F2))"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && <... $OWNER.$F1 ...> == <... $OTHER.$F1 ...> && ... && <... $OWNER.$F2 ...> == <... $OTHER.$F2 ...> && ..."
+                      - pattern: "... || <... $OWNER.$F1 ...> != <... $OTHER.$F1 ...> || ... || <... $OWNER.$F2 ...> != <... $OTHER.$F2 ...> || ..."
+                  - metavariable-pattern:
+                      metavariable: $OWNER
+                      pattern-either:
+                        - pattern: "($VALUE : domain.LimitRate)"
+                        - pattern: "($VALUE : *domain.LimitRate)"
+                        - pattern: "($VALUE : domain.LimitPosition)"
+                        - pattern: "($VALUE : *domain.LimitPosition)"
+                        - pattern: "($VALUE : domain.LimitOrderSize)"
+                        - pattern: "($VALUE : *domain.LimitOrderSize)"
+                        - pattern: "($VALUE : domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : *domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : node.LimitTarget)"
+                        - pattern: "($VALUE : *node.LimitTarget)"
+                        - pattern: "($VALUE : LimitTarget)"
+                        - pattern: "($VALUE : *LimitTarget)"
+                        - pattern: "($VALUE : LimitRate)"
+                        - pattern: "($VALUE : *LimitRate)"
+                        - pattern: "($VALUE : LimitPosition)"
+                        - pattern: "($VALUE : *LimitPosition)"
+                        - pattern: "($VALUE : LimitOrderSize)"
+                        - pattern: "($VALUE : *LimitOrderSize)"
+                        - pattern: "($VALUE : LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : *LimitSpotFundsPnlBounds)"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && <... $OWNER.$F1 ...> == <... $OTHER.$F1 ...> && ... && <... $OWNER.$F2 ...> == <... $OTHER.$F2 ...> && ..."
+                      - pattern: "... || <... $OWNER.$F1 ...> != <... $OTHER.$F1 ...> || ... || <... $OWNER.$F2 ...> != <... $OTHER.$F2 ...> || ..."
+                  - metavariable-pattern:
+                      metavariable: $OTHER
+                      pattern-either:
+                        - pattern: "($VALUE : domain.LimitRate)"
+                        - pattern: "($VALUE : *domain.LimitRate)"
+                        - pattern: "($VALUE : domain.LimitPosition)"
+                        - pattern: "($VALUE : *domain.LimitPosition)"
+                        - pattern: "($VALUE : domain.LimitOrderSize)"
+                        - pattern: "($VALUE : *domain.LimitOrderSize)"
+                        - pattern: "($VALUE : domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : *domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : node.LimitTarget)"
+                        - pattern: "($VALUE : *node.LimitTarget)"
+                        - pattern: "($VALUE : LimitTarget)"
+                        - pattern: "($VALUE : *LimitTarget)"
+                        - pattern: "($VALUE : LimitRate)"
+                        - pattern: "($VALUE : *LimitRate)"
+                        - pattern: "($VALUE : LimitPosition)"
+                        - pattern: "($VALUE : *LimitPosition)"
+                        - pattern: "($VALUE : LimitOrderSize)"
+                        - pattern: "($VALUE : *LimitOrderSize)"
+                        - pattern: "($VALUE : LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : *LimitSpotFundsPnlBounds)"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && <... $OWNER.$F1 ...> == <... $OTHER.$F1 ...> && ... && <... $OWNER.$F2 ...> == <... $OTHER.$F2 ...> && ..."
+                      - pattern: "... || <... $OWNER.$F1 ...> != <... $OTHER.$F1 ...> || ... || <... $OWNER.$F2 ...> != <... $OTHER.$F2 ...> || ..."
+                  - pattern-either:
+                      - patterns:
+                          - pattern-inside: "for $I, $OWNER := range $LIST { ... }"
+                      - patterns:
+                          - pattern-inside: "for $I, $OTHER := range $LIST { ... }"
+                  - metavariable-pattern:
+                      metavariable: $LIST
+                      pattern-either:
+                        - pattern: "($VALUE : []domain.LimitRate)"
+                        - pattern: "($VALUE : []LimitRate)"
+                        - pattern: "($VALUE : []domain.LimitPosition)"
+                        - pattern: "($VALUE : []LimitPosition)"
+                        - pattern: "($VALUE : []domain.LimitOrderSize)"
+                        - pattern: "($VALUE : []LimitOrderSize)"
+                        - pattern: "($VALUE : []domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []node.LimitTarget)"
+                        - pattern: "($VALUE : []*domain.LimitRate)"
+                        - pattern: "($VALUE : []*domain.LimitPosition)"
+                        - pattern: "($VALUE : []*domain.LimitOrderSize)"
+                        - pattern: "($VALUE : []*domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []LimitTarget)"
+                        - pattern: "($VALUE : []*node.LimitTarget)"
+                        - pattern: "($VALUE : []*LimitRate)"
+                        - pattern: "($VALUE : []*LimitPosition)"
+                        - pattern: "($VALUE : []*LimitOrderSize)"
+                        - pattern: "($VALUE : []*LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []*LimitTarget)"
+          - metavariable-regex:
+              metavariable: $F1
+              regex: "^(Scope|Account|AccountGroup|Asset|Mode|Axis)$"
+          - metavariable-regex:
+              metavariable: $F2
+              regex: "^(Scope|Account|AccountGroup|Asset|Mode|Axis)$"
+          - metavariable-comparison:
+              comparison: "str($F1) != str($F2)"
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && <... $OWNER.$F1 ...> == $S1 && ... && <... $OWNER.$F2 ...> == $S2 && ..."
+                      - pattern: "... || <... $OWNER.$F1 ...> != $S1 || ... || <... $OWNER.$F2 ...> != $S2 || ..."
+                  - metavariable-comparison:
+                      comparison: "re.match(\"^(Scope|Axis)$\", str($F1)) or re.match(\"^(Scope|Axis)$\", str($F2))"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && <... $OWNER.$F1 ...> == $S1 && ... && <... $OWNER.$F2 ...> == $S2 && ..."
+                      - pattern: "... || <... $OWNER.$F1 ...> != $S1 || ... || <... $OWNER.$F2 ...> != $S2 || ..."
+                  - metavariable-pattern:
+                      metavariable: $OWNER
+                      pattern-either:
+                        - pattern: "($VALUE : domain.LimitRate)"
+                        - pattern: "($VALUE : *domain.LimitRate)"
+                        - pattern: "($VALUE : domain.LimitPosition)"
+                        - pattern: "($VALUE : *domain.LimitPosition)"
+                        - pattern: "($VALUE : domain.LimitOrderSize)"
+                        - pattern: "($VALUE : *domain.LimitOrderSize)"
+                        - pattern: "($VALUE : domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : *domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : node.LimitTarget)"
+                        - pattern: "($VALUE : *node.LimitTarget)"
+                        - pattern: "($VALUE : LimitTarget)"
+                        - pattern: "($VALUE : *LimitTarget)"
+                        - pattern: "($VALUE : LimitRate)"
+                        - pattern: "($VALUE : *LimitRate)"
+                        - pattern: "($VALUE : LimitPosition)"
+                        - pattern: "($VALUE : *LimitPosition)"
+                        - pattern: "($VALUE : LimitOrderSize)"
+                        - pattern: "($VALUE : *LimitOrderSize)"
+                        - pattern: "($VALUE : LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : *LimitSpotFundsPnlBounds)"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && <... $OWNER.$F1 ...> == $S1 && ... && <... $OWNER.$F2 ...> == $S2 && ..."
+                      - pattern: "... || <... $OWNER.$F1 ...> != $S1 || ... || <... $OWNER.$F2 ...> != $S2 || ..."
+                  - pattern-inside: "for $I, $OWNER := range $LIST { ... }"
+                  - metavariable-pattern:
+                      metavariable: $LIST
+                      pattern-either:
+                        - pattern: "($VALUE : []domain.LimitRate)"
+                        - pattern: "($VALUE : []LimitRate)"
+                        - pattern: "($VALUE : []domain.LimitPosition)"
+                        - pattern: "($VALUE : []LimitPosition)"
+                        - pattern: "($VALUE : []domain.LimitOrderSize)"
+                        - pattern: "($VALUE : []LimitOrderSize)"
+                        - pattern: "($VALUE : []domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []node.LimitTarget)"
+                        - pattern: "($VALUE : []*domain.LimitRate)"
+                        - pattern: "($VALUE : []*domain.LimitPosition)"
+                        - pattern: "($VALUE : []*domain.LimitOrderSize)"
+                        - pattern: "($VALUE : []*domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []LimitTarget)"
+                        - pattern: "($VALUE : []*node.LimitTarget)"
+                        - pattern: "($VALUE : []*LimitRate)"
+                        - pattern: "($VALUE : []*LimitPosition)"
+                        - pattern: "($VALUE : []*LimitOrderSize)"
+                        - pattern: "($VALUE : []*LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []*LimitTarget)"
+          - metavariable-regex:
+              metavariable: $F1
+              regex: "^(Scope|Account|AccountGroup|Asset|Mode|Axis)$"
+          - metavariable-regex:
+              metavariable: $F2
+              regex: "^(Scope|Account|AccountGroup|Asset|Mode|Axis)$"
+          - metavariable-comparison:
+              comparison: "str($F1) != str($F2)"
+          - pattern-either:
+              - pattern-inside: "func $FN(..., $S1 $T1, ..., $S2 $T2, ...) $RET { ... }"
+              - pattern-inside: "func ($RECEIVER $RT) $FN(..., $S1 $T1, ..., $S2 $T2, ...) $RET { ... }"
+              - pattern-inside: "func(..., $S1 $T1, ..., $S2 $T2, ...) $RET { ... }"
+              - pattern-inside: "func $FN(..., $S1 $T1, ..., $S2 $T2, ...) { ... }"
+              - pattern-inside: "func ($RECEIVER $RT) $FN(..., $S1 $T1, ..., $S2 $T2, ...) { ... }"
+              - pattern-inside: "func(..., $S1 $T1, ..., $S2 $T2, ...) { ... }"
+              - pattern-inside: "func $FN(..., $S2 $T2, ..., $S1 $T1, ...) $RET { ... }"
+              - pattern-inside: "func ($RECEIVER $RT) $FN(..., $S2 $T2, ..., $S1 $T1, ...) $RET { ... }"
+              - pattern-inside: "func(..., $S2 $T2, ..., $S1 $T1, ...) $RET { ... }"
+              - pattern-inside: "func $FN(..., $S2 $T2, ..., $S1 $T1, ...) { ... }"
+              - pattern-inside: "func ($RECEIVER $RT) $FN(..., $S2 $T2, ..., $S1 $T1, ...) { ... }"
+              - pattern-inside: "func(..., $S2 $T2, ..., $S1 $T1, ...) { ... }"
+      - patterns:
+          - pattern: "$EXPR"
+          - metavariable-pattern:
+              metavariable: $EXPR
+              pattern-either:
+                - pattern: "$A && $B"
+                - pattern: "$A || $B"
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: "(?s).*?(?:\\b(?P<L1>[a-zA-Z_]\\w*?)(?P<F1>Scope|Axis)\\s*(?:==|!=)\\s*(?P<R1>[a-zA-Z_]\\w*?)(?P=F1)[\\s\\S]*?(?:&&|\\|\\|)[\\s\\S]*?\\b(?:(?P=L1)(?P<G1>Scope|Axis|Account(?:Group)?(?:ID)?|Asset(?:ID)?|Mode)\\s*(?:==|!=)\\s*(?P=R1)(?P=G1)|(?P=R1)(?P<H1>Scope|Axis|Account(?:Group)?(?:ID)?|Asset(?:ID)?|Mode)\\s*(?:==|!=)\\s*(?P=L1)(?P=H1))\\b|\\b(?P<L2>[a-zA-Z_]\\w*?)(?P<F2>Scope|Axis|Account(?:Group)?(?:ID)?|Asset(?:ID)?|Mode)\\s*(?:==|!=)\\s*(?P<R2>[a-zA-Z_]\\w*?)(?P=F2)[\\s\\S]*?(?:&&|\\|\\|)[\\s\\S]*?\\b(?:(?P=L2)(?P<G2>Scope|Axis)\\s*(?:==|!=)\\s*(?P=R2)(?P=G2)|(?P=R2)(?P<H2>Scope|Axis)\\s*(?:==|!=)\\s*(?P=L2)(?P=H2))\\b)"
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+    options:
+      symmetric_eq: true
+
+  - id: limit-key-composite
+    message: Index and compare constructor-built domain.LimitKey values instead of composite barrier keys.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: "$MAP[$TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...}]"
+                      - pattern: "$OTHER == $TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...}"
+                      - pattern: "delete($MAP, $TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...})"
+                      - pattern: "$MAP[$TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...}]"
+                      - pattern: "$OTHER == $TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...}"
+                      - pattern: "delete($MAP, $TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...})"
+                  - metavariable-comparison:
+                      comparison: "re.match(\"^(Scope|Axis)$\", str($F1)) or re.match(\"^(Scope|Axis)$\", str($F2))"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "$MAP[$TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...}]"
+                      - pattern: "$OTHER == $TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...}"
+                      - pattern: "delete($MAP, $TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...})"
+                      - pattern: "$MAP[$TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...}]"
+                      - pattern: "$OTHER == $TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...}"
+                      - pattern: "delete($MAP, $TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...})"
+                  - metavariable-pattern:
+                      metavariable: $OWNER
+                      pattern-either:
+                        - pattern: "($VALUE : domain.LimitRate)"
+                        - pattern: "($VALUE : *domain.LimitRate)"
+                        - pattern: "($VALUE : domain.LimitPosition)"
+                        - pattern: "($VALUE : *domain.LimitPosition)"
+                        - pattern: "($VALUE : domain.LimitOrderSize)"
+                        - pattern: "($VALUE : *domain.LimitOrderSize)"
+                        - pattern: "($VALUE : domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : *domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : node.LimitTarget)"
+                        - pattern: "($VALUE : *node.LimitTarget)"
+                        - pattern: "($VALUE : LimitTarget)"
+                        - pattern: "($VALUE : *LimitTarget)"
+                        - pattern: "($VALUE : LimitRate)"
+                        - pattern: "($VALUE : *LimitRate)"
+                        - pattern: "($VALUE : LimitPosition)"
+                        - pattern: "($VALUE : *LimitPosition)"
+                        - pattern: "($VALUE : LimitOrderSize)"
+                        - pattern: "($VALUE : *LimitOrderSize)"
+                        - pattern: "($VALUE : LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : *LimitSpotFundsPnlBounds)"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "$MAP[$TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...}]"
+                      - pattern: "$OTHER == $TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...}"
+                      - pattern: "delete($MAP, $TYPE{..., <... $OWNER.$F1 ...>, ..., <... $OWNER.$F2 ...>, ...})"
+                      - pattern: "$MAP[$TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...}]"
+                      - pattern: "$OTHER == $TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...}"
+                      - pattern: "delete($MAP, $TYPE{..., $KA: <... $OWNER.$F1 ...>, ..., $KB: <... $OWNER.$F2 ...>, ...})"
+                  - pattern-inside: "for $I, $OWNER := range $LIST { ... }"
+                  - metavariable-pattern:
+                      metavariable: $LIST
+                      pattern-either:
+                        - pattern: "($VALUE : []domain.LimitRate)"
+                        - pattern: "($VALUE : []LimitRate)"
+                        - pattern: "($VALUE : []domain.LimitPosition)"
+                        - pattern: "($VALUE : []LimitPosition)"
+                        - pattern: "($VALUE : []domain.LimitOrderSize)"
+                        - pattern: "($VALUE : []LimitOrderSize)"
+                        - pattern: "($VALUE : []domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []node.LimitTarget)"
+                        - pattern: "($VALUE : []*domain.LimitRate)"
+                        - pattern: "($VALUE : []*domain.LimitPosition)"
+                        - pattern: "($VALUE : []*domain.LimitOrderSize)"
+                        - pattern: "($VALUE : []*domain.LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []LimitTarget)"
+                        - pattern: "($VALUE : []*node.LimitTarget)"
+                        - pattern: "($VALUE : []*LimitRate)"
+                        - pattern: "($VALUE : []*LimitPosition)"
+                        - pattern: "($VALUE : []*LimitOrderSize)"
+                        - pattern: "($VALUE : []*LimitSpotFundsPnlBounds)"
+                        - pattern: "($VALUE : []*LimitTarget)"
+          - metavariable-regex:
+              metavariable: $F1
+              regex: "^(Scope|Account|AccountGroup|Asset|Mode|Axis)$"
+          - metavariable-regex:
+              metavariable: $F2
+              regex: "^(Scope|Account|AccountGroup|Asset|Mode|Axis)$"
+          - metavariable-comparison:
+              comparison: "str($F1) != str($F2)"
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+    options:
+      symmetric_eq: true
+
+  - id: limit-key-sql
+    message: Build limit identity SQL through limitKeyWhere(domain.LimitKey, limitKeyIDs).
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern: "$SQL"
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: "(?is)^[\"\\x60][\\s\\S]*?(?:\\b(?:scope|axis)\\s*(?:=|IS)\\s*\\?(?:(?!(?:\\b(?:UNION|SELECT|FROM|WHERE|HAVING|ON|JOIN)\\b|;|\\bOR\\b(?!(?:[^()]|(?&P))*\\))))[\\s\\S])*?\\bAND\\b(?:(?!(?:\\b(?:UNION|SELECT|FROM|WHERE|HAVING|ON|JOIN)\\b|;|\\bOR\\b(?!(?:[^()]|(?&P))*\\))))[\\s\\S])*?\\b(?:account|account_group|asset)_id\\s*(?:=|IS)\\s*\\?|\\b(?:account|account_group|asset)_id\\s*(?:=|IS)\\s*\\?(?:(?!(?:\\b(?:UNION|SELECT|FROM|WHERE|HAVING|ON|JOIN)\\b|;|\\bOR\\b(?!(?:[^()]|(?&P))*\\))))[\\s\\S])*?\\bAND\\b(?:(?!(?:\\b(?:UNION|SELECT|FROM|WHERE|HAVING|ON|JOIN)\\b|;|\\bOR\\b(?!(?:[^()]|(?&P))*\\))))[\\s\\S])*?\\b(?:scope|axis)\\s*(?:=|IS)\\s*\\?)[\\s\\S]*[\"\\x60]$(?(DEFINE)(?<P>\\((?:[^()]|(?&P))*\\)))"
+      - pattern-not-inside: "func limitKeyWhere($KEY domain.LimitKey, ...) (limitKeyPredicate, error) { ... }"
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+
+  - id: limit-target-template-key
+    message: Build panel barrier keys through limitTargetKey in api/limitTarget.
+    severity: ERROR
+    languages: [typescript]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: "`...${$OWNER.$F1}...${$OWNER.$F2}...`"
+                      - pattern: "$OWNER.$F1 + ... + $OWNER.$F2"
+                      - patterns:
+                          - pattern: "[..., $OWNER.$F1, ..., $OWNER.$F2, ...].join($SEPARATOR)"
+                          - metavariable-regex:
+                              metavariable: $SEPARATOR
+                              regex: "^(?!(?:\"(?:\\\\.|[^\"\\\\])*\\s(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*\\s(?:\\\\.|[^'\\\\])*'|\\x60(?:(?:\\\\.)|(?:(?!\\$\\{)[^\\x60\\\\]))*\\s(?:(?:\\\\.)|(?:(?!\\$\\{)[^\\x60\\\\]))*\\x60)$)[\\s\\S]+$"
+                      - pattern: "JSON.stringify([..., $OWNER.$F1, ..., $OWNER.$F2, ...])"
+                      - pattern: "[..., $OWNER.$F1, ..., $OWNER.$F2, ...].join()"
+                  - metavariable-comparison:
+                      comparison: "str($F1) == \"policy\" or str($F2) == \"policy\""
+              - patterns:
+                  - pattern-either:
+                      - pattern: "`...${$OWNER.$F1}...${$OWNER.$F2}...`"
+                      - pattern: "$OWNER.$F1 + ... + $OWNER.$F2"
+                      - patterns:
+                          - pattern: "[..., $OWNER.$F1, ..., $OWNER.$F2, ...].join($SEPARATOR)"
+                          - metavariable-regex:
+                              metavariable: $SEPARATOR
+                              regex: "^(?!(?:\"(?:\\\\.|[^\"\\\\])*\\s(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*\\s(?:\\\\.|[^'\\\\])*'|\\x60(?:(?:\\\\.)|(?:(?!\\$\\{)[^\\x60\\\\]))*\\s(?:(?:\\\\.)|(?:(?!\\$\\{)[^\\x60\\\\]))*\\x60)$)[\\s\\S]+$"
+                      - pattern: "JSON.stringify([..., $OWNER.$F1, ..., $OWNER.$F2, ...])"
+                      - pattern: "[..., $OWNER.$F1, ..., $OWNER.$F2, ...].join()"
+                  - metavariable-pattern:
+                      metavariable: $OWNER
+                      pattern-either:
+                        - pattern: "($VALUE : Limit)"
+                        - pattern: "($VALUE : LimitTarget)"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "`...${$OWNER.$F1}...${$OWNER.$F2}...`"
+                      - pattern: "$OWNER.$F1 + ... + $OWNER.$F2"
+                      - patterns:
+                          - pattern: "[..., $OWNER.$F1, ..., $OWNER.$F2, ...].join($SEPARATOR)"
+                          - metavariable-regex:
+                              metavariable: $SEPARATOR
+                              regex: "^(?!(?:\"(?:\\\\.|[^\"\\\\])*\\s(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*\\s(?:\\\\.|[^'\\\\])*'|\\x60(?:(?:\\\\.)|(?:(?!\\$\\{)[^\\x60\\\\]))*\\s(?:(?:\\\\.)|(?:(?!\\$\\{)[^\\x60\\\\]))*\\x60)$)[\\s\\S]+$"
+                      - pattern: "JSON.stringify([..., $OWNER.$F1, ..., $OWNER.$F2, ...])"
+                      - pattern: "[..., $OWNER.$F1, ..., $OWNER.$F2, ...].join()"
+                  - pattern-either:
+                      - pattern-inside: "function $FN(..., $OWNER: Limit, ...) { ... }"
+                      - pattern-inside: "function $FN(..., $OWNER: LimitTarget, ...) { ... }"
+                      - patterns:
+                          - pattern-inside: "$LIST.$METHOD(($OWNER, ...) => ...)"
+                          - metavariable-regex:
+                              metavariable: $METHOD
+                              regex: "^(map|some|every|find|filter|forEach)$"
+                          - metavariable-pattern:
+                              metavariable: $LIST
+                              pattern-either:
+                                - pattern: "($VALUE : Limit[])"
+                                - pattern: "($VALUE : LimitTarget[])"
+                      - patterns:
+                          - pattern-inside: "for (const $OWNER of $LIST) { ... }"
+                          - metavariable-pattern:
+                              metavariable: $LIST
+                              pattern-either:
+                                - pattern: "($VALUE : Limit[])"
+                                - pattern: "($VALUE : LimitTarget[])"
+          - metavariable-regex:
+              metavariable: $F1
+              regex: "^(policy|mode|scope|account|accountGroup|asset)$"
+          - metavariable-regex:
+              metavariable: $F2
+              regex: "^(policy|mode|scope|account|accountGroup|asset)$"
+          - metavariable-comparison:
+              comparison: "str($F1) != str($F2)"
+    paths:
+      exclude:
+        - "*.test.ts"
+        - "*.test.tsx"
+        - "/checks/semgrep/testdata/**"
+        - "/web/src/api/limitTarget.ts"
+
+  - id: limit-target-axis-compare
+    message: Compare panel barrier targets through sameLimitTarget in api/limitTarget.
+    severity: ERROR
+    languages: [typescript]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OWNER.$F2 === $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OTHER.$F2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OWNER.$F2 !== $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OTHER.$F2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OWNER.$F2 === $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OTHER.$F2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OWNER.$F2 !== $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OTHER.$F2 !== $OWNER.$F2 && ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OWNER.$F2 === $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OTHER.$F2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OWNER.$F2 !== $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OTHER.$F2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OWNER.$F2 === $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OTHER.$F2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OWNER.$F2 !== $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OTHER.$F2 !== $OWNER.$F2 || ..."
+                  - metavariable-comparison:
+                      comparison: "str($F1) == \"policy\" or str($F2) == \"policy\""
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OWNER.$F2 === $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OTHER.$F2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OWNER.$F2 !== $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OTHER.$F2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OWNER.$F2 === $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OTHER.$F2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OWNER.$F2 !== $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OTHER.$F2 !== $OWNER.$F2 && ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OWNER.$F2 === $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OTHER.$F2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OWNER.$F2 !== $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OTHER.$F2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OWNER.$F2 === $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OTHER.$F2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OWNER.$F2 !== $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OTHER.$F2 !== $OWNER.$F2 || ..."
+                  - metavariable-pattern:
+                      metavariable: $OWNER
+                      pattern-either:
+                        - pattern: "($VALUE : Limit)"
+                        - pattern: "($VALUE : LimitTarget)"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OWNER.$F2 === $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OTHER.$F2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OWNER.$F2 !== $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $OTHER.$F1 && ... && $OTHER.$F2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OWNER.$F2 === $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OTHER.$F2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OWNER.$F2 !== $OTHER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $OTHER.$F1 && ... && $OTHER.$F2 !== $OWNER.$F2 && ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OWNER.$F2 === $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OTHER.$F2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OWNER.$F2 !== $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $OTHER.$F1 || ... || $OTHER.$F2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OWNER.$F2 === $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OTHER.$F2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OWNER.$F2 !== $OTHER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $OTHER.$F1 || ... || $OTHER.$F2 !== $OWNER.$F2 || ..."
+                  - pattern-either:
+                      - pattern-inside: "function $FN(..., $OWNER: Limit, ...) { ... }"
+                      - pattern-inside: "function $FN(..., $OWNER: LimitTarget, ...) { ... }"
+                      - patterns:
+                          - pattern-inside: "$LIST.$METHOD(($OWNER, ...) => ...)"
+                          - metavariable-regex:
+                              metavariable: $METHOD
+                              regex: "^(map|some|every|find|filter|forEach)$"
+                          - metavariable-pattern:
+                              metavariable: $LIST
+                              pattern-either:
+                                - pattern: "($VALUE : Limit[])"
+                                - pattern: "($VALUE : LimitTarget[])"
+                      - patterns:
+                          - pattern-inside: "for (const $OWNER of $LIST) { ... }"
+                          - metavariable-pattern:
+                              metavariable: $LIST
+                              pattern-either:
+                                - pattern: "($VALUE : Limit[])"
+                                - pattern: "($VALUE : LimitTarget[])"
+          - metavariable-regex:
+              metavariable: $F1
+              regex: "^(policy|mode|scope|account|accountGroup|asset)$"
+          - metavariable-regex:
+              metavariable: $F2
+              regex: "^(policy|mode|scope|account|accountGroup|asset)$"
+          - metavariable-comparison:
+              comparison: "str($F1) != str($F2)"
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $S2 !== $OWNER.$F2 || ..."
+                  - metavariable-comparison:
+                      comparison: "str($F1) == \"policy\" or str($F2) == \"policy\""
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $S2 !== $OWNER.$F2 || ..."
+                  - metavariable-pattern:
+                      metavariable: $OWNER
+                      pattern-either:
+                        - pattern: "($VALUE : Limit)"
+                        - pattern: "($VALUE : LimitTarget)"
+              - patterns:
+                  - pattern-either:
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 === $S1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $S1 === $OWNER.$F1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $OWNER.$F2 === $S2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $S2 === $OWNER.$F2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $OWNER.$F1 !== $S1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $OWNER.$F2 !== $S2 && ..."
+                      - pattern: "... && $S1 !== $OWNER.$F1 && ... && $S2 !== $OWNER.$F2 && ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 === $S1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $S1 === $OWNER.$F1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $OWNER.$F2 === $S2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $S2 === $OWNER.$F2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $OWNER.$F1 !== $S1 || ... || $S2 !== $OWNER.$F2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $OWNER.$F2 !== $S2 || ..."
+                      - pattern: "... || $S1 !== $OWNER.$F1 || ... || $S2 !== $OWNER.$F2 || ..."
+                  - pattern-either:
+                      - pattern-inside: "function $FN(..., $OWNER: Limit, ...) { ... }"
+                      - pattern-inside: "function $FN(..., $OWNER: LimitTarget, ...) { ... }"
+                      - patterns:
+                          - pattern-inside: "$LIST.$METHOD(($OWNER, ...) => ...)"
+                          - metavariable-regex:
+                              metavariable: $METHOD
+                              regex: "^(map|some|every|find|filter|forEach)$"
+                          - metavariable-pattern:
+                              metavariable: $LIST
+                              pattern-either:
+                                - pattern: "($VALUE : Limit[])"
+                                - pattern: "($VALUE : LimitTarget[])"
+                      - patterns:
+                          - pattern-inside: "for (const $OWNER of $LIST) { ... }"
+                          - metavariable-pattern:
+                              metavariable: $LIST
+                              pattern-either:
+                                - pattern: "($VALUE : Limit[])"
+                                - pattern: "($VALUE : LimitTarget[])"
+          - metavariable-regex:
+              metavariable: $F1
+              regex: "^(policy|mode|scope|account|accountGroup|asset)$"
+          - metavariable-regex:
+              metavariable: $F2
+              regex: "^(policy|mode|scope|account|accountGroup|asset)$"
+          - metavariable-comparison:
+              comparison: "str($F1) != str($F2)"
+          - pattern-either:
+              - pattern-inside: "function $FN(..., $S1, ..., $S2, ...) { ... }"
+              - pattern-inside: "function (..., $S1, ..., $S2, ...) { ... }"
+              - pattern-inside: "(..., $S1, ..., $S2, ...) => ..."
+              - pattern-inside: "function $FN(..., $S1: $T1, ..., $S2: $T2, ...) { ... }"
+              - pattern-inside: "function (..., $S1: $T1, ..., $S2: $T2, ...) { ... }"
+              - pattern-inside: "(..., $S1: $T1, ..., $S2: $T2, ...) => ..."
+              - pattern-inside: "function $FN(..., $S2, ..., $S1, ...) { ... }"
+              - pattern-inside: "function (..., $S2, ..., $S1, ...) { ... }"
+              - pattern-inside: "(..., $S2, ..., $S1, ...) => ..."
+              - pattern-inside: "function $FN(..., $S2: $T1, ..., $S1: $T2, ...) { ... }"
+              - pattern-inside: "function (..., $S2: $T1, ..., $S1: $T2, ...) { ... }"
+              - pattern-inside: "(..., $S2: $T1, ..., $S1: $T2, ...) => ..."
+    paths:
+      exclude:
+        - "*.test.ts"
+        - "*.test.tsx"
+        - "/checks/semgrep/testdata/**"
+        - "/web/src/api/limitTarget.ts"
+
+  - id: limit-target-object
+    message: Pass limitTarget(value) to deleteLimit instead of copying barrier axes.
+    severity: ERROR
+    languages: [typescript]
+    patterns:
+      - pattern-either:
+          - pattern: "deleteLimit({..., $K1: $OWNER.$F1, ..., $K2: $OWNER.$F2, ...})"
+          - pattern: "$API.deleteLimit({..., $K1: $OWNER.$F1, ..., $K2: $OWNER.$F2, ...})"
+          - pattern: "const $TARGET: LimitTarget = {..., $K1: $OWNER.$F1, ..., $K2: $OWNER.$F2, ...}"
+          - pattern: "let $TARGET: LimitTarget = {..., $K1: $OWNER.$F1, ..., $K2: $OWNER.$F2, ...}"
+          - patterns:
+              - pattern: "return {..., $K1: $OWNER.$F1, ..., $K2: $OWNER.$F2, ...}"
+              - pattern-inside: "function $FN(...): LimitTarget { ... }"
+      - metavariable-regex:
+          metavariable: $F1
+          regex: "^(policy|mode|scope|account|accountGroup|asset)$"
+      - metavariable-regex:
+          metavariable: $F2
+          regex: "^(policy|mode|scope|account|accountGroup|asset)$"
+      - metavariable-comparison:
+          comparison: "str($F1) != str($F2)"
+    paths:
+      exclude:
+        - "*.test.ts"
+        - "*.test.tsx"
+        - "/checks/semgrep/testdata/**"
+        - "/web/src/api/limitTarget.ts"

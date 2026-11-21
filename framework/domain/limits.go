@@ -87,6 +87,11 @@ type LimitRate struct {
 	MaxOrders uint64
 }
 
+// Key returns the barrier's identity without validating its payload.
+func (l LimitRate) Key() (LimitKey, error) {
+	return NewLimitKey(PolicyRateLimit, "", l.Scope, l.Account, "", l.Asset)
+}
+
 // LimitOrderSize is the typed order-size barrier: a per-order ceiling on
 // quantity and/or notional for the addressed scope. Broker barriers may carry
 // either or both caps. Underlying-asset scopes carry quantity; settlement-asset
@@ -109,6 +114,11 @@ type LimitOrderSize struct {
 	MaxNotional string
 }
 
+// Key returns the barrier's identity without validating its payload.
+func (l LimitOrderSize) Key() (LimitKey, error) {
+	return NewLimitKey(PolicyOrderSizeLimit, l.Mode, l.Scope, l.Account, "", l.Asset)
+}
+
 // LimitPosition bounds the long and short position magnitude for one account
 // and asset. The engine computes the projected position and enforces the bound.
 type LimitPosition struct {
@@ -121,6 +131,11 @@ type LimitPosition struct {
 	// MaxPosition is the inclusive, non-negative ceiling (exact decimal).
 	// Zero permits only a flat projected position.
 	MaxPosition string
+}
+
+// Key returns the barrier's identity without validating its payload.
+func (l LimitPosition) Key() (LimitKey, error) {
+	return NewLimitKey(PolicyPositionLimit, "", l.Scope, l.Account, "", l.Asset)
 }
 
 // LimitSpotFundsPnlBounds configures a currency-valued SpotFunds P&L barrier.
@@ -147,6 +162,15 @@ type LimitSpotFundsPnlBounds struct {
 	LowerBound string
 	// UpperBound is the upper P&L bound (exact decimal); empty when unset.
 	UpperBound string
+}
+
+// Key returns the barrier's identity without validating its payload.
+func (l LimitSpotFundsPnlBounds) Key() (LimitKey, error) {
+	policy := l.Axis.Policy()
+	if policy == "" {
+		return LimitKey{}, fmt.Errorf("unknown spot funds pnl axis %q: %w", l.Axis, ErrInvalid)
+	}
+	return NewLimitKey(policy, "", l.Scope, l.Account, l.AccountGroup, "")
 }
 
 // SpotFundsPnlAxis is the account P&L measure a Spot Funds P&L bound limits.
@@ -243,9 +267,7 @@ var allowedScopes = map[string][]LimitScope{
 // for the rate policy, the account/asset axes present consistently with the
 // scope, and a positive order count over a positive, at-most-24h window.
 func (l LimitRate) Validate() error {
-	if err := ValidateLimitScopeAndAxes(
-		PolicyRateLimit, l.Scope, l.Account, l.Asset, "",
-	); err != nil {
+	if _, err := l.Key(); err != nil {
 		return err
 	}
 	// The engine parses the order count with strconv.ParseUint, so the count is
@@ -286,12 +308,7 @@ func ValidateOrderSizeMode(mode RuleMode) error {
 // scope for the order-size policy, consistent axes, and at least one positive
 // decimal ceiling.
 func (l LimitOrderSize) Validate() error {
-	if err := ValidateOrderSizeMode(l.Mode); err != nil {
-		return err
-	}
-	if err := ValidateLimitScopeAndAxes(
-		PolicyOrderSizeLimit, l.Scope, l.Account, l.Asset, "",
-	); err != nil {
+	if _, err := l.Key(); err != nil {
 		return err
 	}
 	switch l.Scope {
@@ -354,9 +371,7 @@ func (l LimitOrderSize) Validate() error {
 
 // Validate requires an account, an asset and a non-negative exact ceiling.
 func (l LimitPosition) Validate() error {
-	if err := ValidateLimitScopeAndAxes(
-		PolicyPositionLimit, l.Scope, l.Account, l.Asset, "",
-	); err != nil {
+	if _, err := l.Key(); err != nil {
 		return err
 	}
 	if l.MaxPosition == "" {
@@ -375,13 +390,8 @@ func (l LimitPosition) Validate() error {
 // Validate checks the SpotFunds self-computed P&L-bounds barrier against the
 // Officer meta-policy contract of its axis's policy.
 func (l LimitSpotFundsPnlBounds) Validate() error {
-	policy := l.Axis.Policy()
-	if policy == "" {
-		return fmt.Errorf("unknown spot funds pnl axis %q: %w", l.Axis, ErrInvalid)
-	}
-	if err := ValidateLimitScopeAndAxes(
-		policy, l.Scope, l.Account, "", l.AccountGroup,
-	); err != nil {
+	key, err := l.Key()
+	if err != nil {
 		return err
 	}
 	if l.Currency == "" {
@@ -392,7 +402,7 @@ func (l LimitSpotFundsPnlBounds) Validate() error {
 			"", "",
 			fmt.Errorf(
 				"%s requires at least lower_bound or upper_bound: %w",
-				policy, ErrInvalid,
+				key.Policy(), ErrInvalid,
 			),
 		)
 	}

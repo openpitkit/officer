@@ -965,21 +965,27 @@ func TestMemoryRealmRestoreDefaultGroupSemantics(t *testing.T) {
 	t.Parallel()
 	realm := newMemoryStore("memory-default-restore.db").realm
 
-	realm.restoreData(backup.Data{}, backup.RestoreModeOverwrite)
+	if err := realm.restoreData(backup.Data{}, backup.RestoreModeOverwrite); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := realm.groups[""]; ok {
 		t.Fatal("empty restore invented an absent default group")
 	}
 
-	realm.restoreData(
+	if err := realm.restoreData(
 		backup.Data{DefaultGroupCurrency: "USD"},
 		backup.RestoreModeOverwrite,
-	)
+	); err != nil {
+		t.Fatal(err)
+	}
 	group, ok := realm.groups[""]
 	if !ok || group.Currency != "USD" || group.EngineGroupID != 0 {
 		t.Fatalf("non-empty default restore = %+v ok=%v, want USD with id 0", group, ok)
 	}
 
-	realm.restoreData(backup.Data{}, backup.RestoreModeOverwrite)
+	if err := realm.restoreData(backup.Data{}, backup.RestoreModeOverwrite); err != nil {
+		t.Fatal(err)
+	}
 	group, ok = realm.groups[""]
 	if !ok || group.Currency != "" || group.EngineGroupID != 0 {
 		t.Fatalf("cleared default restore = %+v ok=%v, want retained row with id 0", group, ok)

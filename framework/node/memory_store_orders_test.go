@@ -304,7 +304,7 @@ func (r *memoryRealm) RecordOrderSettlementWithAttestation(
 	snapshot := r.exportData(ctx)
 	reportID, err := r.recordOrderSettlement(ctx, st, attest)
 	if err != nil {
-		r.restoreData(snapshot, backup.RestoreModeOverwrite)
+		err = errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 	}
 	return reportID, err
 }
@@ -501,14 +501,12 @@ func (r *memoryRealm) recordOrderSubmission(
 	}
 	recordedSubmitted, err := r.AppendOrderEvent(ctx, submitted)
 	if err != nil {
-		r.restoreData(snapshot, backup.RestoreModeOverwrite)
-		return domain.Order{}, err
+		return domain.Order{}, errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 	}
 
 	settlement, err := apply(order)
 	if err != nil {
-		r.restoreData(snapshot, backup.RestoreModeOverwrite)
-		return domain.Order{}, err
+		return domain.Order{}, errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 	}
 	// The submitted event is offered to attest only after apply has returned,
 	// as the SQLite store does: the attestor is chosen while apply runs.
@@ -516,8 +514,7 @@ func (r *memoryRealm) recordOrderSubmission(
 	err = r.attestEventLocked(ctx, recordedSubmitted, attest)
 	r.mu.Unlock()
 	if err != nil {
-		r.restoreData(snapshot, backup.RestoreModeOverwrite)
-		return domain.Order{}, err
+		return domain.Order{}, errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 	}
 	if settlement.Order.IsZero() {
 		settlement.Order = order.ExternalID
@@ -526,8 +523,7 @@ func (r *memoryRealm) recordOrderSubmission(
 		settlement.Account = order.Account
 	}
 	if _, err := r.recordOrderSettlement(ctx, settlement, attest); err != nil {
-		r.restoreData(snapshot, backup.RestoreModeOverwrite)
-		return domain.Order{}, err
+		return domain.Order{}, errors.Join(err, r.restoreData(snapshot, backup.RestoreModeOverwrite))
 	}
 
 	order.Status = settlement.OrderStatus

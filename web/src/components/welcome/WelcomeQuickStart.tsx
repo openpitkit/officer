@@ -29,6 +29,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import type { Asset, AssetClass, Limit, MarketDataInstance } from "@/api/types";
+import { sameLimitTarget } from "@/api/limitTarget";
 import { Button } from "@/components/ui/button";
 import { Section } from "@/components/welcome/Section";
 import { ApiError, MAX_LIST_LIMIT, useOfficerApi } from "@/framework";
@@ -77,6 +78,7 @@ const DEMO_LIMITS: Limit[] = [
     mode: null,
     scope: "account",
     account: DEMO_ACCOUNT_ID,
+    accountGroup: "",
     asset: "",
     values: { max_orders: "20", window: "1m" },
   },
@@ -85,6 +87,7 @@ const DEMO_LIMITS: Limit[] = [
     mode: "reject",
     scope: "account_underlying_asset",
     account: DEMO_ACCOUNT_ID,
+    accountGroup: "",
     asset: "BTC",
     values: { max_quantity: "2" },
   },
@@ -93,6 +96,7 @@ const DEMO_LIMITS: Limit[] = [
     mode: "reject",
     scope: "account_settlement_asset",
     account: DEMO_ACCOUNT_ID,
+    accountGroup: "",
     asset: "USD",
     values: { max_notional: "150000" },
   },
@@ -499,14 +503,7 @@ export function WelcomeQuickStart() {
       throw new Error(t("welcome.status.barriersUnread", { account }));
     }
     const exists = limits.some((limit) =>
-      page.items.some(
-        (row) =>
-          row.policy === limit.policy &&
-          row.mode === limit.mode &&
-          row.scope === limit.scope &&
-          row.account === limit.account &&
-          row.asset === limit.asset,
-      ),
+      page.items.some((row) => sameLimitTarget(row, limit)),
     );
     if (exists) {
       throw new Error(t("welcome.status.barriersExist", { account }));

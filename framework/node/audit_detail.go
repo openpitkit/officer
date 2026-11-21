@@ -26,57 +26,35 @@ import (
 // setRateLimitDetail renders a rate-limit upsert as a short human-readable audit
 // detail, e.g. "Limit set: rate_limit (account) account=acc-1 max_orders=100
 // window=1s".
-func setRateLimitDetail(limit domain.LimitRate) domain.AuditDetail {
-	target := LimitTarget{
-		Policy:  domain.PolicyRateLimit,
-		Scope:   limit.Scope,
-		Account: limit.Account,
-		Asset:   limit.Asset,
-	}
-	fields := append(axesFields(target),
+func setRateLimitDetail(key domain.LimitKey, limit domain.LimitRate) domain.AuditDetail {
+	fields := append(axesFields(key),
 		domain.AuditDetailField{Name: "max_orders", Value: strconv.FormatUint(limit.MaxOrders, 10)},
 		domain.AuditDetailField{Name: "window", Value: limit.Window.String()},
 	)
-	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(key), fields...)
 }
 
 // setPositionLimitDetail renders a position-limit upsert as a short audit detail.
-func setPositionLimitDetail(limit domain.LimitPosition) domain.AuditDetail {
-	target := LimitTarget{
-		Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset,
-	}
-	fields := append(axesFields(target), domain.AuditDetailField{Name: "max_position", Value: limit.MaxPosition})
-	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
+func setPositionLimitDetail(key domain.LimitKey, limit domain.LimitPosition) domain.AuditDetail {
+	fields := append(axesFields(key), domain.AuditDetailField{Name: "max_position", Value: limit.MaxPosition})
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(key), fields...)
 }
 
 // setOrderSizeLimitDetail renders an order-size upsert as a short audit detail.
-func setOrderSizeLimitDetail(limit domain.LimitOrderSize) domain.AuditDetail {
-	target := LimitTarget{
-		Policy:  domain.PolicyOrderSizeLimit,
-		Mode:    limit.Mode,
-		Scope:   limit.Scope,
-		Account: limit.Account,
-		Asset:   limit.Asset,
-	}
-	fields := axesFields(target)
+func setOrderSizeLimitDetail(key domain.LimitKey, limit domain.LimitOrderSize) domain.AuditDetail {
+	fields := axesFields(key)
 	if limit.MaxQuantity != "" {
 		fields = append(fields, domain.AuditDetailField{Name: "max_quantity", Value: limit.MaxQuantity})
 	}
 	if limit.MaxNotional != "" {
 		fields = append(fields, domain.AuditDetailField{Name: "max_notional", Value: limit.MaxNotional})
 	}
-	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(key), fields...)
 }
 
 // setSpotFundsPnlBoundsLimitDetail renders a SpotFunds P&L-bounds upsert.
-func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) domain.AuditDetail {
-	target := LimitTarget{
-		Policy:       limit.Axis.Policy(),
-		Scope:        limit.Scope,
-		Account:      limit.Account,
-		AccountGroup: limit.AccountGroup,
-	}
-	fields := append(axesFields(target),
+func setSpotFundsPnlBoundsLimitDetail(key domain.LimitKey, limit domain.LimitSpotFundsPnlBounds) domain.AuditDetail {
+	fields := append(axesFields(key),
 		domain.AuditDetailField{Name: "currency", Value: limit.Currency},
 	)
 	if limit.LowerBound != "" {
@@ -85,27 +63,27 @@ func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) doma
 	if limit.UpperBound != "" {
 		fields = append(fields, domain.AuditDetailField{Name: "upper_bound", Value: limit.UpperBound})
 	}
-	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
+	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(key), fields...)
 }
 
 // setSpotFundsLimitModeDetail renders a change of the Spot Funds limit-mode
 // meta-policy, e.g. "Limit set: spot_funds_limit_mode (global)
 // mode=track_only".
 func setSpotFundsLimitModeDetail(mode domain.SpotFundsLimitMode) domain.AuditDetail {
-	target := LimitTarget{
-		Policy: domain.PolicySpotFundsLimitMode,
-		Scope:  domain.ScopeGlobal,
-	}
-	fields := append(axesFields(target),
+	return domain.NewAuditDetail(
+		domain.AuditDetailSetLimit,
+		domain.AuditDetailParams{
+			"policy": domain.PolicySpotFundsLimitMode,
+			"scope":  string(domain.ScopeGlobal),
+		},
 		domain.AuditDetailField{Name: "mode", Value: string(mode)},
 	)
-	return domain.NewAuditDetail(domain.AuditDetailSetLimit, axesParams(target), fields...)
 }
 
 // deleteLimitDetail renders a barrier deletion as a short audit detail.
-func deleteLimitDetail(target LimitTarget) domain.AuditDetail {
+func deleteLimitDetail(key domain.LimitKey) domain.AuditDetail {
 	return domain.NewAuditDetail(
-		domain.AuditDetailDeleteLimit, axesParams(target), axesFields(target)...,
+		domain.AuditDetailDeleteLimit, axesParams(key), axesFields(key)...,
 	)
 }
 
@@ -349,28 +327,28 @@ func policyConfigurationBlockDetail(policy string, block domain.AccountBlock) do
 }
 
 // axesParams names the policy and scope of a typed barrier.
-func axesParams(target LimitTarget) domain.AuditDetailParams {
+func axesParams(key domain.LimitKey) domain.AuditDetailParams {
 	return domain.AuditDetailParams{
-		"policy": target.Policy,
-		"scope":  string(target.Scope),
+		"policy": key.Policy(),
+		"scope":  string(key.Scope()),
 	}
 }
 
 // axesFields renders the account, group and asset axes of a typed barrier,
-// and its mode for order_size_limit.
-func axesFields(target LimitTarget) []domain.AuditDetailField {
+// and its mode when present.
+func axesFields(key domain.LimitKey) []domain.AuditDetailField {
 	fields := make([]domain.AuditDetailField, 0, 3)
-	if target.Policy == domain.PolicyOrderSizeLimit {
-		fields = append(fields, domain.AuditDetailField{Name: "mode", Value: string(target.Mode)})
+	if key.Mode() != "" {
+		fields = append(fields, domain.AuditDetailField{Name: "mode", Value: string(key.Mode())})
 	}
-	if target.Account != "" {
-		fields = append(fields, domain.AuditDetailField{Name: "account", Value: target.Account.String()})
+	if key.Account() != "" {
+		fields = append(fields, domain.AuditDetailField{Name: "account", Value: key.Account().String()})
 	}
-	if target.AccountGroup != "" {
-		fields = append(fields, domain.AuditDetailField{Name: "account_group", Value: target.AccountGroup})
+	if key.AccountGroup() != "" {
+		fields = append(fields, domain.AuditDetailField{Name: "account_group", Value: key.AccountGroup()})
 	}
-	if target.Asset != "" {
-		fields = append(fields, domain.AuditDetailField{Name: "asset", Value: target.Asset})
+	if key.Asset() != "" {
+		fields = append(fields, domain.AuditDetailField{Name: "asset", Value: key.Asset()})
 	}
 	return fields
 }

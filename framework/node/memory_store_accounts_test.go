@@ -323,7 +323,9 @@ func (r *memoryRealm) UpdateAccount(
 			return domain.Account{}, domain.ErrAlreadyExists
 		}
 		delete(r.accounts, oldCode)
-		r.renameAccountReferences(oldCode, account.Code)
+		if err := r.renameAccountReferences(oldCode, account.Code); err != nil {
+			return domain.Account{}, err
+		}
 	}
 	current.Code = account.Code
 	current.Title = account.Title
@@ -331,7 +333,7 @@ func (r *memoryRealm) UpdateAccount(
 	return current, nil
 }
 
-func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID) {
+func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID) error {
 	for id, connection := range r.tradingConnections {
 		if connection.FeeAccount == oldCode {
 			connection.FeeAccount = newCode
@@ -348,14 +350,27 @@ func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID)
 	}
 	r.balances = nextBalances
 
-	r.rateLimits = renameAccountLimits(r.rateLimits, oldCode, newCode)
-	r.orderSizeLimits = renameAccountLimits(r.orderSizeLimits, oldCode, newCode)
-	r.positionLimits = renameAccountLimits(r.positionLimits, oldCode, newCode)
-	r.spotFundsPnlBoundsLimits = renameSpotFundsPnlBoundsLimits(
+	var err error
+	r.rateLimits, err = renameAccountLimits(r.rateLimits, oldCode, newCode)
+	if err != nil {
+		return err
+	}
+	r.orderSizeLimits, err = renameAccountLimits(r.orderSizeLimits, oldCode, newCode)
+	if err != nil {
+		return err
+	}
+	r.positionLimits, err = renameAccountLimits(r.positionLimits, oldCode, newCode)
+	if err != nil {
+		return err
+	}
+	r.spotFundsPnlBoundsLimits, err = renameAccountLimits(
 		r.spotFundsPnlBoundsLimits,
 		oldCode,
 		newCode,
 	)
+	if err != nil {
+		return err
+	}
 
 	for i := range r.adjustments {
 		if r.adjustments[i].Account == oldCode {
@@ -373,60 +388,43 @@ func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID)
 			r.trades[i].Account = newCode
 		}
 	}
+	return nil
 }
 
 func renameAccountLimits[Limit interface {
-	domain.LimitRate | domain.LimitOrderSize | domain.LimitPosition
+	domain.KeyedLimit
+	domain.LimitRate | domain.LimitOrderSize | domain.LimitPosition | domain.LimitSpotFundsPnlBounds
 }](
-	limits map[string]Limit,
+	limits map[domain.LimitKey]Limit,
 	oldCode domain.AccountID,
 	newCode domain.AccountID,
-) map[string]Limit {
-	out := map[string]Limit{}
+) (map[domain.LimitKey]Limit, error) {
+	out := map[domain.LimitKey]Limit{}
 	for key, limit := range limits {
-		switch typed := any(limit).(type) {
-		case domain.LimitRate:
-			if typed.Account == oldCode {
+		if key.Account() == oldCode {
+			switch typed := any(limit).(type) {
+			case domain.LimitRate:
 				typed.Account = newCode
-				key = limitKey(typed.Scope, typed.Account, typed.Asset, "")
-			}
-			out[key] = any(typed).(Limit)
-		case domain.LimitOrderSize:
-			if typed.Account == oldCode {
+				limit = any(typed).(Limit)
+			case domain.LimitOrderSize:
 				typed.Account = newCode
-				key = limitKey(typed.Scope, typed.Account, typed.Asset, typed.Mode)
-			}
-			out[key] = any(typed).(Limit)
-		case domain.LimitPosition:
-			if typed.Account == oldCode {
+				limit = any(typed).(Limit)
+			case domain.LimitPosition:
 				typed.Account = newCode
-				key = limitKey(typed.Scope, typed.Account, typed.Asset, "")
+				limit = any(typed).(Limit)
+			case domain.LimitSpotFundsPnlBounds:
+				typed.Account = newCode
+				limit = any(typed).(Limit)
 			}
-			out[key] = any(typed).(Limit)
-		}
-	}
-	return out
-}
-
-func renameSpotFundsPnlBoundsLimits(
-	limits map[string]domain.LimitSpotFundsPnlBounds,
-	oldCode domain.AccountID,
-	newCode domain.AccountID,
-) map[string]domain.LimitSpotFundsPnlBounds {
-	out := map[string]domain.LimitSpotFundsPnlBounds{}
-	for key, limit := range limits {
-		if limit.Account == oldCode {
-			limit.Account = newCode
-			key = spotFundsPnlBoundsLimitKey(
-				limit.Axis,
-				limit.Scope,
-				limit.Account,
-				limit.AccountGroup,
-			)
+			var err error
+			key, err = domain.StoredLimitKey(limit)
+			if err != nil {
+				return nil, err
+			}
 		}
 		out[key] = limit
 	}
-	return out
+	return out, nil
 }
 
 func (r *memoryRealm) DeleteAccount(
@@ -474,23 +472,23 @@ func (r *memoryRealm) DeleteAccount(
 			return domain.NewHasDependentsError(dependents)
 		}
 	}
-	for key, limit := range r.rateLimits {
-		if limit.Account == code {
+	for key := range r.rateLimits {
+		if key.Account() == code {
 			delete(r.rateLimits, key)
 		}
 	}
-	for key, limit := range r.orderSizeLimits {
-		if limit.Account == code {
+	for key := range r.orderSizeLimits {
+		if key.Account() == code {
 			delete(r.orderSizeLimits, key)
 		}
 	}
-	for key, limit := range r.positionLimits {
-		if limit.Account == code {
+	for key := range r.positionLimits {
+		if key.Account() == code {
 			delete(r.positionLimits, key)
 		}
 	}
-	for key, limit := range r.spotFundsPnlBoundsLimits {
-		if limit.Account == code {
+	for key := range r.spotFundsPnlBoundsLimits {
+		if key.Account() == code {
 			delete(r.spotFundsPnlBoundsLimits, key)
 		}
 	}

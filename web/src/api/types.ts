@@ -286,16 +286,21 @@ export interface AccountLimits {
   spotFundsTotalPnlBoundsLimits: SpotFundsPnlBoundsLimit[];
 }
 
-/** One risk-limit barrier in the UI's flat policy/value model. Values is an
- *  ordered kind -> value map.
- */
-export interface Limit {
+/** All axes identifying a barrier; absent string axes are empty and mode is
+ *  null for policies without a mode axis. */
+export interface LimitTarget {
   mode: OrderSizeLimitMode | null;
   policy: string;
   scope: string;
   account: string;
-  accountGroup?: string;
+  accountGroup: string;
   asset: string;
+}
+
+/** One risk-limit barrier in the UI's flat policy/value model. Values is an
+ *  ordered kind -> value map.
+ */
+export interface Limit extends LimitTarget {
   values: Record<string, string>;
 }
 

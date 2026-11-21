@@ -62,8 +62,19 @@ func TestLocalNode_OrderSizeModeKeyLifecycle(t *testing.T) {
 			assertStored := func(want ...domain.LimitOrderSize) {
 				t.Helper()
 				got, err := st.ListOrderSizeLimits(ctx, "")
-				if err != nil || !reflect.DeepEqual(orderSizeLimitMap(got), orderSizeLimitMap(want)) {
-					t.Fatalf("stored barriers = %+v, %v; want %+v", got, err, want)
+				if err != nil {
+					t.Fatal(err)
+				}
+				gotMap, err := limitMap(got)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantMap, err := limitMap(want)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(gotMap, wantMap) {
+					t.Fatalf("stored barriers = %+v; want %+v", got, want)
 				}
 			}
 			if err := put(first, domain.LimitWriteAdd); err != nil {
@@ -77,7 +88,11 @@ func TestLocalNode_OrderSizeModeKeyLifecycle(t *testing.T) {
 				t.Fatalf("first barrier per mode: builds=%d snapshot=%+v", builds, built.OrderSizeLimits)
 			}
 			for _, limit := range []domain.LimitOrderSize{first, second} {
-				found, ok, err := n.readOrderSizeBarrier(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Mode: limit.Mode, Scope: limit.Scope})
+				key, err := limit.Key()
+				if err != nil {
+					t.Fatal(err)
+				}
+				found, ok, err := n.readOrderSizeBarrier(ctx, key)
 				if err != nil || !ok || found != limit {
 					t.Fatalf("read mode %s = %+v, %t, %v", limit.Mode, found, ok, err)
 				}
@@ -108,7 +123,7 @@ func TestLocalNode_OrderSizeModeKeyLifecycle(t *testing.T) {
 			if builds != 2 {
 				t.Fatalf("second barrier of existing mode rebuilt engine: %d", builds)
 			}
-			if _, _, err := n.readOrderSizeBarrier(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker}); !errors.Is(err, domain.ErrInvalid) {
+			if _, err := domain.NewLimitKey(domain.PolicyOrderSizeLimit, "", domain.ScopeBroker, "", "", ""); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("read without mode = %v, want ErrInvalid", err)
 			}
 			if _, err := n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker}, testCaller); !errors.Is(err, domain.ErrInvalid) {
@@ -164,10 +179,13 @@ func TestOrderSizeModeRestoreDelta(t *testing.T) {
 		{"last_mode", []domain.LimitOrderSize{review}, nil, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			plan := classifyRestoreRuntimeDelta(
+			plan, err := classifyRestoreRuntimeDelta(
 				restoreRuntimeSnapshot{data: backup.Data{OrderSizeLimits: tc.before}},
 				restoreRuntimeSnapshot{data: backup.Data{OrderSizeLimits: tc.after}},
 			)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if plan.rebuild != tc.rebuild || plan.orderSizeChanged != tc.changed {
 				t.Fatalf("restore plan = %+v, want rebuild=%t changed=%t", plan, tc.rebuild, tc.changed)
 			}
@@ -287,9 +305,14 @@ func TestLocalNode_OrderSizeModeBuildFailureIsAtomic(t *testing.T) {
 
 func TestOrderSizeModeAuditDetail(t *testing.T) {
 	for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+		limit := domain.LimitOrderSize{Mode: mode, Scope: domain.ScopeBroker, MaxQuantity: "10"}
+		key, err := limit.Key()
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, detail := range []domain.AuditDetail{
-			setOrderSizeLimitDetail(domain.LimitOrderSize{Mode: mode, Scope: domain.ScopeBroker, MaxQuantity: "10"}),
-			deleteLimitDetail(LimitTarget{Policy: domain.PolicyOrderSizeLimit, Mode: mode, Scope: domain.ScopeBroker}),
+			setOrderSizeLimitDetail(key, limit),
+			deleteLimitDetail(key),
 		} {
 			if err := detail.Validate(); err != nil {
 				t.Fatal(err)
@@ -318,16 +341,13 @@ func (r *failPolicyLifecycleCommitRealm) PutRateLimit(
 	return r.RealmStore.PutRateLimit(ctx, limit)
 }
 
-func (r *failPolicyLifecycleCommitRealm) DeleteRateLimit(
-	ctx context.Context,
-	scope domain.LimitScope,
-	account domain.AccountID,
-	asset string,
+func (r *failPolicyLifecycleCommitRealm) DeleteLimit(
+	ctx context.Context, key domain.LimitKey,
 ) error {
-	if r.deleteRateErr != nil {
+	if key.Policy() == domain.PolicyRateLimit && r.deleteRateErr != nil {
 		return r.deleteRateErr
 	}
-	return r.RealmStore.DeleteRateLimit(ctx, scope, account, asset)
+	return r.RealmStore.DeleteLimit(ctx, key)
 }
 
 func (*livePolicyMarkerSink) Push(marketdata.QuoteUpdate) error { return nil }

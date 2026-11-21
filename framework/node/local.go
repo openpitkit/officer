@@ -690,7 +690,14 @@ func (n *localNode) RestoreBackup(
 					fmt.Errorf("capture restored runtime snapshot: %w", err),
 				)
 		}
-		plan = classifyRestoreRuntimeDelta(beforeRuntime, afterRuntime)
+		plan, err = classifyRestoreRuntimeDelta(beforeRuntime, afterRuntime)
+		if err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(),
+				failAfterCommit(
+					"classify committed restore runtime delta",
+					fmt.Errorf("classify restored runtime delta: %w", err),
+				)
+		}
 		if plan.marketDataNeedsClear && !plan.rebuild {
 			if _, ok := n.currentMarketDataSink().(marketdata.QuoteClearer); !ok {
 				plan.rebuild = true

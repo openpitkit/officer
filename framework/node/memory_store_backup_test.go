@@ -81,7 +81,9 @@ func (r *memoryRealm) RestoreBackup(
 		previousGroups := r.groups
 		// Runtime sections replace data except assets, which restore by code to
 		// match SQLite's non-pruning contract.
-		r.restoreDataWithCredentialForm(data, opts.Mode, archive.CredentialForm)
+		if err := r.restoreDataWithCredentialForm(data, opts.Mode, archive.CredentialForm); err != nil {
+			return backup.RestoreSummary{}, err
+		}
 		// The real connector updates dictionary rows by code and preserves their
 		// stable engine ids in every restore mode. Keep the memory connector honest
 		// about that identity contract so online-restore tests do not manufacture an
@@ -281,13 +283,29 @@ func (r *memoryRealm) restoreAssets(
 	}
 }
 
-func (r *memoryRealm) restoreData(data backup.Data, mode backup.RestoreMode) {
-	r.restoreDataWithCredentialForm(data, mode, backup.CredentialFormPlaintext)
+func (r *memoryRealm) restoreData(data backup.Data, mode backup.RestoreMode) error {
+	return r.restoreDataWithCredentialForm(data, mode, backup.CredentialFormPlaintext)
 }
 
 func (r *memoryRealm) restoreDataWithCredentialForm(
 	data backup.Data, mode backup.RestoreMode, credentialForm string,
-) {
+) error {
+	rateLimits, err := limitMap(data.RateLimits)
+	if err != nil {
+		return err
+	}
+	orderSizeLimits, err := limitMap(data.OrderSizeLimits)
+	if err != nil {
+		return err
+	}
+	positionLimits, err := limitMap(data.PositionLimits)
+	if err != nil {
+		return err
+	}
+	spotFundsPnlBoundsLimits, err := limitMap(data.SpotFundsPnlBoundsLimits)
+	if err != nil {
+		return err
+	}
 	defaultGroup, hadDefaultGroup := r.groups[""]
 	previousAssets := r.assets
 	r.assets = make(map[string]domain.Asset, len(previousAssets))
@@ -345,27 +363,10 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 			Account:               balance.Account,
 		}
 	}
-	r.rateLimits = map[string]domain.LimitRate{}
-	for _, limit := range data.RateLimits {
-		r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
-	}
-	r.orderSizeLimits = map[string]domain.LimitOrderSize{}
-	for _, limit := range data.OrderSizeLimits {
-		r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset, limit.Mode)] = limit
-	}
-	r.positionLimits = map[string]domain.LimitPosition{}
-	for _, limit := range data.PositionLimits {
-		r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
-	}
-	r.spotFundsPnlBoundsLimits = map[string]domain.LimitSpotFundsPnlBounds{}
-	for _, limit := range data.SpotFundsPnlBoundsLimits {
-		r.spotFundsPnlBoundsLimits[spotFundsPnlBoundsLimitKey(
-			limit.Axis,
-			limit.Scope,
-			limit.Account,
-			limit.AccountGroup,
-		)] = limit
-	}
+	r.rateLimits = rateLimits
+	r.orderSizeLimits = orderSizeLimits
+	r.positionLimits = positionLimits
+	r.spotFundsPnlBoundsLimits = spotFundsPnlBoundsLimits
 	r.adjustments = append([]domain.AccountAdjustmentRecord(nil), data.Adjustments...)
 	r.orders = map[domain.ExternalID]domain.Order{}
 	for _, record := range data.Orders {
@@ -437,6 +438,7 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 	for key, value := range data.McpAccess {
 		r.mcpAccess[key] = value
 	}
+	return nil
 }
 
 func (r *memoryRealm) restoreSigningKeys(

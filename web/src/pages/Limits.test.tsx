@@ -347,6 +347,7 @@ describe("Limits order-size barrier modes", () => {
       mode,
       scope: account ? "account" : "broker",
       account,
+      accountGroup: "",
       asset: "",
       values: { max_quantity: "10" },
     };
@@ -460,7 +461,7 @@ describe("Limits order-size barrier modes", () => {
           mode,
           scope: "broker",
           account: "",
-          accountGroup: undefined,
+          accountGroup: "",
           asset: "",
         }),
       );
@@ -1060,6 +1061,7 @@ describe("LimitDialog framework controls", () => {
           mode: null,
           scope: "account_asset",
           account: "acc-1",
+          accountGroup: "",
           asset: "AAPL",
           values: { max_position: "10.00000001" },
         },
@@ -1102,6 +1104,7 @@ describe("LimitDialog framework controls", () => {
       mode: null,
       scope: "account_asset",
       account: "acc-1",
+      accountGroup: "",
       asset: "AAPL",
       values: { max_position: "100" },
     });
@@ -1138,6 +1141,7 @@ describe("LimitDialog framework controls", () => {
           mode: null,
           scope: "account_asset",
           account: "acc-1",
+          accountGroup: "",
           asset: "AAPL",
           values: { max_position: "100" },
         },
@@ -1155,7 +1159,7 @@ describe("LimitDialog framework controls", () => {
         mode: null,
         scope: "account_asset",
         account: "acc-1",
-        accountGroup: undefined,
+        accountGroup: "",
         asset: "AAPL",
       }),
     );
@@ -1480,6 +1484,7 @@ describe("LimitDialog framework controls", () => {
       mode: null,
       scope: "account",
       account: "acc-inherited",
+      accountGroup: "",
       asset: "",
       values: { currency: "USD", lower_bound: "-100" },
     });
@@ -1506,6 +1511,7 @@ describe("LimitDialog framework controls", () => {
       mode: null,
       scope: "account",
       account: "acc-no-currency",
+      accountGroup: "",
       asset: "",
       values: { currency: "USD", lower_bound: "-100" },
     });

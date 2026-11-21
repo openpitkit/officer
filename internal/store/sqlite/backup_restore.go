@@ -455,15 +455,19 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 				err,
 			)
 		}
-		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
+		key, err := l.Key()
 		if err != nil {
 			return err
 		}
-		applied, err := rt.putLimit(ctx, "limit_rate", l.Scope, accountID, assetID,
+		ids, err := resolveLimitKeyIDs(ctx, rt.tx, key)
+		if err != nil {
+			return err
+		}
+		accountID, assetID := ids.account, ids.asset
+		applied, err := rt.putLimit(ctx, key, ids,
 			`INSERT INTO limit_rate (scope, account_id, asset_id, max_orders, window)
 			 VALUES (?, ?, ?, ?, ?)`,
 			[]any{l.Scope, accountID, assetID, int64(l.MaxOrders), l.Window.String()},
-			nil,
 		)
 		if err != nil {
 			return err
@@ -480,16 +484,20 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 				err,
 			)
 		}
-		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
+		key, err := l.Key()
 		if err != nil {
 			return err
 		}
-		applied, err := rt.putLimit(ctx, "limit_order_size", l.Scope, accountID, assetID,
+		ids, err := resolveLimitKeyIDs(ctx, rt.tx, key)
+		if err != nil {
+			return err
+		}
+		accountID, assetID := ids.account, ids.asset
+		applied, err := rt.putLimit(ctx, key, ids,
 			`INSERT INTO limit_order_size (scope, account_id, asset_id, max_quantity, max_notional, mode)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
 			[]any{l.Scope, accountID, assetID,
 				nullableString(l.MaxQuantity), nullableString(l.MaxNotional), l.Mode},
-			&l.Mode,
 		)
 		if err != nil {
 			return err
@@ -503,14 +511,18 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 				l.Scope, l.Account, l.Asset, err,
 			)
 		}
-		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
+		key, err := l.Key()
 		if err != nil {
 			return err
 		}
-		applied, err := rt.putLimit(ctx, "limit_position", l.Scope, accountID, assetID,
+		ids, err := resolveLimitKeyIDs(ctx, rt.tx, key)
+		if err != nil {
+			return err
+		}
+		accountID, assetID := ids.account, ids.asset
+		applied, err := rt.putLimit(ctx, key, ids,
 			`INSERT INTO limit_position (scope, account_id, asset_id, max_position) VALUES (?, ?, ?, ?)`,
 			[]any{l.Scope, accountID, assetID, l.MaxPosition},
-			nil,
 		)
 		if err != nil {
 			return err
@@ -530,12 +542,11 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 				err,
 			)
 		}
-		accountID, groupID, err := resolveSubjectIDs(
-			ctx,
-			rt.tx,
-			l.Account,
-			l.AccountGroup,
-		)
+		key, err := l.Key()
+		if err != nil {
+			return err
+		}
+		ids, err := resolveLimitKeyIDs(ctx, rt.tx, key)
 		if err != nil {
 			return err
 		}
@@ -543,17 +554,15 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		if err != nil {
 			return err
 		}
-		applied, err := rt.putSpotFundsPnlBoundsLimit(
+		applied, err := rt.putLimit(
 			ctx,
-			l.Axis,
-			l.Scope,
-			accountID,
-			groupID,
+			key,
+			ids,
 			`INSERT INTO limit_spot_funds_pnl_bound
 				 (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			[]any{
-				l.Axis, l.Scope, accountID, groupID, currencyID,
+				l.Axis, l.Scope, ids.account, ids.group, currencyID,
 				nullableString(l.LowerBound), nullableString(l.UpperBound),
 			},
 		)
@@ -565,22 +574,22 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 	return nil
 }
 
-// putLimit applies one limit row under the restore mode. A limit is keyed by its
-// (scope, account, asset) composite, plus mode for limit_order_size;
-// insert-missing skips an existing composite,
+// putLimit applies one keyed limit row under the restore mode.
+// Insert-missing skips an existing key;
 // overwrite and replace-all delete-then-insert it (delete-then-insert is required
 // because SQLite treats NULL axes as distinct in the UNIQUE constraint). Returns
-// the number of rows applied (0 when skipped). Position limits have a fixed
-// account-asset scope, so their key has no stored scope column.
+// the number of rows applied (0 when skipped).
 func (rt *restoreTx) putLimit(
 	ctx context.Context,
-	table string, scope domain.LimitScope,
-	accountID, assetID sql.NullInt64,
+	key domain.LimitKey, ids limitKeyIDs,
 	insertSQL string,
 	insertArgs []any,
-	mode *domain.RuleMode,
 ) (int, error) {
-	where, keyArgs := limitKeyWhere(scope, accountID, assetID, mode)
+	predicate, err := limitKeyWhere(key, ids)
+	if err != nil {
+		return 0, err
+	}
+	table, where, keyArgs := predicate.table, predicate.where, predicate.args
 	exists, err := rowExists(
 		ctx, rt.tx,
 		`SELECT 1 FROM `+table+` WHERE `+where,
@@ -601,46 +610,6 @@ func (rt *restoreTx) putLimit(
 	}
 	if _, err := rt.tx.ExecContext(ctx, insertSQL, insertArgs...); err != nil {
 		return 0, fmt.Errorf("store: restore insert %s: %w", table, err)
-	}
-	return 1, nil
-}
-
-func (rt *restoreTx) putSpotFundsPnlBoundsLimit(
-	ctx context.Context,
-	axis domain.SpotFundsPnlAxis,
-	scope domain.LimitScope,
-	accountID, groupID sql.NullInt64,
-	insertSQL string,
-	insertArgs []any,
-) (int, error) {
-	exists, err := rowExists(
-		ctx, rt.tx,
-		`SELECT 1 FROM limit_spot_funds_pnl_bound
-		 WHERE axis = ?
-		   AND scope = ?
-		   AND account_id IS ?
-		   AND account_group_id IS ?`,
-		axis, scope, accountID, groupID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	if rt.skip(backup.SectionRiskLimits, exists) {
-		return 0, nil
-	}
-	if _, err := rt.tx.ExecContext(
-		ctx,
-		`DELETE FROM limit_spot_funds_pnl_bound
-		 WHERE axis = ?
-		   AND scope = ?
-		   AND account_id IS ?
-		   AND account_group_id IS ?`,
-		axis, scope, accountID, groupID,
-	); err != nil {
-		return 0, fmt.Errorf("store: restore delete limit_spot_funds_pnl_bound: %w", err)
-	}
-	if _, err := rt.tx.ExecContext(ctx, insertSQL, insertArgs...); err != nil {
-		return 0, fmt.Errorf("store: restore insert limit_spot_funds_pnl_bound: %w", err)
 	}
 	return 1, nil
 }

@@ -99,8 +99,12 @@ func TestLocalNode_PositionLimitCRUD(t *testing.T) {
 			t.Fatalf("delete configured %+v, stored %+v, %v; want %+v", call, stored, err, want)
 		}
 		rows, err := st.ListAudit(ctx, 1)
+		key, keyErr := target.Key()
+		if keyErr != nil {
+			t.Fatal(keyErr)
+		}
 		if err != nil || len(rows) != 1 || rows[0].Action != domain.AuditActionDeleteLimit ||
-			!reflect.DeepEqual(rows[0].Detail, deleteLimitDetail(target)) {
+			!reflect.DeepEqual(rows[0].Detail, deleteLimitDetail(key)) {
 			t.Fatalf("position delete audit = %+v, %v", rows, err)
 		}
 	}

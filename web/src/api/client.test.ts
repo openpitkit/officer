@@ -22,6 +22,7 @@ import { normalizeSigningKeysStatus } from "@/api/client";
 import type {
   BackupArchive,
   FrameworkCredentialStorage,
+  LimitTarget,
   TradingAccessSubject,
   TradingSnapshot,
   TestExecutionPolicy,
@@ -2381,6 +2382,7 @@ describe("limits client", () => {
           mode: null,
           scope: "broker",
           account: "",
+          accountGroup: "",
           asset: "",
           values: { max_quantity: "10" },
         },
@@ -2429,6 +2431,7 @@ describe("limits client", () => {
           mode: "reject",
           scope: "broker",
           account: "",
+          accountGroup: "",
           asset: "",
           values: { max_quantity: "10" },
         },
@@ -2476,6 +2479,7 @@ describe("limits client", () => {
         mode,
         scope: "broker",
         account: "",
+        accountGroup: "",
         asset: "",
         values: { max_quantity: "10", max_notional: "" },
       };
@@ -2539,6 +2543,7 @@ describe("limits client", () => {
       mode: "review_without_hold" as const,
       scope: "broker",
       account: "",
+      accountGroup: "",
       asset: "",
     };
     await api().deleteLimit(target);
@@ -2556,6 +2561,135 @@ describe("limits client", () => {
     );
     expect(fetch).toHaveBeenCalledTimes(calls);
   });
+
+  it.each<[keyof LimitTarget, LimitTarget, LimitTarget]>([
+    [
+      "policy",
+      {
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
+        scope: "global",
+        account: "",
+        accountGroup: "",
+        asset: "",
+      },
+      {
+        policy: "spot_funds_unrealized_pnl_bounds_kill_switch",
+        mode: null,
+        scope: "global",
+        account: "",
+        accountGroup: "",
+        asset: "",
+      },
+    ],
+    [
+      "mode",
+      {
+        policy: "order_size_limit",
+        mode: "reject",
+        scope: "broker",
+        account: "",
+        accountGroup: "",
+        asset: "",
+      },
+      {
+        policy: "order_size_limit",
+        mode: "review_without_hold",
+        scope: "broker",
+        account: "",
+        accountGroup: "",
+        asset: "",
+      },
+    ],
+    [
+      "scope",
+      {
+        policy: "order_size_limit",
+        mode: "reject",
+        scope: "underlying_asset",
+        account: "",
+        accountGroup: "",
+        asset: "AAPL",
+      },
+      {
+        policy: "order_size_limit",
+        mode: "reject",
+        scope: "settlement_asset",
+        account: "",
+        accountGroup: "",
+        asset: "AAPL",
+      },
+    ],
+    [
+      "account",
+      {
+        policy: "rate_limit",
+        mode: null,
+        scope: "account",
+        account: "desk-alpha",
+        accountGroup: "",
+        asset: "",
+      },
+      {
+        policy: "rate_limit",
+        mode: null,
+        scope: "account",
+        account: "desk-beta",
+        accountGroup: "",
+        asset: "",
+      },
+    ],
+    [
+      "accountGroup",
+      {
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
+        scope: "account_group",
+        account: "",
+        accountGroup: "group-alpha",
+        asset: "",
+      },
+      {
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
+        scope: "account_group",
+        account: "",
+        accountGroup: "group-beta",
+        asset: "",
+      },
+    ],
+    [
+      "asset",
+      {
+        policy: "rate_limit",
+        mode: null,
+        scope: "asset",
+        account: "",
+        accountGroup: "",
+        asset: "AAPL",
+      },
+      {
+        policy: "rate_limit",
+        mode: null,
+        scope: "asset",
+        account: "",
+        accountGroup: "",
+        asset: "MSFT",
+      },
+    ],
+  ])(
+    "uses distinct DELETE URLs for the %s axis",
+    async (_axis, left, right) => {
+      vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+      const client = api();
+      await client.deleteLimit(left);
+      await client.deleteLimit(right);
+      const [first, second] = vi.mocked(fetch).mock.calls;
+      expect(first[0]).not.toBe(second[0]);
+      expect(first[1]).toEqual(expect.objectContaining({ method: "DELETE" }));
+      expect(second[1]).toEqual(expect.objectContaining({ method: "DELETE" }));
+    },
+  );
 
   it.each([
     ["positionLimit", {}, "Position limit is missing from the API response"],
@@ -2581,6 +2715,7 @@ describe("limits client", () => {
           mode: null,
           scope: "account_asset",
           account: "desk-alpha",
+          accountGroup: "",
           asset: "AAPL",
           values: { max_position: "10" },
         },
@@ -2659,6 +2794,7 @@ describe("limits client", () => {
         mode: null,
         scope: "account_asset",
         account: "desk-alpha",
+        accountGroup: "",
         asset: "AAPL",
         values: { max_position: "+10.000000010" },
       },
@@ -2682,6 +2818,7 @@ describe("limits client", () => {
       mode: null,
       scope: "account_asset",
       account: "desk-alpha",
+      accountGroup: "",
       asset: "AAPL",
       values: { max_position: "10.00000001" },
     });
@@ -2755,6 +2892,7 @@ describe("limits client", () => {
         mode: null,
         scope: "account_asset",
         account: "desk-alpha",
+        accountGroup: "",
         asset: "AAPL",
         values: { max_position: "0" },
       },
@@ -2769,6 +2907,7 @@ describe("limits client", () => {
       mode: null,
       scope: "account_asset",
       account: "desk-alpha",
+      accountGroup: "",
       asset: "AAPL",
     });
     expect(fetch).toHaveBeenCalledWith(
@@ -2956,6 +3095,7 @@ describe("limits client", () => {
           mode: null,
           scope: "account",
           account: "desk-alpha",
+          accountGroup: "",
           asset: "",
           values: { max_orders: "20", window: "1m" },
         },
@@ -2971,6 +3111,7 @@ describe("limits client", () => {
         mode: null,
         scope: "account",
         account: "desk-alpha",
+        accountGroup: "",
         asset: "",
         values: { max_orders: "20", window: "1m" },
       });
@@ -3002,6 +3143,7 @@ describe("limits client", () => {
           mode: null,
           scope: "account",
           account: "desk-alpha",
+          accountGroup: "",
           asset: "",
           values: { max_orders: "20", window: "1m" },
         },
@@ -3039,6 +3181,7 @@ describe("limits client", () => {
         mode: null,
         scope: "account",
         account: "desk-alpha",
+        accountGroup: "",
         asset: "",
         values: { max_orders: "20", window: "1m" },
       },
@@ -3072,6 +3215,7 @@ describe("limits client", () => {
         mode: "reject",
         scope: "underlying_asset",
         account: "",
+        accountGroup: "",
         asset: "AAPL",
         values: { max_quantity: "10" },
       },
@@ -3137,6 +3281,7 @@ describe("limits client", () => {
           mode: null,
           scope: "account",
           account: "desk-alpha",
+          accountGroup: "",
           asset: "",
           values: { max_orders: "", window: "1m" },
         },
@@ -3168,6 +3313,7 @@ describe("limits client", () => {
         mode: null,
         scope: "account",
         account: "desk-alpha",
+        accountGroup: "",
         asset: "",
         values: {
           currency: "USD",
@@ -3239,6 +3385,7 @@ describe("limits client", () => {
           mode: null,
           scope: "account",
           account: "desk-alpha",
+          accountGroup: "",
           asset: "",
           values: { currency: "USD", lower_bound: "-1000", upper_bound: "" },
         },
@@ -3370,6 +3517,7 @@ describe("limits client", () => {
             mode: null,
             scope: "global",
             account: "",
+            accountGroup: "",
             asset: "",
             values: { mode: "track_only" },
           },
@@ -3395,6 +3543,7 @@ describe("limits client", () => {
           mode: null,
           scope: "global",
           account: "",
+          accountGroup: "",
           asset: "",
           values: { mode: "track_only" },
         },
@@ -3435,6 +3584,7 @@ describe("limits client", () => {
             mode: null,
             scope: "global",
             account: "",
+            accountGroup: "",
             asset: "",
             values,
           },
@@ -3474,6 +3624,7 @@ describe("limits client", () => {
             mode: null,
             scope: "global",
             account: "",
+            accountGroup: "",
             asset: "",
             values: { mode: "enforce" },
           },

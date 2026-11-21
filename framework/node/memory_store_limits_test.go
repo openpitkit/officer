@@ -239,26 +239,56 @@ func (r *memoryRealm) ListRateLimits(
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return limitKey(out[i].Scope, out[i].Account, out[i].Asset, "") <
-			limitKey(out[j].Scope, out[j].Account, out[j].Asset, "")
+		if out[i].Scope != out[j].Scope {
+			return out[i].Scope < out[j].Scope
+		}
+		if out[i].Account != out[j].Account {
+			return out[i].Account < out[j].Account
+		}
+		return out[i].Asset < out[j].Asset
 	})
 	return out, nil
 }
 
 func (r *memoryRealm) PutRateLimit(_ context.Context, limit domain.LimitRate) error {
-	r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
+	key, err := domain.StoredLimitKey(limit)
+	if err != nil {
+		return err
+	}
+	r.rateLimits[key] = limit
 	return nil
 }
 
-func (r *memoryRealm) DeleteRateLimit(
-	_ context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
-) error {
-	key := limitKey(scope, account, asset, "")
-	if _, ok := r.rateLimits[key]; !ok {
-		return domain.ErrNotFound
+func (r *memoryRealm) DeleteLimit(_ context.Context, key domain.LimitKey) error {
+	switch key.Policy() {
+	case domain.PolicyRateLimit:
+		if _, ok := r.rateLimits[key]; !ok {
+			return domain.ErrNotFound
+		}
+		delete(r.rateLimits, key)
+		return nil
+	case domain.PolicyOrderSizeLimit:
+		if _, ok := r.orderSizeLimits[key]; !ok {
+			return domain.ErrNotFound
+		}
+		delete(r.orderSizeLimits, key)
+		return nil
+	case domain.PolicyPositionLimit:
+		if _, ok := r.positionLimits[key]; !ok {
+			return domain.ErrNotFound
+		}
+		delete(r.positionLimits, key)
+		return nil
+	case domain.PolicySpotFundsPnlBoundsKillSwitch,
+		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
+		if _, ok := r.spotFundsPnlBoundsLimits[key]; !ok {
+			return domain.ErrNotFound
+		}
+		delete(r.spotFundsPnlBoundsLimits, key)
+		return nil
 	}
-	delete(r.rateLimits, key)
-	return nil
+	return domain.ErrInvalid
 }
 
 func (r *memoryRealm) ListOrderSizeLimits(
@@ -271,8 +301,16 @@ func (r *memoryRealm) ListOrderSizeLimits(
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return limitKey(out[i].Scope, out[i].Account, out[i].Asset, out[i].Mode) <
-			limitKey(out[j].Scope, out[j].Account, out[j].Asset, out[j].Mode)
+		if out[i].Scope != out[j].Scope {
+			return out[i].Scope < out[j].Scope
+		}
+		if out[i].Account != out[j].Account {
+			return out[i].Account < out[j].Account
+		}
+		if out[i].Asset != out[j].Asset {
+			return out[i].Asset < out[j].Asset
+		}
+		return out[i].Mode < out[j].Mode
 	})
 	return out, nil
 }
@@ -283,22 +321,11 @@ func (r *memoryRealm) PutOrderSizeLimit(
 	if err := limit.Validate(); err != nil {
 		return err
 	}
-	r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset, limit.Mode)] = limit
-	return nil
-}
-
-func (r *memoryRealm) DeleteOrderSizeLimit(
-	_ context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
-	mode domain.RuleMode,
-) error {
-	if err := domain.ValidateOrderSizeMode(mode); err != nil {
+	key, err := domain.StoredLimitKey(limit)
+	if err != nil {
 		return err
 	}
-	key := limitKey(scope, account, asset, mode)
-	if _, ok := r.orderSizeLimits[key]; !ok {
-		return domain.ErrNotFound
-	}
-	delete(r.orderSizeLimits, key)
+	r.orderSizeLimits[key] = limit
 	return nil
 }
 
@@ -313,16 +340,11 @@ func (r *memoryRealm) ListPositionLimits(_ context.Context, account domain.Accou
 }
 
 func (r *memoryRealm) PutPositionLimit(_ context.Context, limit domain.LimitPosition) error {
-	r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
-	return nil
-}
-
-func (r *memoryRealm) DeletePositionLimit(_ context.Context, account domain.AccountID, asset string) error {
-	key := limitKey(domain.ScopeAccountAsset, account, asset, "")
-	if _, ok := r.positionLimits[key]; !ok {
-		return domain.ErrNotFound
+	key, err := domain.StoredLimitKey(limit)
+	if err != nil {
+		return err
 	}
-	delete(r.positionLimits, key)
+	r.positionLimits[key] = limit
 	return nil
 }
 
@@ -347,27 +369,11 @@ func (r *memoryRealm) PutSpotFundsPnlBoundsLimit(
 	if _, ok := r.assets[limit.Currency]; !ok {
 		return domain.ErrInvalid
 	}
-	r.spotFundsPnlBoundsLimits[spotFundsPnlBoundsLimitKey(
-		limit.Axis,
-		limit.Scope,
-		limit.Account,
-		limit.AccountGroup,
-	)] = limit
-	return nil
-}
-
-func (r *memoryRealm) DeleteSpotFundsPnlBoundsLimit(
-	_ context.Context,
-	axis domain.SpotFundsPnlAxis,
-	scope domain.LimitScope,
-	account domain.AccountID,
-	accountGroup string,
-) error {
-	key := spotFundsPnlBoundsLimitKey(axis, scope, account, accountGroup)
-	if _, ok := r.spotFundsPnlBoundsLimits[key]; !ok {
-		return domain.ErrNotFound
+	key, err := domain.StoredLimitKey(limit)
+	if err != nil {
+		return err
 	}
-	delete(r.spotFundsPnlBoundsLimits, key)
+	r.spotFundsPnlBoundsLimits[key] = limit
 	return nil
 }
 
