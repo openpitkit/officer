@@ -92,8 +92,9 @@ type tradingE2E struct {
 	logs    tradingE2ELog
 	venueMu sync.Mutex
 	// closing, guarded by venueMu, marks app shutdown, when the connector
-	// may abandon a dialed stream before sending its auth frame. Such an
-	// abandoned stream does not count as a missing auth frame.
+	// may abandon a dialed stream anywhere in its handshake: before sending
+	// its auth frame, or before answering the venue's close frame. Such an
+	// abandoned stream is not a venue failure.
 	closing        bool
 	fees           []map[string]string
 	accountError   bool
@@ -147,10 +148,7 @@ func newTradingE2E(t *testing.T, sealed bool, providers ...fwtrading.Provider) *
 			defer func() { _ = conn.CloseNow() }()
 			_, raw, err := conn.Read(ctx)
 			if err != nil {
-				f.venueMu.Lock()
-				closing := f.closing
-				f.venueMu.Unlock()
-				if !closing {
+				if !f.isClosing() {
 					t.Error("auth frame missing")
 				}
 				return
@@ -166,7 +164,7 @@ func newTradingE2E(t *testing.T, sealed bool, providers ...fwtrading.Provider) *
 				case "unauthorized":
 					sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":"unauthorized","action":"authenticate"}}`)
 				case "close":
-					if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil {
+					if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil && !f.isClosing() {
 						t.Error(err)
 					}
 				default:
@@ -371,6 +369,13 @@ func (f *tradingE2E) waitStreams() {
 			f.t.Fatal("venue stream handshake did not complete")
 		}
 	}
+}
+
+// isClosing reports whether the app is shutting down; see closing.
+func (f *tradingE2E) isClosing() bool {
+	f.venueMu.Lock()
+	defer f.venueMu.Unlock()
+	return f.closing
 }
 
 func (f *tradingE2E) close() {
