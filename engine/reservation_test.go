@@ -120,6 +120,7 @@ func newTestEngine(t *testing.T) *openPitEngine {
 		nil,
 		res,
 		make(map[accountAssetKey]positionLimitValue),
+		make(map[string]map[orderSizeLimitKey]orderSizeLimitValue),
 	).(*openPitEngine)
 	t.Cleanup(func() {
 		adapter.Stop()
@@ -162,6 +163,7 @@ func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 		nil,
 		res,
 		make(map[accountAssetKey]positionLimitValue),
+		make(map[string]map[orderSizeLimitKey]orderSizeLimitValue),
 	).(*openPitEngine)
 	t.Cleanup(func() {
 		adapter.Stop()
@@ -185,6 +187,15 @@ func testOrder() domain.Order {
 	}
 }
 
+type testDropCopyResult struct {
+	*asyncengine.AsyncDropCopyOperation
+}
+
+// asyncengine.OperationResult specifies that drop-copy exposes no review marks.
+func (testDropCopyResult) Reviews() ([]reject.Reject, error) {
+	return nil, nil
+}
+
 func materializeOrderResult(
 	eng fwengine.Engine, order domain.Order,
 ) (fwengine.OrderResult, error) {
@@ -192,7 +203,7 @@ func materializeOrderResult(
 	if !ok {
 		return fwengine.OrderResult{}, fmt.Errorf("test engine type %T is not native", eng)
 	}
-	source, err := e.OrderModel(order)
+	source, err := e.OrderModel(order, fwengine.ReviewFlags{})
 	if err != nil {
 		return fwengine.OrderResult{}, err
 	}
@@ -210,7 +221,7 @@ func materializeOrderResult(
 		if operation == nil {
 			return fwengine.OrderResult{}, errors.New("drop-copy operation missing")
 		}
-		result, materializeErr := e.AppliedDropCopyOrder(order, operation)
+		result, materializeErr := e.AppliedDropCopyOrder(order, testDropCopyResult{operation})
 		if materializeErr != nil {
 			_, rollbackErr := operation.RollbackAndClose(ctx).Await(ctx)
 			return fwengine.OrderResult{}, errors.Join(materializeErr, rollbackErr)
@@ -246,7 +257,7 @@ func materializeImmediateResult(
 	if !ok {
 		return fwengine.ImmediateResult{}, fmt.Errorf("test engine type %T is not native", eng)
 	}
-	source, err := e.OrderModel(order)
+	source, err := e.OrderModel(order, fwengine.ReviewFlags{})
 	if err != nil {
 		return fwengine.ImmediateResult{}, err
 	}
@@ -265,7 +276,7 @@ func materializeImmediateResult(
 		if operation == nil {
 			return fwengine.ImmediateResult{}, errors.New("drop-copy operation missing")
 		}
-		prepared, err = e.PrepareImmediateDropCopy(order, operation)
+		prepared, err = e.PrepareImmediateDropCopy(order, testDropCopyResult{operation})
 		if err != nil {
 			_, rollbackErr := operation.RollbackAndClose(ctx).Await(ctx)
 			return fwengine.ImmediateResult{}, errors.Join(err, rollbackErr)
@@ -419,7 +430,7 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
-	if !res.Accepted {
+	if res.Verdict != domain.VerdictAccept {
 		t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
 	}
 	if res.Persistence == nil || res.Persistence.Leaves != "0" {
@@ -476,7 +487,7 @@ func TestSubmitImmediate_DropCopySettlesWhileAccountIsBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitImmediate(drop copy): %v", err)
 	}
-	if !result.Accepted || len(result.Rejects) != 0 {
+	if result.Verdict != domain.VerdictAccept || len(result.Rejects) != 0 {
 		t.Fatalf("drop-copy immediate result = %+v, want accepted", result)
 	}
 	if result.FillQuantity != testQty {
@@ -611,6 +622,7 @@ func newLockSpyTestEngine(t *testing.T, spy *executionLockSpy) *openPitEngine {
 		nil,
 		res,
 		make(map[accountAssetKey]positionLimitValue),
+		make(map[string]map[orderSizeLimitKey]orderSizeLimitValue),
 	).(*openPitEngine)
 	t.Cleanup(func() {
 		adapter.Stop()
@@ -656,7 +668,7 @@ func TestSubmitImmediate_ReportCarriesEngineLockAndLeaves(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SubmitImmediate: %v", err)
 			}
-			if !res.Accepted {
+			if res.Verdict != domain.VerdictAccept {
 				t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
 			}
 			if err := spy.pushError(); err != nil {
@@ -760,7 +772,7 @@ func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
 		AmountValue: "1",
 		Price:       "73406.8115",
 	}
-	if _, result, err := n.SubmitImmediate(ctx, buy, domain.MissingAccountCreate, caller); err != nil || !result.Accepted {
+	if _, result, err := n.SubmitImmediate(ctx, buy, domain.MissingAccountCreate, caller); err != nil || result.Verdict != domain.VerdictAccept {
 		t.Fatalf("buy SubmitImmediate: %v result=%+v", err, result)
 	}
 
@@ -768,7 +780,7 @@ func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
 	sell.Side = domain.OrderSideSell
 	sell.Price = "54268.522"
 	_, result, err := n.SubmitImmediate(ctx, sell, domain.MissingAccountCreate, caller)
-	if err != nil || !result.Accepted {
+	if err != nil || result.Verdict != domain.VerdictAccept {
 		t.Fatalf("sell SubmitImmediate: %v result=%+v", err, result)
 	}
 	balance, ok, err := n.GetBalance(ctx, accountID, "BTC")
@@ -809,7 +821,7 @@ func TestSubmitImmediate_OpeningFillDoesNotEmitNoopAccountPnl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
-	if !res.Accepted {
+	if res.Verdict != domain.VerdictAccept {
 		t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
 	}
 	if res.AccountPnl != "" || res.AccountPnlHaltReason != "" {
@@ -832,8 +844,8 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 	e := newTestEngine(t)
 
 	submitted, err := materializeOrderResult(e, testOrder())
-	if err != nil || !submitted.Accepted {
-		t.Fatalf("SubmitOrder: %v accepted=%v", err, submitted.Accepted)
+	if err != nil || submitted.Verdict != domain.VerdictAccept {
+		t.Fatalf("SubmitOrder: %v accepted=%v", err, (submitted.Verdict == domain.VerdictAccept))
 	}
 
 	// A full fill of the 5-unit order at the reservation's settlement lock price
@@ -910,8 +922,8 @@ func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
 		AmountValue: "1", Price: "50000",
 	}
 	submitted, err := materializeOrderResult(e, order)
-	if err != nil || !submitted.Accepted {
-		t.Fatalf("SubmitOrder: %v accepted=%v rejects=%+v", err, submitted.Accepted, submitted.Rejects)
+	if err != nil || submitted.Verdict != domain.VerdictAccept {
+		t.Fatalf("SubmitOrder: %v accepted=%v rejects=%+v", err, (submitted.Verdict == domain.VerdictAccept), submitted.Rejects)
 	}
 
 	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
@@ -1042,7 +1054,7 @@ func TestApplyExecutionReport_NoTradeFinalReleasesStoredLeaves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if !submitted.Accepted {
+	if submitted.Verdict != domain.VerdictAccept {
 		t.Fatalf("SubmitOrder rejected: %+v", submitted.Rejects)
 	}
 
@@ -1151,7 +1163,7 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) 
 	market := testOrder()
 	market.Price = ""
 	market.AmountValue = "1"
-	if result, err := materializeOrderResult(e, market); err != nil || !result.Accepted {
+	if result, err := materializeOrderResult(e, market); err != nil || result.Verdict != domain.VerdictAccept {
 		t.Fatalf("market SubmitOrder: err=%v result=%+v", err, result)
 	}
 
@@ -1161,7 +1173,7 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
-	if !submitted.Accepted {
+	if submitted.Verdict != domain.VerdictAccept {
 		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 
@@ -1189,6 +1201,73 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) 
 	}
 }
 
+func TestConfigurePolicy_SpotFundsPnlBoundsClearsGlobalBarrierOnline(t *testing.T) {
+	for _, axis := range []domain.SpotFundsPnlAxis{
+		domain.SpotFundsPnlAxisRealized,
+		domain.SpotFundsPnlAxisUnrealized,
+		domain.SpotFundsPnlAxisTotal,
+	} {
+		t.Run(string(axis), func(t *testing.T) {
+			t.Parallel()
+			e := newSpotFundsLimitModeTestEngine(t, true, domain.LimitSpotFundsPnlBounds{
+				Axis: axis, Scope: domain.ScopeGlobal, Currency: testQuote, LowerBound: "-5",
+			})
+			control := newSpotFundsLimitModeTestEngine(t, true, domain.LimitSpotFundsPnlBounds{
+				Axis: axis, Scope: domain.ScopeGlobal, Currency: testQuote, LowerBound: "-5",
+			})
+			buy := testOrder()
+			buy.AmountValue = "1"
+			for _, eng := range []*openPitEngine{e, control} {
+				if err := eng.sink.Push(marketdata.QuoteUpdate{
+					Base: testMarketDataAssetID(testBase), Quote: testMarketDataAssetID(testQuote), Mark: "100",
+				}); err != nil {
+					t.Fatalf("Push initial mark: %v", err)
+				}
+				if result, err := materializeImmediateResult(eng, buy); err != nil || result.Verdict != domain.VerdictAccept || len(result.Blocks) != 0 {
+					t.Fatalf("buy at initial mark: err=%v result=%+v", err, result)
+				}
+			}
+
+			asyncBefore := e.async
+			if _, err := e.ConfigurePolicy(context.Background(), axis.Policy(), fwengine.LimitSet{}); err != nil {
+				t.Fatalf("ConfigurePolicy clear global barrier: %v", err)
+			}
+			if e.async != asyncBefore {
+				t.Fatal("clearing global barrier replaced engine handle")
+			}
+			for _, eng := range []*openPitEngine{e, control} {
+				if err := eng.sink.Push(marketdata.QuoteUpdate{
+					Base: testMarketDataAssetID(testBase), Quote: testMarketDataAssetID(testQuote), Mark: "90",
+				}); err != nil {
+					t.Fatalf("Push losing mark: %v", err)
+				}
+			}
+			sell := buy
+			sell.Side = domain.OrderSideSell
+			sell.Price = "90"
+			if result, err := materializeImmediateResult(e, sell); err != nil || result.Verdict != domain.VerdictAccept || len(result.Blocks) != 0 {
+				t.Fatalf("cleared global barrier still applies: err=%v result=%+v", err, result)
+			}
+			result, err := materializeImmediateResult(control, sell)
+			if err != nil {
+				t.Fatalf("sell without clearing global barrier: %v", err)
+			}
+			if axis == domain.SpotFundsPnlAxisRealized {
+				if result.Verdict != domain.VerdictAccept || len(result.Blocks) != 1 {
+					t.Fatalf("uncleared realized barrier: result=%+v, want one account block", result)
+				}
+				block := result.Blocks[0]
+				wantDetails := fmt.Sprintf("lower bound breached: realized pnl -10, lower bound -5, currency %q", testQuote)
+				if block.Account != domain.AccountID(testAccount) || block.Code != "pnl_kill_switch_triggered" || block.Details != wantDetails {
+					t.Fatalf("uncleared realized barrier block = %+v, want realized loss -10 on %q", block, testAccount)
+				}
+			} else if result.Verdict != domain.VerdictReject || !hasRejectCode(result.Rejects, "pnl_kill_switch_triggered") {
+				t.Fatalf("uncleared global barrier: result=%+v, want pnl_kill_switch_triggered", result)
+			}
+		})
+	}
+}
+
 func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T) {
 	e := newTestEngineWithSpotFundsPnlBounds(t)
 	ctx := context.Background()
@@ -1211,7 +1290,7 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 	if err != nil {
 		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
-	if !submitted.Accepted {
+	if submitted.Verdict != domain.VerdictAccept {
 		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 
@@ -1303,7 +1382,7 @@ func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) fwengine.ExecutionRe
 	if err != nil {
 		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
-	if !submitted.Accepted {
+	if submitted.Verdict != domain.VerdictAccept {
 		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 	result, err := materializeExecutionReport(e, domain.ExecutionReportInput{
@@ -1385,7 +1464,7 @@ func TestSubmitOrder_AcceptCapturesSettlement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if !res.Accepted {
+	if res.Verdict != domain.VerdictAccept {
 		t.Fatalf("SubmitOrder rejected: %+v", res.Rejects)
 	}
 	if len(res.Lock) == 0 {
@@ -1441,7 +1520,7 @@ func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T
 	if err != nil {
 		t.Fatalf("SubmitOrder(drop copy): %v", err)
 	}
-	if !result.Accepted || len(result.Rejects) != 0 {
+	if result.Verdict != domain.VerdictAccept || len(result.Rejects) != 0 {
 		t.Fatalf("drop-copy result = %+v, want accepted without rejects", result)
 	}
 	var quote *domain.AdjustmentOutcomeAccepted
@@ -1466,7 +1545,7 @@ func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T
 	if err != nil {
 		t.Fatalf("SubmitOrder(ordinary): %v", err)
 	}
-	if ordinaryResult.Accepted || len(ordinaryResult.Rejects) == 0 {
+	if (ordinaryResult.Verdict == domain.VerdictAccept) || len(ordinaryResult.Rejects) == 0 {
 		t.Fatalf("ordinary blocked order = %+v, want reject", ordinaryResult)
 	}
 }
@@ -1498,7 +1577,7 @@ func TestSubmitOrder_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder(drop copy): %v", err)
 	}
-	if !result.Accepted || len(result.Rejects) != 0 {
+	if result.Verdict != domain.VerdictAccept || len(result.Rejects) != 0 {
 		t.Fatalf("drop-copy result = %+v, want accepted without rejects", result)
 	}
 	if len(result.Blocks) != 1 {
@@ -1540,7 +1619,7 @@ func TestSubmitImmediate_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitImmediate(drop copy): %v", err)
 	}
-	if !result.Accepted || len(result.Rejects) != 0 {
+	if result.Verdict != domain.VerdictAccept || len(result.Rejects) != 0 {
 		t.Fatalf("drop-copy immediate result = %+v, want accepted without rejects", result)
 	}
 	if len(result.Blocks) == 0 {
@@ -1569,7 +1648,7 @@ func TestSubmitOrder_DropCopyVolumeDoesNotDeriveQuantity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if !res.Accepted {
+	if res.Verdict != domain.VerdictAccept {
 		t.Fatalf("SubmitOrder rejected: %+v", res.Rejects)
 	}
 	if res.SettlementLockPrice == "" {
@@ -1589,7 +1668,7 @@ func TestSubmitOrder_DropCopyVolumeAtZeroPriceLeavesBaseInflowEmpty(t *testing.T
 	if err != nil {
 		t.Fatalf("SubmitOrder(drop-copy volume at zero price): %v", err)
 	}
-	if !result.Accepted {
+	if result.Verdict != domain.VerdictAccept {
 		t.Fatalf(
 			"SubmitOrder(drop-copy volume at zero price) rejected: %+v",
 			result.Rejects,
@@ -1616,7 +1695,7 @@ func TestSubmitOrder_UnpricedVolumeDoesNotInventReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if !res.Accepted || len(res.Rejects) != 0 {
+	if res.Verdict != domain.VerdictAccept || len(res.Rejects) != 0 {
 		t.Fatalf("SubmitOrder volume result = %+v, want accepted", res)
 	}
 }
@@ -1645,7 +1724,7 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SubmitImmediate(volume limit): %v", err)
 		}
-		if !result.Accepted {
+		if result.Verdict != domain.VerdictAccept {
 			t.Fatalf("SubmitImmediate(volume limit) rejected: %+v", result.Rejects)
 		}
 		if result.TradePrice != testLimit || result.FillQuantity != testQty {
@@ -1670,7 +1749,7 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SubmitImmediate(volume at zero price): %v", err)
 		}
-		if result.Accepted || len(result.Rejects) != 1 ||
+		if (result.Verdict == domain.VerdictAccept) || len(result.Rejects) != 1 ||
 			result.Rejects[0].Code != "order_value_calculation_failed" {
 			t.Fatalf(
 				"SubmitImmediate(volume at zero price) = %+v, want order_value_calculation_failed",
@@ -1784,7 +1863,7 @@ func TestSubmitImmediate_DropCopyVolumeUsesEngineDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitImmediate(drop-copy volume): %v", err)
 	}
-	if !result.Accepted {
+	if result.Verdict != domain.VerdictAccept {
 		t.Fatalf("SubmitImmediate(drop-copy volume) rejected: %+v", result.Rejects)
 	}
 	if result.FillQuantity != testQty {

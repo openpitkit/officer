@@ -203,6 +203,15 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 	for _, order := range r.orders {
 		data.Orders = append(data.Orders, backup.OrderRecord{Order: order})
 	}
+	for id, review := range r.orderReviews {
+		row := backup.OrderReview{Order: id, Mode: review.Mode}
+		if review.Destination != nil {
+			row.Connection = review.Destination.Connection
+			row.VenueAccount = review.Destination.VenueAccount
+			row.Route = review.Destination.Route
+		}
+		data.OrderReviews = append(data.OrderReviews, row)
+	}
 	for _, instance := range r.instances {
 		data.MarketDataInstances = append(data.MarketDataInstances,
 			backup.MarketDataInstance{
@@ -330,15 +339,15 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 	}
 	r.rateLimits = map[string]domain.LimitRate{}
 	for _, limit := range data.RateLimits {
-		r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+		r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
 	}
 	r.orderSizeLimits = map[string]domain.LimitOrderSize{}
 	for _, limit := range data.OrderSizeLimits {
-		r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+		r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset, limit.Mode)] = limit
 	}
 	r.positionLimits = map[string]domain.LimitPosition{}
 	for _, limit := range data.PositionLimits {
-		r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+		r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
 	}
 	r.spotFundsPnlBoundsLimits = map[string]domain.LimitSpotFundsPnlBounds{}
 	for _, limit := range data.SpotFundsPnlBoundsLimits {
@@ -353,6 +362,16 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 	r.orders = map[domain.ExternalID]domain.Order{}
 	for _, record := range data.Orders {
 		r.orders[record.Order.ExternalID] = record.Order
+	}
+	r.orderReviews = map[domain.ExternalID]domain.OrderReview{}
+	for _, row := range data.OrderReviews {
+		review := domain.OrderReview{Mode: row.Mode}
+		if !row.Connection.IsZero() {
+			review.Destination = &domain.TradingDestination{
+				Connection: row.Connection, VenueAccount: row.VenueAccount, Route: row.Route,
+			}
+		}
+		r.orderReviews[row.Order] = review
 	}
 	r.attestations = map[domain.ExternalID]domain.EventAttestation{}
 	r.events = r.events[:0]

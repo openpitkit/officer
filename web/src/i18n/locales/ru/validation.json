@@ -39,6 +39,7 @@
     "scopeNoAsset": "скоп {{scope}} не должен содержать актив",
     "scopeNoAccountGroup": "скоп {{scope}} не должен содержать группу счетов",
     "policyNoAccountGroup": "{{policy}} не должна содержать группу счетов",
+    "policyNoMode": "{{policy}} не должна содержать режим",
     "rateLimitRequires": "rate_limit требует указания max_orders и window",
     "orderSizeRequires": "order_size_limit требует max_quantity или max_notional",
     "orderSizeUnderlyingRequires": "для скопа базового актива требуется max_quantity",
@@ -49,7 +50,8 @@
     "pnlCurrencyRequired": "{{policy}} требует указать валюту",
     "pnlRequires": "{{policy}} требует lower_bound или upper_bound",
     "pnlBoundOrder": "lower_bound должен быть <= upper_bound",
-    "modeRequired": "выберите режим лимита средств"
+    "modeRequired": "выберите режим лимита средств",
+    "orderSizeModeInvalid": "выберите режим размера ордера"
   },
   "password": {
     "mismatch": "Пароли не совпадают."

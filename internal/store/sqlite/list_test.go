@@ -453,6 +453,7 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 		}
 	}
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeAccountUnderlyingAsset, Account: "a", Asset: "AAPL",
 		MaxQuantity: "500",
 	}); err != nil {

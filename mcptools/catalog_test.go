@@ -127,7 +127,7 @@ func TestCatalogParity(t *testing.T) {
 		{
 			Name:             "check_order",
 			Title:            "Check order",
-			AgentDescription: "Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons); changes no state.",
+			AgentDescription: "Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons; review marks mean do not send); changes no state.",
 			Mutating:         false,
 			Protective:       false,
 			Implemented:      true,
@@ -340,6 +340,10 @@ func TestImplementedDescriptorOrder(t *testing.T) {
 	RegisterTools(reg, nil)
 	var got []string
 	for _, d := range reg.Descriptors() {
+		switch d.Name {
+		case "confirm_order_review", "retry_order_review", "cancel_order_review":
+			t.Fatalf("review must remain status-only; registered tool %q", d.Name)
+		}
 		if d.Register != nil {
 			got = append(got, d.Name)
 		}

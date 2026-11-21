@@ -1,4 +1,11 @@
 {
+  "orderSizeMode": {
+    "label": "屏障模式",
+    "descriptions": {
+      "reject": "超出屏障的订单会被拒绝。",
+      "review_without_hold": "超出屏障的订单将等待操作员审核；确认之前不会预留资金或发送订单。"
+    }
+  },
   "spotFundsMode": {
     "modes": {
       "enforce": {
@@ -78,7 +85,8 @@
   },
   "delete": {
     "title": "删除风控屏障？",
-    "description": "此操作将删除 {{scope}}{{account}}{{asset}} 上的 {{policy}} 屏障。",
+    "description": "此操作将删除 {{scope}}{{account}}{{asset}} 上的 {{policy}} 屏障{{mode}}。",
+    "modeFragment": "，模式为 {{mode}}",
     "accountFragment": " 账户 {{account}}",
     "accountGroupFragment": " 账户组 {{accountGroup}}",
     "assetFragment": " 资产 {{asset}}"

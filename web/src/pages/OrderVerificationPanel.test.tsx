@@ -167,10 +167,13 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
         id: "ord-repro-1",
         verdict: "accept",
         reasons: [],
+        reviews: [],
       },
       executionReport: null,
       confirm: null,
       cancel: null,
+      reviewConfirm: null,
+      reviewCancel: null,
     },
     canonicalApproval: fixture.canonical,
     publicKey: {
@@ -244,6 +247,8 @@ function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
       },
       confirm: null,
       cancel: null,
+      reviewConfirm: null,
+      reviewCancel: null,
     },
     canonicalApproval: fixture.canonical,
     publicKey: {
@@ -305,6 +310,104 @@ function textareaByValue(value: string): HTMLTextAreaElement | undefined {
 }
 
 describe("OrderVerificationPanel - reproduction mode", () => {
+  it.each([
+    ["review_confirm", "Confirm order review", "Review confirmation response"],
+    ["review_cancel", "Cancel order review", "Review cancellation response"],
+  ])(
+    "renders %s request and its own response envelope",
+    async (requestType, label, responseLabel) => {
+      const fixture = await buildSignedEnvelope("review-key", { requestType });
+      const facetFixture = await buildSignedEnvelope("facet-key", {
+        requestType,
+      });
+      fetchPublicKeyByIdMock.mockResolvedValue({
+        keyId: fixture.keyId,
+        alg: "ed25519",
+        format: "raw-base64",
+        key: fixture.rawPublicKey,
+      });
+      const bundle = submitBundleFrom(fixture);
+      bundle.requestType = requestType;
+      bundle.attestation!.requestType = requestType;
+      bundle.response = {
+        submitResponse: null,
+        executionReport: null,
+        confirm: null,
+        cancel: null,
+        reviewConfirm:
+          requestType === "review_confirm"
+            ? {
+                verdict: "accept",
+                reasons: [],
+                signedApproval: facetFixture.envelope,
+                keyId: facetFixture.keyId,
+                signed: true,
+              }
+            : null,
+        reviewCancel:
+          requestType === "review_cancel"
+            ? {
+                order: {
+                  id: "ord-repro-1",
+                  account: "acc-1",
+                  at: sampleEvent.at,
+                  source: "api",
+                  baseAsset: "AAPL",
+                  quoteAsset: "USD",
+                  side: "buy",
+                  amountKind: "quantity",
+                  amountValue: "10",
+                  commissionSubtotals: [],
+                  leavesQuantity: "0",
+                  price: "150.25",
+                  status: "cancelled",
+                  displayPrice: "",
+                  dropCopy: false,
+                  signed: true,
+                },
+                signedAttestation: facetFixture.envelope,
+                attestationKeyId: facetFixture.keyId,
+                signed: true,
+              }
+            : null,
+      };
+      fetchEventReproductionMock.mockResolvedValue(bundle);
+      renderPanel("ord-repro-1", "evt-repro-1");
+      await screen.findByText(responseLabel);
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+      expect(textareaByValue(facetFixture.envelope)).toBeDefined();
+    },
+  );
+
+  it("shows review marks beside the signed approval verdict", async () => {
+    const fixture = await buildSignedEnvelope("review-key", {
+      verdict: "review",
+      reviews: [
+        {
+          code: "policy_reject",
+          scope: "account",
+          policy: "order_size",
+          mode: "review_without_hold",
+          reason: "Size needs review",
+          details: "100 > 50",
+        },
+      ],
+    });
+    fetchPublicKeyByIdMock.mockResolvedValue({
+      keyId: fixture.keyId,
+      alg: "ed25519",
+      format: "raw-base64",
+      key: fixture.rawPublicKey,
+    });
+    fetchEventReproductionMock.mockResolvedValue(submitBundleFrom(fixture));
+    renderPanel("ord-repro-1", "evt-repro-1");
+    expect(await screen.findByText("Review mark 1")).toBeInTheDocument();
+    expect(
+      screen.getByText(/order_size · Review without hold/),
+    ).toHaveTextContent("Size needs review · 100 > 50");
+    expect(screen.getByText("Review")).toBeInTheDocument();
+  });
+
   it("renders the envelope and canonical bytes verbatim for a submit event", async () => {
     const fixture = await buildSignedEnvelope("key-1");
     const bundle = submitBundleFrom(fixture);
@@ -483,6 +586,49 @@ describe("OrderVerificationPanel - verify envelope mode", () => {
     );
     // The read-only breakdown appears with the parsed fields.
     expect(screen.getByText("Human-readable breakdown")).toBeInTheDocument();
+  });
+
+  it("verifies a pasted envelope with an unknown review mode and shows the raw mode", async () => {
+    const fixture = await buildSignedEnvelope("key-unknown-review", {
+      verdict: "review",
+      reviews: [
+        {
+          code: "policy_reject",
+          scope: "account",
+          policy: "order_size",
+          mode: "future_review_mode",
+          reason: "Size needs review",
+          details: "100 > 50",
+        },
+      ],
+    });
+    fetchPublicKeyByIdMock.mockResolvedValue({
+      keyId: fixture.keyId,
+      alg: "ed25519",
+      format: "raw-base64",
+      key: fixture.rawPublicKey,
+    } satisfies PublicKeyMaterial);
+    const user = userEvent.setup();
+    renderPanel(null, null, "verify");
+    const area = await screen.findByLabelText("Envelope", {
+      selector: "textarea",
+    });
+    await user.click(area);
+    await user.paste(fixture.envelope);
+    await user.click(screen.getByRole("button", { name: "Verify" }));
+
+    expect(await screen.findByText("VALID")).toBeInTheDocument();
+    expect(fetchPublicKeyByIdMock).toHaveBeenCalledWith(
+      fixture.keyId,
+      "raw-base64",
+    );
+    expect(screen.getByText("Review mark 1")).toBeInTheDocument();
+    expect(
+      screen.getByText(/order_size · future_review_mode/),
+    ).toHaveTextContent("Size needs review · 100 > 50");
+    expect(
+      screen.queryByText(/ruleMode\.future_review_mode/),
+    ).not.toBeInTheDocument();
   });
 
   it("parses a generalized execution-report payload with its result section", async () => {

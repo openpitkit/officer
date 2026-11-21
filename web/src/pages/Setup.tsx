@@ -564,6 +564,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
                       await putLimit(
                         {
                           policy: "spot_funds_limit_mode",
+                          mode: null,
                           scope: "global",
                           account: "",
                           asset: "",

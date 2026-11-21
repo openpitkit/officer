@@ -18,11 +18,67 @@
 import { describe, expect, it } from "vitest";
 
 import { validateLimit } from "@/api/validate";
+import type { Limit } from "@/api/types";
+import { ORDER_SIZE_LIMIT_MODES } from "@/framework/registries/vocabulary";
+
+describe("validateLimit barrier mode", () => {
+  const barrier: Limit = {
+    policy: "order_size_limit",
+    mode: "reject",
+    scope: "broker",
+    account: "",
+    asset: "",
+    values: { max_quantity: "10" },
+  };
+
+  it.each(ORDER_SIZE_LIMIT_MODES)("accepts order-size mode %s", (mode) => {
+    expect(validateLimit({ ...barrier, mode })).toBeNull();
+  });
+
+  it.each([undefined, null, "review_with_hold", "unknown", 1])(
+    "rejects invalid order-size mode %s",
+    (mode) => {
+      expect(validateLimit({ ...barrier, mode } as Limit)).toEqual({
+        key: "limit.orderSizeModeInvalid",
+      });
+    },
+  );
+
+  it.each([undefined, "reject", "review_without_hold"])(
+    "rejects non-null mode %s on another policy",
+    (mode) => {
+      const policy = "rate_limit";
+      expect(
+        validateLimit({
+          ...barrier,
+          policy,
+          mode,
+          values: { window: "1s", max_orders: "1" },
+        } as Limit),
+      ).toEqual({
+        key: "limit.policyNoMode",
+        values: { policy },
+      });
+    },
+  );
+
+  it("accepts null mode on another policy", () => {
+    expect(
+      validateLimit({
+        ...barrier,
+        policy: "rate_limit",
+        mode: null,
+        values: { window: "1s", max_orders: "1" },
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("validateLimit", () => {
   const positionLimit = (values: Record<string, string>) =>
     validateLimit({
       policy: "position_limit",
+      mode: null,
       scope: "account_asset",
       account: "acc-1",
       asset: "AAPL",
@@ -76,6 +132,7 @@ describe("validateLimit", () => {
     ) =>
       validateLimit({
         policy: "order_size_limit",
+        mode: "reject",
         scope,
         account,
         asset,
@@ -144,6 +201,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "account_group",
         account: "",
         accountGroup: "desk-a",
@@ -157,6 +215,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "global",
         account: "",
         asset: "",
@@ -169,6 +228,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "global",
         account: "",
         asset: "",
@@ -184,6 +244,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "global",
         account: "",
         asset: "",
@@ -202,6 +263,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy,
+        mode: null,
         scope: "account",
         account: "ACC-1",
         asset: "",
@@ -211,6 +273,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy,
+        mode: null,
         scope: "global",
         account: "",
         asset: "",
@@ -220,6 +283,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy,
+        mode: null,
         scope: "global",
         account: "",
         asset: "",
@@ -232,6 +296,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "global",
         account: "",
         asset: "",
@@ -242,6 +307,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "global",
         account: "",
         asset: "",
@@ -256,6 +322,7 @@ describe("validateLimit for the funds limit mode", () => {
     overrides: Partial<Parameters<typeof validateLimit>[0]> = {},
   ) => ({
     policy: "spot_funds_limit_mode",
+    mode: null,
     scope: "global",
     account: "",
     asset: "",

@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -220,6 +221,7 @@ func (n *localNode) PutOrderSizeLimit(
 
 	target := LimitTarget{
 		Policy:  domain.PolicyOrderSizeLimit,
+		Mode:    limit.Mode,
 		Scope:   limit.Scope,
 		Account: limit.Account,
 		Asset:   limit.Asset,
@@ -259,8 +261,8 @@ func (n *localNode) PutOrderSizeLimit(
 		return nil, fmt.Errorf("load order-size policy lifecycle snapshot: %w", err)
 	}
 	var sink marketdata.Sink
-	if !hadPrev && len(snapshot.OrderSizeLimits) == 0 {
-		snapshot.OrderSizeLimits = []domain.LimitOrderSize{limit}
+	if orderSizeModeCount(snapshot.OrderSizeLimits, limit.Mode) == 0 {
+		snapshot.OrderSizeLimits = append(snapshot.OrderSizeLimits, limit)
 		durableCtx := context.WithoutCancel(ctx)
 		sink, err = n.replaceEngineForPolicyLifecycle(
 			ctx, domain.PolicyOrderSizeLimit, snapshot, func() error {
@@ -268,7 +270,7 @@ func (n *localNode) PutOrderSizeLimit(
 			},
 		)
 		if err != nil {
-			return sink, fmt.Errorf("install first order-size limit: %w", err)
+			return sink, fmt.Errorf("install first order-size limit of mode %q: %w", limit.Mode, err)
 		}
 	} else {
 		if err := n.realm.PutOrderSizeLimit(ctx, limit); err != nil {
@@ -475,9 +477,10 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 // overrides the underlying_asset cap on the same asset, and an
 // account_settlement_asset cap the settlement_asset cap. Broker caps apply on
 // top of every other cap and an asset-tier cap overrides none, so those scopes
-// compare with the same key only. The policy's first barrier is installed by
-// an engine rebuild, so it is refused while a rate-limit barrier is configured
-// (see guardTightenOnlyRebuild). It returns nil for a caller that is not
+// compare with the same key only. The reference asset-tier cap has the same mode.
+// The first barrier of its mode is installed by an engine rebuild, so it is
+// refused while a rate-limit barrier is configured (see guardTightenOnlyRebuild).
+// It returns nil for a caller that is not
 // tighten-only.
 func (n *localNode) guardTightenOnlyOrderSize(
 	ctx context.Context,
@@ -495,7 +498,7 @@ func (n *localNode) guardTightenOnlyOrderSize(
 	if err != nil {
 		return fmt.Errorf("read order-size barriers: %w", err)
 	}
-	if len(limits) == 0 {
+	if orderSizeModeCount(limits, limit.Mode) == 0 {
 		return n.guardTightenOnlyRebuild(ctx, caller)
 	}
 	var overridden domain.LimitScope
@@ -514,6 +517,7 @@ func (n *localNode) guardTightenOnlyOrderSize(
 	}
 	ref, ok, err := n.readOrderSizeBarrier(ctx, LimitTarget{
 		Policy: domain.PolicyOrderSizeLimit, Scope: overridden, Asset: limit.Asset,
+		Mode: limit.Mode,
 	})
 	if err != nil {
 		return err
@@ -715,7 +719,7 @@ func (n *localNode) deleteBarrier(
 		if err != nil {
 			return nil, err
 		}
-		if err := n.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset); err != nil {
+		if err := n.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, target.Mode); err != nil {
 			return nil, fmt.Errorf("delete order-size limit: %w", err)
 		}
 		return func() error {
@@ -842,7 +846,7 @@ func (n *localNode) deleteLastPolicyBarrierPrepared(
 				"list order-size limits for lifecycle delete: %w", err,
 			)
 		}
-		if !hadPrev || len(limits) != 1 {
+		if !hadPrev || orderSizeModeCount(limits, target.Mode) != 1 {
 			return nil, false, nil
 		}
 		snapshot, _, err := n.loadSnapshot(ctx)
@@ -851,11 +855,13 @@ func (n *localNode) deleteLastPolicyBarrierPrepared(
 				"load order-size policy lifecycle snapshot: %w", err,
 			)
 		}
-		snapshot.OrderSizeLimits = nil
+		snapshot.OrderSizeLimits = slices.DeleteFunc(snapshot.OrderSizeLimits, func(limit domain.LimitOrderSize) bool {
+			return limit.Mode == target.Mode
+		})
 		sink, err := n.replaceEngineForPolicyLifecycle(
 			ctx, target.Policy, snapshot, func() error {
 				return n.realm.DeleteOrderSizeLimit(
-					durableCtx, prev.Scope, prev.Account, prev.Asset,
+					durableCtx, prev.Scope, prev.Account, prev.Asset, prev.Mode,
 				)
 			},
 		)
@@ -1128,12 +1134,15 @@ func (n *localNode) revertPositionBarrier(
 func (n *localNode) readOrderSizeBarrier(
 	ctx context.Context, target LimitTarget,
 ) (domain.LimitOrderSize, bool, error) {
+	if target.Mode == "" {
+		return domain.LimitOrderSize{}, false, fmt.Errorf("read order-size key requires mode: %w", domain.ErrInvalid)
+	}
 	limits, err := n.realm.ListOrderSizeLimits(ctx, "")
 	if err != nil {
 		return domain.LimitOrderSize{}, false, fmt.Errorf("read order-size barrier: %w", err)
 	}
 	for _, limit := range limits {
-		if limit.Scope == target.Scope && limit.Account == target.Account && limit.Asset == target.Asset {
+		if limit.Scope == target.Scope && limit.Account == target.Account && limit.Asset == target.Asset && limit.Mode == target.Mode {
 			return limit, true, nil
 		}
 	}
@@ -1150,10 +1159,20 @@ func (n *localNode) revertOrderSizeBarrier(
 		}
 		return nil
 	}
-	if err := n.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset); err != nil {
+	if err := n.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, target.Mode); err != nil {
 		return fmt.Errorf("remove order-size barrier: %w", err)
 	}
 	return nil
+}
+
+func orderSizeModeCount(limits []domain.LimitOrderSize, mode domain.RuleMode) int {
+	count := 0
+	for _, limit := range limits {
+		if limit.Mode == mode {
+			count++
+		}
+	}
+	return count
 }
 
 // readSpotFundsPnlBoundsBarrier mirrors readRateBarrier for the SpotFunds

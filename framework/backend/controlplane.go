@@ -298,4 +298,9 @@ type ControlPlane interface {
 	CancelOrder(
 		ctx context.Context, orderID, leavesQuantity, reason string,
 	) (domain.Order, Attestation, error)
+	// ConfirmOrderReview re-runs pre-trade for a waiting order; a rejection
+	// leaves it waiting for another attempt. Only an accepted trading order sends.
+	ConfirmOrderReview(ctx context.Context, orderID string) (domain.Order, VenueSendResult, error)
+	// CancelOrderReview cancels a waiting order without sending or holding it.
+	CancelOrderReview(ctx context.Context, orderID string) (domain.Order, Attestation, error)
 }

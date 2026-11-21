@@ -39,6 +39,7 @@
     "scopeNoAsset": "scope {{scope}} must not carry an asset",
     "scopeNoAccountGroup": "scope {{scope}} must not carry an account group",
     "policyNoAccountGroup": "{{policy}} must not carry an account group",
+    "policyNoMode": "{{policy}} must not carry a mode",
     "rateLimitRequires": "rate_limit requires both max_orders and window",
     "orderSizeRequires": "order_size_limit requires max_quantity or max_notional",
     "orderSizeUnderlyingRequires": "an underlying-asset scope requires max_quantity",
@@ -49,7 +50,8 @@
     "pnlCurrencyRequired": "{{policy}} requires currency",
     "pnlRequires": "{{policy}} requires lower_bound or upper_bound",
     "pnlBoundOrder": "lower_bound must be <= upper_bound",
-    "modeRequired": "choose a funds limit mode"
+    "modeRequired": "choose a funds limit mode",
+    "orderSizeModeInvalid": "choose an order-size mode"
   },
   "password": {
     "mismatch": "The passwords do not match."

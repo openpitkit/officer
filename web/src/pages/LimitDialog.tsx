@@ -17,12 +17,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ShieldX, ClipboardCheck } from "lucide-react";
 
 import {
   isInPlacePolicy,
   isSpotFundsPnlPolicy,
 } from "@/api/spotFundsPnlPolicies";
-import type { Account, Limit } from "@/api/types";
+import type { Account, Limit, OrderSizeLimitMode } from "@/api/types";
+import { barrierCount } from "@/api/useLimits";
 import { validateLimit } from "@/api/validate";
 import {
   getAllowedScopes,
@@ -45,7 +47,12 @@ import {
   useOfficerApi,
   type MissingAccountPolicy,
 } from "@/framework";
-import { isSpotFundsLimitMode } from "@/framework/registries/vocabulary";
+import {
+  ORDER_SIZE_LIMIT_MODES,
+  isSpotFundsLimitMode,
+  ruleModeLabel,
+} from "@/framework/registries/vocabulary";
+import { ChoiceCards } from "@/components/ChoiceCards";
 import { Autocomplete } from "@/components/Autocomplete";
 import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
 import { ErrorBanner } from "@/components/PageStates";
@@ -231,6 +238,7 @@ function DurationPicker({
 // ---------------------------------------------------------------------------
 
 interface FormState {
+  mode: OrderSizeLimitMode | null;
   policy: Policy;
   scope: Scope;
   account: string;
@@ -241,6 +249,7 @@ interface FormState {
 
 function emptyForm(initialAccount = ""): FormState {
   return {
+    mode: null,
     policy: "rate_limit",
     scope: "broker",
     account: initialAccount,
@@ -252,6 +261,7 @@ function emptyForm(initialAccount = ""): FormState {
 
 function fromLimit(limit: Limit): FormState {
   return {
+    mode: limit.mode,
     policy: limit.policy as Policy,
     scope: limit.scope as Scope,
     account: limit.account,
@@ -300,6 +310,7 @@ function errMessage(err: unknown): string {
  * only the values are editable; otherwise all fields are editable. Validation
  * mirrors the cross-layer contract before the request is sent. Value fields are
  * labeled with human words from the policy catalog.
+ * The order-size mode is also locked on edit because it is part of the key.
  */
 export function LimitDialog({
   open,
@@ -309,6 +320,7 @@ export function LimitDialog({
   accountSuggestions = [],
   accountGroupSuggestions = [],
   policyCounts = {},
+  orderSizeCounts,
   onOpenChange,
   onSaved,
 }: {
@@ -319,6 +331,7 @@ export function LimitDialog({
   accountSuggestions?: string[];
   accountGroupSuggestions?: string[];
   policyCounts?: Partial<Record<Policy, number>>;
+  orderSizeCounts: Record<OrderSizeLimitMode, number | undefined>;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
@@ -503,6 +516,7 @@ export function LimitDialog({
     }
     return {
       policy: form.policy,
+      mode: form.mode,
       scope: form.scope,
       account: scopeHasAccount(form.scope) ? form.account.trim() : "",
       accountGroup: hasAccountGroupAxis ? form.accountGroup.trim() : "",
@@ -513,7 +527,7 @@ export function LimitDialog({
   }, [form, hasAccountGroupAxis, isSpotFundsPnl, pnlAccount, visibleKinds]);
 
   const validation = validateLimit(candidate);
-  const policyCount = policyCounts[form.policy];
+  const policyCount = barrierCount(form, policyCounts, orderSizeCounts);
   const requiresEngineRebuild =
     !isEdit &&
     !isInPlacePolicy(form.policy) &&
@@ -526,6 +540,7 @@ export function LimitDialog({
     setForm((prev) => ({
       ...prev,
       policy,
+      mode: policy === "order_size_limit" ? "reject" : null,
       scope: offeredScopes(policy)[0] ?? "",
       values: {},
     }));
@@ -750,6 +765,26 @@ export function LimitDialog({
                         />
                       </div>
                     )}
+                  </div>
+                )}
+
+                {form.policy === "order_size_limit" && (
+                  <div className="flex flex-col gap-y-1.5">
+                    <Label>{t("orderSizeMode.label")}</Label>
+                    <ChoiceCards
+                      label={t("orderSizeMode.label")}
+                      options={ORDER_SIZE_LIMIT_MODES.map((mode) => ({
+                        value: mode,
+                        title: ruleModeLabel(t, mode),
+                        description: t(`orderSizeMode.descriptions.${mode}`),
+                        icon: mode === "reject" ? ShieldX : ClipboardCheck,
+                      }))}
+                      value={form.mode}
+                      onChange={(mode) =>
+                        setForm((prev) => ({ ...prev, mode }))
+                      }
+                      disabled={isEdit || busy}
+                    />
                   </div>
                 )}
 

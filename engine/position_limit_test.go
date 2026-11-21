@@ -105,14 +105,14 @@ func TestPositionLimit_LongBoundaryAndNoAccountBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rejected.Accepted || len(rejected.Blocks) != 0 || len(rejected.Rejects) != 1 ||
+	if (rejected.Verdict == domain.VerdictAccept) || len(rejected.Blocks) != 0 || len(rejected.Rejects) != 1 ||
 		rejected.Rejects[0].Code != domain.RejectCodePositionLimitExceeded ||
 		rejected.Rejects[0].Policy != nameSpotFunds || rejected.Rejects[0].Scope != "order" {
 		t.Fatalf("submitted over-ceiling order = %+v, want order reject without account block", rejected)
 	}
 	order.AmountValue = "10"
 	accepted, err := materializeOrderResult(eng, order)
-	if err != nil || !accepted.Accepted || len(accepted.Blocks) != 0 {
+	if err != nil || accepted.Verdict != domain.VerdictAccept || len(accepted.Blocks) != 0 {
 		t.Fatalf("boundary order after rejection = %+v, %v, want accepted without block", accepted, err)
 	}
 }
@@ -139,14 +139,14 @@ func TestPositionLimit_ShortBoundary(t *testing.T) {
 	order := testOrder()
 	order.Account, order.Side, order.AmountValue, order.Price = "acc-1", domain.OrderSideSell, "10.00000001", "1"
 	rejected, err := materializeOrderResult(eng, order)
-	if err != nil || rejected.Accepted || len(rejected.Blocks) != 0 ||
+	if err != nil || (rejected.Verdict == domain.VerdictAccept) || len(rejected.Blocks) != 0 ||
 		len(rejected.Rejects) != 1 || rejected.Rejects[0].Code != domain.RejectCodePositionLimitExceeded ||
 		rejected.Rejects[0].Policy != nameSpotFunds || rejected.Rejects[0].Scope != "order" {
 		t.Fatalf("submitted short order = %+v, %v, want position-limit reject without block", rejected, err)
 	}
 	order.AmountValue = "10"
 	accepted, err := materializeOrderResult(eng, order)
-	if err != nil || !accepted.Accepted {
+	if err != nil || accepted.Verdict != domain.VerdictAccept {
 		t.Fatalf("short boundary order after rejection = %+v, %v, want accepted", accepted, err)
 	}
 }

@@ -20,6 +20,11 @@
     "account_underlying_asset": "Account + underlying asset",
     "account_settlement_asset": "Account + settlement asset"
   },
+  "ruleMode": {
+    "reject": "Reject",
+    "review_without_hold": "Review without hold",
+    "review_with_hold": "Review with hold"
+  },
   "adjustmentType": {
     "venue_fee": "Venue fee",
     "deposit": "Deposit",

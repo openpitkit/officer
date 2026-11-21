@@ -174,8 +174,53 @@ export function isSpotFundsLimitMode(
   );
 }
 
+/** Every order-size barrier mode, in the order the panel offers them. */
+export const ORDER_SIZE_LIMIT_MODES = [
+  "reject",
+  "review_without_hold",
+] as const;
+
+/** The mode of an order-size barrier, derived from ORDER_SIZE_LIMIT_MODES. */
+export type OrderSizeLimitMode = (typeof ORDER_SIZE_LIMIT_MODES)[number];
+
+/** True when value is one of ORDER_SIZE_LIMIT_MODES. */
+export function isOrderSizeLimitMode(
+  value: unknown,
+): value is OrderSizeLimitMode {
+  return (
+    typeof value === "string" &&
+    (ORDER_SIZE_LIMIT_MODES as readonly string[]).includes(value)
+  );
+}
+
+/** Every mode that can produce a review mark. */
+export const REVIEW_MARK_MODES = [
+  "review_without_hold",
+  "review_with_hold",
+] as const;
+
+/** The mode of a review mark, derived from REVIEW_MARK_MODES so the union and
+ *  the list cannot drift apart. Reject mode never produces a review mark. */
+export type ReviewMarkMode = (typeof REVIEW_MARK_MODES)[number];
+
+/** True when value is one of REVIEW_MARK_MODES. */
+export function isReviewMarkMode(value: unknown): value is ReviewMarkMode {
+  return (
+    typeof value === "string" &&
+    (REVIEW_MARK_MODES as readonly string[]).includes(value)
+  );
+}
+
 export function adjustmentTypeLabel(t: TFunction, id: AdjustmentType): string {
   return t(`domain:adjustmentType.${id}`);
+}
+
+/** The shared domain label for a barrier or review mark's rule mode. */
+export function ruleModeLabel(
+  t: TFunction,
+  mode: OrderSizeLimitMode | ReviewMarkMode,
+): string {
+  return t(`domain:ruleMode.${mode}`);
 }
 
 export function kindHint(t: TFunction, policy: string, kind: string): string {

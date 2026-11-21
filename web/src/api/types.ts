@@ -21,6 +21,8 @@
 
 import type {
   AdjustmentType,
+  OrderSizeLimitMode,
+  ReviewMarkMode,
   SpotFundsLimitMode,
 } from "../framework/registries/vocabulary";
 
@@ -247,6 +249,7 @@ export interface RateLimit {
 
 /** Typed wire shape for an order-size barrier. */
 export interface OrderSizeLimit {
+  mode: OrderSizeLimitMode;
   scope: string;
   account: string;
   asset: string;
@@ -287,6 +290,7 @@ export interface AccountLimits {
  *  ordered kind -> value map.
  */
 export interface Limit {
+  mode: OrderSizeLimitMode | null;
   policy: string;
   scope: string;
   account: string;
@@ -346,6 +350,7 @@ export interface PolicyValues {
 /** One policy row from the unified, paged GET /limits list (the policyDTO wire
  *  shape). The `kind` selects which member of `values` is populated. */
 export interface Policy {
+  mode: OrderSizeLimitMode | null;
   kind: PolicyKind;
   scope: string;
   account: string;
@@ -367,6 +372,7 @@ export type PolicyFilter =
 
 /** Filter options accepted by the unified, paged GET /limits list. */
 export interface PolicyListFilters extends PageRequest, SortSpec {
+  mode?: OrderSizeLimitMode;
   account?: string;
   accountGroup?: string;
   asset?: string;
@@ -444,6 +450,9 @@ export type { AdjustmentType };
 
 /** The funds-check mode; declared with SPOT_FUNDS_LIMIT_MODES, its one source. */
 export type { SpotFundsLimitMode };
+
+/** The barrier mode, declared with ORDER_SIZE_LIMIT_MODES, its one source. */
+export type { OrderSizeLimitMode };
 
 /** The request body captured on an adjustment record. */
 export interface AdjustmentRequest {
@@ -680,6 +689,7 @@ export interface CheckWouldBlock {
 export interface CheckResult {
   passed: boolean;
   rejects: CheckReject[];
+  reviews: ReviewMark[];
   wouldDisplayPrice: string;
   wouldBlock: CheckWouldBlock | null;
 }
@@ -727,8 +737,9 @@ export interface SignedApproval {
   signedApproval: string;
   keyId: string;
   id: string;
-  verdict: "accept" | "reject" | "";
+  verdict: "accept" | "reject" | "review" | "";
   reasons: CheckReject[];
+  reviews: ReviewMark[];
 }
 
 // --- Dashboard / Overview ---
@@ -994,6 +1005,40 @@ export interface OrderDetail {
   events: OrderEvent[];
   trades: Trade[];
   venueOrder?: VenueOrder;
+  review?: OrderReview;
+}
+
+/** Engine rule mark explaining why an order awaits an operator decision. */
+export interface ReviewMark extends CheckReject {
+  mode: ReviewMarkMode;
+}
+
+/** Review history and the stored trading destination of a waiting order. */
+export interface OrderReview {
+  marks: ReviewMark[];
+  lastConfirm: {
+    verdict: "reject";
+    reasons: CheckReject[];
+    at: string;
+  } | null;
+  destination: {
+    connection: string;
+    venueAccount: string;
+    route: Record<string, unknown>;
+  } | null;
+}
+
+/** Recorded review decision and, for accepted trading orders, send outcome. */
+export interface ConfirmOrderReviewResponse {
+  order: Order;
+  decision: {
+    verdict: "accept" | "reject";
+    reasons: CheckReject[];
+    signedApproval: string;
+    keyId: string;
+    signed: boolean;
+  };
+  venueSend?: VenueSendOutcome;
 }
 
 /** Pre-trade approval and optional outcome of a paper or live order send. */
@@ -1305,7 +1350,9 @@ export type AttestationRequestType =
   | "submit"
   | "execution_report"
   | "confirm"
-  | "cancel";
+  | "cancel"
+  | "review_confirm"
+  | "review_cancel";
 
 /** Identified public-key material (never private): the key resolved by a keyId,
  *  paired with its export format. Mirrors the reproduction bundle's publicKey and
@@ -1348,9 +1395,11 @@ export interface SignedApprovalResponse {
   /** The order's opaque public handle. */
   id: string;
   /** Signed pre-trade verdict. */
-  verdict: "accept" | "reject" | "";
+  verdict: "accept" | "reject" | "review" | "";
   /** Structured reject reasons; empty on accept. */
   reasons: CheckReject[];
+  /** Ordered review marks; empty when no review is required. */
+  reviews: ReviewMark[];
 }
 
 /** One engine-recorded account block bound in the attestation payload result. */
@@ -1423,6 +1472,8 @@ export interface EventReproductionResponse {
   executionReport: ExecutionReportResponse | null;
   confirm: OrderMutationResponse | null;
   cancel: OrderMutationResponse | null;
+  reviewConfirm: ConfirmOrderReviewResponse["decision"] | null;
+  reviewCancel: OrderMutationResponse | null;
 }
 
 /** The signing-mode facet of a reproduction bundle: the global eSign-off flag

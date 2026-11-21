@@ -64,9 +64,11 @@ func getSpotFundsLimitModeHandler(
 	}
 }
 
-// The limit tools accept the flat fields of the corresponding REST body and
-// pass them to the core with the explicit write intent. The core validates
-// the values and missing-account policy and enforces tighten-only writes.
+// The limit tools accept the flat fields of the corresponding REST body,
+// except order-size mode: they address only reject order-size barriers.
+// They pass the fields to the core with the explicit write intent. The core
+// validates the values and missing-account policy and enforces tighten-only
+// writes.
 
 const addLimitToolName = "add_limit"
 const updateLimitToolName = "update_limit"
@@ -77,7 +79,9 @@ const keyedLimitPoliciesDescription = "rate_limit, order_size_limit, position_li
 	"spot_funds_total_pnl_bounds_kill_switch (total P&L)"
 
 const limitPolicyFieldsDescription = "The other arguments are that " +
-	"kind's fields. A field of another kind is refused with validation. "
+	"kind's fields. A field of another kind is refused with validation. " +
+	"order_size_limit takes caps without mode and addresses only the reject barrier; " +
+	"review barriers are read-only for an agent. "
 
 const limitAccountCurrencyDescription = "An account P&L bound must use the account's effective " +
 	"currency: its own, else its group's, else the default group's. A different " +
@@ -97,7 +101,7 @@ const addLimitToolDescription = "Create a risk barrier at a new address and retu
 	"bound must be in the currency of, and no looser than, the bound it takes " +
 	"over from. A group takes over from the global bound, and an account takes " +
 	"over from its currently applicable bound. " + limitAccountCurrencyDescription +
-	"The first order-size barrier is refused while any rate-limit barrier is configured. " +
+	"The first reject order-size barrier is refused while any rate-limit barrier is configured. " +
 	"Mutates Officer control-plane config; protected and disabled by default."
 
 const updateLimitToolDescription = "Change the risk barrier stored at the given address and return it as stored. " +
@@ -124,7 +128,8 @@ const updateLimitToolDescription = "Change the risk barrier stored at the given 
 	"Officer control-plane config; protected and disabled by default."
 
 // limitWriteInput is the REST body of the named policy's write, flattened next
-// to the policy, with REST's missingAccount query value.
+// to the policy, with REST's missingAccount query value, except order-size
+// mode: order-size writes accept no mode and address only reject barriers.
 type limitWriteInput struct {
 	Policy         string `json:"policy" jsonschema:"Barrier kind: rate_limit, order_size_limit, position_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch or spot_funds_limit_mode"`
 	Scope          string `json:"scope" jsonschema:"Barrier scope: broker, asset, account or account_asset for rate_limit; broker, underlying_asset, settlement_asset, account_underlying_asset or account_settlement_asset for order_size_limit; account_asset for position_limit; global, account_group or account for the P&L-bound kill switches; global for spot_funds_limit_mode"`

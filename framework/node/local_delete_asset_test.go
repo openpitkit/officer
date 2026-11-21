@@ -329,8 +329,8 @@ func TestSnapshotWithoutAssetDropsCascadedRuntimeRows(t *testing.T) {
 			{Scope: domain.ScopeAsset, Asset: "USD"},
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
-			{Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "1"},
-			{Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "1"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "1"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "1"},
 		},
 		PositionLimits: []domain.LimitPosition{
 			{Scope: domain.ScopeAccountAsset, Account: "account", Asset: "AAPL", MaxPosition: "100"},
@@ -377,6 +377,7 @@ func TestDeleteAssetForceRebuildsWithoutCascadedRuntimeRows(t *testing.T) {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	if err := n.realm.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeUnderlyingAsset, Asset: asset, MaxQuantity: "1",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)

@@ -225,6 +225,32 @@ func TestListAndDetailResponseBytes(t *testing.T) {
 		want   string
 	}{
 		{
+			name: "limits list modes",
+			path: "/api/v1/limits",
+			fake: func() *fakeService {
+				return &fakeService{policyRows: []store.PolicyListRow{
+					{Kind: store.PolicyKindRate, Scope: domain.ScopeBroker, Rate: &domain.LimitRate{Window: time.Second, MaxOrders: 10}},
+					{Kind: store.PolicyKindOrderSize, Scope: domain.ScopeBroker, OrderSize: &domain.LimitOrderSize{Mode: domain.RuleModeReject, MaxQuantity: "10"}},
+					{Kind: store.PolicyKindOrderSize, Scope: domain.ScopeBroker, OrderSize: &domain.LimitOrderSize{Mode: domain.RuleModeReviewWithoutHold, MaxQuantity: "20"}},
+					{Kind: store.PolicyKindPosition, Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "AAPL", Position: &domain.LimitPosition{MaxPosition: "30"}},
+					{Kind: store.PolicyKindSpotFundsPnlBounds, Scope: domain.ScopeGlobal, SpotFundsPnlBounds: &domain.LimitSpotFundsPnlBounds{Currency: "USD", LowerBound: "-100"}},
+					{Kind: store.PolicyKindSpotFundsUnrealizedPnlBounds, Scope: domain.ScopeGlobal, SpotFundsPnlBounds: &domain.LimitSpotFundsPnlBounds{Currency: "USD", LowerBound: "-200"}},
+					{Kind: store.PolicyKindSpotFundsTotalPnlBounds, Scope: domain.ScopeGlobal, SpotFundsPnlBounds: &domain.LimitSpotFundsPnlBounds{Currency: "USD", LowerBound: "-300"}},
+					{Kind: store.PolicyKindSpotFundsLimitMode, Scope: domain.ScopeGlobal, SpotFundsLimitMode: &domain.LimitSpotFundsLimitMode{Mode: domain.SpotFundsLimitModeTrackOnly}},
+				}}
+			},
+			status: http.StatusOK,
+			want: `{"policies":[` +
+				`{"kind":"rate_limit","mode":null,"scope":"broker","account":"","accountGroup":"","asset":"","values":{"rate":{"windowMs":1000,"maxOrders":10}}},` +
+				`{"kind":"order_size_limit","mode":"reject","scope":"broker","account":"","accountGroup":"","asset":"","values":{"orderSize":{"maxQuantity":"10","maxNotional":""}}},` +
+				`{"kind":"order_size_limit","mode":"review_without_hold","scope":"broker","account":"","accountGroup":"","asset":"","values":{"orderSize":{"maxQuantity":"20","maxNotional":""}}},` +
+				`{"kind":"position_limit","mode":null,"scope":"account_asset","account":"desk","accountGroup":"","asset":"AAPL","values":{"position":{"maxPosition":"30"}}},` +
+				`{"kind":"spot_funds_pnl_bounds_kill_switch","mode":null,"scope":"global","account":"","accountGroup":"","asset":"","values":{"spotFundsPnlBounds":{"currency":"USD","lowerBound":"-100","upperBound":""}}},` +
+				`{"kind":"spot_funds_unrealized_pnl_bounds_kill_switch","mode":null,"scope":"global","account":"","accountGroup":"","asset":"","values":{"spotFundsPnlBounds":{"currency":"USD","lowerBound":"-200","upperBound":""}}},` +
+				`{"kind":"spot_funds_total_pnl_bounds_kill_switch","mode":null,"scope":"global","account":"","accountGroup":"","asset":"","values":{"spotFundsPnlBounds":{"currency":"USD","lowerBound":"-300","upperBound":""}}},` +
+				`{"kind":"spot_funds_limit_mode","mode":null,"scope":"global","account":"","accountGroup":"","asset":"","values":{"spotFundsLimitMode":{"mode":"track_only"}}}],"total":8}` + "\n",
+		},
+		{
 			name:   "account list",
 			path:   "/api/v1/accounts",
 			fake:   goldenFakeService,

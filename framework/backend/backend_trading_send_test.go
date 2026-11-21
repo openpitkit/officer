@@ -38,6 +38,8 @@ import (
 type paperSendTestNode struct {
 	*tradingTestNode
 	accepted            bool
+	reviews             []domain.ReviewMark
+	destination         *domain.TradingDestination
 	submitErr, venueErr error
 	orderErr            error
 	order               *domain.Order
@@ -46,6 +48,8 @@ type paperSendTestNode struct {
 	events              []string
 	holds, reads        int
 	orderEvents         []domain.OrderEvent
+	review              *domain.OrderReview
+	reviewConfirms      int
 	cancelErr           error
 	cancels             int
 	audits              []store.AuditEntry
@@ -54,24 +58,32 @@ type paperSendTestNode struct {
 func (n *paperSendTestNode) SubmitOrderWithAttestation(
 	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 	_ domain.Caller,
+	destination *domain.TradingDestination,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
 	n.holds++
 	n.events = append(n.events, "hold")
 	n.missing = missing
+	n.destination = destination
 	if n.submitErr != nil {
 		return domain.Order{}, engine.OrderResult{}, n.submitErr
 	}
 	if o.ExternalID.IsZero() {
 		o.ExternalID = "generated-paper-order"
 	}
-	result := engine.OrderResult{Accepted: n.accepted, SettlementLockPrice: "100"}
+	result := engine.OrderResult{Verdict: domain.VerdictAccept, SettlementLockPrice: "100"}
 	eventType := domain.OrderEventPreTradeAccepted
 	o.Status = domain.OrderStatusCommitted
 	if !n.accepted {
+		result.Verdict = domain.VerdictReject
 		eventType = domain.OrderEventPreTradeRejected
 		o.Status = domain.OrderStatusRejected
 		result.Rejects = []domain.OrderReject{{Code: "order_size_limit", Reason: "too large"}}
+	}
+	if len(n.reviews) > 0 {
+		result = engine.OrderResult{Verdict: domain.VerdictReview, Reviews: n.reviews}
+		eventType = domain.OrderEventPreTradeReview
+		o.Status = domain.OrderStatusAwaitingReview
 	}
 	event := domain.OrderEvent{
 		ExternalID: "paper-approval-event", Order: o.ExternalID, Type: eventType,
@@ -81,6 +93,9 @@ func (n *paperSendTestNode) SubmitOrderWithAttestation(
 		return domain.Order{}, engine.OrderResult{}, err
 	}
 	n.order = &o
+	if result.Verdict == domain.VerdictReview {
+		n.review = &domain.OrderReview{Mode: domain.SubmitModeHold, Destination: destination}
+	}
 	event.Attestation = &att
 	n.orderEvents = append(n.orderEvents, event)
 	return o, result, nil
@@ -93,7 +108,7 @@ func (n *paperSendTestNode) GetOrder(_ context.Context, id domain.ExternalID) (d
 	if n.order == nil || n.order.ExternalID != id {
 		return domain.OrderDetail{}, domain.ErrNotFound
 	}
-	return domain.OrderDetail{Order: *n.order, Events: n.orderEvents}, nil
+	return domain.OrderDetail{Order: *n.order, Events: n.orderEvents, Review: n.review}, nil
 }
 
 func (n *paperSendTestNode) CancelOrderWithAttestation(
@@ -145,6 +160,9 @@ type paperSendTestSigner struct {
 	fwsigning.Service
 	payload     domain.ApprovalPayload
 	holdPayload domain.ApprovalPayload
+	// reviewTokens binds each review-flow envelope to the payload it signed.
+	// Ordinary send tests retain their existing deterministic token.
+	reviewTokens map[string]domain.ApprovalPayload
 }
 
 func (*paperSendTestSigner) NoESign(context.Context) (bool, error) { return false, nil }
@@ -155,13 +173,25 @@ func (*paperSendTestSigner) ListKeys(context.Context) ([]domain.SigningKey, erro
 
 func (s *paperSendTestSigner) Sign(payload domain.ApprovalPayload) (string, error) {
 	s.payload = payload
+	if s.reviewTokens != nil {
+		token := fmt.Sprintf("paper-review-envelope-%d", len(s.reviewTokens))
+		s.reviewTokens[token] = payload
+		return token, nil
+	}
 	if payload.RequestType == string(domain.AttestationRequestSubmit) {
 		s.holdPayload = payload
 	}
 	return "paper-signed-approval", nil
 }
 
-func (s *paperSendTestSigner) Verify(context.Context, string, fwsigning.VerifyParams) (fwsigning.VerifyResult, error) {
+func (s *paperSendTestSigner) Verify(_ context.Context, token string, _ fwsigning.VerifyParams) (fwsigning.VerifyResult, error) {
+	if s.reviewTokens != nil {
+		payload, ok := s.reviewTokens[token]
+		if !ok {
+			return fwsigning.VerifyResult{}, domain.ErrInvalid
+		}
+		return fwsigning.VerifyResult{Payload: payload, Signed: true}, nil
+	}
 	return fwsigning.VerifyResult{Payload: s.holdPayload, Signed: true}, nil
 }
 
@@ -453,6 +483,35 @@ func TestSendPaperOrderPreCheck(t *testing.T) {
 	}
 }
 
+func TestSendPaperOrderDropCopyRefused(t *testing.T) {
+	s, n, rt, _ := newPaperSendTestService(t)
+	o := paperSendTestOrder()
+	o.DropCopy = true
+	_, err := s.SendPaperOrder(systemCtx(), o, SendDestination{Connection: "connection-1", Route: "{}"})
+	if !errors.Is(err, domain.ErrInvalid) || n.holds != 0 || len(rt.sends) != 0 {
+		t.Fatalf("drop-copy send: err=%v submits=%d sends=%+v, want refusal before submit", err, n.holds, rt.sends)
+	}
+}
+
+func TestSendPaperOrderReviewWaitsWithDestination(t *testing.T) {
+	s, n, rt, signer := newPaperSendTestService(t)
+	n.reviews = []domain.ReviewMark{{OrderReject: domain.OrderReject{Code: "order_size_limit", Reason: "large order"}, Mode: domain.RuleModeReviewWithoutHold}}
+	got, err := s.SendPaperOrder(systemCtx(), paperSendTestOrder(), SendDestination{Connection: "connection-1", Route: "{}"})
+	if err != nil {
+		t.Fatalf("SendPaperOrder review: %v", err)
+	}
+	if got.Send != nil || len(rt.sends) != 0 || n.reads != 0 {
+		t.Fatalf("review was sent: result=%+v sends=%+v reads=%d", got, rt.sends, n.reads)
+	}
+	want := &domain.TradingDestination{Connection: "connection-1", VenueAccount: "remote-1", Route: "{}"}
+	if !reflect.DeepEqual(n.destination, want) {
+		t.Fatalf("node destination = %+v, want %+v", n.destination, want)
+	}
+	if got.Approval.Verdict != domain.VerdictReview || !reflect.DeepEqual(got.Approval.Reviews, n.reviews) || signer.payload.EventExternalID != n.orderEvents[0].ExternalID.String() || n.orderEvents[0].Type != domain.OrderEventPreTradeReview || n.order == nil || n.order.Status != domain.OrderStatusAwaitingReview {
+		t.Fatalf("review result=%+v payload=%+v order=%+v", got, signer.payload, n.order)
+	}
+}
+
 func TestSendPaperOrderPreTrade(t *testing.T) {
 	for _, name := range []string{"accepted", "rejected", "submit_error"} {
 		t.Run(name, func(t *testing.T) {
@@ -473,10 +532,10 @@ func TestSendPaperOrderPreTrade(t *testing.T) {
 				}
 				return
 			}
-			verdict := "accept"
+			verdict := domain.VerdictAccept
 			var reasons []domain.OrderReject
 			if name == "rejected" {
-				verdict = "reject"
+				verdict = domain.VerdictReject
 				reasons = []domain.OrderReject{{Code: "order_size_limit", Reason: "too large"}}
 			}
 			want := SignedApproval{SignedApproval: "paper-signed-approval", KeyID: "paper-key", OrderExternalID: "generated-paper-order", Verdict: verdict, Reasons: reasons, Signed: true}

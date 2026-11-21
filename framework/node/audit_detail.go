@@ -53,6 +53,7 @@ func setPositionLimitDetail(limit domain.LimitPosition) domain.AuditDetail {
 func setOrderSizeLimitDetail(limit domain.LimitOrderSize) domain.AuditDetail {
 	target := LimitTarget{
 		Policy:  domain.PolicyOrderSizeLimit,
+		Mode:    limit.Mode,
 		Scope:   limit.Scope,
 		Account: limit.Account,
 		Asset:   limit.Asset,
@@ -214,11 +215,7 @@ func marketDataInstrumentToggleDetail(
 
 // submitOrderDetail renders one order submission and its accept/reject
 // disposition. The order is named by its opaque external id.
-func submitOrderDetail(order domain.Order, accepted bool) domain.AuditDetail {
-	code := domain.AuditDetailSubmitOrderRejected
-	if accepted {
-		code = domain.AuditDetailSubmitOrderCommitted
-	}
+func submitOrderDetail(order domain.Order, code domain.AuditDetailCode) domain.AuditDetail {
 	return domain.NewAuditDetail(code, domain.AuditDetailParams{
 		"order":   order.ExternalID.String(),
 		"account": order.Account.String(),
@@ -359,9 +356,13 @@ func axesParams(target LimitTarget) domain.AuditDetailParams {
 	}
 }
 
-// axesFields renders the account, group and asset axes of a typed barrier.
+// axesFields renders the account, group and asset axes of a typed barrier,
+// and its mode for order_size_limit.
 func axesFields(target LimitTarget) []domain.AuditDetailField {
 	fields := make([]domain.AuditDetailField, 0, 3)
+	if target.Policy == domain.PolicyOrderSizeLimit {
+		fields = append(fields, domain.AuditDetailField{Name: "mode", Value: string(target.Mode)})
+	}
 	if target.Account != "" {
 		fields = append(fields, domain.AuditDetailField{Name: "account", Value: target.Account.String()})
 	}

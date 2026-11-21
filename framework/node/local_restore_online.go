@@ -224,9 +224,9 @@ func classifyRestoreRuntimeDelta(
 		return plan
 	}
 	if plan.orderSizeChanged &&
-		(len(before.data.OrderSizeLimits) == 0) != (len(after.data.OrderSizeLimits) == 0) {
+		!reflect.DeepEqual(orderSizeModes(before.data.OrderSizeLimits), orderSizeModes(after.data.OrderSizeLimits)) {
 		plan.rebuild = true
-		plan.reason = "restore adds or removes the order-size policy"
+		plan.reason = "restore changes the order-size mode set"
 		return plan
 	}
 	plan.marketDataChanged = !reflect.DeepEqual(
@@ -337,9 +337,17 @@ func positionLimitMap(limits []domain.LimitPosition) map[string]string {
 func orderSizeLimitMap(limits []domain.LimitOrderSize) map[string]domain.LimitOrderSize {
 	out := make(map[string]domain.LimitOrderSize, len(limits))
 	for _, limit := range limits {
-		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.Asset] = limit
+		out[string(limit.Scope)+"\x00"+limit.Account.String()+"\x00"+limit.Asset+"\x00"+string(limit.Mode)] = limit
 	}
 	return out
+}
+
+func orderSizeModes(limits []domain.LimitOrderSize) map[domain.RuleMode]bool {
+	modes := make(map[domain.RuleMode]bool)
+	for _, limit := range limits {
+		modes[limit.Mode] = true
+	}
+	return modes
 }
 
 func spotFundsLimitMap(

@@ -53,19 +53,28 @@ const healthToolDescription = "Report Pit Officer deployment health: per-node " 
 const getAccountStateToolName = "get_account_state"
 const getAccountStateToolDescription = "Return account row and its " +
 	"account-scoped risk barriers, each with the fields add_limit and update_limit " +
-	"take, the rate window as windowMs in milliseconds. Read-only - no secrets, no " +
+	"take, the rate window as windowMs in milliseconds. " +
+	orderSizeLimitModeDescription + "Read-only - no secrets, no " +
 	"order-flow control."
 
 const getLimitsToolName = "get_limits"
 const getLimitsToolDescription = "Return risk barriers and P&L-bound currencies, " +
 	"optionally filtered by account; each barrier has the fields add_limit and " +
-	"update_limit take, the rate window as windowMs in milliseconds. Read-only - no " +
+	"update_limit take, the rate window as windowMs in milliseconds. " +
+	orderSizeLimitModeDescription + "Read-only - no " +
 	"secrets, no order-flow control."
+
+const orderSizeLimitModeDescription = "An order-size barrier also carries " +
+	"read-only mode: reject or review_without_hold. mode is not a write argument " +
+	"for order-size barriers. add_limit and update_limit address only reject " +
+	"order-size barriers; review barriers are read-only for an agent, and MCP " +
+	"deletes no barrier. "
 
 const getOrderToolName = "get_order"
 const getOrderToolDescription = "Return one order addressed by its id: " +
 	"its status, its 1:1 signed approval (when issued), and its fills with their " +
-	"display prices. Read-only - no secrets, no order-flow control. The opaque " +
+	"display prices, plus a review object while it awaits operator review. " +
+	"Read-only - no secrets, no order-flow control. The opaque " +
 	"pre-trade lock is never exposed; only backend-derived display prices are."
 
 const getAuditToolName = "get_audit"
@@ -77,7 +86,8 @@ const checkOrderToolDescription = "Run a non-mutating pre-trade dry-run for an "
 	"order: report whether it would pass the engine's risk checks plus the " +
 	"reasons (would-be lock prices on pass, structured rejects and any " +
 	"would-be account block on reject). Submits nothing and changes no state - " +
-	"no order is placed, no funds are reserved."
+	"no order is placed, no funds are reserved. Results can carry review marks, " +
+	"which mean do not send."
 
 const setMarketDataInstrumentToolName = "set_market_data_instrument"
 const setMarketDataInstrumentToolDescription = "Enable or disable one " +
@@ -222,7 +232,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		checkOrderToolName,
 		"Check order",
 		checkOrderToolDescription,
-		"Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons); changes no state.",
+		"Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons; review marks mean do not send); changes no state.",
 		false,
 		false,
 		true,
@@ -701,10 +711,11 @@ type getOrderInput struct {
 }
 
 type getOrderOutput struct {
-	Order      orderDTO          `json:"order"`
-	Approval   *orderApprovalDTO `json:"approval"`
-	Trades     []tradeDTO        `json:"trades"`
-	VenueOrder *venueOrderDTO    `json:"venueOrder,omitempty"`
+	Order      orderDTO                              `json:"order"`
+	Approval   *orderApprovalDTO                     `json:"approval"`
+	Trades     []tradeDTO                            `json:"trades"`
+	VenueOrder *venueOrderDTO                        `json:"venueOrder,omitempty"`
+	Review     *httpx.OrderReviewDTO[map[string]any] `json:"review,omitempty"`
 }
 
 type getAuditInput struct {
@@ -728,10 +739,11 @@ type checkOrderInput struct {
 }
 
 type checkOrderOutput struct {
-	WouldBlock        *checkOrderBlockDTO   `json:"wouldBlock"`
-	Rejects           []checkOrderRejectDTO `json:"rejects"`
-	WouldDisplayPrice string                `json:"wouldDisplayPrice"`
-	Passed            bool                  `json:"passed"`
+	WouldBlock        *checkOrderBlockDTO    `json:"wouldBlock"`
+	Rejects           []httpx.OrderRejectDTO `json:"rejects"`
+	Reviews           []httpx.ReviewMarkDTO  `json:"reviews,omitempty"`
+	WouldDisplayPrice string                 `json:"wouldDisplayPrice"`
+	Passed            bool                   `json:"passed"`
 }
 
 type setMarketDataInstrumentInput struct {
@@ -774,11 +786,12 @@ type submitDropCopyOrderInput struct {
 }
 
 type submitOrderOutput struct {
-	SignedApproval  string                `json:"signedApproval"`
-	KeyID           string                `json:"keyId"`
-	OrderExternalID string                `json:"id"`
-	Verdict         string                `json:"verdict"`
-	Reasons         []checkOrderRejectDTO `json:"reasons,omitempty"`
+	SignedApproval  string                 `json:"signedApproval"`
+	KeyID           string                 `json:"keyId"`
+	OrderExternalID string                 `json:"id"`
+	Verdict         string                 `json:"verdict"`
+	Reasons         []httpx.OrderRejectDTO `json:"reasons,omitempty"`
+	Reviews         []httpx.ReviewMarkDTO  `json:"reviews,omitempty"`
 }
 
 type submitDropCopyOrderOutput struct {
@@ -891,14 +904,6 @@ type tradeDTO struct {
 	Commission *commissionDTO `json:"commission,omitempty"`
 }
 
-type checkOrderRejectDTO struct {
-	Code    string `json:"code"`
-	Scope   string `json:"scope"`
-	Policy  string `json:"policy"`
-	Reason  string `json:"reason"`
-	Details string `json:"details"`
-}
-
 type checkOrderBlockDTO struct {
 	Account string `json:"account"`
 	Code    string `json:"code"`
@@ -996,13 +1001,12 @@ func toCommissionDTOs(in []domain.Commission) []commissionDTO {
 	return out
 }
 
-// toOrderApprovalDTO maps the order's submit-verdict attestation onto the MCP
-// approval DTO, or returns nil when no event carries one. The submit verdict
-// event (pre_trade_accepted / pre_trade_rejected) is preferred; failing that,
-// the first attested event is used, so the MCP surface still reflects an
-// attested order created through a non-submit path.
+// toOrderApprovalDTO maps the latest signed pre-trade verdict (submit or
+// review confirm), in history order, onto the MCP approval DTO. It falls back
+// to the first attested accept/reject event of any request type, then the
+// first attested event, or nil when no event carries an attestation.
 func toOrderApprovalDTO(detail domain.OrderDetail) *orderApprovalDTO {
-	att := submitVerdictAttestation(detail)
+	att := latestVerdictAttestation(detail)
 	if att == nil {
 		return nil
 	}
@@ -1016,10 +1020,14 @@ func toOrderApprovalDTO(detail domain.OrderDetail) *orderApprovalDTO {
 	}
 }
 
-// submitVerdictAttestation returns the attestation of the order's submit verdict
-// event when present, else the first attested event's attestation, else nil.
-func submitVerdictAttestation(detail domain.OrderDetail) *domain.EventAttestation {
+// latestVerdictAttestation returns the latest signed pre-trade verdict (submit
+// or review confirm), in history order. It falls back to the first attested
+// accept/reject event of any request type, then the first attested event,
+// or nil when no event carries an attestation.
+func latestVerdictAttestation(detail domain.OrderDetail) *domain.EventAttestation {
 	var first *domain.EventAttestation
+	var firstAcceptReject *domain.EventAttestation
+	var lastVerdict *domain.EventAttestation
 	for i := range detail.Events {
 		att := detail.Events[i].Attestation
 		if att == nil {
@@ -1030,8 +1038,21 @@ func submitVerdictAttestation(detail domain.OrderDetail) *domain.EventAttestatio
 		}
 		switch detail.Events[i].Type {
 		case domain.OrderEventPreTradeAccepted, domain.OrderEventPreTradeRejected:
-			return att
+			if firstAcceptReject == nil {
+				firstAcceptReject = att
+			}
+			fallthrough
+		case domain.OrderEventPreTradeReview:
+			if att.RequestType == domain.AttestationRequestSubmit || att.RequestType == domain.AttestationRequestReviewConfirm {
+				lastVerdict = att
+			}
 		}
+	}
+	if lastVerdict != nil {
+		return lastVerdict
+	}
+	if firstAcceptReject != nil {
+		return firstAcceptReject
 	}
 	return first
 }
@@ -1061,9 +1082,9 @@ func toAuditDTOs(rows []domain.AuditRow) []auditDTO {
 }
 
 func toCheckOrderOutput(r domain.CheckResult) checkOrderOutput {
-	rejects := make([]checkOrderRejectDTO, 0, len(r.Rejects))
+	rejects := make([]httpx.OrderRejectDTO, 0, len(r.Rejects))
 	for _, rej := range r.Rejects {
-		rejects = append(rejects, toMCPRejectDTO(rej))
+		rejects = append(rejects, httpx.ToOrderRejectDTO(rej))
 	}
 	var block *checkOrderBlockDTO
 	if r.WouldBlock != nil {
@@ -1077,29 +1098,9 @@ func toCheckOrderOutput(r domain.CheckResult) checkOrderOutput {
 	return checkOrderOutput{
 		WouldBlock:        block,
 		Rejects:           rejects,
+		Reviews:           httpx.ToReviewMarkDTOs(r.Reviews),
 		WouldDisplayPrice: r.WouldLockPrice,
 		Passed:            r.Passed,
-	}
-}
-
-func toMCPRejectDTOs(rejects []domain.OrderReject) []checkOrderRejectDTO {
-	if len(rejects) == 0 {
-		return nil
-	}
-	out := make([]checkOrderRejectDTO, 0, len(rejects))
-	for _, rej := range rejects {
-		out = append(out, toMCPRejectDTO(rej))
-	}
-	return out
-}
-
-func toMCPRejectDTO(rej domain.OrderReject) checkOrderRejectDTO {
-	return checkOrderRejectDTO{
-		Code:    rej.Code,
-		Scope:   rej.Scope,
-		Policy:  rej.Policy,
-		Reason:  rej.Reason,
-		Details: rej.Details,
 	}
 }
 
@@ -1190,10 +1191,21 @@ func getOrderHandler(
 		if err != nil {
 			return "", getOrderOutput{}, toolError(err)
 		}
+		view, err := backend.OrderReviewView(detail)
+		if err != nil {
+			return "", getOrderOutput{}, toolError(err)
+		}
 		out := getOrderOutput{
 			Order:    toOrderDTO(detail),
 			Approval: toOrderApprovalDTO(detail),
 			Trades:   toTradeDTOs(detail.Trades),
+		}
+		if view != nil {
+			review, err := httpx.ToOrderReviewDTO(view, storedTradingRouteDTO)
+			if err != nil {
+				return "", getOrderOutput{}, toolError(err)
+			}
+			out.Review = &review
 		}
 		if detail.Venue != nil {
 			venue, err := toVenueOrderDTO(*detail.Venue)
@@ -1281,6 +1293,8 @@ func checkOrderHandler(
 		summary := fmt.Sprintf("check %s: pass", account)
 		if !result.Passed {
 			summary = fmt.Sprintf("check %s: reject - %d reason(s)", account, len(result.Rejects))
+		} else if len(result.Reviews) > 0 {
+			summary = fmt.Sprintf("check %s: review - %d reason(s); do not send", account, len(result.Reviews))
 		}
 		return summary, out, nil
 	}
@@ -1386,21 +1400,32 @@ func submitOrderHandler(
 			SignedApproval:  res.SignedApproval,
 			KeyID:           res.KeyID,
 			OrderExternalID: res.OrderExternalID,
-			Verdict:         res.Verdict,
-			Reasons:         toMCPRejectDTOs(res.Reasons),
+			Verdict:         string(res.Verdict),
+			Reasons:         httpx.ToOrderRejectDTOs(res.Reasons),
+			Reviews:         httpx.ToReviewMarkDTOs(res.Reviews),
 		}
-		if res.Verdict == "reject" {
+		switch res.Verdict {
+		case domain.VerdictAccept:
+			return fmt.Sprintf(
+				"order %s approved - approval envelope issued",
+				res.OrderExternalID,
+			), out, nil
+		case domain.VerdictReject:
 			return fmt.Sprintf(
 				"order %s rejected - %d reason(s)",
 				res.OrderExternalID,
 				len(res.Reasons),
 			), out, nil
+		case domain.VerdictReview:
+			return orderReviewText(res.OrderExternalID, len(res.Reviews)), out, nil
+		default:
+			return "", submitOrderOutput{}, fmt.Errorf("unknown order verdict %q", res.Verdict)
 		}
-		return fmt.Sprintf(
-			"order %s approved - approval envelope issued",
-			res.OrderExternalID,
-		), out, nil
 	}
+}
+
+func orderReviewText(orderID string, reasons int) string {
+	return fmt.Sprintf("order %s waits for operator review - %d reason(s); do not send", orderID, reasons)
 }
 
 func submitDropCopyOrderHandler(
@@ -1557,13 +1582,8 @@ type venueOrderDTO struct {
 }
 
 func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
-	if err := domain.ValidateTradingRoute(v.Route); err != nil {
-		return venueOrderDTO{}, fmt.Errorf("stored venue order route is invalid")
-	}
-	var route map[string]any
-	decoder := json.NewDecoder(strings.NewReader(v.Route))
-	decoder.UseNumber()
-	if err := decoder.Decode(&route); err != nil {
+	route, err := storedTradingRouteDTO(v.Route)
+	if err != nil {
 		return venueOrderDTO{}, fmt.Errorf("stored venue order route is invalid")
 	}
 	return venueOrderDTO{
@@ -1572,6 +1592,19 @@ func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
 		VenueOrderID: v.VenueOrderID, SendAttempted: v.SendAttempted,
 		CreatedAt: v.CreatedAt.Format(time.RFC3339Nano),
 	}, nil
+}
+
+func storedTradingRouteDTO(raw string) (map[string]any, error) {
+	if err := domain.ValidateTradingRoute(raw); err != nil {
+		return nil, fmt.Errorf("stored trading route is invalid")
+	}
+	var route map[string]any
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&route); err != nil {
+		return nil, fmt.Errorf("stored trading route is invalid")
+	}
+	return route, nil
 }
 
 type tradingConnectionOutput struct {
@@ -2018,12 +2051,13 @@ type sendDestinationInput struct {
 }
 
 type sendVenueOrderOutput struct {
-	SignedApproval  string                `json:"signedApproval"`
-	KeyID           string                `json:"keyId"`
-	OrderExternalID string                `json:"id"`
-	Verdict         string                `json:"verdict"`
-	Reasons         []checkOrderRejectDTO `json:"reasons,omitempty"`
-	VenueSend       *venueSendDTO         `json:"venueSend,omitempty"`
+	SignedApproval  string                 `json:"signedApproval"`
+	KeyID           string                 `json:"keyId"`
+	OrderExternalID string                 `json:"id"`
+	Verdict         string                 `json:"verdict"`
+	Reasons         []httpx.OrderRejectDTO `json:"reasons,omitempty"`
+	Reviews         []httpx.ReviewMarkDTO  `json:"reviews,omitempty"`
+	VenueSend       *venueSendDTO          `json:"venueSend,omitempty"`
 }
 
 type venueSendDTO struct {
@@ -2079,9 +2113,14 @@ func sendVenueOrder(ctx context.Context, src frameworkmcp.Source, send venueSend
 	approval := result.Approval
 	out := sendVenueOrderOutput{
 		SignedApproval: approval.SignedApproval, KeyID: approval.KeyID, OrderExternalID: approval.OrderExternalID,
-		Verdict: approval.Verdict, Reasons: toMCPRejectDTOs(approval.Reasons),
+		Verdict: string(approval.Verdict), Reasons: httpx.ToOrderRejectDTOs(approval.Reasons),
+		Reviews: httpx.ToReviewMarkDTOs(approval.Reviews),
 	}
-	if result.Send != nil {
+	switch approval.Verdict {
+	case domain.VerdictAccept:
+		if result.Send == nil {
+			return "", sendVenueOrderOutput{}, fmt.Errorf("accepted order has no venue send result")
+		}
 		out.VenueSend = &venueSendDTO{Status: result.Send.Status, Error: result.Send.Error, Refusal: result.Send.Refusal}
 		if result.Send.Order != nil {
 			link, err := toVenueOrderDTO(*result.Send.Order)
@@ -2090,13 +2129,16 @@ func sendVenueOrder(ctx context.Context, src frameworkmcp.Source, send venueSend
 			}
 			out.VenueSend.VenueOrder = &link
 		}
-	}
-	outcome := "reject"
-	if result.Send != nil {
-		outcome = "accept; venue send " + result.Send.Status
+		outcome := "accept; venue send " + result.Send.Status
 		if result.Send.Error != "" {
 			outcome += ": " + result.Send.Error
 		}
+		return fmt.Sprintf("order %s: %s", approval.OrderExternalID, outcome), out, nil
+	case domain.VerdictReject:
+		return fmt.Sprintf("order %s: reject", approval.OrderExternalID), out, nil
+	case domain.VerdictReview:
+		return orderReviewText(approval.OrderExternalID, len(approval.Reviews)), out, nil
+	default:
+		return "", sendVenueOrderOutput{}, fmt.Errorf("unknown order verdict %q", approval.Verdict)
 	}
-	return fmt.Sprintf("order %s: %s", approval.OrderExternalID, outcome), out, nil
 }

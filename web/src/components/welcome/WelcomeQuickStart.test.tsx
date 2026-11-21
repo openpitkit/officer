@@ -229,6 +229,7 @@ describe("WelcomeQuickStart", () => {
     expect(putLimitMock).toHaveBeenCalledWith(
       {
         policy: "order_size_limit",
+        mode: "reject",
         scope: "account_underlying_asset",
         account: "demo-main",
         asset: "BTC",
@@ -239,6 +240,7 @@ describe("WelcomeQuickStart", () => {
     expect(putLimitMock).toHaveBeenCalledWith(
       {
         policy: "order_size_limit",
+        mode: "reject",
         scope: "account_settlement_asset",
         account: "demo-main",
         asset: "USD",
@@ -820,12 +822,48 @@ describe("WelcomeQuickStart while accounts are hidden", () => {
     }
   });
 
-  it("refuses the starter barriers when the account has one of them", async () => {
+  it("allows the starter reject barriers when the demo target has a review barrier", async () => {
     const user = userEvent.setup();
     fetchPoliciesPageMock.mockResolvedValue({
       items: [
         {
           policy: "order_size_limit",
+          mode: "review_without_hold",
+          scope: "account_underlying_asset",
+          account: "main",
+          asset: "BTC",
+          values: { max_quantity: "5" },
+        },
+      ],
+      total: 1,
+    });
+    renderQuickStart();
+
+    await user.click(
+      screen.getByRole("button", { name: /Add starter policy barriers/i }),
+    );
+
+    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(3));
+    expect(putLimitMock).toHaveBeenCalledWith(
+      {
+        policy: "order_size_limit",
+        mode: "reject",
+        scope: "account_underlying_asset",
+        account: "main",
+        asset: "BTC",
+        values: { max_quantity: "2" },
+      },
+      "create",
+    );
+  });
+
+  it("refuses the starter barriers when the demo target has a reject barrier", async () => {
+    const user = userEvent.setup();
+    fetchPoliciesPageMock.mockResolvedValue({
+      items: [
+        {
+          policy: "order_size_limit",
+          mode: "reject",
           scope: "account_underlying_asset",
           account: "main",
           asset: "BTC",
@@ -853,6 +891,7 @@ describe("WelcomeQuickStart while accounts are hidden", () => {
     fetchPoliciesPageMock.mockResolvedValue({
       items: Array.from({ length: 1000 }, (_, index) => ({
         policy: "order_size_limit",
+        mode: "reject",
         scope: "account_underlying_asset",
         account: "main",
         asset: `ASSET${index}`,

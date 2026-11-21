@@ -20,11 +20,14 @@ package node
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/openpit/asyncengine"
 
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -32,6 +35,271 @@ import (
 )
 
 const livePolicyTestTimeout = 5 * time.Second
+
+func TestLocalNode_OrderSizeModeKeyLifecycle(t *testing.T) {
+	for _, firstMode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+		t.Run(string(firstMode), func(t *testing.T) {
+			ctx := context.Background()
+			n, st := newTestNode(t, newFakeEngine())
+			builds := 0
+			var current *fakeEngine
+			var built engine.Snapshot
+			n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+				builds++
+				current = newFakeEngine()
+				return fakeBuild(current, &built)(snapshot)
+			}
+			first := domain.LimitOrderSize{Mode: firstMode, Scope: domain.ScopeBroker, MaxQuantity: "10"}
+			second := first
+			second.Mode, second.MaxQuantity = domain.RuleModeReject, "20"
+			if firstMode == domain.RuleModeReject {
+				second.Mode = domain.RuleModeReviewWithoutHold
+			}
+			put := func(limit domain.LimitOrderSize, write domain.LimitWrite) error {
+				_, err := n.PutOrderSizeLimit(ctx, limit, write, domain.MissingAccountCreate, testCaller)
+				return err
+			}
+			assertStored := func(want ...domain.LimitOrderSize) {
+				t.Helper()
+				got, err := st.ListOrderSizeLimits(ctx, "")
+				if err != nil || !reflect.DeepEqual(orderSizeLimitMap(got), orderSizeLimitMap(want)) {
+					t.Fatalf("stored barriers = %+v, %v; want %+v", got, err, want)
+				}
+			}
+			if err := put(first, domain.LimitWriteAdd); err != nil {
+				t.Fatal(err)
+			}
+			if err := put(second, domain.LimitWriteAdd); err != nil {
+				t.Fatal(err)
+			}
+			assertStored(first, second)
+			if builds != 2 || len(built.OrderSizeLimits) != 2 {
+				t.Fatalf("first barrier per mode: builds=%d snapshot=%+v", builds, built.OrderSizeLimits)
+			}
+			for _, limit := range []domain.LimitOrderSize{first, second} {
+				found, ok, err := n.readOrderSizeBarrier(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Mode: limit.Mode, Scope: limit.Scope})
+				if err != nil || !ok || found != limit {
+					t.Fatalf("read mode %s = %+v, %t, %v", limit.Mode, found, ok, err)
+				}
+			}
+			second.MaxQuantity = "19"
+			if err := put(second, domain.LimitWriteChange); err != nil {
+				t.Fatal(err)
+			}
+			assertStored(first, second)
+			if builds != 2 {
+				t.Fatalf("update rebuilt engine: %d", builds)
+			}
+			configureErr := errors.New("mode update rejected")
+			current.configureErr = configureErr
+			failed := second
+			failed.MaxQuantity = "18"
+			if err := put(failed, domain.LimitWriteChange); !errors.Is(err, configureErr) {
+				t.Fatalf("configure error = %v", err)
+			}
+			assertStored(first, second)
+			current.configureErr = nil
+			extra := second
+			extra.Scope, extra.Asset = domain.ScopeUnderlyingAsset, "AAPL"
+			if err := put(extra, domain.LimitWriteAdd); err != nil {
+				t.Fatal(err)
+			}
+			assertStored(first, second, extra)
+			if builds != 2 {
+				t.Fatalf("second barrier of existing mode rebuilt engine: %d", builds)
+			}
+			if _, _, err := n.readOrderSizeBarrier(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker}); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("read without mode = %v, want ErrInvalid", err)
+			}
+			if _, err := n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker}, testCaller); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("delete without mode = %v, want ErrInvalid", err)
+			}
+			assertStored(first, second, extra)
+			for i, limit := range []domain.LimitOrderSize{extra, second, first} {
+				if _, err := n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Mode: limit.Mode, Scope: limit.Scope, Asset: limit.Asset}, testCaller); err != nil {
+					t.Fatal(err)
+				}
+				switch i {
+				case 0:
+					assertStored(first, second)
+					if builds != 2 {
+						t.Fatalf("non-last mode barrier delete rebuilt: %d", builds)
+					}
+				case 1:
+					assertStored(first)
+					if builds != 3 || len(built.OrderSizeLimits) != 1 || built.OrderSizeLimits[0] != first {
+						t.Fatalf("last mode barrier delete: builds=%d snapshot=%+v", builds, built.OrderSizeLimits)
+					}
+				case 2:
+					assertStored()
+					if builds != 4 || len(built.OrderSizeLimits) != 0 {
+						t.Fatalf("empty mode set: builds=%d snapshot=%+v", builds, built.OrderSizeLimits)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestOrderSizeModeRestoreDelta(t *testing.T) {
+	reject := domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "10"}
+	review := reject
+	review.Mode, review.MaxQuantity = domain.RuleModeReviewWithoutHold, "20"
+	changedReject := reject
+	changedReject.MaxQuantity = "9"
+	extra := reject
+	extra.Scope, extra.Asset = domain.ScopeUnderlyingAsset, "AAPL"
+	for _, tc := range []struct {
+		name             string
+		before, after    []domain.LimitOrderSize
+		rebuild, changed bool
+	}{
+		{"add_mode", []domain.LimitOrderSize{reject}, []domain.LimitOrderSize{reject, review}, true, true},
+		{"remove_mode", []domain.LimitOrderSize{reject, review}, []domain.LimitOrderSize{reject}, true, true},
+		{"replace_mode", []domain.LimitOrderSize{reject}, []domain.LimitOrderSize{review}, true, true},
+		{"values_same_modes", []domain.LimitOrderSize{reject, review}, []domain.LimitOrderSize{changedReject, review}, false, true},
+		{"more_rows_same_modes", []domain.LimitOrderSize{reject, review}, []domain.LimitOrderSize{reject, review, extra}, false, true},
+		{"row_order", []domain.LimitOrderSize{reject, review}, []domain.LimitOrderSize{review, reject}, false, false},
+		{"first_mode", nil, []domain.LimitOrderSize{review}, true, true},
+		{"last_mode", []domain.LimitOrderSize{review}, nil, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := classifyRestoreRuntimeDelta(
+				restoreRuntimeSnapshot{data: backup.Data{OrderSizeLimits: tc.before}},
+				restoreRuntimeSnapshot{data: backup.Data{OrderSizeLimits: tc.after}},
+			)
+			if plan.rebuild != tc.rebuild || plan.orderSizeChanged != tc.changed {
+				t.Fatalf("restore plan = %+v, want rebuild=%t changed=%t", plan, tc.rebuild, tc.changed)
+			}
+		})
+	}
+}
+
+func TestLocalNode_OrderSizeModeRollback(t *testing.T) {
+	ctx := context.Background()
+	n, st := newTestNode(t, newFakeEngine())
+	var current *fakeEngine
+	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+		current = newFakeEngine()
+		return fakeBuild(current, new(engine.Snapshot))(snapshot)
+	}
+	reject := domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "10"}
+	review := reject
+	review.Mode, review.MaxQuantity = domain.RuleModeReviewWithoutHold, "20"
+	assetReject := reject
+	assetReject.Scope, assetReject.Asset = domain.ScopeUnderlyingAsset, "AAPL"
+	put := func(limit domain.LimitOrderSize) error {
+		_, err := n.PutOrderSizeLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
+		return err
+	}
+	for _, limit := range []domain.LimitOrderSize{reject, review, assetReject} {
+		if err := put(limit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := st.ListOrderSizeLimits(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureErr := errors.New("mode configure failed")
+	current.configureErr = configureErr
+	assetReview := assetReject
+	assetReview.Mode, assetReview.MaxQuantity = review.Mode, "30"
+	if err := put(assetReview); !errors.Is(err, configureErr) {
+		t.Fatalf("new mode-key rollback error = %v", err)
+	}
+	after, err := st.ListOrderSizeLimits(ctx, "")
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("new-key rollback touched neighbour: before=%+v after=%+v err=%v", before, after, err)
+	}
+	current.configureErr = nil
+	if err := put(assetReview); err != nil {
+		t.Fatal(err)
+	}
+	before, err = st.ListOrderSizeLimits(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.configureErr = configureErr
+	_, err = n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Mode: assetReview.Mode, Scope: assetReview.Scope, Asset: assetReview.Asset}, testCaller)
+	if !errors.Is(err, configureErr) {
+		t.Fatalf("delete rollback error = %v", err)
+	}
+	after, err = st.ListOrderSizeLimits(ctx, "")
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("delete rollback touched neighbour: before=%+v after=%+v err=%v", before, after, err)
+	}
+}
+
+func TestLocalNode_OrderSizeModeBuildFailureIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	n, st := newTestNode(t, newFakeEngine())
+	preparePolicyLifecycleBuild(n)
+	reject := domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "10"}
+	review := reject
+	review.Mode, review.MaxQuantity = domain.RuleModeReviewWithoutHold, "20"
+	put := func(limit domain.LimitOrderSize) error {
+		_, err := n.PutOrderSizeLimit(ctx, limit, domain.LimitWriteAdd, domain.MissingAccountCreate, testCaller)
+		return err
+	}
+	if err := put(reject); err != nil {
+		t.Fatal(err)
+	}
+	old := n.currentEngine()
+	buildErr := errors.New("new mode build failed")
+	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+		if len(snapshot.OrderSizeLimits) != 2 {
+			t.Fatalf("new-mode build lost neighbour: %+v", snapshot.OrderSizeLimits)
+		}
+		stored, err := st.ListOrderSizeLimits(ctx, "")
+		if err != nil || len(stored) != 1 || stored[0] != reject {
+			t.Fatalf("store mutated before build: %+v, %v", stored, err)
+		}
+		return nil, buildErr
+	}
+	if err := put(review); !errors.Is(err, buildErr) {
+		t.Fatalf("new mode failure = %v", err)
+	}
+	stored, err := st.ListOrderSizeLimits(ctx, "")
+	if err != nil || len(stored) != 1 || stored[0] != reject || n.currentEngine() != old {
+		t.Fatalf("failed mode build changed state: %+v, %v", stored, err)
+	}
+	preparePolicyLifecycleBuild(n)
+	if err := put(review); err != nil {
+		t.Fatal(err)
+	}
+	old = n.currentEngine()
+	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+		if len(snapshot.OrderSizeLimits) != 1 || snapshot.OrderSizeLimits[0] != reject {
+			t.Fatalf("last-mode delete build lost neighbour: %+v", snapshot.OrderSizeLimits)
+		}
+		return nil, buildErr
+	}
+	_, err = n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyOrderSizeLimit, Mode: review.Mode, Scope: review.Scope}, testCaller)
+	if !errors.Is(err, buildErr) {
+		t.Fatalf("last mode delete failure = %v", err)
+	}
+	stored, err = st.ListOrderSizeLimits(ctx, "")
+	if err != nil || len(stored) != 2 || n.currentEngine() != old {
+		t.Fatalf("failed delete build changed state: %+v, %v", stored, err)
+	}
+}
+
+func TestOrderSizeModeAuditDetail(t *testing.T) {
+	for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+		for _, detail := range []domain.AuditDetail{
+			setOrderSizeLimitDetail(domain.LimitOrderSize{Mode: mode, Scope: domain.ScopeBroker, MaxQuantity: "10"}),
+			deleteLimitDetail(LimitTarget{Policy: domain.PolicyOrderSizeLimit, Mode: mode, Scope: domain.ScopeBroker}),
+		} {
+			if err := detail.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if detail.Params["scope"] != "broker" || !strings.Contains(detail.Text, "mode="+string(mode)) {
+				t.Fatalf("audit detail does not identify mode: %+v", detail)
+			}
+		}
+	}
+}
 
 type livePolicyMarkerSink struct{}
 
@@ -97,12 +365,14 @@ func TestLocalNode_RateAndOrderSizeCRUDConfigureLive(t *testing.T) {
 		t.Fatalf("put first rate: %v", err)
 	}
 	if _, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxQuantity: "100",
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("put first order size: %v", err)
 	}
 	if _, err := n.DeleteLimit(ctx, LimitTarget{
 		Policy: domain.PolicyOrderSizeLimit,
+		Mode:   domain.RuleModeReject,
 		Scope:  domain.ScopeBroker,
 	}, testCaller); err != nil {
 		t.Fatalf("delete last order size: %v", err)
@@ -136,7 +406,7 @@ func TestLocalNode_OrderSizeConfigureFailureRevertsWithoutRebuild(t *testing.T) 
 	n, st := newTestNode(t, old)
 	current, _ := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
-	initial := domain.LimitOrderSize{Scope: domain.ScopeBroker, MaxQuantity: "50"}
+	initial := domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "50"}
 	if _, err := n.PutOrderSizeLimit(ctx, initial, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutOrderSizeLimit initial: %v", err)
 	}
@@ -148,6 +418,7 @@ func TestLocalNode_OrderSizeConfigureFailureRevertsWithoutRebuild(t *testing.T) 
 	}
 
 	sink, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxQuantity: "100",
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, configureErr) {

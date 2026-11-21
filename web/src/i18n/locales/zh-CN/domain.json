@@ -20,6 +20,11 @@
     "account_underlying_asset": "账户 + 标的资产",
     "account_settlement_asset": "账户 + 结算资产"
   },
+  "ruleMode": {
+    "reject": "拒绝",
+    "review_without_hold": "审核但不预留",
+    "review_with_hold": "审核并预留"
+  },
   "adjustmentType": {
     "venue_fee": "交易场所费用",
     "deposit": "入金",

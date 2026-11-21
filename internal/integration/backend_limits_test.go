@@ -18,14 +18,100 @@
 package integration_test
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/officer/httpapi"
 )
+
+func TestRESTDeleteOrderSizeLimitMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		status      int
+		remaining   domain.RuleMode
+	}{
+		{"review", "policy=order_size_limit&scope=broker&mode=review_without_hold", http.StatusNoContent, domain.RuleModeReject},
+		{"default reject", "policy=order_size_limit&scope=broker", http.StatusNoContent, domain.RuleModeReviewWithoutHold},
+		{"empty reject", "policy=order_size_limit&scope=broker&mode=", http.StatusNoContent, domain.RuleModeReviewWithoutHold},
+		{"foreign mode", "policy=rate_limit&scope=broker&mode=reject", http.StatusUnprocessableEntity, ""},
+		{"unknown mode", "policy=order_size_limit&scope=broker&mode=unknown", http.StatusUnprocessableEntity, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target, realm := newLocalNode(t)
+			svc := newOfficerService(t, target, nil, nil)
+			for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+				if err := svc.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
+					Mode: mode, Scope: domain.ScopeBroker, MaxQuantity: "10",
+				}, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
+					t.Fatal(err)
+				}
+			}
+			registry := httpapi.NewRouteRegistry(svc, nil, func(context.Context) (time.Time, int, bool, error) {
+				return time.Time{}, 0, false, nil
+			})
+			var handler http.Handler
+			for _, route := range registry.Routes() {
+				if route.Method == http.MethodDelete && route.Pattern == "/limits" {
+					handler = route.Handler
+				}
+			}
+			if handler == nil {
+				t.Fatal("DELETE /limits route is missing")
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequestWithContext(systemCtx(), http.MethodDelete, "/limits?"+tc.query, nil))
+			if rec.Code != tc.status {
+				t.Fatalf("DELETE %s = %d, want %d: %s", tc.query, rec.Code, tc.status, rec.Body)
+			}
+			if tc.status == http.StatusUnprocessableEntity {
+				var problem struct {
+					Errors []struct{ Code, Pointer string } `json:"errors"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+					t.Fatal(err)
+				}
+				if len(problem.Errors) != 1 || problem.Errors[0].Code != "validation" || problem.Errors[0].Pointer != "/mode" {
+					t.Fatalf("delete validation = %+v", problem)
+				}
+			}
+			limits, err := realm.ListOrderSizeLimits(systemCtx(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.status == http.StatusNoContent {
+				if len(limits) != 1 || limits[0].Mode != tc.remaining {
+					t.Fatalf("DELETE %s left %+v, want only mode %s", tc.query, limits, tc.remaining)
+				}
+			} else if len(limits) != 2 {
+				t.Fatalf("refused delete changed barriers: %+v", limits)
+			}
+		})
+	}
+}
+
+func TestService_DeleteLimitModeValidation(t *testing.T) {
+	for _, target := range []node.LimitTarget{
+		{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker, Mode: "unknown"},
+		{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker},
+		{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker, Mode: domain.RuleModeReject},
+	} {
+		svc, fn := newTestService(t)
+		err := svc.DeleteLimit(systemCtx(), target)
+		public := httpx.DescribeErr(err)
+		if public.Status != http.StatusUnprocessableEntity || public.Code != "validation" || domain.ValidationPointer(err) != "/mode" || len(fn.deleteLimitCalls) != 0 {
+			t.Fatalf("mode validation for %+v = %+v / %v; node calls=%+v", target, public, err, fn.deleteLimitCalls)
+		}
+	}
+}
 
 type blockingStopMarketDataRuntime struct {
 	*fakeMarketDataRuntime
@@ -54,6 +140,7 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 	// account scope on order_size_limit is not allowed - validation must reject
 	// before the node is touched.
 	bad := domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeAccount,
 		Account:     "acc-1",
 		MaxQuantity: "1",
@@ -264,6 +351,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 	orderDone := make(chan error, 1)
 	go func() {
 		orderDone <- svc.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
+			Mode:        domain.RuleModeReject,
 			Scope:       domain.ScopeAccountUnderlyingAsset,
 			Account:     "acc-1",
 			Asset:       "AAPL",

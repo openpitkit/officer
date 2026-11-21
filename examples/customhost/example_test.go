@@ -938,7 +938,7 @@ func (*fakeEngine) AppliedSpotFundsAccountPnl(
 	return nil, errUnexpectedOrderChain
 }
 
-func (*fakeEngine) OrderModel(domain.Order) (model.Order, error) {
+func (*fakeEngine) OrderModel(domain.Order, engine.ReviewFlags) (model.Order, error) {
 	return model.Order{}, errUnexpectedOrderChain
 }
 

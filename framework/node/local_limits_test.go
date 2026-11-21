@@ -603,7 +603,7 @@ func TestLocalNode_PutOrderSizeLimit(t *testing.T) {
 	_, snapshot := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
-	size := domain.LimitOrderSize{Scope: domain.ScopeBroker, MaxQuantity: "100"}
+	size := domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "100"}
 	if _, err := n.PutOrderSizeLimit(ctx, size, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}

@@ -303,7 +303,7 @@ func TestFilterDataPositionLimits(t *testing.T) {
 
 func TestArchiveWithoutPositionLimits(t *testing.T) {
 	var archive Archive
-	if err := json.Unmarshal([]byte(`{"manifest":{"formatVersion":6},"data":{}}`), &archive); err != nil {
+	if err := json.Unmarshal([]byte(`{"manifest":{"formatVersion":7},"data":{}}`), &archive); err != nil {
 		t.Fatal(err)
 	}
 	if archive.Manifest.FormatVersion != FormatVersion || len(archive.Data.PositionLimits) != 0 {
@@ -800,9 +800,9 @@ func fixtureData() Data {
 			{Account: "acc-3", Asset: "USD", Available: "30"},
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
-			{Scope: domain.ScopeBroker, MaxQuantity: "1000"},
-			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100"},
-			{Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-2", Asset: "AAPL", MaxQuantity: "200"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "1000"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-2", Asset: "AAPL", MaxQuantity: "200"},
 		},
 		PositionLimits: []domain.LimitPosition{
 			{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},

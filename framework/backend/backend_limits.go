@@ -343,6 +343,13 @@ func (s *Service) finishLimitChangeLocked(sink marketdata.Sink, err error) error
 
 // validateLimitTarget checks the delete target's policy, scope, and axes.
 func validateLimitTarget(target node.LimitTarget) error {
+	if target.Policy == domain.PolicyOrderSizeLimit {
+		if err := domain.ValidateOrderSizeMode(target.Mode); err != nil {
+			return err
+		}
+	} else if target.Mode != "" {
+		return domain.NewValidationError("/mode", "unsupported_value", "mode is only valid for order-size limits")
+	}
 	return domain.ValidateLimitScopeAndAxes(
 		target.Policy,
 		target.Scope,

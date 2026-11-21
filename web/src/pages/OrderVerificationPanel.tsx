@@ -71,12 +71,14 @@ type VerifyState =
   | { phase: "unsigned" }
   | { phase: "error"; message: string };
 
-// The four request types Officer attests, by wire value.
+// The request types Officer attests, by wire value.
 const REQUEST_TYPE_KEYS: Record<string, string> = {
   submit: "orders:requestType.submit",
   execution_report: "orders:requestType.executionReport",
   confirm: "orders:requestType.confirm",
   cancel: "orders:requestType.cancel",
+  review_confirm: "orders:requestType.reviewConfirm",
+  review_cancel: "orders:requestType.reviewCancel",
 };
 
 // The submit modes an attestation carries, by wire value.
@@ -341,6 +343,22 @@ function ApprovalBreakdown({
           label={t("breakdown.verdict")}
           value={present(fields.verdict, prefixed("orders:breakdown.verdicts"))}
         />
+        {fields.reviews.map((mark, index) => (
+          <BreakdownRow
+            key={`${mark.policy}:${mark.code}:${index}`}
+            label={t("breakdown.reviewMark", { index: index + 1 })}
+            value={[
+              mark.policy,
+              present(mark.mode, prefixed("domain:ruleMode")),
+              present(mark.code, rejectLabel),
+              present(mark.scope, rejectScopeLabel),
+              mark.reason,
+              mark.details,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          />
+        ))}
         <BreakdownRow
           label={t("breakdown.instrument")}
           value={fields.instrument}
@@ -579,6 +597,20 @@ function presentResponseFacet(response: EventReproductionResponse | null): {
       labelKey: "repro.responseCancel",
       signedEnvelope: response.cancel.signedAttestation,
       body: { cancel: response.cancel },
+    };
+  }
+  if (response.reviewConfirm) {
+    return {
+      labelKey: "repro.responseReviewConfirm",
+      signedEnvelope: response.reviewConfirm.signedApproval,
+      body: { reviewConfirm: response.reviewConfirm },
+    };
+  }
+  if (response.reviewCancel) {
+    return {
+      labelKey: "repro.responseReviewCancel",
+      signedEnvelope: response.reviewCancel.signedAttestation,
+      body: { reviewCancel: response.reviewCancel },
     };
   }
   return null;

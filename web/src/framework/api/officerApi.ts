@@ -47,6 +47,7 @@ import type {
   CheckReject,
   CheckResult,
   CheckWouldBlock,
+  ConfirmOrderReviewResponse,
   Commission,
   FrameworkCredentialStorage,
   EngineHealth,
@@ -77,6 +78,8 @@ import type {
   VenueSendOutcome,
   VenueSendResult,
   OrderDetail,
+  OrderReview,
+  ReviewMark,
   Diagnostic,
   DiagnosticAction,
   MarketDataInstrument,
@@ -136,7 +139,10 @@ import {
 } from "../../api/spotFundsPnlPolicies";
 import {
   ADJUSTMENT_TYPES,
+  isOrderSizeLimitMode,
+  isReviewMarkMode,
   isSpotFundsLimitMode,
+  type OrderSizeLimitMode,
   type SpotFundsLimitMode,
 } from "../registries/vocabulary";
 import { isRfc3339Time } from "./rfc3339";
@@ -848,8 +854,10 @@ function windowMsToDuration(ms: number): string {
 
 function normalizeLimit(v: unknown): Limit {
   const o = isObject(v) ? v : {};
+  const policy = asString(pick(o, "policy", "Policy"));
   return {
-    policy: asString(pick(o, "policy", "Policy")),
+    policy,
+    mode: requireLimitMode(o, policy),
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
@@ -872,6 +880,7 @@ function normalizeRateLimit(v: unknown): RateLimit {
 function normalizeOrderSizeLimit(v: unknown): OrderSizeLimit {
   const o = isObject(v) ? v : {};
   return {
+    mode: requireOrderSizeLimitMode(o),
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     asset: asString(pick(o, "asset", "Asset")),
@@ -959,6 +968,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
   return [
     ...v.rateLimits.map((limit) => ({
       policy: "rate_limit",
+      mode: null,
       scope: limit.scope,
       account: limit.account,
       asset: limit.asset,
@@ -969,6 +979,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
     })),
     ...v.orderSizeLimits.map((limit) => ({
       policy: "order_size_limit",
+      mode: limit.mode,
       scope: limit.scope,
       account: limit.account,
       asset: limit.asset,
@@ -979,6 +990,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
     })),
     ...v.positionLimits.map((limit) => ({
       policy: "position_limit",
+      mode: null,
       scope: limit.scope,
       account: limit.account,
       asset: limit.asset,
@@ -987,6 +999,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
     ...SPOT_FUNDS_PNL_POLICY_IDS.flatMap((policy) =>
       v[SPOT_FUNDS_PNL_POLICIES[policy].listKey].map((limit) => ({
         policy,
+        mode: null,
         scope: limit.scope,
         account: limit.account,
         accountGroup: limit.accountGroup,
@@ -1036,14 +1049,43 @@ function requireSpotFundsLimitMode(obj: Json): SpotFundsLimitMode {
   return mode;
 }
 
+/** A missing or unknown order-size mode means a malformed response. */
+function requireOrderSizeLimitMode(obj: Json): OrderSizeLimitMode {
+  const mode = pick(obj, "mode", "Mode");
+  if (!isOrderSizeLimitMode(mode)) {
+    throw new ApiError(
+      "Order-size limit mode field in the API response is missing or unknown",
+      "internal",
+    );
+  }
+  return mode;
+}
+
+/** A response needs a known order-size mode; other policies must carry null. */
+function requireLimitMode(
+  obj: Json,
+  policy: string,
+): OrderSizeLimitMode | null {
+  if (policy === "order_size_limit") return requireOrderSizeLimitMode(obj);
+  if (pick(obj, "mode", "Mode") !== null) {
+    throw new ApiError(
+      `Limit mode field for ${policy} in the API response must be null`,
+      "internal",
+    );
+  }
+  return null;
+}
+
 /** Normalize one policyDTO from the unified GET /limits list. */
 function normalizePolicy(v: unknown): Policy {
   const o = isObject(v) ? v : {};
+  const kind = normalizePolicyKind(pick(o, "kind", "Kind"));
   const values = isObject(pick(o, "values", "Values"))
     ? (pick(o, "values", "Values") as Json)
     : {};
   const policy: Policy = {
-    kind: normalizePolicyKind(pick(o, "kind", "Kind")),
+    kind,
+    mode: requireLimitMode(o, kind),
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
@@ -1119,6 +1161,7 @@ function normalizePolicy(v: unknown): Policy {
  *  across the list endpoint and the account-detail endpoint. */
 function policyToLimit(policy: Policy): Limit {
   const base = {
+    mode: policy.mode,
     policy: policy.kind,
     scope: policy.scope,
     account: policy.account,
@@ -1272,6 +1315,13 @@ function limitEndpointBody(
         },
       };
     case "order_size_limit":
+      if (!isOrderSizeLimitMode(limit.mode)) {
+        throw new ApiError(
+          "Order-size limit mode is missing or unknown",
+          "validation",
+          400,
+        );
+      }
       return {
         path: `${client.baseUrl}/limits/order-size${query}`,
         body: {
@@ -1280,6 +1330,7 @@ function limitEndpointBody(
           asset: limit.asset,
           maxQuantity: limit.values.max_quantity ?? "",
           maxNotional: limit.values.max_notional ?? "",
+          mode: limit.mode,
         },
       };
     case "position_limit":
@@ -1358,6 +1409,7 @@ function normalizePutLimitResponse(policy: string, v: unknown): Limit {
       }
       return policyToLimit({
         kind: policy,
+        mode: null,
         scope: requireStringField(
           body,
           "Spot Funds limit mode scope",
@@ -3093,6 +3145,7 @@ function policyListQuery(filters?: PolicyListFilters): string {
   appendListFilter(params, "accountGroup", filters.accountGroup);
   appendListFilter(params, "asset", filters.asset);
   appendListFilter(params, "policy", filters.policy, "all");
+  appendListFilter(params, "mode", filters.mode);
   appendListFilter(params, "sort", filters.sort);
   appendListFilter(params, "order", filters.order);
   appendListFilter(params, "limit", filters.limit);
@@ -3916,6 +3969,7 @@ function normalizeSignedApproval(v: unknown): SignedApproval {
     keyId: asString(pick(o, "keyId", "KeyId", "key_id")),
     id: asString(pick(o, "id", "Id", "ID")),
     verdict: normalizeSubmitVerdict(pick(o, "verdict", "Verdict")),
+    reviews: normalizeReviews(o.reviews),
     reasons: normalizeArray(
       pick(o, "reasons", "Reasons"),
       normalizeCheckReject,
@@ -3924,7 +3978,7 @@ function normalizeSignedApproval(v: unknown): SignedApproval {
 }
 
 function normalizeSubmitVerdict(v: unknown): SignedApproval["verdict"] {
-  return v === "accept" || v === "reject" ? v : "";
+  return v === "accept" || v === "reject" || v === "review" ? v : "";
 }
 
 function minimalCreatedOrder(
@@ -4097,6 +4151,7 @@ function normalizeCheckResult(v: unknown): CheckResult {
   const o = isObject(v) ? v : {};
   return {
     passed: asBool(pick(o, "passed", "Passed")),
+    reviews: normalizeReviews(o.reviews),
     rejects: normalizeArray(
       pick(o, "rejects", "Rejects"),
       normalizeCheckReject,
@@ -4213,7 +4268,87 @@ async function fetchOrderDetail(
   if (o.venueOrder !== undefined) {
     detail.venueOrder = normalizeVenueOrder(o.venueOrder);
   }
+  if (o.review !== undefined) {
+    detail.review = normalizeOrderReview(o.review);
+  } else if (detail.order.status === "awaiting_review") {
+    throw new ApiError(
+      "waiting order has no review in the API response",
+      "internal",
+    );
+  }
   return detail;
+}
+
+function normalizeReviewMark(mark: unknown): ReviewMark {
+  if (!isObject(mark) || !isReviewMarkMode(mark.mode)) {
+    throw new ApiError(
+      "Invalid review rule mode in the API response",
+      "internal",
+    );
+  }
+  return { ...normalizeCheckReject(mark), mode: mark.mode };
+}
+
+function normalizeReviews(reviews: unknown): ReviewMark[] {
+  // The wire omits reviews when there are no marks.
+  if (reviews === undefined) {
+    return [];
+  }
+  if (!Array.isArray(reviews)) {
+    throw new ApiError("Invalid reviews in the API response", "internal");
+  }
+  return reviews.map(normalizeReviewMark);
+}
+
+function normalizeOrderReview(v: unknown): OrderReview {
+  if (!isObject(v)) {
+    throw new ApiError("order review was not a JSON object", "internal");
+  }
+  const lastConfirm = v.lastConfirm;
+  const destination = v.destination;
+  if (
+    !Array.isArray(v.marks) ||
+    (lastConfirm !== null &&
+      (!isObject(lastConfirm) ||
+        lastConfirm.verdict !== "reject" ||
+        !Array.isArray(lastConfirm.reasons)))
+  ) {
+    throw new ApiError("Invalid order review in the API response", "internal");
+  }
+  let storedDestination: OrderReview["destination"] = null;
+  if (destination !== null) {
+    if (!isObject(destination) || !isObject(destination.route)) {
+      throw new ApiError(
+        "Invalid review destination in the API response",
+        "internal",
+      );
+    }
+    storedDestination = {
+      connection: requireStringField(
+        destination,
+        "review destination connection",
+        "connection",
+      ),
+      venueAccount: requireStringField(
+        destination,
+        "review destination venueAccount",
+        "venueAccount",
+      ),
+      route: destination.route,
+    };
+  }
+  return {
+    marks: v.marks.map(normalizeReviewMark),
+    lastConfirm:
+      lastConfirm === null
+        ? null
+        : {
+            verdict: "reject",
+            reasons: normalizeArray(lastConfirm.reasons, normalizeCheckReject),
+            at: requireStringField(lastConfirm, "review lastConfirm at", "at"),
+          },
+    destination: storedDestination,
+  };
 }
 
 // asNullableString maps an absent/null wire value to null and any string to
@@ -4250,18 +4385,7 @@ function normalizeSignedApprovalResponse(
   if (!isObject(v)) {
     return null;
   }
-  return {
-    signedApproval: asString(
-      pick(v, "signedApproval", "SignedApproval", "signed_approval"),
-    ),
-    keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
-    id: asString(pick(v, "id", "Id", "ID")),
-    verdict: normalizeSubmitVerdict(pick(v, "verdict", "Verdict")),
-    reasons: normalizeArray(
-      pick(v, "reasons", "Reasons"),
-      normalizeCheckReject,
-    ),
-  };
+  return normalizeSignedApproval(v);
 }
 
 function normalizeEventReproductionESign(v: unknown): EventReproductionESign {
@@ -4425,6 +4549,9 @@ function normalizeEventReproductionResponse(
     ),
     confirm: normalizeOrderMutationResponse(pick(v, "confirm", "Confirm")),
     cancel: normalizeOrderMutationResponse(pick(v, "cancel", "Cancel")),
+    reviewConfirm:
+      v.reviewConfirm == null ? null : normalizeReviewDecision(v.reviewConfirm),
+    reviewCancel: normalizeOrderMutationResponse(v.reviewCancel),
   };
 }
 
@@ -4631,6 +4758,74 @@ async function confirmOrder(
   return orderMutationResponseOrThrow(v);
 }
 
+async function confirmOrderReview(
+  client: ApiClient,
+  id: string,
+  signal?: AbortSignal,
+): Promise<ConfirmOrderReviewResponse> {
+  const v = await client.request(
+    `${client.baseUrl}/orders/${encode(id)}/review/confirm`,
+    { method: "POST", signal },
+  );
+  if (!isObject(v)) {
+    throw new ApiError(
+      "review confirmation response was not a JSON object",
+      "internal",
+    );
+  }
+  const decision = normalizeReviewDecision(v.decision);
+  const result: ConfirmOrderReviewResponse = {
+    order: normalizeOrder(v.order),
+    decision,
+  };
+  if (v.venueSend !== undefined) {
+    if (decision.verdict !== "accept") {
+      throw new ApiError(
+        "venueSend requires an accepted review decision in the API response",
+        "internal",
+      );
+    }
+    result.venueSend = normalizeVenueSendOutcome(v.venueSend);
+  }
+  return result;
+}
+
+function normalizeReviewDecision(
+  decision: unknown,
+): ConfirmOrderReviewResponse["decision"] {
+  if (!isObject(decision)) {
+    throw new ApiError(
+      "review confirmation decision is missing or not an object in the API response",
+      "internal",
+    );
+  }
+  if (decision.verdict !== "accept" && decision.verdict !== "reject") {
+    throw new ApiError(
+      "Invalid review decision verdict in the API response",
+      "internal",
+    );
+  }
+  return {
+    verdict: decision.verdict,
+    reasons: normalizeArray(decision.reasons, normalizeCheckReject),
+    signedApproval: asString(decision.signedApproval),
+    keyId: asString(decision.keyId),
+    signed: asBool(decision.signed),
+  };
+}
+
+async function cancelOrderReview(
+  client: ApiClient,
+  id: string,
+  signal?: AbortSignal,
+): Promise<OrderMutationResponse> {
+  const v = await client.request(
+    `${client.baseUrl}/orders/${encode(id)}/review/cancel`,
+    { method: "POST", signal },
+  );
+  return orderMutationResponseOrThrow(v);
+}
+
 /** POST /orders/{id}/cancel. Authorizes the shortcut from Officer's recorded
  *  signed hold approval and records the untouched-order cancellation. */
 async function cancelOrder(
@@ -4794,6 +4989,7 @@ function putLimit(
 async function deleteLimit(
   client: ApiClient,
   target: {
+    mode: OrderSizeLimitMode | null;
     policy: string;
     scope: string;
     account: string;
@@ -4805,6 +5001,15 @@ async function deleteLimit(
     policy: target.policy,
     scope: target.scope,
   });
+  if (target.policy === "order_size_limit") {
+    if (!isOrderSizeLimitMode(target.mode)) {
+      throw new ApiError(
+        "Order-size limit delete target mode is missing or unknown",
+        "validation",
+      );
+    }
+    params.set("mode", target.mode);
+  }
   if (target.account) {
     params.set("account", target.account);
   }
@@ -5167,6 +5372,8 @@ export function createOfficerApi(client: ApiClient) {
     fetchEventReproduction: bind(fetchEventReproduction),
     submitExecutionReport: bind(submitExecutionReport),
     confirmOrder: bind(confirmOrder),
+    confirmOrderReview: bind(confirmOrderReview),
+    cancelOrderReview: bind(cancelOrderReview),
     cancelOrder: bind(cancelOrder),
     fetchTradesPage: bind(fetchTradesPage),
     fetchTrades: bind(fetchTrades),

@@ -62,6 +62,7 @@
       "selectTerminal": "全部终态",
       "submitted": "已提交",
       "accepted": "已接受",
+      "awaiting_review": "等待审核",
       "rejected": "已拒绝",
       "committed": "已确认",
       "rolled_back": "已回滚",
@@ -141,6 +142,8 @@
   },
 
   "addOrder": {
+    "addedAwaitingReview": "订单已添加，等待操作员审核。",
+    "addedAwaitingReviewWithWarning": "订单已添加，等待操作员审核。{{warning}}",
     "button": "添加订单",
     "added": "订单已添加",
     "dialog": {
@@ -229,10 +232,11 @@
         "submitLive": "提交实盘订单",
         "submit": "提交订单",
         "chooseTarget": "选择目标",
-        "acknowledged": "已发送到 {{venue}} · {{mode}}。交易场所订单 {{venueOrderId}}。",
+        "acknowledged": "已发送到 {{venue}}。交易场所订单 {{venueOrderId}}。",
         "refused": "订单未能下达到 {{venue}}：{{error}}。Officer 已将其记录为已取消。",
         "unknown": "交易场所未确认订单：{{error}}。Officer 正在执行对账；以下订单状态为权威状态。",
         "preTradeRejected": "交易前检查拒绝了订单。未向交易场所发送任何内容。",
+        "awaitingReview": "订单正在等待操作员审核。未向交易场所发送任何内容。",
         "networkError": "发送请求未完成：{{message}}。再次发送前请检查订单 - 该订单可能已经存在。"
       }
     }
@@ -243,6 +247,7 @@
   },
 
   "check": {
+    "wouldReview": "预览：将等待审核",
     "checking": "检查中...",
     "previewUnavailable": "预览不可用",
     "wouldPass": "预览：将通过",
@@ -377,6 +382,15 @@
       "fieldSubmitted": "提交时间",
       "fieldDisplayPrice": "锁定价格",
       "fieldCommission": "佣金",
+      "review": {
+        "title": "订单审核",
+        "retry": "重试",
+        "lastConfirm": "上次确认被拒绝",
+        "cancelTitle": "取消此订单？",
+        "cancelDescription": "订单将被取消，不会发送。此决定无法撤销。",
+        "approvedForCaller": "订单已获批准。调用方现在可以发送此订单。",
+        "uncertainOutcome": "审核请求未完成：{{message}}。决定可能已记录；显示的订单状态为准。重试前请先检查该状态。"
+      },
       "workflow": {
         "title": "工作流快捷操作",
         "description": "Officer 在提交此订单时记录了交易前批准，因此只有在尚无执行报告活动时，才能使用快捷操作确认或取消订单。出现任何报告后，必须改为提交明确的执行报告。",
@@ -400,6 +414,7 @@
           "submitted": "已提交",
           "pre_trade_accepted": "交易前已接受",
           "pre_trade_rejected": "交易前已拒绝",
+          "pre_trade_review": "交易前审核",
           "committed": "已确认",
           "rolled_back": "已回滚",
           "confirmed": "已获确认",
@@ -451,6 +466,8 @@
   },
 
   "requestType": {
+    "reviewConfirm": "确认订单审核",
+    "reviewCancel": "取消订单审核",
     "submit": "提交",
     "executionReport": "执行报告",
     "confirm": "确认",
@@ -458,6 +475,8 @@
   },
 
   "repro": {
+    "responseReviewConfirm": "审核确认响应",
+    "responseReviewCancel": "审核取消响应",
     "loading": "正在加载复现数据包…",
     "loadError": "无法加载复现数据包。{{message}}",
     "noAttestation": "此事件没有持久化的认证，因此无可复现内容。",
@@ -514,6 +533,7 @@
   },
 
   "breakdown": {
+    "reviewMark": "审核标记 {{index}}",
     "label": "可读明细",
     "readOnlyNote": "仅供阅读 - 不用于复制或验证。请依据规范字节验证，切勿依据重新格式化的副本。",
     "version": "版本",
@@ -563,7 +583,8 @@
     "issuedAt": "签发时间",
     "verdicts": {
       "accept": "接受",
-      "reject": "拒绝"
+      "reject": "拒绝",
+      "review": "审核"
     },
     "orderTypes": {
       "market": "市价",

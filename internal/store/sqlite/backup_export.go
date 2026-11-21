@@ -22,6 +22,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -586,6 +587,48 @@ func (r *realmStore) exportTradingAccess(
 		return nil, fmt.Errorf("store: iterate trading access for export: %w", err)
 	}
 	return out, nil
+}
+
+func (r *realmStore) exportOrderReviews(ctx context.Context) (result []backup.OrderReview, resultErr error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx,
+		`SELECT o.external_id, m.code, c.external_id, r.venue_account, r.route
+		 FROM order_review r
+		 JOIN order_record o ON o.id = r.order_id
+		 JOIN attestation_mode m ON m.id = r.mode_id
+		 LEFT JOIN trading_connection c ON c.id = r.connection_id
+		 ORDER BY o.external_id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: export order reviews: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
+	for rows.Next() {
+		var review backup.OrderReview
+		var order, connection []byte
+		var account, route sql.NullString
+		if err := rows.Scan(&order, &review.Mode, &connection, &account, &route); err != nil {
+			return nil, fmt.Errorf("store: scan order review for export: %w", err)
+		}
+		review.Order, err = domain.ExternalIDFromBytes(order)
+		if err != nil {
+			return nil, fmt.Errorf("store: decode order review for export: %w", err)
+		}
+		if connection != nil {
+			review.Connection, err = domain.ExternalIDFromBytes(connection)
+			if err != nil {
+				return nil, fmt.Errorf("store: decode order review connection for export: %w", err)
+			}
+			review.VenueAccount, review.Route = account.String, route.String
+		}
+		result = append(result, review)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate order reviews for export: %w", err)
+	}
+	return result, nil
 }
 
 func (r *realmStore) exportVenueOrders(

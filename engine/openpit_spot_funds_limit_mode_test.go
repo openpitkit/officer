@@ -59,7 +59,7 @@ func requireInsufficientFunds(t *testing.T, result fwengine.OrderResult, err err
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if result.Accepted || len(result.Rejects) != 1 ||
+	if (result.Verdict == domain.VerdictAccept) || len(result.Rejects) != 1 ||
 		result.Rejects[0].Code != domain.RejectCodeInsufficientFunds {
 		t.Fatalf("order from zero = %+v, want one insufficient_funds reject", result)
 	}
@@ -72,7 +72,7 @@ func requireTrackedFromZero(t *testing.T, result fwengine.OrderResult, err error
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if !result.Accepted || len(result.Rejects) != 0 {
+	if result.Verdict != domain.VerdictAccept || len(result.Rejects) != 0 {
 		t.Fatalf("order from zero = %+v, want accepted without rejects", result)
 	}
 	for _, outcome := range result.Outcomes {
@@ -149,7 +149,7 @@ func TestSpotFundsLimitMode_TrackOnlyKeepsPnlBarrier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buy SubmitImmediate: %v", err)
 	}
-	if !bought.Accepted || len(bought.Blocks) != 0 {
+	if bought.Verdict != domain.VerdictAccept || len(bought.Blocks) != 0 {
 		t.Fatalf("buy from zero = %+v, want accepted without blocks", bought)
 	}
 
@@ -161,7 +161,7 @@ func TestSpotFundsLimitMode_TrackOnlyKeepsPnlBarrier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sell SubmitImmediate: %v", err)
 	}
-	if !sold.Accepted {
+	if sold.Verdict != domain.VerdictAccept {
 		t.Fatalf("losing sell = %+v, want accepted", sold)
 	}
 	if len(sold.Blocks) != 1 || sold.Blocks[0].Account != domain.AccountID(testAccount) {
@@ -172,7 +172,7 @@ func TestSpotFundsLimitMode_TrackOnlyKeepsPnlBarrier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder after block: %v", err)
 	}
-	if next.Accepted || len(next.Rejects) == 0 {
+	if (next.Verdict == domain.VerdictAccept) || len(next.Rejects) == 0 {
 		t.Fatalf("order after P&L block = %+v, want refused", next)
 	}
 	for _, reject := range next.Rejects {

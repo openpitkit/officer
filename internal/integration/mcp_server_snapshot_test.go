@@ -53,13 +53,21 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "get_account_state",
 			description: "Return account row and its account-scoped risk barriers, " +
 				"each with the fields add_limit and update_limit take, the rate window as windowMs " +
-				"in milliseconds. Read-only - no secrets, no order-flow control.",
+				"in milliseconds. An order-size barrier also carries " +
+				"read-only mode: reject or review_without_hold. mode is not a write argument " +
+				"for order-size barriers. add_limit and update_limit address only reject " +
+				"order-size barriers; review barriers are read-only for an agent, and MCP " +
+				"deletes no barrier. Read-only - no secrets, no order-flow control.",
 		},
 		{
 			name: "get_limits",
 			description: "Return risk barriers and P&L-bound currencies, optionally " +
 				"filtered by account; each barrier has the fields add_limit and update_limit take, " +
-				"the rate window as windowMs in milliseconds. Read-only - no " +
+				"the rate window as windowMs in milliseconds. An order-size barrier also carries " +
+				"read-only mode: reject or review_without_hold. mode is not a write argument " +
+				"for order-size barriers. add_limit and update_limit address only reject " +
+				"order-size barriers; review barriers are read-only for an agent, and MCP " +
+				"deletes no barrier. Read-only - no " +
 				"secrets, no order-flow control.",
 		},
 		{
@@ -79,7 +87,8 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "get_order",
 			description: "Return one order addressed by its id: its " +
 				"status, its 1:1 signed approval (when issued), and its fills with " +
-				"their display prices. Read-only - no secrets, no order-flow control. " +
+				"their display prices, plus a review object while it awaits operator review. " +
+				"Read-only - no secrets, no order-flow control. " +
 				"The opaque pre-trade lock is never exposed; only backend-derived " +
 				"display prices are.",
 		},
@@ -138,7 +147,8 @@ func TestServerToolSnapshot(t *testing.T) {
 				"whether it would pass the engine's risk checks plus the reasons " +
 				"(would-be lock prices on pass, structured rejects and any would-be " +
 				"account block on reject). Submits nothing and changes no state - no " +
-				"order is placed, no funds are reserved.",
+				"order is placed, no funds are reserved. Results can carry review marks, " +
+				"which mean do not send.",
 		},
 		{
 			name: "add_limit",
@@ -150,6 +160,8 @@ func TestServerToolSnapshot(t *testing.T) {
 				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
 				"spot_funds_total_pnl_bounds_kill_switch (total P&L). " +
 				"The other arguments are that kind's fields. A field of another kind is refused with validation. " +
+				"order_size_limit takes caps without mode and addresses only the reject barrier; " +
+				"review barriers are read-only for an agent. " +
 				"Anything that loosens risk is refused with loosening_refused and changes nothing. " +
 				"A new account_underlying_asset or account_settlement_asset cap " +
 				"must be no higher than the underlying_asset or settlement_asset cap on " +
@@ -159,7 +171,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				"over from its currently applicable bound. An account P&L bound must use the account's effective " +
 				"currency: its own, else its group's, else the default group's. A different " +
 				"bound currency or no resolved currency is refused with pnl_bound_currency_mismatch. " +
-				"The first order-size barrier is refused while any rate-limit barrier is configured. " +
+				"The first reject order-size barrier is refused while any rate-limit barrier is configured. " +
 				"Mutates Officer control-plane config; protected and disabled by default.",
 		},
 		{
@@ -171,6 +183,8 @@ func TestServerToolSnapshot(t *testing.T) {
 				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
 				"spot_funds_total_pnl_bounds_kill_switch (total P&L), or spot_funds_limit_mode. " +
 				"The other arguments are that kind's fields. A field of another kind is refused with validation. " +
+				"order_size_limit takes caps without mode and addresses only the reject barrier; " +
+				"review barriers are read-only for an agent. " +
 				"Anything that loosens risk is refused with loosening_refused and changes nothing. " +
 				"For rate_limit, allow no more orders and keep, on the broker and asset " +
 				"scopes, the same window, on the account and account_asset scopes a " +

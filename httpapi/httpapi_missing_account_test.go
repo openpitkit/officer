@@ -188,6 +188,7 @@ func newMissingAccountService() *fakeService {
 				},
 			},
 			OrderSizeLimits: []domain.LimitOrderSize{{
+				Mode:        domain.RuleModeReject,
 				Scope:       domain.ScopeAccountUnderlyingAsset,
 				Account:     "acc-1",
 				Asset:       "AAPL",

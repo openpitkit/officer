@@ -45,6 +45,7 @@ type RateLimitDTO struct {
 // OrderSizeLimitDTO is the wire shape of an order-size barrier. The ceilings are
 // exact decimal strings; an unset ceiling is the empty string.
 type OrderSizeLimitDTO struct {
+	Mode        string `json:"mode"`
 	Scope       string `json:"scope"`
 	Account     string `json:"account"`
 	Asset       string `json:"asset"`
@@ -145,9 +146,15 @@ func FromRateLimitDTO(dto RateLimitDTO) (domain.LimitRate, error) {
 }
 
 // FromOrderSizeLimitDTO maps a wire order-size body onto the domain barrier.
-// Decimal values are carried through verbatim; never parsed to float.
+// An absent or empty mode means reject. Other modes and decimal values are
+// carried through verbatim for domain validation; never parsed to float.
 func FromOrderSizeLimitDTO(dto OrderSizeLimitDTO) domain.LimitOrderSize {
+	mode := domain.RuleMode(dto.Mode)
+	if mode == "" {
+		mode = domain.RuleModeReject
+	}
 	return domain.LimitOrderSize{
+		Mode:        mode,
 		Scope:       domain.LimitScope(dto.Scope),
 		Account:     domain.AccountID(dto.Account),
 		Asset:       dto.Asset,
@@ -218,6 +225,7 @@ func ToRateLimitDTO(l domain.LimitRate) RateLimitDTO {
 // ToOrderSizeLimitDTO maps a domain.LimitOrderSize onto the wire DTO.
 func ToOrderSizeLimitDTO(l domain.LimitOrderSize) OrderSizeLimitDTO {
 	return OrderSizeLimitDTO{
+		Mode:        string(l.Mode),
 		Scope:       string(l.Scope),
 		Account:     string(l.Account),
 		Asset:       l.Asset,
@@ -346,9 +354,9 @@ func storedLimitAccount(
 // persistedLimit reads back a barrier using its normalized stored address.
 func persistedLimit[T any](
 	ctx context.Context, svc LimitReader,
-	scope domain.LimitScope, account domain.AccountID, asset string,
+	scope domain.LimitScope, account domain.AccountID, asset string, mode domain.RuleMode,
 	slice func(node.AccountLimits) []T,
-	address func(T) (domain.LimitScope, domain.AccountID, string),
+	address func(T) (domain.LimitScope, domain.AccountID, string, domain.RuleMode),
 ) (T, error) {
 	var zero T
 	account = storedLimitAccount(svc, scope, account)
@@ -357,8 +365,8 @@ func persistedLimit[T any](
 		return zero, err
 	}
 	for _, limit := range slice(limits) {
-		limitScope, limitAccount, limitAsset := address(limit)
-		if sameLimitAddress(limitScope, limitAccount, limitAsset, scope, account, asset) {
+		limitScope, limitAccount, limitAsset, limitMode := address(limit)
+		if sameLimitAddress(limitScope, limitAccount, limitAsset, limitMode, scope, account, asset, mode) {
 			return limit, nil
 		}
 	}
@@ -370,10 +378,10 @@ func persistedLimit[T any](
 func PersistedRateLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitRate,
 ) (domain.LimitRate, error) {
-	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset,
+	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset, "",
 		func(limits node.AccountLimits) []domain.LimitRate { return limits.RateLimits },
-		func(limit domain.LimitRate) (domain.LimitScope, domain.AccountID, string) {
-			return limit.Scope, limit.Account, limit.Asset
+		func(limit domain.LimitRate) (domain.LimitScope, domain.AccountID, string, domain.RuleMode) {
+			return limit.Scope, limit.Account, limit.Asset, ""
 		})
 }
 
@@ -382,10 +390,10 @@ func PersistedRateLimit(
 func PersistedOrderSizeLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitOrderSize,
 ) (domain.LimitOrderSize, error) {
-	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset,
+	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset, target.Mode,
 		func(limits node.AccountLimits) []domain.LimitOrderSize { return limits.OrderSizeLimits },
-		func(limit domain.LimitOrderSize) (domain.LimitScope, domain.AccountID, string) {
-			return limit.Scope, limit.Account, limit.Asset
+		func(limit domain.LimitOrderSize) (domain.LimitScope, domain.AccountID, string, domain.RuleMode) {
+			return limit.Scope, limit.Account, limit.Asset, limit.Mode
 		})
 }
 
@@ -394,10 +402,10 @@ func PersistedOrderSizeLimit(
 func PersistedPositionLimit(
 	ctx context.Context, svc LimitReader, target domain.LimitPosition,
 ) (domain.LimitPosition, error) {
-	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset,
+	return persistedLimit(ctx, svc, target.Scope, target.Account, target.Asset, "",
 		func(limits node.AccountLimits) []domain.LimitPosition { return limits.PositionLimits },
-		func(limit domain.LimitPosition) (domain.LimitScope, domain.AccountID, string) {
-			return limit.Scope, limit.Account, limit.Asset
+		func(limit domain.LimitPosition) (domain.LimitScope, domain.AccountID, string, domain.RuleMode) {
+			return limit.Scope, limit.Account, limit.Asset, ""
 		})
 }
 
@@ -422,9 +430,11 @@ func PersistedSpotFundsPnlBoundsLimit(
 
 func sameLimitAddress(
 	leftScope domain.LimitScope, leftAccount domain.AccountID, leftAsset string,
+	leftMode domain.RuleMode,
 	rightScope domain.LimitScope, rightAccount domain.AccountID, rightAsset string,
+	rightMode domain.RuleMode,
 ) bool {
-	return leftScope == rightScope && leftAccount == rightAccount && leftAsset == rightAsset
+	return leftScope == rightScope && leftAccount == rightAccount && leftAsset == rightAsset && leftMode == rightMode
 }
 
 func sameSpotFundsPnlBoundsAddress(

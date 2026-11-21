@@ -898,6 +898,17 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 	if err != nil {
 		return store.PolicyListFilter{}, err
 	}
+	mode := domain.RuleMode(q.Get("mode"))
+	if mode != "" {
+		if kind == nil || *kind != store.PolicyKindOrderSize {
+			return store.PolicyListFilter{}, domain.NewValidationError(
+				"/mode", "unsupported_value", "mode requires policy=order_size",
+			)
+		}
+		if err := domain.ValidateOrderSizeMode(mode); err != nil {
+			return store.PolicyListFilter{}, err
+		}
+	}
 	sortSpec, err := sortSpecFromQuery(q, policySortKeys)
 	if err != nil {
 		return store.PolicyListFilter{}, err
@@ -912,6 +923,7 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 		Asset:        asset,
 		Scope:        scope,
 		Kind:         kind,
+		Mode:         mode,
 		Sort:         sortSpec,
 		Page:         page,
 	}, nil

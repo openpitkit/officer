@@ -169,6 +169,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
@@ -2613,8 +2614,9 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 		{
 			name: "order-size",
 			data: backup.Data{OrderSizeLimits: []domain.LimitOrderSize{
-				{Scope: domain.ScopeBroker, MaxQuantity: "1"},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "1"},
 				{
+					Mode:  domain.RuleModeReject,
 					Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL",
 					MaxNotional: "1",
 				},
@@ -3276,6 +3278,7 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 			t.Fatalf("UpsertBalance(extra): %v", err)
 		}
 		if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccountUnderlyingAsset, Account: "extra-acc", Asset: "AAPL", MaxQuantity: "9",
 		}); err != nil {
 			t.Fatalf("PutOrderSizeLimit(extra): %v", err)
@@ -3659,6 +3662,7 @@ var backupExportedTables = map[string]bool{
 	"limit_spot_funds_pnl_bound": true,
 	"adjustment":                 true,
 	"order_record":               true,
+	"order_review":               true,
 	"event_attestation":          true,
 	"order_event":                true,
 	"execution_report":           true,
@@ -3729,7 +3733,7 @@ func TestBackupPositionLimitsRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Manifest.FormatVersion != 6 || !reflect.DeepEqual(decoded.Data.PositionLimits, want) {
+	if decoded.Manifest.FormatVersion != backup.FormatVersion || !reflect.DeepEqual(decoded.Data.PositionLimits, want) {
 		t.Fatalf("JSON position limits changed: version=%d limits=%+v", decoded.Manifest.FormatVersion, decoded.Data.PositionLimits)
 	}
 	_, dst := newRealmStore(t, domain.DefaultRealm)
@@ -5090,7 +5094,7 @@ func TestBackupRestoreRejectsInvalidAuditDecisionAndRollsBack(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		action     domain.AuditAction
-		verdict    string
+		verdict    domain.Verdict
 		rejectCode string
 		orderID    string
 		context    string
@@ -5460,9 +5464,144 @@ func TestBackupRestoreValidatesManifestRealmCodeBeforeTransaction(t *testing.T) 
 	}
 }
 
-// TestBackupRestoreFormatVersionRejected asserts an archive whose manifest format
-// version mismatches the current one is rejected with ErrInvalid and writes
-// nothing.
+func TestBackupOrderSizeMode(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version int
+		mode    domain.RuleMode
+		want    domain.RuleMode
+		invalid bool
+	}{
+		{"v6_without_mode", 6, "", domain.RuleModeReject, false},
+		{"v6_with_reject", 6, domain.RuleModeReject, "", true},
+		{"v6_with_review", 6, domain.RuleModeReviewWithoutHold, "", true},
+		{"v7_without_mode", 7, "", "", true},
+		{"v7_reject", 7, domain.RuleModeReject, domain.RuleModeReject, false},
+		{"v7_review", 7, domain.RuleModeReviewWithoutHold, domain.RuleModeReviewWithoutHold, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, src := seedLimitFixtures(t)
+			limit := domain.LimitOrderSize{
+				Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset,
+				Account: "acc-1", Asset: "AAPL", MaxQuantity: "10",
+			}
+			if tc.mode == domain.RuleModeReviewWithoutHold {
+				limit.Mode = tc.mode
+			}
+			if err := src.PutOrderSizeLimit(ctx, limit); err != nil {
+				t.Fatal(err)
+			}
+			archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if archive.Manifest.FormatVersion != 7 || len(archive.Data.OrderSizeLimits) != 1 || archive.Data.OrderSizeLimits[0] != limit {
+				t.Fatalf("export = %+v / %+v, want version 7 and %+v", archive.Manifest, archive.Data.OrderSizeLimits, limit)
+			}
+			archive.Manifest.FormatVersion = tc.version
+			archive.Data.OrderSizeLimits[0].Mode = tc.mode
+			encoded, err := json.Marshal(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.version == 6 && tc.mode == "" {
+				encoded = bytes.ReplaceAll(encoded, []byte(`"Mode":"",`), nil)
+			}
+			var decoded backup.Archive
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			_, dst := newTestStore(t)
+			_, err = dst.RestoreBackup(ctx, decoded, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+			})
+			if tc.invalid {
+				if !errors.Is(err, domain.ErrInvalid) {
+					t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+				}
+				if limits, readErr := dst.ListOrderSizeLimits(ctx, ""); readErr != nil || len(limits) != 0 {
+					t.Fatalf("rejected restore wrote limits: %+v, %v", limits, readErr)
+				}
+				if _, exists, readErr := dst.GetAccount(ctx, "acc-1"); readErr != nil || exists {
+					t.Fatalf("rejected restore wrote account: exists %t, %v", exists, readErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RestoreBackup: %v", err)
+			}
+			limit.Mode = tc.want
+			limits, err := dst.ListOrderSizeLimits(ctx, "")
+			if err != nil || len(limits) != 1 || limits[0] != limit {
+				t.Fatalf("restored limits = %+v, %v; want %+v", limits, err, limit)
+			}
+		})
+	}
+}
+
+func TestBackupOrderSizeModeKey(t *testing.T) {
+	for _, archiveMode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+		for _, restoreMode := range []backup.RestoreMode{
+			backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing, backup.RestoreModeReplaceAll,
+		} {
+			for _, existing := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/existing_%t", archiveMode, restoreMode, existing), func(t *testing.T) {
+					ctx, src := seedLimitFixtures(t)
+					archived := domain.LimitOrderSize{
+						Mode: archiveMode, Scope: domain.ScopeAccountUnderlyingAsset,
+						Account: "acc-1", Asset: "AAPL", MaxQuantity: "10",
+					}
+					if err := src.PutOrderSizeLimit(ctx, archived); err != nil {
+						t.Fatal(err)
+					}
+					scope := backup.Scope{Sections: []backup.Section{backup.SectionRiskLimits}, Accounts: backup.EntitySelector{All: true}}
+					archive, err := src.ExportBackup(ctx, scope)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, dst := seedLimitFixtures(t)
+					neighbour := archived
+					neighbour.Mode, neighbour.MaxQuantity = domain.RuleModeReject, "90"
+					if archiveMode == domain.RuleModeReject {
+						neighbour.Mode = domain.RuleModeReviewWithoutHold
+					}
+					if err := dst.PutOrderSizeLimit(ctx, neighbour); err != nil {
+						t.Fatal(err)
+					}
+					previous := archived
+					previous.MaxQuantity = "70"
+					if existing {
+						if err := dst.PutOrderSizeLimit(ctx, previous); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{Scope: scope, Mode: restoreMode}); err != nil {
+						t.Fatal(err)
+					}
+					want := map[domain.RuleMode]domain.LimitOrderSize{archiveMode: archived}
+					if restoreMode == backup.RestoreModeInsertMissing && existing {
+						want[archiveMode] = previous
+					}
+					if restoreMode != backup.RestoreModeReplaceAll {
+						want[neighbour.Mode] = neighbour
+					}
+					got, err := dst.ListOrderSizeLimits(ctx, "")
+					if err != nil || len(got) != len(want) {
+						t.Fatalf("restored mode-keyed limits = %+v, %v; want %+v", got, err, want)
+					}
+					for _, limit := range got {
+						if limit != want[limit.Mode] {
+							t.Fatalf("restored barrier = %+v, want %+v", limit, want[limit.Mode])
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestBackupRestoreFormatVersionRejected asserts unsupported archive versions
+// are rejected with ErrInvalid and write nothing.
 func TestBackupRestoreFormatVersionRejected(t *testing.T) {
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
@@ -5471,7 +5610,7 @@ func TestBackupRestoreFormatVersionRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportBackup: %v", err)
 	}
-	for _, version := range []int{backup.FormatVersion - 1, backup.FormatVersion + 1} {
+	for _, version := range []int{5, backup.FormatVersion + 1} {
 		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
 			archive.Manifest.FormatVersion = version
 			_, dst := newRealmStore(t, domain.DefaultRealm)

@@ -102,6 +102,7 @@ type fakeNode struct {
 	resetErr                error
 	currentSink             marketdata.Sink
 	orders                  map[domain.ExternalID]domain.Order
+	orderReviews            map[domain.ExternalID]domain.OrderReview
 	allOrders               []domain.Order
 	orderEvents             map[domain.ExternalID][]domain.OrderEvent
 	attestations            map[domain.ExternalID]domain.EventAttestation
@@ -161,6 +162,7 @@ type fakeNode struct {
 
 type fakeOrderTxnSnapshot struct {
 	orders                  map[domain.ExternalID]domain.Order
+	orderReviews            map[domain.ExternalID]domain.OrderReview
 	orderEvents             map[domain.ExternalID][]domain.OrderEvent
 	attestations            map[domain.ExternalID]domain.EventAttestation
 	execReports             []domain.ExecutionReportInput
@@ -220,8 +222,13 @@ func (n *fakeNode) appendEvent(
 }
 
 func (n *fakeNode) snapshotOrderTxn() fakeOrderTxnSnapshot {
+	reviews := make(map[domain.ExternalID]domain.OrderReview, len(n.orderReviews))
+	for id, review := range n.orderReviews {
+		reviews[id] = review
+	}
 	return fakeOrderTxnSnapshot{
 		orders:                  cloneOrderMap(n.orders),
+		orderReviews:            reviews,
 		orderEvents:             cloneOrderEventMap(n.orderEvents),
 		attestations:            cloneAttestationMap(n.attestations),
 		execReports:             slices.Clone(n.execReports),
@@ -235,6 +242,7 @@ func (n *fakeNode) snapshotOrderTxn() fakeOrderTxnSnapshot {
 
 func (n *fakeNode) restoreOrderTxn(snapshot fakeOrderTxnSnapshot) {
 	n.orders = snapshot.orders
+	n.orderReviews = snapshot.orderReviews
 	n.orderEvents = snapshot.orderEvents
 	n.attestations = snapshot.attestations
 	n.execReports = snapshot.execReports
@@ -885,11 +893,27 @@ func (n *fakeNode) SubmitOrder(
 	}
 	order.Source = caller.Source
 	order.Principal = caller.Principal
-	n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
-	if n.submitResult != nil && !n.submitResult.Accepted {
+	verdict := domain.VerdictAccept
+	if n.submitResult != nil {
+		verdict = n.submitResult.Verdict
+	}
+	switch verdict {
+	case domain.VerdictReview:
+		order.Status = domain.OrderStatusAwaitingReview
+		if n.orderReviews == nil {
+			n.orderReviews = make(map[domain.ExternalID]domain.OrderReview)
+		}
+		n.orderReviews[order.ExternalID] = domain.OrderReview{Mode: domain.SubmitModeHold}
+		order.Leaves, order.ReservedQuantity, order.Lock = "0", "0", nil
+		n.orders[order.ExternalID] = order
+		n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
+		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeReview, domain.OrderEventPayload{})
+	case domain.VerdictReject:
+		n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
 		n.recordRejected(order, n.submitResult.Rejects)
 		order = n.orders[order.ExternalID]
-	} else {
+	case domain.VerdictAccept:
+		n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
 		order.Status = domain.OrderStatusCommitted
 		if n.submitResult != nil {
 			order.Lock = slices.Clone(n.submitResult.Lock)
@@ -897,6 +921,8 @@ func (n *fakeNode) SubmitOrder(
 		n.orders[order.ExternalID] = order
 		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 		n.appendEvent(order.ExternalID, domain.OrderEventCommitted, domain.OrderEventPayload{})
+	default:
+		return domain.Order{}, fmt.Errorf("fake node: unknown order verdict %q", verdict)
 	}
 	return order, nil
 }
@@ -906,6 +932,7 @@ func (n *fakeNode) SubmitOrderWithAttestation(
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
+	destination *domain.TradingDestination,
 	attestFor func(domain.Order, fwengine.OrderResult) store.EventAttestor,
 ) (domain.Order, fwengine.OrderResult, error) {
 	snapshot := n.snapshotOrderTxn()
@@ -917,8 +944,12 @@ func (n *fakeNode) SubmitOrderWithAttestation(
 	if o.ExternalID.IsZero() {
 		before = 0
 	}
+	if review, ok := n.orderReviews[order.ExternalID]; ok {
+		review.Destination = destination
+		n.orderReviews[order.ExternalID] = review
+	}
 	result := fwengine.OrderResult{
-		Accepted:            true,
+		Verdict:             domain.VerdictAccept,
 		SettlementLockPrice: "100",
 	}
 	if n.submitResult != nil {
@@ -950,11 +981,28 @@ func (n *fakeNode) SubmitImmediate(
 	}
 	order := o
 	order.ExternalID = n.recordedOrderExternalID(o)
-	n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
 	if n.immediateResult != nil {
-		if !n.immediateResult.Accepted {
+		switch n.immediateResult.Verdict {
+		case domain.VerdictReview:
+			order.Status = domain.OrderStatusAwaitingReview
+			if n.orderReviews == nil {
+				n.orderReviews = make(map[domain.ExternalID]domain.OrderReview)
+			}
+			n.orderReviews[order.ExternalID] = domain.OrderReview{Mode: domain.SubmitModeImmediate}
+			order.Leaves, order.ReservedQuantity, order.Lock = "0", "0", nil
+			n.orders[order.ExternalID] = order
+			n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
+			n.appendEvent(order.ExternalID, domain.OrderEventPreTradeReview, domain.OrderEventPayload{})
+			return order, *n.immediateResult, nil
+		case domain.VerdictReject:
+			n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
 			n.recordRejected(order, n.immediateResult.Rejects)
 			return n.orders[order.ExternalID], *n.immediateResult, nil
+		case domain.VerdictAccept:
+			n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
+		default:
+			return domain.Order{}, fwengine.ImmediateResult{},
+				fmt.Errorf("fake node: unknown immediate verdict %q", n.immediateResult.Verdict)
 		}
 		order.Status = domain.OrderStatusFilled
 		order.Lock = n.immediateResult.Lock
@@ -962,23 +1010,22 @@ func (n *fakeNode) SubmitImmediate(
 		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 		return order, completeFakeImmediateResult(order, *n.immediateResult), nil
 	}
+	n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
 	order.Status = domain.OrderStatusFilled
 	n.orders[order.ExternalID] = order
 	n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 	return order, completeFakeImmediateResult(order, fwengine.ImmediateResult{
-		Accepted:            true,
+		Verdict:             domain.VerdictAccept,
 		SettlementLockPrice: "100",
 		TradePrice:          o.Price,
 		FillQuantity:        o.AmountValue,
 	}), nil
 }
 
+// completeFakeImmediateResult completes an accepted result only.
 func completeFakeImmediateResult(
 	order domain.Order, result fwengine.ImmediateResult,
 ) fwengine.ImmediateResult {
-	if !result.Accepted {
-		return result
-	}
 	if result.FillQuantity == "" {
 		result.FillQuantity = order.AmountValue
 	}
@@ -1027,6 +1074,7 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
+	destination *domain.TradingDestination,
 	attestFor func(domain.Order, fwengine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, fwengine.ImmediateResult, error) {
 	snapshot := n.snapshotOrderTxn()
@@ -1035,7 +1083,11 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 	if err != nil {
 		return domain.Order{}, fwengine.ImmediateResult{}, err
 	}
-	if result.Accepted {
+	if review, ok := n.orderReviews[order.ExternalID]; ok {
+		review.Destination = destination
+		n.orderReviews[order.ExternalID] = review
+	}
+	if result.Verdict == domain.VerdictAccept {
 		n.appendEvent(order.ExternalID, domain.OrderEventCommitted, domain.OrderEventPayload{})
 		n.appendEvent(order.ExternalID, domain.OrderEventFill, domain.OrderEventPayload{
 			FillQuantity:    result.FillQuantity,
@@ -1058,6 +1110,140 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 		return domain.Order{}, fwengine.ImmediateResult{}, err
 	}
 	return order, result, nil
+}
+
+func (n *fakeNode) reviewOrder(orderID domain.ExternalID) (domain.Order, domain.OrderReview, error) {
+	order, ok := n.orders[orderID]
+	if !ok {
+		return domain.Order{}, domain.OrderReview{}, domain.ErrNotFound
+	}
+	if err := domain.RequireOrderAwaitingReview(order.Status); err != nil {
+		return domain.Order{}, domain.OrderReview{}, err
+	}
+	review, ok := n.orderReviews[orderID]
+	if !ok {
+		return domain.Order{}, domain.OrderReview{}, fmt.Errorf("fake node: awaiting order has no review")
+	}
+	return order, review, nil
+}
+
+func (n *fakeNode) ConfirmOrderReview(
+	ctx context.Context, orderID domain.ExternalID, caller domain.Caller,
+	attestFor func(domain.Order, fwengine.OrderResult) store.EventAttestor,
+) (domain.Order, fwengine.OrderResult, error) {
+	n.recordCall("ConfirmOrderReview", orderID)
+	order, review, err := n.reviewOrder(orderID)
+	if err != nil {
+		return domain.Order{}, fwengine.OrderResult{}, err
+	}
+	if review.Mode != domain.SubmitModeHold {
+		return domain.Order{}, fwengine.OrderResult{}, fmt.Errorf("order review mode %q does not match %q: %w", review.Mode, domain.SubmitModeHold, domain.ErrConflict)
+	}
+	if n.confirmErr != nil {
+		return domain.Order{}, fwengine.OrderResult{}, n.confirmErr
+	}
+	result := fwengine.OrderResult{Verdict: domain.VerdictAccept}
+	if n.submitResult != nil {
+		result = *n.submitResult
+	}
+	if result.Verdict != domain.VerdictAccept && result.Verdict != domain.VerdictReject {
+		return domain.Order{}, fwengine.OrderResult{}, fmt.Errorf("fake node: confirmed review returned %q", result.Verdict)
+	}
+	waiting := order
+	snapshot := n.snapshotOrderTxn()
+	before := len(n.orderEvents[orderID])
+	if result.Verdict == domain.VerdictAccept {
+		order.Status = domain.OrderStatusCommitted
+		order.Lock = slices.Clone(result.Lock)
+		order.Leaves, order.ReservedQuantity = order.AmountValue, order.AmountValue
+		delete(n.orderReviews, orderID)
+		n.appendEvent(orderID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
+		n.appendEvent(orderID, domain.OrderEventCommitted, domain.OrderEventPayload{})
+	} else {
+		n.appendEvent(orderID, domain.OrderEventPreTradeRejected, domain.OrderEventPayload{Rejects: result.Rejects})
+	}
+	n.orders[orderID] = order
+	var attest store.EventAttestor
+	if attestFor != nil {
+		attest = attestFor(waiting, result)
+	}
+	if err := n.attestNewEvents(ctx, orderID, before, attest); err != nil {
+		n.restoreOrderTxn(snapshot)
+		return domain.Order{}, fwengine.OrderResult{}, err
+	}
+	return order, result, nil
+}
+
+func (n *fakeNode) ConfirmImmediateReview(
+	ctx context.Context, orderID domain.ExternalID, caller domain.Caller,
+	attestFor func(domain.Order, fwengine.ImmediateResult) store.EventAttestor,
+) (domain.Order, fwengine.ImmediateResult, error) {
+	n.recordCall("ConfirmImmediateReview", orderID)
+	order, review, err := n.reviewOrder(orderID)
+	if err != nil {
+		return domain.Order{}, fwengine.ImmediateResult{}, err
+	}
+	if review.Mode != domain.SubmitModeImmediate {
+		return domain.Order{}, fwengine.ImmediateResult{}, fmt.Errorf("order review mode %q does not match %q: %w", review.Mode, domain.SubmitModeImmediate, domain.ErrConflict)
+	}
+	if n.confirmErr != nil {
+		return domain.Order{}, fwengine.ImmediateResult{}, n.confirmErr
+	}
+	result := fwengine.ImmediateResult{Verdict: domain.VerdictAccept, TradePrice: order.Price, FillQuantity: order.AmountValue}
+	if n.immediateResult != nil {
+		result = *n.immediateResult
+	}
+	if result.Verdict != domain.VerdictAccept && result.Verdict != domain.VerdictReject {
+		return domain.Order{}, fwengine.ImmediateResult{}, fmt.Errorf("fake node: confirmed review returned %q", result.Verdict)
+	}
+	waiting := order
+	snapshot := n.snapshotOrderTxn()
+	before := len(n.orderEvents[orderID])
+	if result.Verdict == domain.VerdictAccept {
+		order.Status, order.Leaves, order.ReservedQuantity = domain.OrderStatusFilled, "0", "0"
+		order.Lock = slices.Clone(result.Lock)
+		result = completeFakeImmediateResult(order, result)
+		delete(n.orderReviews, orderID)
+		n.appendEvent(orderID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
+		n.appendEvent(orderID, domain.OrderEventCommitted, domain.OrderEventPayload{})
+		n.appendEvent(orderID, domain.OrderEventFill, domain.OrderEventPayload{ExecutionReport: result.ExecutionReport})
+	} else {
+		n.appendEvent(orderID, domain.OrderEventPreTradeRejected, domain.OrderEventPayload{Rejects: result.Rejects})
+	}
+	n.orders[orderID] = order
+	var attest store.EventAttestor
+	if attestFor != nil {
+		attest = attestFor(waiting, result)
+	}
+	if err := n.attestNewEvents(ctx, orderID, before, attest); err != nil {
+		n.restoreOrderTxn(snapshot)
+		return domain.Order{}, fwengine.ImmediateResult{}, err
+	}
+	return order, result, nil
+}
+
+func (n *fakeNode) CancelOrderReview(
+	ctx context.Context, orderID domain.ExternalID, caller domain.Caller, attest store.EventAttestor,
+) (domain.Order, error) {
+	n.recordCall("CancelOrderReview", orderID)
+	order, _, err := n.reviewOrder(orderID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if n.cancelErr != nil {
+		return domain.Order{}, n.cancelErr
+	}
+	snapshot := n.snapshotOrderTxn()
+	before := len(n.orderEvents[orderID])
+	order.Status, order.Leaves = domain.OrderStatusCancelled, "0"
+	n.orders[orderID] = order
+	delete(n.orderReviews, orderID)
+	n.appendEvent(orderID, domain.OrderEventCancelled, domain.OrderEventPayload{})
+	if err := n.attestNewEvents(ctx, orderID, before, attest); err != nil {
+		n.restoreOrderTxn(snapshot)
+		return domain.Order{}, err
+	}
+	return order, nil
 }
 
 func (n *fakeNode) ConfirmOrder(
@@ -1302,7 +1488,11 @@ func (n *fakeNode) GetOrder(
 			events[i].Attestation = &stamped
 		}
 	}
-	return domain.OrderDetail{Order: order, Events: events}, nil
+	detail := domain.OrderDetail{Order: order, Events: events}
+	if review, ok := n.orderReviews[id]; ok {
+		detail.Review = &review
+	}
+	return detail, nil
 }
 
 func (n *fakeNode) PersistEventAttestation(

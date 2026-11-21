@@ -135,10 +135,10 @@ type AdjustmentResult struct {
 	AccountBlocks []domain.AccountBlock
 }
 
-// OrderResult is the outcome of one SubmitOrder pre-trade call. On accept the
-// reservation is committed inside the adapter and Lock holds the SDK-serialized
-// reservation lock captured before commit; on reject Rejects holds the engine
-// rejects.
+// OrderResult is the outcome of one SubmitOrder pre-trade call. On accept Lock
+// holds the SDK-serialized reservation lock captured before commit; on reject
+// Rejects holds the engine rejects. On review only Reviews is populated and
+// the reservation must not be committed.
 type OrderResult struct {
 	// Lock is the non-empty SDK-serialized reservation lock captured before the
 	// reservation was committed, ready to persist verbatim on an accepted order.
@@ -148,7 +148,7 @@ type OrderResult struct {
 	// reservation. They are non-empty only for a non-enforcing drop-copy path and
 	// must be mirrored durably with the accepted order.
 	Blocks []domain.AccountBlock
-	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
+	// Rejects are the engine pre-trade rejects; non-empty only on reject.
 	Rejects []domain.OrderReject
 	// Outcomes are the per-asset balance effects the reservation produced (held
 	// funds and incoming quantity). They must be persisted so the balance
@@ -157,8 +157,10 @@ type OrderResult struct {
 	// SettlementLockPrice is the display settlement leg decoded from the engine
 	// lock as a decimal string; empty when no price was locked.
 	SettlementLockPrice string
-	// Accepted reports whether the pre-trade passed and was committed.
-	Accepted bool
+	// Verdict is the pre-trade decision; review permits no commit or send.
+	Verdict domain.Verdict
+	// Reviews are non-empty only for VerdictReview.
+	Reviews []domain.ReviewMark
 }
 
 // BalanceOutcome is one per-asset account-adjustment outcome produced by the
@@ -179,7 +181,8 @@ type BalanceOutcome struct {
 // reservation is committed and settled in the same call via an execution
 // report carrying the request quantity, the order's own price (an order
 // without a price is refused), and the original engine lock. On reject
-// Rejects holds the engine rejects and nothing settles.
+// Rejects holds the engine rejects and nothing settles. On review only Reviews
+// is populated; nothing is held or settled.
 type ImmediateResult struct {
 	// Persistence is the authoritative execution-report write set produced by
 	// the same adapter path as a caller-driven execution report.
@@ -212,16 +215,23 @@ type ImmediateResult struct {
 	// TradePrice is the fill price recorded for the immediate order. It is the
 	// order's own price; an order without a price is refused.
 	TradePrice string
-	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
+	// Rejects are the engine pre-trade rejects; non-empty only on reject.
 	Rejects []domain.OrderReject
-	// Accepted reports whether the pre-trade passed and the fill settled.
-	Accepted bool
+	// Verdict is the pre-trade decision; accept means the fill settled.
+	Verdict domain.Verdict
+	// Reviews are non-empty only for VerdictReview.
+	Reviews []domain.ReviewMark
 }
 
 // ImmediatePreparation is the caller-owned state derived from a pending
 // reservation or drop-copy operation before it is committed. ExecutionReport
-// must be applied only after the chain commits that pending operation.
+// must be applied only for accept, after the chain commits that operation.
+// A review preparation carries only its verdict and marks, without a report.
 type ImmediatePreparation struct {
+	// Verdict is the pre-trade decision. A review carries only review marks.
+	Verdict domain.Verdict
+	// Reviews are non-empty only for VerdictReview.
+	Reviews []domain.ReviewMark
 	// ExecutionReport is the SDK report derived while the pending operation can
 	// still be rolled back.
 	ExecutionReport model.ExecutionReport
@@ -238,6 +248,12 @@ type ImmediatePreparation struct {
 	ReconciliationState string
 }
 
+// ReviewFlags carries the operator's review decision into the SDK order model.
+type ReviewFlags struct {
+	// Confirmed skips review rules on a confirmed re-run; reject rules still apply.
+	Confirmed bool
+}
+
 // OrderChainAdapter maps Officer order values to the SDK chain surface and
 // materializes capability-limited hook results. The node owns chain ordering
 // and persistence; the adapter owns only SDK representation and resolver work.
@@ -246,7 +262,7 @@ type OrderChainAdapter interface {
 	// chains. A nil engine is invalid and fails through asyncengine's explicit
 	// ErrChainEngineMissing result.
 	AsyncEngine() *asyncengine.AsyncEngine
-	OrderModel(domain.Order) (model.Order, error)
+	OrderModel(domain.Order, ReviewFlags) (model.Order, error)
 	CheckOrderModel(domain.OrderProbe) (model.Order, error)
 	RejectedOrder(domain.Order, []reject.Reject) (OrderResult, error)
 	ReservedOrder(domain.Order, asyncengine.OperationResult) (OrderResult, error)

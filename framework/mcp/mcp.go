@@ -388,10 +388,12 @@ type SubmitOrderResult struct {
 	KeyID string
 	// OrderExternalID is the order's opaque public handle.
 	OrderExternalID string
-	// Verdict is the signed pre-trade decision: "accept" or "reject".
-	Verdict string
+	// Verdict is the signed pre-trade decision: accept, reject or review.
+	Verdict domain.Verdict
 	// Reasons carries engine reject reasons when Verdict is "reject".
 	Reasons []domain.OrderReject
+	// Reviews carries the ordered engine marks for a review verdict.
+	Reviews []domain.ReviewMark
 }
 
 // SubmitDropCopyOrderResult identifies the unsigned drop-copy order recorded by
@@ -1186,6 +1188,7 @@ func (s controlPlaneSource) SubmitOrder(
 		OrderExternalID: approval.OrderExternalID,
 		Verdict:         approval.Verdict,
 		Reasons:         approval.Reasons,
+		Reviews:         approval.Reviews,
 	}, nil
 }
 

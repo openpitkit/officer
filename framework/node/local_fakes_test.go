@@ -70,6 +70,7 @@ type fakeEngine struct {
 	adjustmentBatchCalls   []adjustmentBatchCall
 	adjustmentBatchResults []engine.AdjustmentResult
 	submitCalls            []domain.Order
+	preTradeCalls          int
 	execReportCalls        []domain.ExecutionReportInput
 	execReportLeaves       []string
 	// Canned engine outcomes for the trading/spot-funds/group paths.
@@ -306,6 +307,7 @@ func TestFakeEngineRejectsUnpublishedAssetOnEveryResolverPath(t *testing.T) {
 			run: func(eng *fakeEngine) error {
 				_, err := eng.ConfigurePolicy(ctx, domain.PolicyOrderSizeLimit,
 					engine.LimitSet{OrderSizeLimits: []domain.LimitOrderSize{{
+						Mode:        domain.RuleModeReject,
 						Scope:       domain.ScopeUnderlyingAsset,
 						Asset:       unpublished,
 						MaxQuantity: "1",
@@ -355,7 +357,7 @@ func TestFakeEngineRejectsUnpublishedAssetOnEveryResolverPath(t *testing.T) {
 					Account:    account,
 					BaseAsset:  unpublished,
 					QuoteAsset: unpublished,
-				})
+				}, engine.ReviewFlags{})
 				return err
 			},
 		},
@@ -366,7 +368,7 @@ func TestFakeEngineRejectsUnpublishedAssetOnEveryResolverPath(t *testing.T) {
 					Account:    account,
 					BaseAsset:  unpublished,
 					QuoteAsset: unpublished,
-				})
+				}, engine.ReviewFlags{})
 				return err
 			},
 		},

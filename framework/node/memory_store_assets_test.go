@@ -162,7 +162,7 @@ func (r *memoryRealm) UpdateAsset(
 			}
 			delete(r.rateLimits, key)
 			limit.Asset = asset.Code
-			r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+			r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
 		}
 		for key, limit := range r.orderSizeLimits {
 			if limit.Asset != oldCode {
@@ -170,7 +170,7 @@ func (r *memoryRealm) UpdateAsset(
 			}
 			delete(r.orderSizeLimits, key)
 			limit.Asset = asset.Code
-			r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+			r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset, limit.Mode)] = limit
 		}
 		for key, limit := range r.positionLimits {
 			if limit.Asset != oldCode {
@@ -178,7 +178,7 @@ func (r *memoryRealm) UpdateAsset(
 			}
 			delete(r.positionLimits, key)
 			limit.Asset = asset.Code
-			r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+			r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
 		}
 		for key, limit := range r.spotFundsPnlBoundsLimits {
 			if limit.Currency == oldCode {

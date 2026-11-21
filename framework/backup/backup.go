@@ -26,8 +26,9 @@
 // at all - they are re-assigned, collision-free, when the archive is restored,
 // while code and external id values are preserved verbatim.
 //
-// The archive format carries an explicit version. Restore rejects mismatches
-// instead of best-effort importing an older shape into the current schema.
+// The archive format carries an explicit version. Restore accepts the current
+// version and the previous released version through its one upgrade step;
+// every other version is rejected.
 package backup
 
 import (
@@ -42,7 +43,7 @@ import (
 )
 
 // FormatVersion is the current portable archive shape.
-const FormatVersion = 6
+const FormatVersion = 7
 
 const (
 	// CredentialFormPlaintext declares that archived credentials are plaintext.
@@ -502,6 +503,15 @@ type VenueOrder struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// OrderReview carries the submit settings of an order waiting for review.
+type OrderReview struct {
+	Order        domain.ExternalID `json:"order"`
+	Mode         string            `json:"mode"`
+	Connection   domain.ExternalID `json:"connection,omitempty"`
+	VenueAccount string            `json:"venueAccount,omitempty"`
+	Route        string            `json:"route,omitempty"`
+}
+
 // SigningKey is the portable archive form of a signing public key. The key_id
 // UUID is the key's own external handle and is preserved. Private key material
 // never enters the archive, and the surrogate id is never carried.
@@ -603,6 +613,8 @@ type Data struct {
 	Adjustments []domain.AccountAdjustmentRecord `json:"adjustments,omitempty"`
 	// Orders are order records with their optional approvals (by external id).
 	Orders []OrderRecord `json:"orders,omitempty"`
+	// OrderReviews are waiting-order settings in the activity_history section.
+	OrderReviews []OrderReview `json:"orderReviews,omitempty"`
 	// OrderEvents are order lifecycle events (by external id, linked to their
 	// order's external id).
 	OrderEvents []domain.OrderEvent `json:"orderEvents,omitempty"`
@@ -688,6 +700,29 @@ type Archive struct {
 	Manifest Manifest `json:"manifest"`
 	// Data carries the portable rows.
 	Data Data `json:"data"`
+}
+
+// Upgrade brings an accepted archive to the current shape. Version 6 is the
+// previous released shape: its order-size barriers always reject and have no mode.
+func (a *Archive) Upgrade() error {
+	switch a.Manifest.FormatVersion {
+	case FormatVersion:
+		return nil
+	case 6:
+		for _, limit := range a.Data.OrderSizeLimits {
+			if limit.Mode != "" {
+				return fmt.Errorf("backup format version 6 order_size_limit carries mode %q: %w", limit.Mode, domain.ErrInvalid)
+			}
+		}
+		a.Data.OrderSizeLimits = slices.Clone(a.Data.OrderSizeLimits)
+		for i := range a.Data.OrderSizeLimits {
+			a.Data.OrderSizeLimits[i].Mode = domain.RuleModeReject
+		}
+		a.Manifest.FormatVersion = FormatVersion
+		return nil
+	default:
+		return fmt.Errorf("backup format version %d unsupported, want %d or 6: %w", a.Manifest.FormatVersion, FormatVersion, domain.ErrInvalid)
+	}
 }
 
 // NewArchive builds an archive from data and metadata, restricting the data to
@@ -996,6 +1031,11 @@ func FilterData(data Data, scope Scope) Data {
 			orderIDs[rec.Order.ExternalID] = true
 		}
 		out.OrderEvents = filterOrderEvents(data.OrderEvents, orderIDs)
+		for _, review := range data.OrderReviews {
+			if orderIDs[review.Order] {
+				out.OrderReviews = append(out.OrderReviews, review)
+			}
+		}
 		out.ExecutionReports = filterExecutionReports(data.ExecutionReports, orderIDs)
 		reportIDs := make(map[domain.ExternalID]bool, len(out.ExecutionReports))
 		for _, report := range out.ExecutionReports {

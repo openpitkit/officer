@@ -38,8 +38,8 @@ import (
 // at the order's own price and refuses an order without one; SubmitModeHold is
 // the workflow submit, whose later state changes arrive as execution reports.
 const (
-	SubmitModeImmediate = "immediate"
-	SubmitModeHold      = "hold"
+	SubmitModeImmediate = domain.SubmitModeImmediate
+	SubmitModeHold      = domain.SubmitModeHold
 )
 
 // approvalPayloadVersion is the canonical payload schema version.
@@ -59,9 +59,11 @@ type SignedApproval struct {
 	// authorises. It is the order's external id, never a surrogate or engine id.
 	OrderExternalID string
 	// Verdict is the pre-trade decision carried by the signed envelope.
-	Verdict string
+	Verdict domain.Verdict
 	// Reasons carries the engine reject reasons when Verdict is "reject".
 	Reasons []domain.OrderReject
+	// Reviews is non-empty only for review; populated by the review flow.
+	Reviews []domain.ReviewMark
 	// Signed reports whether the envelope carries an Ed25519 signature.
 	Signed bool
 }
@@ -69,6 +71,30 @@ type SignedApproval struct {
 type eventPayloadBuilder func(domain.OrderEvent) (domain.ApprovalPayload, bool, error)
 
 type signedEventCapture func(Attestation, domain.ApprovalPayload)
+
+type decisionPayloadInputs struct {
+	mode                string
+	approvalID          string
+	approvalRef         string
+	verdict             domain.Verdict
+	rejects             []domain.OrderReject
+	reviews             []domain.ReviewMark
+	settlementLockPrice string
+	persistence         *engine.ExecutionReportPersistence
+}
+
+// captureDecisionEvent returns a capture that saves the verdict's attestation
+// and payload, excluding lifecycle and settlement events.
+func captureDecisionEvent(
+	issued *Attestation, payload *domain.ApprovalPayload,
+) signedEventCapture {
+	return func(att Attestation, p domain.ApprovalPayload) {
+		if p.Result == nil && p.Verdict != "" {
+			*issued = att
+			*payload = p
+		}
+	}
+}
 
 // signerOrErr returns the configured signer or an unconfigured error. The
 // signing and approval surfaces require a signer; nil or unavailable signing
@@ -300,15 +326,16 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 
 // --- Submit / confirm / cancel ----------------------------------------------
 
-// SubmitOrder runs the pre-trade pipeline for o in the given mode and, on
-// accept, issues a signed (or eSign-off) approval. Mode "hold" uses the
-// normal workflow submit: the engine commits the pre-trade effects and later
-// execution reports settle or release them. Mode "immediate" also settles a
-// fill at the order's own price in the same call and refuses an order without
-// a price. A pre-trade reject is a successful signed decision and returns the
-// reject reasons with the same envelope shape as an accept verdict. The
-// post-commit approval_issued audit write is best-effort: because the
-// operation is already committed, a failure is logged rather than returned.
+// SubmitOrder runs the pre-trade pipeline for o in the given mode and issues a
+// signed (or eSign-off) approval for accept, reject, or review. On accept, mode
+// "hold" commits the pre-trade effects, which later execution reports settle
+// or release; mode "immediate" also settles a fill at the order's own price in
+// the same call. Immediate mode refuses an order without a price. A reject
+// returns the reject reasons. A review rolls back the engine reservation,
+// records pre_trade_review with awaiting_review status, audits the decision,
+// and returns Reviews. All three verdicts use the same envelope shape. The
+// approval_issued audit write after recording the decision is best-effort: a
+// failure is logged rather than returned because the decision is already durable.
 // missing is the caller's required choice for an order naming
 // an account that does not exist yet: register it with no group and no currency,
 // or fail with domain.ErrAccountMissing.
@@ -318,10 +345,7 @@ func (s *Service) SubmitOrder(
 	mode string,
 	missing domain.MissingAccountPolicy,
 ) (SignedApproval, error) {
-	if isDropCopyOrder(o) {
-		return SignedApproval{}, dropCopySigningError()
-	}
-	return s.submitOrder(ctx, o, mode, missing)
+	return s.submitOrder(ctx, o, mode, missing, nil)
 }
 
 func (s *Service) submitOrder(
@@ -329,7 +353,11 @@ func (s *Service) submitOrder(
 	o domain.Order,
 	mode string,
 	missing domain.MissingAccountPolicy,
+	destination *domain.TradingDestination,
 ) (SignedApproval, error) {
+	if isDropCopyOrder(o) {
+		return SignedApproval{}, dropCopySigningError()
+	}
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
 		return SignedApproval{}, err
@@ -383,12 +411,12 @@ func (s *Service) submitOrder(
 	}
 
 	var (
-		order    domain.Order
-		rejects  []domain.OrderReject
-		verdict  string
-		issued   Attestation
-		payload  domain.ApprovalPayload
-		accepted bool
+		order   domain.Order
+		rejects []domain.OrderReject
+		reviews []domain.ReviewMark
+		verdict domain.Verdict
+		issued  Attestation
+		payload domain.ApprovalPayload
 	)
 	switch mode {
 	case SubmitModeHold:
@@ -400,55 +428,20 @@ func (s *Service) submitOrder(
 				signer, off, keyID, domain.AttestationRequestSubmit,
 				func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
 					eventOrder := orderForEvent(persisted, o.Account, event, caller)
-					switch event.Type {
-					case domain.OrderEventSubmitted:
-						p, err := buildSubmittedPayload(
-							eventOrder, SubmitModeHold, submitApprovalID)
-						return p, err == nil, err
-					case domain.OrderEventPreTradeAccepted:
-						nonce, err := newNonce()
-						if err != nil {
-							return domain.ApprovalPayload{}, false, err
-						}
-						return buildApprovalPayload(
-							eventOrder,
-							SubmitModeHold,
-							submitApprovalID,
-							submitted.SettlementLockPrice,
-							time.Now().UTC(),
-							nonce,
-						), true, nil
-					case domain.OrderEventPreTradeRejected:
-						nonce, err := newNonce()
-						if err != nil {
-							return domain.ApprovalPayload{}, false, err
-						}
-						return buildRejectApprovalPayload(
-							eventOrder, SubmitModeHold, submitApprovalID,
-							submitted.Rejects, time.Now().UTC(), nonce,
-						), true, nil
-					case domain.OrderEventCommitted:
-						committed := eventOrder
-						committed.Status = domain.OrderStatusCommitted
-						p, err := s.buildLifecyclePayload(
-							committed, domain.AttestationRequestSubmit,
-							"committed", "", submitApprovalID,
-						)
-						return p, err == nil, err
-					default:
-						return domain.ApprovalPayload{}, false, nil
-					}
+					return s.buildDecisionEventPayload(eventOrder, event, decisionPayloadInputs{
+						mode:                SubmitModeHold,
+						approvalID:          submitApprovalID,
+						verdict:             submitted.Verdict,
+						rejects:             submitted.Rejects,
+						reviews:             submitted.Reviews,
+						settlementLockPrice: submitted.SettlementLockPrice,
+					})
 				},
-				func(att Attestation, p domain.ApprovalPayload) {
-					if p.Result == nil && p.Verdict != "" {
-						issued = att
-						payload = p
-					}
-				},
+				captureDecisionEvent(&issued, &payload),
 			)
 		}
 		order, result, err = n.SubmitOrderWithAttestation(
-			ctx, o, missing, caller, attestFor)
+			ctx, o, missing, caller, destination, attestFor)
 		if err != nil {
 			if auditErr := s.auditApproval(
 				ctx, n, o.Account, domain.AuditActionApprovalFailed,
@@ -460,8 +453,9 @@ func (s *Service) submitOrder(
 			}
 			return SignedApproval{}, err
 		}
-		accepted = result.Accepted
+		verdict = result.Verdict
 		rejects = result.Rejects
+		reviews = result.Reviews
 	default:
 		var result engine.ImmediateResult
 		attestFor := func(
@@ -471,69 +465,21 @@ func (s *Service) submitOrder(
 				signer, off, keyID, domain.AttestationRequestSubmit,
 				func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
 					eventOrder := orderForEvent(persisted, o.Account, event, caller)
-					switch event.Type {
-					case domain.OrderEventSubmitted:
-						p, err := buildSubmittedPayload(
-							eventOrder, SubmitModeImmediate, submitApprovalID)
-						return p, err == nil, err
-					case domain.OrderEventPreTradeAccepted:
-						nonce, err := newNonce()
-						if err != nil {
-							return domain.ApprovalPayload{}, false, err
-						}
-						return buildApprovalPayload(
-							eventOrder,
-							SubmitModeImmediate,
-							submitApprovalID,
-							immediate.SettlementLockPrice,
-							time.Now().UTC(),
-							nonce,
-						), true, nil
-					case domain.OrderEventPreTradeRejected:
-						nonce, err := newNonce()
-						if err != nil {
-							return domain.ApprovalPayload{}, false, err
-						}
-						return buildRejectApprovalPayload(
-							eventOrder, SubmitModeImmediate, submitApprovalID,
-							immediate.Rejects, time.Now().UTC(), nonce), true, nil
-					case domain.OrderEventCommitted:
-						committed := eventOrder
-						committed.Status = domain.OrderStatusCommitted
-						p, err := s.buildLifecyclePayload(
-							committed, domain.AttestationRequestSubmit,
-							"committed", "", submitApprovalID)
-						if err != nil {
-							return domain.ApprovalPayload{}, false, err
-						}
-						p.Mode = SubmitModeImmediate
-						return p, true, nil
-					// A settling event must never travel unattested. The commission
-					// variant is defensive: no immediate path populates a commission
-					// today, but one that settled the account without a fill would
-					// have to be signed exactly like a fill.
-					case domain.OrderEventFill, domain.OrderEventCommission:
-						p, err := s.buildImmediateSettlementPayload(
-							eventOrder, event, immediate.Persistence,
-						)
-						if err != nil {
-							return domain.ApprovalPayload{}, false, err
-						}
-						return p, true, nil
-					default:
-						return domain.ApprovalPayload{}, false, nil
-					}
+					return s.buildDecisionEventPayload(eventOrder, event, decisionPayloadInputs{
+						mode:                SubmitModeImmediate,
+						approvalID:          submitApprovalID,
+						verdict:             immediate.Verdict,
+						rejects:             immediate.Rejects,
+						reviews:             immediate.Reviews,
+						settlementLockPrice: immediate.SettlementLockPrice,
+						persistence:         immediate.Persistence,
+					})
 				},
-				func(att Attestation, p domain.ApprovalPayload) {
-					if p.Result == nil && p.Verdict != "" {
-						issued = att
-						payload = p
-					}
-				},
+				captureDecisionEvent(&issued, &payload),
 			)
 		}
 		order, result, err = n.SubmitImmediateWithAttestation(
-			ctx, o, missing, caller, attestFor)
+			ctx, o, missing, caller, destination, attestFor)
 		if err != nil {
 			if auditErr := s.auditApproval(
 				ctx, n, o.Account, domain.AuditActionApprovalFailed,
@@ -545,18 +491,19 @@ func (s *Service) submitOrder(
 			}
 			return SignedApproval{}, err
 		}
-		accepted = result.Accepted
+		verdict = result.Verdict
 		rejects = result.Rejects
+		reviews = result.Reviews
 	}
 
+	switch verdict {
+	case domain.VerdictAccept, domain.VerdictReject, domain.VerdictReview:
+	default:
+		return SignedApproval{}, fmt.Errorf("backend: submit order verdict %q is invalid", verdict)
+	}
 	if issued.SignedAttestation == "" {
 		return SignedApproval{}, missingAttestationError(
 			domain.AttestationRequestSubmit)
-	}
-	if accepted {
-		verdict = "accept"
-	} else {
-		verdict = "reject"
 	}
 	if err := s.auditApproval(
 		ctx, n, o.Account, domain.AuditActionApprovalIssued,
@@ -580,6 +527,7 @@ func (s *Service) submitOrder(
 		OrderExternalID: order.ExternalID.String(),
 		Verdict:         verdict,
 		Reasons:         rejectReasons(payload, rejects),
+		Reviews:         reviews,
 		Signed:          issued.Signed,
 	}, nil
 }
@@ -863,6 +811,9 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 	stored domain.OrderDetail,
 	action string,
 ) (domain.ApprovalPayload, fwsigning.Service, error) {
+	if err := domain.RequireOrderNotAwaitingReview(stored.Order.Status); err != nil {
+		return domain.ApprovalPayload{}, nil, err
+	}
 	if err := s.requireNoVenueOrder(ctx, stored.Order.ExternalID); err != nil {
 		return domain.ApprovalPayload{}, nil, err
 	}
@@ -872,10 +823,59 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 			action, domain.ErrApprovalRequired,
 		)
 	}
+	payload, signer, err := s.verifyRecordedApproval(
+		ctx, stored, domain.OrderEventPreTradeAccepted, "pre-trade accept", action,
+	)
+	if err != nil {
+		return domain.ApprovalPayload{}, nil, err
+	}
+	if payload.Mode != SubmitModeHold {
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: recorded approval %s mode %q cannot be %s: %w",
+			payload.ApprovalID, payload.Mode, action, domain.ErrApprovalRequired,
+		)
+	}
+	if payload.Verdict != domain.VerdictAccept {
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: recorded approval %s verdict %q cannot be %s: %w",
+			payload.ApprovalID, payload.Verdict, action, domain.ErrApprovalRequired,
+		)
+	}
+	authorized := isOriginalSubmitVerdict(payload)
+	if payload.RequestType == string(domain.AttestationRequestReviewConfirm) &&
+		payload.Result == nil && payload.ExecutionReport == nil && payload.ApprovalRef != "" {
+		review, _, err := s.verifyReviewApproval(ctx, stored, action)
+		if err != nil {
+			return domain.ApprovalPayload{}, nil, err
+		}
+		authorized = payload.ApprovalRef == review.ApprovalID && payload.Mode == review.Mode
+	}
+	if !authorized {
+		return domain.ApprovalPayload{}, nil, fmt.Errorf(
+			"backend: recorded approval %s is not an original submit verdict and cannot be %s: %w",
+			payload.ApprovalID, action, domain.ErrApprovalRequired,
+		)
+	}
+	return payload, signer, nil
+}
+
+func isOriginalSubmitVerdict(payload domain.ApprovalPayload) bool {
+	return payload.RequestType == string(domain.AttestationRequestSubmit) &&
+		payload.Result == nil && payload.ExecutionReport == nil && payload.ApprovalRef == ""
+}
+
+// verifyRecordedApproval verifies the first enveloped event of the given type
+// and its event binding, returning the payload and the signer used.
+func (s *Service) verifyRecordedApproval(
+	ctx context.Context,
+	stored domain.OrderDetail,
+	eventType domain.OrderEventType,
+	label, action string,
+) (domain.ApprovalPayload, fwsigning.Service, error) {
 	var recorded *domain.OrderEvent
 	for i := range stored.Events {
 		event := &stored.Events[i]
-		if event.Type == domain.OrderEventPreTradeAccepted &&
+		if event.Type == eventType &&
 			event.Attestation != nil && event.Attestation.SignedEnvelope != "" {
 			recorded = event
 			break
@@ -883,8 +883,8 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 	}
 	if recorded == nil {
 		return domain.ApprovalPayload{}, nil, fmt.Errorf(
-			"backend: order has no signed pre-trade accept approval recorded by Officer and cannot be %s: %w",
-			action, domain.ErrApprovalRequired,
+			"backend: order has no signed %s approval recorded by Officer and cannot be %s: %w",
+			label, action, domain.ErrApprovalRequired,
 		)
 	}
 	signer, err := s.signerOrErr()
@@ -898,34 +898,13 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 		if errors.Is(err, domain.ErrInvalid) ||
 			errors.Is(err, domain.ErrNotFound) {
 			return domain.ApprovalPayload{}, nil, fmt.Errorf(
-				"backend: recorded pre-trade accept approval cannot be verified for %s: %v: %w",
-				action, err, domain.ErrApprovalRequired,
+				"backend: recorded %s approval cannot be verified for %s: %v: %w",
+				label, action, err, domain.ErrApprovalRequired,
 			)
 		}
 		return domain.ApprovalPayload{}, nil, err
 	}
 	payload := result.Payload
-	if payload.Mode != SubmitModeHold {
-		return domain.ApprovalPayload{}, nil, fmt.Errorf(
-			"backend: recorded approval %s mode %q cannot be %s: %w",
-			payload.ApprovalID, payload.Mode, action, domain.ErrApprovalRequired,
-		)
-	}
-	if payload.Verdict != "accept" {
-		return domain.ApprovalPayload{}, nil, fmt.Errorf(
-			"backend: recorded approval %s verdict %q cannot be %s: %w",
-			payload.ApprovalID, payload.Verdict, action, domain.ErrApprovalRequired,
-		)
-	}
-	if payload.RequestType != string(domain.AttestationRequestSubmit) ||
-		payload.Result != nil ||
-		payload.ExecutionReport != nil ||
-		payload.ApprovalRef != "" {
-		return domain.ApprovalPayload{}, nil, fmt.Errorf(
-			"backend: recorded approval %s is not an original submit verdict and cannot be %s: %w",
-			payload.ApprovalID, action, domain.ErrApprovalRequired,
-		)
-	}
 	eventID, err := domain.ParseExternalID(payload.EventExternalID)
 	if err != nil {
 		return domain.ApprovalPayload{}, nil, fmt.Errorf(
@@ -935,11 +914,77 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 	}
 	if eventID != recorded.ExternalID {
 		return domain.ApprovalPayload{}, nil, fmt.Errorf(
-			"backend: recorded approval %s does not identify its pre-trade accept event and cannot be %s: %w",
-			payload.ApprovalID, action, domain.ErrApprovalRequired,
+			"backend: recorded approval %s does not identify its %s event and cannot be %s: %w",
+			payload.ApprovalID, label, action, domain.ErrApprovalRequired,
 		)
 	}
 	return payload, signer, nil
+}
+
+// buildDecisionEventPayload returns an event's decision payload and whether it
+// needs attestation; only immediate mode attests fill and commission events.
+func (s *Service) buildDecisionEventPayload(
+	order domain.Order,
+	event domain.OrderEvent,
+	decision decisionPayloadInputs,
+) (domain.ApprovalPayload, bool, error) {
+	switch event.Type {
+	case domain.OrderEventSubmitted:
+		p, err := buildSubmittedPayload(order, decision.mode, decision.approvalID)
+		return p, err == nil, err
+	case domain.OrderEventPreTradeAccepted:
+		nonce, err := newNonce()
+		if err != nil {
+			return domain.ApprovalPayload{}, false, err
+		}
+		p := buildApprovalPayload(
+			order, decision.mode, decision.approvalID,
+			decision.settlementLockPrice, time.Now().UTC(), nonce,
+		)
+		p.ApprovalRef = decision.approvalRef
+		return p, true, nil
+	case domain.OrderEventPreTradeRejected, domain.OrderEventPreTradeReview:
+		nonce, err := newNonce()
+		if err != nil {
+			return domain.ApprovalPayload{}, false, err
+		}
+		p, err := buildSubmitDecisionPayload(
+			order, decision.mode, decision.approvalID,
+			decision.verdict, decision.rejects, decision.reviews,
+			time.Now().UTC(), nonce,
+		)
+		p.ApprovalRef = decision.approvalRef
+		return p, err == nil, err
+	case domain.OrderEventCommitted:
+		committed := order
+		committed.Status = domain.OrderStatusCommitted
+		p, err := s.buildLifecyclePayload(
+			committed, domain.AttestationRequestSubmit,
+			"committed", "", decision.approvalID,
+		)
+		if err != nil {
+			return domain.ApprovalPayload{}, false, err
+		}
+		p.Mode = decision.mode
+		return p, true, nil
+	// An immediate settling event must never travel unattested. The commission
+	// variant is defensive: no immediate path populates a commission today, but
+	// one that settled the account without a fill would have to be signed
+	// exactly like a fill.
+	case domain.OrderEventFill, domain.OrderEventCommission:
+		if decision.mode == SubmitModeImmediate {
+			p, err := s.buildImmediateSettlementPayload(
+				order, event, decision.persistence,
+			)
+			if err != nil {
+				return domain.ApprovalPayload{}, false, err
+			}
+			return p, true, nil
+		}
+		return domain.ApprovalPayload{}, false, nil
+	default:
+		return domain.ApprovalPayload{}, false, nil
+	}
 }
 
 // buildApprovalPayload assembles the canonical approval payload from the
@@ -966,7 +1011,7 @@ func buildApprovalPayload(
 		LimitPrice:      order.Price,
 		PriceCurrency:   order.QuoteAsset,
 		AccountID:       string(order.Account),
-		Verdict:         "accept",
+		Verdict:         domain.VerdictAccept,
 		PolicySummary:   "accepted",
 		EstimatePrice:   settlement,
 		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
@@ -998,15 +1043,26 @@ func orderForEvent(
 	return order
 }
 
-// buildRejectApprovalPayload assembles the canonical approval payload for a
-// rejected pre-trade verdict. It binds the same order params as the accept path
-// (so the envelope re-binds against the order it records), carries an empty
-// estimate, binds the complete ordered engine reject list, and mirrors its first
-// entry onto the legacy Reject* fields.
-func buildRejectApprovalPayload(
-	order domain.Order, mode, approvalID string, rejects []domain.OrderReject,
+// buildSubmitDecisionPayload binds a rejected or review pre-trade decision to
+// the same order parameters as the accept path, with an empty estimate. It
+// preserves the ordered rejects or review marks and mirrors the first reject
+// onto the singular Reject* fields.
+func buildSubmitDecisionPayload(
+	order domain.Order, mode, approvalID string, verdict domain.Verdict,
+	rejects []domain.OrderReject, reviews []domain.ReviewMark,
 	issuedAt time.Time, nonce string,
-) domain.ApprovalPayload {
+) (domain.ApprovalPayload, error) {
+	var summary string
+	switch verdict {
+	case domain.VerdictReject:
+		summary = "rejected"
+	case domain.VerdictReview:
+		summary = "waiting for review"
+	case domain.VerdictAccept:
+		return domain.ApprovalPayload{}, fmt.Errorf("backend: accept verdict requires an approval payload")
+	default:
+		return domain.ApprovalPayload{}, fmt.Errorf("backend: unknown submit decision verdict %q", verdict)
+	}
 	reject := firstReject(rejects)
 	boundRejects := append([]domain.OrderReject(nil), rejects...)
 	orderType := "market"
@@ -1026,8 +1082,8 @@ func buildRejectApprovalPayload(
 		LimitPrice:      order.Price,
 		PriceCurrency:   order.QuoteAsset,
 		AccountID:       string(order.Account),
-		Verdict:         "reject",
-		PolicySummary:   "rejected",
+		Verdict:         verdict,
+		PolicySummary:   summary,
 		EstimatePrice:   "",
 		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
 		Nonce:           nonce,
@@ -1038,7 +1094,8 @@ func buildRejectApprovalPayload(
 		RejectDetails:   reject.Details,
 		Principal:       order.Principal,
 		Rejects:         boundRejects,
-	}
+		Reviews:         append([]domain.ReviewMark(nil), reviews...),
+	}, nil
 }
 
 func buildSubmittedPayload(
@@ -1133,7 +1190,7 @@ func (s *Service) buildExecutionReportPayload(
 
 	payload := baseAttestationPayload(
 		order, SubmitModeImmediate, issuedAt, approvalID, nonce)
-	payload.Verdict = "accept"
+	payload.Verdict = domain.VerdictAccept
 	payload.PolicySummary = "execution report applied"
 	fillQuantity := ""
 	fillPrice := ""
@@ -1191,7 +1248,7 @@ func (s *Service) buildLifecyclePayload(
 
 	payload := baseAttestationPayload(
 		order, SubmitModeHold, issuedAt, approvalID, nonce)
-	payload.Verdict = "accept"
+	payload.Verdict = domain.VerdictAccept
 	payload.ApprovalRef = approvalRef
 	payload.PolicySummary = "order lifecycle recorded"
 	if requestType == domain.AttestationRequestConfirm {
@@ -1276,7 +1333,7 @@ func firstReject(rejects []domain.OrderReject) domain.OrderReject {
 func rejectReasons(
 	payload domain.ApprovalPayload, rejects []domain.OrderReject,
 ) []domain.OrderReject {
-	if payload.Verdict != "reject" {
+	if payload.Verdict != domain.VerdictReject {
 		return nil
 	}
 	if len(rejects) > 0 {

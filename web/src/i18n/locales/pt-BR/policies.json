@@ -1,4 +1,11 @@
 {
+  "orderSizeMode": {
+    "label": "Modo da barreira",
+    "descriptions": {
+      "reject": "Uma ordem acima da barreira é rejeitada.",
+      "review_without_hold": "Uma ordem acima da barreira aguarda a revisão de um operador; nada é reservado ou enviado até sua confirmação."
+    }
+  },
   "spotFundsMode": {
     "modes": {
       "enforce": {
@@ -81,7 +88,8 @@
   },
   "delete": {
     "title": "Excluir a barreira de política?",
-    "description": "Isso remove a barreira {{policy}} em {{scope}}{{account}}{{asset}}.",
+    "description": "Isso remove a barreira {{policy}}{{mode}} em {{scope}}{{account}}{{asset}}.",
+    "modeFragment": " no modo {{mode}}",
     "accountFragment": " conta {{account}}",
     "accountGroupFragment": " grupo de contas {{accountGroup}}",
     "assetFragment": " ativo {{asset}}"

@@ -125,9 +125,10 @@ func handlePutRateLimit(svc backend.ControlPlane, write domain.LimitWrite, statu
 
 // handlePutOrderSizeLimit serves POST and PUT on /api/v1/limits/order-size.
 // The route supplies the write intent and success status. POST adds a barrier
-// and returns 201, refusing an existing key. PUT creates or replaces a barrier
-// and returns 200. The missingAccount query parameter is required when the
-// scope names an account.
+// and returns 201, refusing an existing (scope, account, asset, mode) key. PUT
+// creates or replaces that key and returns 200. An omitted mode means reject;
+// changing mode requires a delete and an add. The missingAccount query
+// parameter is required when the scope names an account.
 func handlePutOrderSizeLimit(svc backend.ControlPlane, write domain.LimitWrite, status int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req httpx.OrderSizeLimitDTO
@@ -229,17 +230,22 @@ func handlePutSpotFundsPnlBoundsLimit(
 }
 
 // handleDeleteLimit handles
-// DELETE /api/v1/limits?policy=&scope=&account=&asset=&accountGroup=.
-// The barrier is addressed by its policy-specific composite.
+// DELETE /api/v1/limits?policy=&scope=&account=&asset=&accountGroup=&mode=.
+// The barrier is addressed by its policy-specific composite. For order-size
+// limits, an omitted or empty mode addresses the reject barrier.
 func handleDeleteLimit(svc backend.ControlPlane) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		target := node.LimitTarget{
 			Policy:       q.Get("policy"),
+			Mode:         domain.RuleMode(q.Get("mode")),
 			Scope:        domain.LimitScope(q.Get("scope")),
 			Account:      domain.AccountID(q.Get("account")),
 			AccountGroup: q.Get("accountGroup"),
 			Asset:        q.Get("asset"),
+		}
+		if target.Policy == domain.PolicyOrderSizeLimit && target.Mode == "" {
+			target.Mode = domain.RuleModeReject
 		}
 		if err := svc.DeleteLimit(r.Context(), target); err != nil {
 			httpx.WriteErr(w, err)

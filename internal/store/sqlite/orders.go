@@ -95,6 +95,9 @@ LEFT JOIN trading_connection tc ON tc.id = vo.connection_id`
 func (r *realmStore) CreateOrder(
 	ctx context.Context, o domain.Order,
 ) (domain.Order, error) {
+	if o.Status == domain.OrderStatusAwaitingReview {
+		return domain.Order{}, fmt.Errorf("store: order %q requires review settlement: %w", o.ExternalID, domain.ErrInvalid)
+	}
 	db, err := r.db()
 	if err != nil {
 		return domain.Order{}, err
@@ -276,7 +279,10 @@ func (r *realmStore) recordOrderSubmission(
 // UpdateOrderStatus updates the status of the order addressed by external id.
 func (r *realmStore) UpdateOrderStatus(
 	ctx context.Context, id domain.ExternalID, status domain.OrderStatus,
-) error {
+) (err error) {
+	if status == domain.OrderStatusAwaitingReview {
+		return fmt.Errorf("store: order %q requires review settlement: %w", id, domain.ErrInvalid)
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -289,7 +295,12 @@ func (r *realmStore) UpdateOrderStatus(
 	if err != nil {
 		return err
 	}
-	res, err := db.ExecContext(
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin order status update: %w", err)
+	}
+	defer rollbackTransaction(&err, tx)
+	res, err := tx.ExecContext(
 		ctx,
 		`UPDATE order_record SET status_id = ? WHERE external_id = ?`,
 		statusID, id.Bytes(),
@@ -297,7 +308,13 @@ func (r *realmStore) UpdateOrderStatus(
 	if err != nil {
 		return fmt.Errorf("store: update order status: %w", err)
 	}
-	return notFoundIfNoRows(res, "order", id.String())
+	if err := notFoundIfNoRows(res, "order", id.String()); err != nil {
+		return err
+	}
+	if err := checkOrderReviewInvariant(ctx, dictionaries, tx, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SetOrderLock replaces the persisted SDK-serialized lock blob of the order
@@ -390,6 +407,7 @@ func putEventAttestationTx(
 
 // GetOrder returns the order addressed by external id together with its events
 // (each carrying its 1:1 signed attestation when one was issued) and trades.
+// A waiting order's review is read consistently with its status.
 // Returns domain.ErrNotFound when the order is absent.
 //
 // Each event's attestation is persisted in event_attestation (written by
@@ -398,7 +416,7 @@ func putEventAttestationTx(
 // gets every event's envelope metadata without a second round-trip.
 func (r *realmStore) GetOrder(
 	ctx context.Context, id domain.ExternalID,
-) (domain.OrderDetail, error) {
+) (detail domain.OrderDetail, err error) {
 	db, err := r.db()
 	if err != nil {
 		return domain.OrderDetail{}, err
@@ -407,13 +425,25 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	row := db.QueryRowContext(ctx, orderSelect+` WHERE o.external_id = ?`, id.Bytes())
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return domain.OrderDetail{}, fmt.Errorf("store: begin order read: %w", err)
+	}
+	defer rollbackTransaction(&err, tx)
+	row := tx.QueryRowContext(ctx, orderSelect+` WHERE o.external_id = ?`, id.Bytes())
 	o, err := scanOrderRow(dictionaries, row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.OrderDetail{}, fmt.Errorf("order %q: %w", id.String(), domain.ErrNotFound)
 	}
 	if err != nil {
 		return domain.OrderDetail{}, fmt.Errorf("store: get order: %w", err)
+	}
+	review, err := getOrderReview(ctx, tx, id)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.OrderDetail{}, fmt.Errorf("store: finish order read: %w", err)
 	}
 
 	events, err := r.ListOrderEvents(ctx, id)
@@ -428,7 +458,7 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	return domain.OrderDetail{Order: o, Events: events, Trades: trades}, nil
+	return domain.OrderDetail{Order: o, Events: events, Trades: trades, Review: review}, nil
 }
 
 // ListOrders returns the most recent n orders for an account, newest first. An
@@ -654,7 +684,7 @@ func (r *realmStore) activeOrderStatusIDs(ctx context.Context) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	statuses := domain.OrderStatusesEligibleForFill()
+	statuses := domain.OrderStatusesActive()
 	statusIDs := make([]any, 0, len(statuses))
 	for _, status := range statuses {
 		id, err := dictionaries.id(orderStatusTable, "order status", string(status))
@@ -2052,6 +2082,24 @@ func (r *realmStore) recordOrderSettlementTx(
 	if err := guardedOrderStatus(
 		ctx, dictionaries, tx, orderID, st.Order, st.OrderStatus, st.AllowedFrom,
 	); err != nil {
+		return "", err
+	}
+
+	if st.ClearReview {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM order_review WHERE order_id = ?`, orderID); err != nil {
+			return "", fmt.Errorf("store: clear review for order %q: %w", st.Order, err)
+		}
+	}
+	if st.Review != nil {
+		review, err := resolveOrderReview(ctx, dictionaries, tx, st.Order, *st.Review)
+		if err != nil {
+			return "", err
+		}
+		if err := insertOrderReview(ctx, tx, orderID, st.Order, review); err != nil {
+			return "", err
+		}
+	}
+	if err := checkOrderReviewInvariant(ctx, dictionaries, tx, st.Order); err != nil {
 		return "", err
 	}
 

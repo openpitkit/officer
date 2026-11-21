@@ -2625,7 +2625,8 @@ paths:
             type: string
           description: >
             Order status filter. May be repeated or comma-separated; `all` and
-            empty parts are ignored.
+            empty parts are ignored. Includes `awaiting_review` for orders
+            waiting for an operator decision.
         - name: baseAsset
           in: query
           schema:
@@ -2839,6 +2840,9 @@ paths:
                   venueOrder:
                     description: Omitted for an ordinary order, never null.
                     $ref: "#/components/schemas/VenueOrder"
+                  review:
+                    description: Present only while the order is awaiting_review.
+                    $ref: "#/components/schemas/OrderReview"
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
@@ -2908,6 +2912,7 @@ paths:
         account, and side are taken from the parent order.
         A venue-linked order refuses manual execution reports with 409
         venue_order_managed.
+        An order awaiting review refuses execution reports with 409 conflict.
 
         Reports are serialized on the account pipeline. Caller-reported
         `leavesQuantity` is recorded verbatim when supplied. Reservation
@@ -3314,6 +3319,16 @@ paths:
             type: string
             enum: [policy, scope, account, accountGroup, asset, maxOrders, maxQuantity, maxNotional, maxPosition, lowerBound, upperBound]
           description: Policy list sort key. Unknown keys are rejected.
+        - name: mode
+          in: query
+          description: >-
+            Filter order-size barriers by mode. A value requires
+            policy=order_size; any other or absent policy, or an unknown mode,
+            returns 422 validation. An absent mode means no mode filter. The total
+            counts the filtered barriers before paging.
+          schema:
+            type: string
+            enum: [reject, review_without_hold]
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -3357,6 +3372,9 @@ paths:
         accepted in single-account mode. Policy `spot_funds_limit_mode` is
         permanent and cannot be deleted; deletion is refused with 422 for
         every caller. Change its mode through PUT instead.
+        For order_size_limit, the key includes mode; an absent mode
+        addresses the reject barrier. A mode on another policy returns 422
+        validation.
       tags: [limits]
       parameters:
         - name: policy
@@ -3387,6 +3405,16 @@ paths:
           description: Account-group-scoped barrier owner code.
           schema:
             type: string
+        - name: mode
+          in: query
+          description: >-
+            Order-size barrier mode, only for policy=order_size_limit. An
+            absent value means reject; a mode on another policy or
+            an unknown mode returns 422 validation.
+          schema:
+            type: string
+            enum: [reject, review_without_hold]
+            default: reject
       responses:
         "204":
           description: Limit deleted.
@@ -3488,6 +3516,8 @@ paths:
       description: >
         Creates a barrier at an unused key. Uses the same scopes, request
         fields and validation as `PUT /limits/order-size`.
+        The key is (scope, account, asset, mode); an existing key returns
+        409 limit_exists. Changing mode requires a delete and an add.
       tags: [limits]
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
@@ -3521,6 +3551,9 @@ paths:
       summary: Create or replace an order-size barrier
       description: >
         Use PUT to edit the barrier at the key or create it if absent.
+        The key is (scope, account, asset, mode), so reject and review barriers
+        can coexist on one target. An absent mode means reject.
+        Changing mode requires a delete and an add.
         `missingAccount` follows the rate-limit barrier: it is required when the
         scope carries the account axis and ignored otherwise. A broker barrier may
         carry either cap or both. `underlying_asset` and
@@ -4714,6 +4747,8 @@ paths:
         duplicate is rejected with 409; when omitted the server generates one. The
         returned `id` is the id actually used, so confirm/cancel
         resolve the same order.
+        A review verdict records awaiting_review and holds nothing. Any verdict
+        other than accept means do not send.
       tags: [signing]
       parameters:
         - $ref: "#/components/parameters/MissingAccountWhenNamed"
@@ -4728,7 +4763,9 @@ paths:
           description: >
             Order created and signed submit decision issued. A risk reject is a
             successful pre-trade decision with `verdict: reject` and structured
-            `reasons`; invalid input and signing/attestation failures are errors.
+            `reasons`; `verdict: review` returns `reviews` and waits without
+            holding or sending. Invalid input and signing/attestation failures
+            are errors.
           content:
             application/json:
               schema:
@@ -4765,7 +4802,7 @@ paths:
         must match the venue account of the grant the account sends through,
         its own or its group's. A live connection returns
         trading_mode_mismatch. A venue pre-check refusal returns 422 with the
-        venue's reason. A pre-trade reject returns 201 without venueSend and
+        venue's reason. A pre-trade reject or review returns 201 without venueSend and
         sends nothing. GET /orders/{id} is authoritative; the runtime reconciles
         any order that reached the send step. POST /orders/send-live is the live
         counterpart.
@@ -4830,7 +4867,7 @@ paths:
         send, through a live destination, with real money at the venue.
         Omitting the connection requires exactly one enabled live destination;
         ambiguity returns destination_ambiguous with candidates. A paper
-        connection returns trading_mode_mismatch. A pre-trade reject returns
+        connection returns trading_mode_mismatch. A pre-trade reject or review returns
         201 without venueSend and sends nothing. GET /orders/{id} is
         authoritative; the runtime reconciles any order that reached the send
         step.
@@ -4937,6 +4974,114 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredError"
 
+  /orders/{id}/review/confirm:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      operationId: confirmOrderReview
+      summary: Confirm or retry an order waiting for review
+      description: >
+        No request body. Re-runs pre-trade and spends rate-limit units again.
+        A rejected decision returns 200 and leaves the order awaiting_review;
+        retry through this same endpoint. An accepted gateway order is approved
+        for the caller to send; an accepted trading order is sent to its stored
+        destination and includes venueSend. MCP callers cannot decide reviews.
+        Every documented error except 500 occurs before the decision and
+        leaves the order unchanged. In particular,
+        a trading destination pre-check can fail while the order still awaits
+        review. After a 500 the decision may already be recorded; GET
+        /orders/{id} reports the current state and must be checked before retrying.
+      tags: [orders]
+      responses:
+        "200":
+          description: >
+            Signed decision and optional trading send outcome. The order is the
+            snapshot recorded by the decision. If venueSend.status is refused,
+            the order has since been cancelled, even though this snapshot is
+            committed. GET /orders/{id} is authoritative for the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmOrderReviewResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+          description: >
+            MCP callers, an unbound trading connection or a different venue
+            account are forbidden, as are foreign-host, foreign-origin and
+            wrong-token requests. The order is unchanged and may still await review.
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+          description: >
+            Unknown order or missing trading instrument mapping. The order is
+            unchanged and may still await review.
+        "409":
+          $ref: "#/components/responses/OrderReviewConflictError"
+          description: >
+            The order has no verified review approval (approval_required),
+            is not awaiting review, or its trading connection or instrument
+            is disabled or its runtime is stopped (conflict). A destination
+            pre-check conflict leaves the order awaiting review.
+            GET /orders/{id} reports the current state.
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+          description: >
+            The decision may already be recorded. Check GET /orders/{id}
+            for the current state before retrying.
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+          description: Setup is required or the engine is restarting (engine_restarting).
+
+  /orders/{id}/review/cancel:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      operationId: cancelOrderReview
+      summary: Cancel an order waiting for review
+      description: >
+        No request body. Cancels the waiting order without holding or sending
+        anything and returns the cancellation attestation. MCP callers cannot
+        decide reviews.
+      tags: [orders]
+      responses:
+        "200":
+          description: Cancelled order and its signed attestation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderMutationResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+          description: MCP callers are forbidden, as are foreign-host, foreign-origin and wrong-token requests.
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/OrderReviewConflictError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+          description: Setup is required or the engine is restarting (engine_restarting).
+
   /orders/{id}/confirm:
     parameters:
       - $ref: "#/components/parameters/OrderId"
@@ -4950,6 +5095,7 @@ paths:
         recorded, or activity already exists, the caller must submit a complete
         execution report through the order workflow instead.
         Venue-linked orders refuse this shortcut with 409 venue_order_managed.
+        Orders awaiting review return 409 conflict; use /review/confirm.
       tags: [signing]
       responses:
         "200":
@@ -4997,6 +5143,7 @@ paths:
         must submit a complete execution report through the order workflow
         instead.
         Venue-linked orders refuse this shortcut with 409 venue_order_managed.
+        Orders awaiting review return 409 conflict; use /review/cancel.
       tags: [signing]
       requestBody:
         required: true
@@ -7028,6 +7175,20 @@ components:
         the normal order workflow instead. A terminal order returns
         `terminal_order`.
         Venue-linked orders always return venue_order_managed.
+        An order awaiting review returns conflict; use its /review endpoints.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    OrderReviewConflictError:
+      description: >
+        The order is not awaiting review, including a second decision after it
+        was accepted or cancelled (`conflict`), or Officer has no verified
+        review approval for it (`approval_required`). On review confirmation,
+        a disabled trading connection or instrument or a stopped runtime also
+        returns `conflict` while the order keeps awaiting review. The order is
+        unchanged after these 409 refusals; GET /orders/{id} reports its current state.
       content:
         application/json:
           schema:
@@ -7757,7 +7918,7 @@ components:
       properties:
         formatVersion:
           type: integer
-          description: Backup archive format version required for restore.
+          description: Restore accepts the current archive format version and the previous released version through its upgrade step.
         createdAt:
           type: string
           format: date-time
@@ -8675,6 +8836,7 @@ components:
           description: Exact decimal string.
         status:
           type: string
+          enum: [submitted, accepted, rejected, committed, rolled_back, filled, partially_filled, cancelled, awaiting_review]
         source:
           type: string
           description: >
@@ -8727,7 +8889,7 @@ components:
         requestType:
           type: string
           description: The trading request the attestation binds.
-          enum: [submit, execution_report, confirm, cancel]
+          enum: [submit, execution_report, confirm, cancel, review_confirm, review_cancel]
         mode:
           type: string
           description: Submit mode the attestation was issued for.
@@ -8760,6 +8922,7 @@ components:
             records `commission`, not a synthetic `fill`, whatever status it
             targets. A status that has its own lifecycle event records that
             event as well, so one report can produce two entries.
+          enum: [submitted, pre_trade_accepted, pre_trade_rejected, committed, rolled_back, confirmed, fill, commission, cancelled, pre_trade_review]
         source:
           type: string
           enum: [panel, api, mcp, system]
@@ -8925,6 +9088,93 @@ components:
         details:
           type: string
 
+    ReviewMark:
+      allOf:
+        - $ref: "#/components/schemas/OrderReject"
+        - type: object
+          required: [mode]
+          properties:
+            mode:
+              type: string
+              enum: [reject, review_without_hold, review_with_hold]
+              description: Rule mode recorded by the engine.
+
+    OrderReview:
+      type: object
+      required: [marks, lastConfirm, destination]
+      description: >
+        Present only for awaiting_review. Marks come from the pre_trade_review
+        envelope. Missing review history or an undecodable envelope is a 500.
+      properties:
+        marks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewMark"
+        lastConfirm:
+          description: >
+            The last pre_trade_rejected event attested review_confirm, in the
+            order of this endpoint's events, or null. After a system clock step
+            back it can appear before the pre_trade_review event.
+          oneOf:
+            - $ref: "#/components/schemas/ReviewLastConfirm"
+            - type: "null"
+        destination:
+          description: Stored trading destination without credentials; null for a gateway order.
+          oneOf:
+            - type: object
+              required: [connection, venueAccount, route]
+              properties:
+                connection:
+                  $ref: "#/components/schemas/Id"
+                venueAccount:
+                  type: string
+                route:
+                  type: object
+                  additionalProperties: true
+            - type: "null"
+
+    ReviewLastConfirm:
+      type: object
+      required: [verdict, reasons, at]
+      properties:
+        verdict:
+          type: string
+          enum: [reject]
+        reasons:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderReject"
+        at:
+          type: string
+          format: date-time
+
+    ConfirmOrderReviewResponse:
+      type: object
+      required: [order, decision]
+      properties:
+        order:
+          $ref: "#/components/schemas/Order"
+        decision:
+          type: object
+          required: [verdict, reasons, signedApproval, keyId, signed]
+          properties:
+            verdict:
+              type: string
+              enum: [accept, reject]
+            reasons:
+              type: array
+              items:
+                $ref: "#/components/schemas/OrderReject"
+            signedApproval:
+              type: string
+            keyId:
+              type: string
+            signed:
+              type: boolean
+        venueSend:
+          description: Present only for an accepted trading order.
+          $ref: "#/components/schemas/VenueSend"
+
     CheckResult:
       type: object
       required: [passed, rejects, wouldDisplayPrice, wouldBlock]
@@ -8937,6 +9187,11 @@ components:
           items:
             $ref: "#/components/schemas/OrderReject"
           description: Engine pre-trade rejects; empty when the check passed.
+        reviews:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewMark"
+          description: Engine review marks; omitted when none.
         wouldDisplayPrice:
           type: string
           description: >
@@ -9100,6 +9355,13 @@ components:
       additionalProperties: false
       required: [scope, asset, maxQuantity, maxNotional]
       properties:
+        mode:
+          type: string
+          enum: [reject, review_without_hold]
+          default: reject
+          description: >
+            Order-size barrier mode, part of its key. Optional in a request;
+            absent means reject. Always present in a response.
         scope:
           $ref: "#/components/schemas/OrderSizeLimitScope"
         account:
@@ -9297,12 +9559,19 @@ components:
         discriminator selects which member of values is present; the
         scope/account/accountGroup/asset axes are shared across
         all kinds; unsupported axes are empty strings.
-      required: [kind, scope, account, accountGroup, asset, values]
+      required: [kind, mode, scope, account, accountGroup, asset, values]
       properties:
         kind:
           type: string
           description: Policy kind discriminator.
           enum: [rate_limit, order_size_limit, position_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch, spot_funds_limit_mode]
+        mode:
+          type: [string, "null"]
+          enum: [reject, review_without_hold, null]
+          description: >
+            Order-size barrier mode. Null for every other kind, including
+            spot_funds_limit_mode, whose enforce/track_only setting remains
+            under values.spotFundsLimitMode.mode.
         scope:
           $ref: "#/components/schemas/LimitScope"
         account:
@@ -9409,7 +9678,7 @@ components:
           description: Opaque order handle for an order decision; omitted for unrelated actions.
         verdict:
           type: string
-          enum: [accept, reject]
+          enum: [accept, reject, review]
           description: Recorded engine decision; omitted for unrelated actions.
         rejectCode:
           type: string
@@ -10962,7 +11231,7 @@ components:
           properties:
             venueSend:
               $ref: "#/components/schemas/VenueSend"
-              description: Omitted when the pre-trade verdict is reject.
+              description: Present only when the pre-trade verdict is accept.
 
     VenueSend:
       type: object
@@ -11040,7 +11309,8 @@ components:
       description: >
         The signed submit decision issued for an order submit. The authorised
         order is referenced by its public id, never a surrogate id.
-        `verdict` distinguishes accepted and rejected pre-trade decisions.
+        `verdict` distinguishes accepted, rejected and review pre-trade decisions.
+        Any verdict other than accept means do not send. Review holds and sends nothing.
         Event reproduction may return an empty verdict when the reproduced event
         has no pre-trade verdict, including submitted lifecycle events.
       properties:
@@ -11055,13 +11325,19 @@ components:
           $ref: "#/components/schemas/Id"
         verdict:
           type: string
-          enum: [accept, reject, ""]
+          enum: [accept, reject, review, ""]
           description: The signed pre-trade verdict, or empty when absent.
         reasons:
           type: array
           description: Structured pre-trade reject reasons; omitted on accept.
           items:
             $ref: "#/components/schemas/OrderReject"
+
+        reviews:
+          type: array
+          description: Engine review marks with their rule modes; omitted when none.
+          items:
+            $ref: "#/components/schemas/ReviewMark"
 
     PublicKeyMaterial:
       type: object
@@ -11151,7 +11427,7 @@ components:
       properties:
         requestType:
           type: string
-          enum: [submit, execution_report, confirm, cancel]
+          enum: [submit, execution_report, confirm, cancel, review_confirm, review_cancel]
         orderId:
           type: string
         eventId:
@@ -11196,6 +11472,10 @@ components:
         attested request. Exactly one facet is populated, matching the request
         type; the envelope is carried verbatim in the response's
         `signedApproval` or `signedAttestation` field.
+        reviewConfirm is the exception: like submitResponse it reproduces the
+        signed decision, and it carries neither order nor venueSend, because
+        the order and venue outcome are not signed by the decision.
+        GET /orders/{id} is authoritative for the current order state.
       properties:
         submitResponse:
           $ref: "#/components/schemas/SignedApproval"
@@ -11204,6 +11484,11 @@ components:
         confirm:
           $ref: "#/components/schemas/OrderMutationResponse"
         cancel:
+          $ref: "#/components/schemas/OrderMutationResponse"
+        reviewConfirm:
+          $ref: "#/components/schemas/ConfirmOrderReviewResponse/properties/decision"
+          description: The signed decision alone, with this event's envelope.
+        reviewCancel:
           $ref: "#/components/schemas/OrderMutationResponse"
 
     EventReproduction:

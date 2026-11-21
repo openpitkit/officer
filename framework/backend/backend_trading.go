@@ -133,7 +133,7 @@ type SendDestination struct {
 // VenueSendResult preserves the pre-trade approval even if sending is unknown.
 type VenueSendResult struct {
 	Approval SignedApproval
-	// Send is nil when the pre-trade verdict is reject.
+	// Send is populated only for an accepted trading order.
 	Send *VenueSend
 }
 
@@ -854,17 +854,7 @@ func (s *Service) SendLiveOrder(ctx context.Context, o domain.Order, dest SendDe
 func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestination, mode domain.TradingMode) (result VenueSendResult, err error) {
 	var redact *strings.Replacer
 	defer func() {
-		if redact == nil {
-			return
-		}
-		if err != nil {
-			if text := redact.Replace(err.Error()); text != err.Error() {
-				err = &redactedTradingError{text: text, cause: err}
-			}
-		}
-		if result.Send != nil {
-			result.Send.Error = redact.Replace(result.Send.Error)
-		}
+		err = redactTradingSend(redact, result.Send, err)
 	}()
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
@@ -885,27 +875,9 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 	var venueAccount string
 	var connection domain.TradingConnection
 	if !dest.Connection.IsZero() {
-		connection, err = s.tradingConnection(ctx, dest.Connection.String())
+		connection, venueAccount, redact, err = s.resolveTradingConnection(ctx, o.Account, dest.Connection)
 		if err != nil {
 			return VenueSendResult{}, err
-		}
-		_, redact, err = secret.CredentialRedactor(connection.Credentials)
-		if err != nil {
-			return VenueSendResult{}, err
-		}
-		access, err := s.node.ListTradingAccess(ctx, o.Account)
-		if err != nil {
-			return VenueSendResult{}, err
-		}
-		bound := false
-		for _, binding := range access {
-			if binding.Connection == connection.ExternalID {
-				bound, venueAccount = true, binding.VenueAccount
-				break
-			}
-		}
-		if !bound {
-			return VenueSendResult{}, fmt.Errorf("trading connection is not bound to the account: %w", domain.ErrForbidden)
 		}
 		if connection.Mode != mode {
 			return VenueSendResult{}, fmt.Errorf("trading connection mode is %s, send requires %s: %w", connection.Mode, mode, domain.ErrTradingModeMismatch)
@@ -943,48 +915,94 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 		return VenueSendResult{}, fmt.Errorf("trading venue account differs from the binding: %w", domain.ErrForbidden)
 	}
 	destination := domain.TradingDestination{Connection: dest.Connection, VenueAccount: venueAccount, Route: dest.Route}
-	if err := s.trading.PreCheck(ctx, o, destination); err != nil {
-		if errors.Is(err, trading.ErrRejected) || errors.Is(err, trading.ErrUnsupported) {
-			return VenueSendResult{}, fmt.Errorf("trading pre-check: %w: %w", err, domain.ErrInvalid)
-		}
-		if tradingHasDomainSentinel(err) {
-			return VenueSendResult{}, err
-		}
-		return VenueSendResult{}, fmt.Errorf("trading pre-check: %w: %w", err, domain.ErrUpstream)
+	if err := s.preCheckTradingOrder(ctx, o, destination); err != nil {
+		return VenueSendResult{}, err
 	}
-	approval, err := s.SubmitOrder(ctx, o, SubmitModeHold, domain.MissingAccountReject)
+	approval, err := s.submitOrder(ctx, o, SubmitModeHold, domain.MissingAccountReject, &destination)
 	if err != nil {
 		return VenueSendResult{}, err
 	}
 	result = VenueSendResult{Approval: approval}
-	if approval.Verdict == "reject" {
+	switch approval.Verdict {
+	case domain.VerdictAccept:
+	case domain.VerdictReject, domain.VerdictReview:
 		return result, nil
+	default:
+		return VenueSendResult{}, fmt.Errorf("backend: unknown order verdict %q", approval.Verdict)
 	}
 	orderID := domain.ExternalID(approval.OrderExternalID)
+	result.Send = s.sendTradingOrder(ctx, orderID, destination, redact)
+	return result, nil
+}
+
+// resolveTradingConnection returns the connection, bound venue account, and
+// credential redactor. Unbound connections return domain.ErrForbidden.
+// The redactor is retained on binding errors so callers can redact them too.
+func (s *Service) resolveTradingConnection(ctx context.Context, account domain.AccountID, connectionID domain.ExternalID) (domain.TradingConnection, string, *strings.Replacer, error) {
+	connection, err := s.tradingConnection(ctx, connectionID.String())
+	if err != nil {
+		return domain.TradingConnection{}, "", nil, err
+	}
+	_, redact, err := secret.CredentialRedactor(connection.Credentials)
+	if err != nil {
+		return connection, "", redact, err
+	}
+	access, err := s.node.ListTradingAccess(ctx, account)
+	if err != nil {
+		return connection, "", redact, err
+	}
+	for _, binding := range access {
+		if binding.Connection == connection.ExternalID {
+			return connection, binding.VenueAccount, redact, nil
+		}
+	}
+	return connection, "", redact, fmt.Errorf("trading connection is not bound to the account: %w", domain.ErrForbidden)
+}
+
+// preCheckTradingOrder checks the order at the venue for the destination and
+// returns the mapped domain error, if any. Call requireTradingRuntime first.
+func (s *Service) preCheckTradingOrder(ctx context.Context, o domain.Order, destination domain.TradingDestination) error {
+	if err := s.trading.PreCheck(ctx, o, destination); err != nil {
+		if errors.Is(err, trading.ErrRejected) || errors.Is(err, trading.ErrUnsupported) {
+			return fmt.Errorf("trading pre-check: %w: %w", err, domain.ErrInvalid)
+		}
+		if tradingHasDomainSentinel(err) {
+			return err
+		}
+		return fmt.Errorf("trading pre-check: %w: %w", err, domain.ErrUpstream)
+	}
+	return nil
+}
+
+// sendTradingOrder sends an accepted order, returning its outcome and venue
+// link. Call requireTradingRuntime first. On trading.ErrNotSent it calls
+// CancelOrder; on a venue refusal it re-reads the order. Redact errors with
+// redactTradingSend.
+func (s *Service) sendTradingOrder(ctx context.Context, orderID domain.ExternalID, destination domain.TradingDestination, redact *strings.Replacer) *VenueSend {
 	_, sendErr := s.trading.Send(ctx, orderID, destination)
-	result.Send = &VenueSend{Status: "acknowledged"}
+	send := &VenueSend{Status: "acknowledged"}
 	if sendErr != nil {
-		result.Send.Status, result.Send.Error = "unknown", sendErr.Error()
-		errors.As(sendErr, &result.Send.Refusal)
+		send.Status, send.Error = "unknown", sendErr.Error()
+		errors.As(sendErr, &send.Refusal)
 		if errors.Is(sendErr, trading.ErrNotSent) {
 			text := redact.Replace(sendErr.Error())
 			reason := domain.NormalizeReason(redact.Replace(domain.NormalizeReason(text)))
 			if _, _, cancelErr := s.CancelOrder(context.WithoutCancel(ctx), string(orderID), "0", reason); cancelErr != nil {
-				result.Send.Error = errors.Join(sendErr, cancelErr).Error()
+				send.Error = errors.Join(sendErr, cancelErr).Error()
 			} else {
-				result.Send.Status, result.Send.Error = "refused", text
+				send.Status, send.Error = "refused", text
 			}
-			return result, nil
+			return send
 		} else if errors.Is(sendErr, trading.ErrRejected) || errors.Is(sendErr, trading.ErrUnsupported) {
 			detail, readErr := s.node.GetOrder(context.WithoutCancel(ctx), orderID)
 			if readErr == nil && detail.Order.Status == domain.OrderStatusCancelled {
-				result.Send.Status = "refused"
+				send.Status = "refused"
 			} else if readErr != nil {
-				result.Send.Error = errors.Join(sendErr,
+				send.Error = errors.Join(sendErr,
 					errors.New("venue refused; cancellation could not be confirmed"),
 					readErr).Error()
 			} else {
-				result.Send.Error = errors.Join(sendErr,
+				send.Error = errors.Join(sendErr,
 					errors.New("venue refused; cancellation is not recorded yet; runtime retries it")).Error()
 			}
 		}
@@ -992,15 +1010,32 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 	// Send may stop waiting when ctx is cancelled while the worker still sends.
 	link, found, err := s.node.GetVenueOrder(context.WithoutCancel(ctx), orderID)
 	if err != nil {
-		result.Send.Status = "unknown"
-		if result.Send.Error != "" {
-			result.Send.Error += "\n"
+		send.Status = "unknown"
+		if send.Error != "" {
+			send.Error += "\n"
 		}
-		result.Send.Error += fmt.Errorf("trading: read venue order: %w", err).Error()
+		send.Error += fmt.Errorf("trading: read venue order: %w", err).Error()
 	} else if found {
-		result.Send.Order = &link
+		send.Order = &link
 	}
-	return result, nil
+	return send
+}
+
+// redactTradingSend redacts the send error text and returns an error
+// preserving its cause.
+func redactTradingSend(redact *strings.Replacer, send *VenueSend, err error) error {
+	if redact == nil {
+		return err
+	}
+	if err != nil {
+		if text := redact.Replace(err.Error()); text != err.Error() {
+			err = &redactedTradingError{text: text, cause: err}
+		}
+	}
+	if send != nil {
+		send.Error = redact.Replace(send.Error)
+	}
+	return err
 }
 
 func tradingHasDomainSentinel(err error) bool {

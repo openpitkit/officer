@@ -710,7 +710,7 @@ describe("Setup", () => {
       await heading(TITLES.encryption);
       expect(putLimit).toHaveBeenCalledTimes(1);
       expect(putLimit).toHaveBeenCalledWith(
-        { ...LIMIT, values: { mode: "track_only" } },
+        { ...LIMIT, mode: null, values: { mode: "track_only" } },
         "reject",
       );
       expect(reload).toHaveBeenCalledTimes(1);
@@ -732,7 +732,7 @@ describe("Setup", () => {
 
       await heading(TITLES.encryption);
       expect(putLimit).toHaveBeenCalledWith(
-        { ...LIMIT, values: { mode: "enforce" } },
+        { ...LIMIT, mode: null, values: { mode: "enforce" } },
         "reject",
       );
     });
@@ -787,7 +787,7 @@ describe("Setup", () => {
       await heading(TITLES.encryption);
       expect(putLimit).toHaveBeenCalledTimes(1);
       expect(putLimit).toHaveBeenCalledWith(
-        { ...LIMIT, values: { mode: "enforce" } },
+        { ...LIMIT, mode: null, values: { mode: "enforce" } },
         "reject",
       );
     });

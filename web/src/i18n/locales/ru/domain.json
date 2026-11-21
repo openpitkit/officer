@@ -20,6 +20,11 @@
     "account_underlying_asset": "Счёт + базовый актив",
     "account_settlement_asset": "Счёт + расчётный актив"
   },
+  "ruleMode": {
+    "reject": "Отказ",
+    "review_without_hold": "Ревью без удержания",
+    "review_with_hold": "Ревью с удержанием"
+  },
   "adjustmentType": {
     "venue_fee": "Комиссия площадки",
     "deposit": "Депозит",

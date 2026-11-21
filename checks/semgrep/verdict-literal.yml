@@ -1,0 +1,59 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# Verdict consumers must name the domain constants and decide every verdict.
+# Literal comparisons can silently let a new review verdict pass as accept.
+# Catch non-empty double-quoted and raw literals in comparisons, assignments, struct
+# fields and switch cases for a field or variable named Verdict or verdict.
+# The Go matcher ignores comments and does not depend on the receiver's type.
+#
+# Deliberate limits: this is a naming rule, not data-flow or exhaustiveness
+# analysis. Aliases with other names and computed strings are
+# outside its scope. It does not prove that all verdicts have switch arms.
+# The empty literal is allowed: the zero value means "no verdict on this
+# payload", rather than an accept, reject or review decision.
+# Tests and fixtures are excluded from the production scan; fixtures carry
+# intentional violations and are checked by the Semgrep test runner.
+
+rules:
+  - id: verdict-literal
+    message: >-
+      Use the domain.Verdict constants and decide every verdict explicitly.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-either:
+          - pattern: $TARGET == $VALUE
+          - pattern: $TARGET != $VALUE
+          - pattern: $VALUE == $TARGET
+          - pattern: $VALUE != $TARGET
+          - pattern: $TARGET = $VALUE
+          - pattern: $TARGET := $VALUE
+          - pattern: '$TYPE{..., $TARGET: $VALUE, ...}'
+          - pattern: 'switch $TARGET { case $VALUE: ... }'
+      - metavariable-regex:
+          metavariable: $TARGET
+          regex: '^(?:[\s\S]*\.)?(?:Verdict|verdict)$'
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: '^(?:"(?:[^"\\]|\\.)+"|`[^`]+`)$'
+    paths:
+      include:
+        - "**/*.go"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

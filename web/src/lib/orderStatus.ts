@@ -21,12 +21,18 @@
 // shared by the Orders screen filter and by cross-screen links that pre-filter
 // Orders to the active set.
 
-/** Working order statuses: the order can still change. */
-export const ACTIVE_ORDER_STATUSES = [
+/** Statuses eligible for execution reports and workflow actions. */
+export const FILL_ELIGIBLE_ORDER_STATUSES = [
   "submitted",
   "accepted",
   "committed",
   "partially_filled",
+] as const;
+
+/** Working order statuses, including orders waiting for an operator decision. */
+export const ACTIVE_ORDER_STATUSES = [
+  ...FILL_ELIGIBLE_ORDER_STATUSES,
+  "awaiting_review",
 ] as const;
 
 /** Resolved order statuses: no further work is expected. */

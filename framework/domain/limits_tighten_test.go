@@ -65,6 +65,7 @@ var (
 // orderSize builds a broker order-size barrier; an empty cap is unset.
 func orderSize(quantity, notional string) domain.LimitOrderSize {
 	return domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxQuantity: quantity, MaxNotional: notional,
 	}
 }

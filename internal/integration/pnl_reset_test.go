@@ -122,7 +122,7 @@ func TestLocalNode_ResetAndFillSerializeWithoutLostPnl(t *testing.T) {
 		defer group.Done()
 		<-start
 		_, result, err := n.SubmitImmediate(ctx, domain.Order{Account: "desk", BaseAsset: "BTC", QuoteAsset: "USD", Side: domain.OrderSideSell, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "103", DropCopy: true}, domain.MissingAccountReject, caller)
-		if err == nil && !result.Accepted {
+		if err == nil && result.Verdict != domain.VerdictAccept {
 			err = errors.New("fill rejected")
 		}
 		failures <- err
@@ -161,7 +161,7 @@ func TestLocalNode_ResetAndFillSerializeWithoutLostPnl(t *testing.T) {
 func realizeResetPosition(t *testing.T, n node.Node, account domain.AccountID, price string) {
 	t.Helper()
 	order, result, err := n.SubmitImmediate(systemCtx(), domain.Order{Account: account, BaseAsset: "BTC", QuoteAsset: "USD", Side: domain.OrderSideSell, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: price, DropCopy: true}, domain.MissingAccountReject, auth.SystemCaller())
-	if err != nil || !result.Accepted || order.Status != domain.OrderStatusFilled {
+	if err != nil || result.Verdict != domain.VerdictAccept || order.Status != domain.OrderStatusFilled {
 		t.Fatalf("real Engine fill = %+v %+v %v", order, result, err)
 	}
 }

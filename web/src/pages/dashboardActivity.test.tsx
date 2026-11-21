@@ -19,8 +19,24 @@ import { AlertTriangle } from "lucide-react";
 import { describe, expect, it } from "vitest";
 
 import { auditActionMeta } from "@/pages/dashboardActivity";
+import i18n from "@/i18n";
+import { LOCALE_CODES } from "@/i18n/locales";
 
 describe("dashboard audit action metadata", () => {
+  it.each([
+    ["confirm_order_review", "confirmOrderReview"],
+    ["cancel_order_review", "cancelOrderReview"],
+  ])(
+    "names %s through the dashboard catalog in every locale",
+    (action, key) => {
+      const titleKey = auditActionMeta(action).titleKey;
+      expect(titleKey).toBe(`audit.action.${key}`);
+      for (const locale of LOCALE_CODES) {
+        expect(i18n.getResource(locale, "dashboard", titleKey!)).toBeTruthy();
+      }
+    },
+  );
+
   it("names alert delivery and decisions through the audit catalog", () => {
     expect(auditActionMeta("alert_delivery").titleKey).toBe(
       "audit.action.alertDelivery",

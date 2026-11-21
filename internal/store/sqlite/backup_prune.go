@@ -88,6 +88,7 @@ func (rt *restoreTx) pruneTrading(ctx context.Context) error {
 		return err
 	}
 	for _, table := range []string{
+		"order_review WHERE connection_id IS NOT NULL",
 		"venue_order",
 		"trading_access",
 		"trading_test_policy",
@@ -274,21 +275,21 @@ func (rt *restoreTx) pruneLimits(
 ) error {
 	rateKeep := make(map[string]bool, len(data.RateLimits))
 	for _, l := range data.RateLimits {
-		rateKeep[limitKey(string(l.Scope), l.Account, l.Asset)] = true
+		rateKeep[limitKey(string(l.Scope), l.Account, l.Asset, "")] = true
 	}
 	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_rate", rateKeep); err != nil {
 		return err
 	}
 	sizeKeep := make(map[string]bool, len(data.OrderSizeLimits))
 	for _, l := range data.OrderSizeLimits {
-		sizeKeep[limitKey(string(l.Scope), l.Account, l.Asset)] = true
+		sizeKeep[limitKey(string(l.Scope), l.Account, l.Asset, l.Mode)] = true
 	}
 	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_order_size", sizeKeep); err != nil {
 		return err
 	}
 	positionKeep := make(map[string]bool, len(data.PositionLimits))
 	for _, l := range data.PositionLimits {
-		positionKeep[limitKey(string(l.Scope), l.Account, l.Asset)] = true
+		positionKeep[limitKey(string(l.Scope), l.Account, l.Asset, "")] = true
 	}
 	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_position", positionKeep); err != nil {
 		return err
@@ -331,9 +332,13 @@ func (rt *restoreTx) pruneLimitTable(
 	ctx context.Context, selector backup.EntitySelector, accounts accountScope,
 	table string, keep map[string]bool,
 ) error {
+	modeColumn := `''`
+	if table == "limit_order_size" {
+		modeColumn = `t.mode`
+	}
 	rows, err := rt.tx.QueryContext(
 		ctx,
-		`SELECT t.id, t.scope, a.code, ast.code
+		`SELECT t.id, t.scope, a.code, ast.code, `+modeColumn+`
 		 FROM `+table+` t
 		 LEFT JOIN account a   ON a.id   = t.account_id
 		 LEFT JOIN asset   ast ON ast.id = t.asset_id`,
@@ -344,6 +349,7 @@ func (rt *restoreTx) pruneLimitTable(
 	type limitRow struct {
 		id            int64
 		scope, a, ast string
+		mode          domain.RuleMode
 	}
 	out := make([]limitRow, 0)
 	for rows.Next() {
@@ -351,12 +357,13 @@ func (rt *restoreTx) pruneLimitTable(
 			id         int64
 			scopeStr   string
 			acc, asset sql.NullString
+			mode       domain.RuleMode
 		)
-		if err := rows.Scan(&id, &scopeStr, &acc, &asset); err != nil {
+		if err := rows.Scan(&id, &scopeStr, &acc, &asset, &mode); err != nil {
 			err = errors.Join(err, rows.Close())
 			return fmt.Errorf("store: prune %s row: %w", table, err)
 		}
-		out = append(out, limitRow{id: id, scope: scopeStr, a: acc.String, ast: asset.String})
+		out = append(out, limitRow{id: id, scope: scopeStr, a: acc.String, ast: asset.String, mode: mode})
 	}
 	if err := rows.Err(); err != nil {
 		err = errors.Join(err, rows.Close())
@@ -366,7 +373,7 @@ func (rt *restoreTx) pruneLimitTable(
 		return fmt.Errorf("store: close %s rows for pruning: %w", table, err)
 	}
 	for _, l := range out {
-		if keep[limitKey(l.scope, domain.AccountID(l.a), l.ast)] ||
+		if keep[limitKey(l.scope, domain.AccountID(l.a), l.ast, l.mode)] ||
 			!limitAxisInScope(selector, accounts, l.a) {
 			continue
 		}
@@ -986,10 +993,11 @@ func scanStrings(rows *sql.Rows, err error) (result []string, resultErr error) {
 	return out, nil
 }
 
-// limitKey builds the portable (scope, account, asset) key a limit barrier is
-// addressed by; empty account/asset codes denote an absent axis.
-func limitKey(scope string, account domain.AccountID, asset string) string {
-	return scope + "\x00" + account.String() + "\x00" + asset
+// limitKey builds the portable (scope, account, asset, mode) barrier key.
+// Mode is empty for tables other than limit_order_size; empty account/asset
+// codes denote an absent axis.
+func limitKey(scope string, account domain.AccountID, asset string, mode domain.RuleMode) string {
+	return scope + "\x00" + account.String() + "\x00" + asset + "\x00" + string(mode)
 }
 
 func spotFundsPnlBoundsLimitKey(

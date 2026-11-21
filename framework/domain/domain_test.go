@@ -1493,19 +1493,26 @@ func TestLimitOrderSize_Validate(t *testing.T) {
 		limit domain.LimitOrderSize
 	}{
 		{"broker max_quantity only", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxQuantity: "100"}},
 		{"broker max_notional only", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxNotional: "50000.5"}},
 		{"broker both", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxQuantity: "1", MaxNotional: "999"}},
 		{"underlying asset", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeUnderlyingAsset, Asset: "MSFT", MaxQuantity: "0.5"}},
 		{"settlement asset", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "500"}},
 		{"account underlying asset", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 			MaxQuantity: "1"}},
 		{"account settlement asset", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccountSettlementAsset, Account: "acc-1", Asset: "USD",
 			MaxNotional: "999"}},
 	}
@@ -1522,23 +1529,31 @@ func TestLimitOrderSize_Validate(t *testing.T) {
 		name  string
 		limit domain.LimitOrderSize
 	}{
-		{"neither kind", domain.LimitOrderSize{Scope: domain.ScopeBroker}},
+		{"neither kind", domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker}},
 		{"max_quantity zero", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxQuantity: "0"}},
 		{"max_notional negative", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxNotional: "-1"}},
 		{"scope account not allowed", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccount, Account: "acc-1", MaxQuantity: "1"}},
 		{"generic asset scope not allowed", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAsset, Asset: "AAPL", MaxQuantity: "1"}},
 		{"underlying missing quantity", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxNotional: "10"}},
 		{"underlying carries notional", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL",
 			MaxQuantity: "1", MaxNotional: "10"}},
 		{"settlement missing notional", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxQuantity: "1"}},
 		{"settlement carries quantity", domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeSettlementAsset, Asset: "USD",
 			MaxQuantity: "1", MaxNotional: "10"}},
 	}
@@ -1547,6 +1562,35 @@ func TestLimitOrderSize_Validate(t *testing.T) {
 			t.Parallel()
 			if err := tc.limit.Validate(); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("expected ErrInvalid, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLimitOrderSize_ValidateMode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		mode  domain.RuleMode
+		valid bool
+	}{
+		{"reject", domain.RuleModeReject, true},
+		{"review_without_hold", domain.RuleModeReviewWithoutHold, true},
+		{"empty", "", false},
+		{"review_with_hold", domain.RuleModeReviewWithHold, false},
+		{"unknown", "unknown", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limit := domain.LimitOrderSize{Mode: tc.mode, Scope: domain.ScopeBroker, MaxQuantity: "10"}
+			err := limit.Validate()
+			if tc.valid {
+				if err != nil {
+					t.Fatalf("Validate(%q): %v", tc.mode, err)
+				}
+				return
+			}
+			if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/mode" {
+				t.Fatalf("Validate(%q) = %v, pointer %q; want ErrInvalid on /mode", tc.mode, err, domain.ValidationPointer(err))
 			}
 		})
 	}
@@ -1664,7 +1708,7 @@ func TestIsSpotFundsSettingPolicy(t *testing.T) {
 func TestLimitOrderSize_EitherOrValidationUsesRequestRoot(t *testing.T) {
 	t.Parallel()
 
-	err := (domain.LimitOrderSize{Scope: domain.ScopeBroker}).Validate()
+	err := (domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker}).Validate()
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("neither ceiling: error = %v, want ErrInvalid", err)
 	}
@@ -1915,15 +1959,17 @@ func TestLimitSpotFundsPnlBounds_ValidateTakesEngineWritingsOnly(t *testing.T) {
 
 func TestAuditAction_Category(t *testing.T) {
 	t.Parallel()
-	trading := map[domain.AuditAction]bool{
-		domain.AuditActionSubmitOrder:     true,
-		domain.AuditActionSubmitDropCopy:  true,
-		domain.AuditActionExecutionReport: true,
+	categories := map[domain.AuditAction]domain.AuditCategory{
+		domain.AuditActionSubmitOrder:        domain.AuditCategoryTrading,
+		domain.AuditActionSubmitDropCopy:     domain.AuditCategoryTrading,
+		domain.AuditActionExecutionReport:    domain.AuditCategoryTrading,
+		domain.AuditActionConfirmOrderReview: domain.AuditCategoryControl,
+		domain.AuditActionCancelOrderReview:  domain.AuditCategoryControl,
 	}
 	for _, action := range domain.AllAuditActions() {
 		want := domain.AuditCategoryControl
-		if trading[action] {
-			want = domain.AuditCategoryTrading
+		if category, ok := categories[action]; ok {
+			want = category
 		}
 		if got := action.Category(); got != want {
 			t.Errorf("Category(%q) = %q, want %q", action, got, want)

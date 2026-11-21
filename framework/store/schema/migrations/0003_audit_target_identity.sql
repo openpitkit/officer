@@ -21,6 +21,13 @@
 ALTER TABLE audit ADD COLUMN account_identity BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE audit ADD COLUMN group_identity BIGINT NOT NULL DEFAULT 0;
 
+-- Released order-size barriers reject; new writes carry their mode explicitly.
+ALTER TABLE limit_order_size ADD COLUMN mode TEXT NOT NULL DEFAULT 'reject'
+    CHECK (mode IN ('reject', 'review_without_hold'));
+DROP INDEX uq_limit_order_size;
+CREATE UNIQUE INDEX uq_limit_order_size
+    ON limit_order_size (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0), mode);
+
 -- Position ceilings have exactly one scope: an account and an asset.
 -- The scope column lets the shared limit-table code apply unchanged.
 CREATE TABLE limit_position (
@@ -110,4 +117,14 @@ CREATE TABLE trading_test_policy (
     connection_id INTEGER PRIMARY KEY REFERENCES trading_connection(id) ON DELETE CASCADE,
     revision      INTEGER NOT NULL CHECK (revision > 0),
     rules         TEXT    NOT NULL
+);
+
+CREATE TABLE order_review (
+    order_id      INTEGER PRIMARY KEY REFERENCES order_record(id) ON DELETE CASCADE,
+    mode_id       INTEGER NOT NULL REFERENCES attestation_mode(id),
+    connection_id INTEGER REFERENCES trading_connection(id) ON DELETE RESTRICT,
+    venue_account TEXT,
+    route         TEXT,
+    CHECK ((connection_id IS NULL AND venue_account IS NULL AND route IS NULL) OR
+           (connection_id IS NOT NULL AND venue_account IS NOT NULL AND route IS NOT NULL))
 );

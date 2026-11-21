@@ -66,7 +66,7 @@
       "description": "Listar grupos de contas com filtros, incluindo o filtro por conexão de negociação, ordenação e paginação."
     },
     "check_order": {
-      "description": "Executar uma simulação pré-negociação sem efeitos para uma ordem (aprovação/rejeição + motivos); não altera nenhum estado."
+      "description": "Executar uma simulação pré-negociação sem efeitos para uma ordem (aprovação/rejeição + motivos; as marcas de revisão indicam que não deve ser enviada); não altera nenhum estado."
     },
     "add_limit": {
       "description": "Adicionar uma barreira de risco em um novo endereço. Se já houver uma barreira nesse endereço, a operação retorna limit_exists. Para alterá-la, use update_limit."

@@ -33,7 +33,60 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/officer/internal/store/sqlite"
 )
+
+type orderSizeDeleteService struct {
+	*fakeService
+	realm store.RealmStore
+}
+
+func (s *orderSizeDeleteService) DeleteLimit(ctx context.Context, target node.LimitTarget) error {
+	s.deleteLimitTarget = target
+	return s.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, target.Mode)
+}
+
+func TestDeleteOrderSizeLimitDefaultsToReject(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.New(t.TempDir()+"/order-size.db", domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	realm, err := db.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := domain.LimitOrderSize{Mode: domain.RuleModeReviewWithoutHold, Scope: domain.ScopeBroker, MaxQuantity: "20"}
+	reject := review
+	reject.Mode, reject.MaxQuantity = domain.RuleModeReject, "10"
+	for _, limit := range []domain.LimitOrderSize{review, reject} {
+		if err := realm.PutOrderSizeLimit(ctx, limit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := &orderSizeDeleteService{fakeService: &fakeService{}, realm: realm}
+	router, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/limits?policy=order_size_limit&scope=broker", nil))
+	if rec.Code != http.StatusNoContent || svc.deleteLimitTarget.Mode != domain.RuleModeReject {
+		t.Fatalf("REST delete = %d %s target=%+v", rec.Code, rec.Body.String(), svc.deleteLimitTarget)
+	}
+	limits, err := realm.ListOrderSizeLimits(ctx, "")
+	if err != nil || len(limits) != 1 || limits[0] != review {
+		t.Fatalf("REST delete touched review barrier: %+v, %v", limits, err)
+	}
+}
 
 func TestGetSpotFundsLimitMode(t *testing.T) {
 	trackOnly := domain.SpotFundsLimitModeState{Mode: domain.SpotFundsLimitModeTrackOnly, Stored: true}
@@ -301,6 +354,7 @@ func TestListLimits(t *testing.T) {
 				Kind:  store.PolicyKindOrderSize,
 				Scope: domain.ScopeBroker,
 				OrderSize: &domain.LimitOrderSize{
+					Mode:  domain.RuleModeReject,
 					Scope: domain.ScopeBroker, MaxQuantity: "500",
 				},
 			},
@@ -417,7 +471,7 @@ func TestListLimitsSpotFundsLimitModeRow(t *testing.T) {
 	if svc.policyFilter.Kind == nil || *svc.policyFilter.Kind != store.PolicyKindSpotFundsLimitMode {
 		t.Fatalf("filter kind = %v, want spot_funds_limit_mode", svc.policyFilter.Kind)
 	}
-	const want = `{"policies":[{"kind":"spot_funds_limit_mode","scope":"global","account":"",` +
+	const want = `{"policies":[{"kind":"spot_funds_limit_mode","mode":null,"scope":"global","account":"",` +
 		`"accountGroup":"","asset":"","values":{"spotFundsLimitMode":{"mode":"track_only"}}}],"total":1}`
 	if got := strings.TrimSpace(rec.Body.String()); got != want {
 		t.Fatalf("body = %s, want %s", got, want)
@@ -730,6 +784,11 @@ func TestPutOrderSizeLimit(t *testing.T) {
 		limits: node.AccountLimits{
 			OrderSizeLimits: []domain.LimitOrderSize{
 				{
+					Mode: domain.RuleModeReviewWithoutHold, Scope: domain.ScopeAccountSettlementAsset,
+					Account: "acc-1", Asset: "USD", MaxNotional: "99999",
+				},
+				{
+					Mode:        domain.RuleModeReject,
 					Scope:       domain.ScopeAccountSettlementAsset,
 					Account:     "acc-1",
 					Asset:       "USD",
@@ -751,7 +810,8 @@ func TestPutOrderSizeLimit(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if svc.orderSizeLimitPut.Scope != domain.ScopeAccountSettlementAsset ||
+	if svc.orderSizeLimitPut.Mode != domain.RuleModeReject ||
+		svc.orderSizeLimitPut.Scope != domain.ScopeAccountSettlementAsset ||
 		svc.orderSizeLimitPut.Account != "acc-1" ||
 		svc.orderSizeLimitPut.Asset != "USD" ||
 		svc.orderSizeLimitPut.MaxQuantity != "" ||
@@ -763,9 +823,159 @@ func TestPutOrderSizeLimit(t *testing.T) {
 	if !ok {
 		t.Fatalf("response missing orderSizeLimit field: %v", m)
 	}
-	if osl["scope"] != "account_settlement_asset" ||
+	if osl["mode"] != "reject" || osl["scope"] != "account_settlement_asset" ||
 		osl["maxQuantity"] != "" || osl["maxNotional"] != "50001" {
 		t.Fatalf("unexpected persisted orderSizeLimit: %v", osl)
+	}
+}
+
+func TestOrderSizeLimitModeDTO(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  domain.RuleMode
+	}{
+		{"", domain.RuleModeReject},
+		{"reject", domain.RuleModeReject},
+		{"review_without_hold", domain.RuleModeReviewWithoutHold},
+		{"unknown", domain.RuleMode("unknown")},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			limit := httpx.FromOrderSizeLimitDTO(httpx.OrderSizeLimitDTO{Mode: tc.input})
+			if limit.Mode != tc.want {
+				t.Fatalf("decoded mode = %q, want %q", limit.Mode, tc.want)
+			}
+			if got := httpx.ToOrderSizeLimitDTO(limit).Mode; got != string(tc.want) {
+				t.Fatalf("encoded mode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOrderSizeLimitModeRESTWrite(t *testing.T) {
+	svc := newTestPolicyService(t)
+	router, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(method, body string, status int, mode, quantity string) {
+		t.Helper()
+		rec := callTestPolicy(t, router, "/api/v1", method, "/limits/order-size", body)
+		if rec.Code != status {
+			t.Fatalf("%s order-size = %d, want %d: %s", method, rec.Code, status, rec.Body)
+		}
+		result := bodyMap(t, rec.Result())["orderSizeLimit"].(map[string]any)
+		if result["mode"] != mode || result["maxQuantity"] != quantity {
+			t.Fatalf("stored response = %v, want mode %s, quantity %s", result, mode, quantity)
+		}
+	}
+	write(http.MethodPost, `{"scope":"broker","maxQuantity":"10"}`, http.StatusCreated, "reject", "10")
+	const review = `{"scope":"broker","mode":"review_without_hold","maxQuantity":"20"}`
+	write(http.MethodPost, review, http.StatusCreated, "review_without_hold", "20")
+	rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/limits/order-size", review)
+	if rec.Code != http.StatusConflict || bodyMap(t, rec.Result())["error"].(map[string]any)["code"] != "limit_exists" {
+		t.Fatalf("duplicate review POST = %d: %s", rec.Code, rec.Body)
+	}
+	write(http.MethodPut, `{"scope":"broker","mode":"review_without_hold","maxQuantity":"15"}`, http.StatusOK, "review_without_hold", "15")
+	rec = callTestPolicy(t, router, "/api/v1", http.MethodGet, "/limits?policy=order_size", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list coexisting barriers = %d: %s", rec.Code, rec.Body)
+	}
+	limits := bodyMap(t, rec.Result())["policies"].([]any)
+	if len(limits) != 2 {
+		t.Fatalf("coexisting barriers = %v, want both modes", limits)
+	}
+	for _, value := range limits {
+		limit := value.(map[string]any)
+		want := "10"
+		if limit["mode"] == "review_without_hold" {
+			want = "15"
+		} else if limit["mode"] != "reject" {
+			t.Fatalf("unexpected barrier mode: %+v", limit)
+		}
+		quantity := limit["values"].(map[string]any)["orderSize"].(map[string]any)["maxQuantity"]
+		if quantity != want {
+			t.Fatalf("mode %s quantity = %v, want %s", limit["mode"], quantity, want)
+		}
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		rec := callTestPolicy(t, router, "/api/v1", method, "/limits/order-size", `{"scope":"broker","mode":"unknown","maxQuantity":"5"}`)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s unknown mode = %d: %s", method, rec.Code, rec.Body)
+		}
+		problem := bodyMap(t, rec.Result())["errors"].([]any)[0].(map[string]any)
+		if problem["code"] != "validation" || problem["pointer"] != "/mode" {
+			t.Fatalf("unknown mode problem = %v", problem)
+		}
+	}
+}
+
+func TestListLimitsModeValidation(t *testing.T) {
+	for _, query := range []string{
+		"mode=review_without_hold",
+		"policy=all&mode=review_without_hold",
+		"policy=rate&mode=review_without_hold",
+		"policy=spot_funds_limit_mode&mode=reject",
+		"policy=order_size&mode=unknown",
+	} {
+		t.Run(query, func(t *testing.T) {
+			router, err := newRouter(&fakeService{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := callTestPolicy(t, router, "/api/v1", http.MethodGet, "/limits?"+query, "")
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("GET /limits?%s = %d, want 422: %s", query, rec.Code, rec.Body)
+			}
+			problem := bodyMap(t, rec.Result())["errors"].([]any)[0].(map[string]any)
+			if problem["code"] != "validation" || problem["pointer"] != "/mode" {
+				t.Fatalf("mode filter problem = %v", problem)
+			}
+		})
+	}
+}
+
+func TestListLimitsModeFilter(t *testing.T) {
+	router, err := newRouter(newTestPolicyService(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setup := range []struct{ path, body string }{
+		{"/assets", `{"code":"USD"}`},
+		{"/limits/order-size", `{"scope":"broker","maxQuantity":"10"}`},
+		{"/limits/order-size", `{"scope":"broker","mode":"review_without_hold","maxQuantity":"20"}`},
+		{"/limits/order-size", `{"scope":"underlying_asset","asset":"USD","mode":"review_without_hold","maxQuantity":"30"}`},
+	} {
+		rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, setup.path, setup.body)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("setup %s = %d: %s", setup.path, rec.Code, rec.Body)
+		}
+	}
+	for _, tc := range []struct {
+		query, mode string
+		rows, total int
+	}{
+		{"policy=order_size&mode=review_without_hold", "review_without_hold", 2, 2},
+		{"policy=order_size&mode=review_without_hold&limit=1", "review_without_hold", 1, 2},
+		{"policy=order_size&mode=reject", "reject", 1, 1},
+		{"policy=order_size&mode=", "", 3, 3},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			rec := callTestPolicy(t, router, "/api/v1", http.MethodGet, "/limits?"+tc.query, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("list = %d: %s", rec.Code, rec.Body)
+			}
+			body := bodyMap(t, rec.Result())
+			rows := body["policies"].([]any)
+			if len(rows) != tc.rows || body["total"] != float64(tc.total) {
+				t.Fatalf("filtered list = %v, want %d rows, total %d", body, tc.rows, tc.total)
+			}
+			for _, value := range rows {
+				row := value.(map[string]any)
+				if row["kind"] != "order_size_limit" || (tc.mode != "" && row["mode"] != tc.mode) || row["mode"] == nil {
+					t.Fatalf("mode-filtered row = %v, want mode %s", row, tc.mode)
+				}
+			}
+		})
 	}
 }
 
@@ -1364,7 +1574,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 				Window: time.Second, MaxOrders: 100},
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
-			{Scope: domain.ScopeBroker, MaxQuantity: "500", MaxNotional: "50000"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "500", MaxNotional: "50000"},
 		},
 		PositionLimits: []domain.LimitPosition{{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "1.000000000000000001"}},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
@@ -1398,10 +1608,13 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 	}
 	sizes, _ := m["orderSizeLimits"].([]any)
 	size := sizes[0].(map[string]any)
-	for _, key := range []string{"scope", "account", "asset", "maxQuantity", "maxNotional"} {
+	for _, key := range []string{"mode", "scope", "account", "asset", "maxQuantity", "maxNotional"} {
 		if _, ok := size[key]; !ok {
 			t.Fatalf("OrderSizeLimitDTO missing JSON key %q", key)
 		}
+	}
+	if size["mode"] != "reject" {
+		t.Fatalf("order-size mode = %v, want reject", size["mode"])
 	}
 	positions, ok := m["positionLimits"].([]any)
 	if !ok || len(positions) != 1 {

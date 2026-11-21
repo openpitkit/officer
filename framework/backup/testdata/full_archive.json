@@ -1,7 +1,7 @@
 {
   "credentialForm": "plaintext",
   "manifest": {
-    "formatVersion": 6,
+    "formatVersion": 7,
     "createdAt": "2026-06-22T10:00:00Z",
     "source": "fixture",
     "realm": {
@@ -94,6 +94,7 @@
     ],
     "orderSizeLimits": [
       {
+        "Mode": "reject",
         "Scope": "account_underlying_asset",
         "Account": "acc-1",
         "Asset": "AAPL",

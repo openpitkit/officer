@@ -170,6 +170,10 @@ const (
 	AuditDetailDeleteMarketDataInstrument      AuditDetailCode = "delete_market_data_instrument"
 	AuditDetailSubmitOrderCommitted            AuditDetailCode = "submit_order_committed"
 	AuditDetailSubmitOrderRejected             AuditDetailCode = "submit_order_rejected"
+	AuditDetailSubmitOrderReview               AuditDetailCode = "submit_order_review"
+	AuditDetailConfirmOrderReviewAccepted      AuditDetailCode = "confirm_order_review_accepted"
+	AuditDetailConfirmOrderReviewRejected      AuditDetailCode = "confirm_order_review_rejected"
+	AuditDetailCancelOrderReview               AuditDetailCode = "cancel_order_review"
 	AuditDetailExecutionReport                 AuditDetailCode = "execution_report"
 	AuditDetailExecutionReportForceRefused     AuditDetailCode = "execution_report_force_refused"
 	AuditDetailAdjustmentAccepted              AuditDetailCode = "adjustment_accepted"
@@ -290,6 +294,10 @@ var auditDetailTemplates = map[AuditDetailCode]string{
 	AuditDetailDeleteMarketDataInstrument:      "Market-data instrument {{instance}}/{{symbol}} deleted",
 	AuditDetailSubmitOrderCommitted:            "Order {{order}} submitted, account {{account}}, {{base}}/{{quote}}, {{side}}: committed",
 	AuditDetailSubmitOrderRejected:             "Order {{order}} submitted, account {{account}}, {{base}}/{{quote}}, {{side}}: rejected",
+	AuditDetailSubmitOrderReview:               "Order {{order}} submitted, account {{account}}, {{base}}/{{quote}}, {{side}}: waiting for review",
+	AuditDetailConfirmOrderReviewAccepted:      "Order {{order}} review confirmed, account {{account}}, {{base}}/{{quote}}, {{side}}: accepted",
+	AuditDetailConfirmOrderReviewRejected:      "Order {{order}} review confirmed, account {{account}}, {{base}}/{{quote}}, {{side}}: rejected",
+	AuditDetailCancelOrderReview:               "Order {{order}} awaiting review cancelled, account {{account}}, {{base}}/{{quote}}, {{side}}",
 	AuditDetailExecutionReport:                 "Execution report for order {{order}}, account {{account}}, {{base}}/{{quote}}: qty {{qty}}, remaining {{leavesQty}}, {{status}}, blocks: {{blocks}}",
 	AuditDetailExecutionReportForceRefused:     "Forced execution report for order {{order}} (account {{account}}) refused: {{refusal}}",
 	AuditDetailAdjustmentAccepted:              "Adjustment for account {{account}}, asset {{asset}}, type {{adjustmentType}}: accepted",

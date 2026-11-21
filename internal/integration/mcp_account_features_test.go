@@ -257,7 +257,9 @@ func TestOmittedAccountReachesSourceWithOneAccount(t *testing.T) {
 		{submitDropCopyOrderToolName, orderInput(nil)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			src := &approvalFakeSource{}
+			src := &approvalFakeSource{
+				submitResult: frameworkmcp.SubmitOrderResult{Verdict: domain.VerdictAccept},
+			}
 			src.accountFeatures = oneAccountFeatures
 			res := callTool[map[string]any](t, src, tc.name, tc.in)
 			requireNotToolError(t, res.IsError)

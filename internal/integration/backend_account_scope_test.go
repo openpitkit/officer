@@ -382,6 +382,7 @@ func accountScopeSites() []scopeSite {
 			name: "PutOrderSizeLimit",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
 				return svc.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+					Mode:    domain.RuleModeReject,
 					Scope:   domain.ScopeAccountSettlementAsset,
 					Account: req.account, Asset: "USD", MaxNotional: "1000",
 				}, domain.LimitWriteReplace, req.policy)
@@ -850,6 +851,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 			name: "PutOrderSizeLimit/broker",
 			run: func(ctx context.Context, svc *backend.Service) error {
 				return svc.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+					Mode:  domain.RuleModeReject,
 					Scope: domain.ScopeBroker, MaxQuantity: "10",
 				}, domain.LimitWriteReplace, "")
 			},
@@ -1557,10 +1559,11 @@ func TestService_AccountScopeNarrowsLimits(t *testing.T) {
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
 			{
+				Mode:    domain.RuleModeReject,
 				Scope:   domain.ScopeAccountSettlementAsset,
 				Account: scopeHiddenAccount, Asset: "USD",
 			},
-			{Scope: domain.ScopeSettlementAsset, Asset: "USD"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeSettlementAsset, Asset: "USD"},
 		},
 		PositionLimits: []domain.LimitPosition{
 			{Scope: domain.ScopeAccountAsset, Account: scopeHiddenAccount, Asset: "BTC", MaxPosition: "2"},

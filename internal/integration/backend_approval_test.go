@@ -343,8 +343,8 @@ func TestService_SubmitOrderRejectPersistsVerdict(t *testing.T) {
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(t, signer)
 	fn.submitResult = &engine.OrderResult{
-		Accepted: false,
-		Rejects:  []domain.OrderReject{{Code: "insufficient_funds", Reason: "no funds"}},
+		Verdict: domain.VerdictReject,
+		Rejects: []domain.OrderReject{{Code: "insufficient_funds", Reason: "no funds"}},
 	}
 
 	o := sampleOrder()
@@ -862,6 +862,71 @@ func TestService_ShortcutsRequireConfiguredSigner(t *testing.T) {
 	}
 }
 
+func TestService_ShortcutsRefuseAwaitingReview(t *testing.T) {
+	t.Parallel()
+	for _, action := range []string{"confirm", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			signer := &fakeSigner{}
+			svc, fn := newTestServiceWithSigner(t, signer)
+			order := sampleOrder()
+			order.ExternalID = "waiting-order"
+			order.Status = domain.OrderStatusAwaitingReview
+			fn.orders[order.ExternalID] = order
+			before, err := fn.GetOrder(systemCtx(), order.ExternalID)
+			if err != nil {
+				t.Fatalf("GetOrder before: %v", err)
+			}
+			if action == "confirm" {
+				_, _, err = svc.ConfirmExecution(systemCtx(), order.ExternalID.String())
+			} else {
+				_, _, err = svc.CancelOrder(systemCtx(), order.ExternalID.String(), "10", "operator")
+			}
+			if !errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrApprovalRequired) ||
+				!strings.Contains(err.Error(), "order is awaiting review") {
+				t.Fatalf("%s waiting order = %v, want awaiting review ErrConflict", action, err)
+			}
+			after, err := fn.GetOrder(systemCtx(), order.ExternalID)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("%s changed order: after=%+v err=%v", action, after, err)
+			}
+			if len(fn.confirmCalls) != 0 || len(fn.cancelCalls) != 0 ||
+				len(fn.auditCalls) != 0 || len(signer.signed) != 0 {
+				t.Fatalf("%s changed state: confirm=%v cancel=%v audit=%v signed=%v",
+					action, fn.confirmCalls, fn.cancelCalls, fn.auditCalls, signer.signed)
+			}
+		})
+	}
+}
+
+func TestService_ExecutionReportRejectsAwaitingReviewTarget(t *testing.T) {
+	t.Parallel()
+	for _, withEnginePayload := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enginePayload=%t", withEnginePayload), func(t *testing.T) {
+			svc, fn := newTestServiceWithSigner(t, &fakeSigner{})
+			order := sampleOrder()
+			order.ExternalID = "target-order"
+			order.Status = domain.OrderStatusCommitted
+			fn.orders[order.ExternalID] = order
+			in := domain.ExecutionReportInput{
+				Order: order.ExternalID, OrderStatus: domain.OrderStatusAwaitingReview,
+			}
+			if withEnginePayload {
+				in.Commission = &domain.Commission{Amount: "1", Currency: "USD"}
+			}
+			_, _, err := svc.ApplyExecutionReport(systemCtx(), in)
+			if !errors.Is(err, domain.ErrInvalid) ||
+				!strings.Contains(err.Error(), "execution reports cannot target awaiting_review") {
+				t.Fatalf("review target = %v, want awaiting_review validation ErrInvalid", err)
+			}
+			if len(fn.execReports) != 0 || fn.orders[order.ExternalID].Status != order.Status {
+				t.Fatalf("invalid target reached node or changed order: reports=%+v order=%+v",
+					fn.execReports, fn.orders[order.ExternalID])
+			}
+		})
+	}
+}
+
 func TestService_ShortcutsRequirePersistedPreTradeAttestation(t *testing.T) {
 	t.Parallel()
 
@@ -987,7 +1052,7 @@ func TestService_ShortcutsRequireRecordedHoldApproval(t *testing.T) {
 					orderID = order.ExternalID.String()
 				case "pre-trade rejected":
 					fn.submitResult = &engine.OrderResult{
-						Accepted: false,
+						Verdict: domain.VerdictReject,
 						Rejects: []domain.OrderReject{{
 							Code: "insufficient_funds", Reason: "no funds",
 						}},
@@ -1475,6 +1540,67 @@ func TestService_SubmitOrderMissingAttestationFailsClosedInternal(t *testing.T) 
 	}
 }
 
+func TestService_SubmitOrderReviewReturnsAttestedDecision(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{backend.SubmitModeHold, backend.SubmitModeImmediate} {
+		for _, off := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/eSignOff=%t", mode, off), func(t *testing.T) {
+				t.Parallel()
+				signer := &fakeSigner{noESign: off}
+				if !off {
+					signer.signToken = func(p domain.ApprovalPayload) string {
+						raw, err := json.Marshal(approvalEnvelope{Alg: fwsigning.AlgEd25519, KeyID: "key-1", Approval: p, Signature: "test-signature"})
+						if err != nil {
+							t.Fatal(err)
+						}
+						return base64.RawURLEncoding.EncodeToString(raw)
+					}
+				}
+				svc, fn := newTestServiceWithSigner(t, signer)
+				marks := []domain.ReviewMark{
+					{OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order", Details: "quantity=1"}, Mode: domain.RuleModeReviewWithoutHold},
+					{OrderReject: domain.OrderReject{Code: "second_review", Reason: "another mark"}, Mode: domain.RuleModeReviewWithoutHold},
+				}
+				fn.submitResult = &engine.OrderResult{Verdict: domain.VerdictReview, Reviews: marks}
+				fn.immediateResult = &engine.ImmediateResult{Verdict: domain.VerdictReview, Reviews: marks}
+				got, err := svc.SubmitOrder(systemCtx(), sampleOrder(), mode, domain.MissingAccountCreate)
+				if err != nil {
+					t.Fatalf("SubmitOrder review: %v", err)
+				}
+				if got.Verdict != domain.VerdictReview || !reflect.DeepEqual(got.Reviews, marks) || len(got.Reasons) != 0 || got.Signed == off {
+					t.Fatalf("review approval = %+v, want review marks, no reasons, signed=%t", got, !off)
+				}
+				env, err := decodeApprovalEnvelope(got.SignedApproval)
+				if err != nil {
+					t.Fatalf("decode review envelope: %v", err)
+				}
+				p := env.Approval
+				if p.Verdict != domain.VerdictReview || !reflect.DeepEqual(p.Reviews, marks) || len(p.Rejects) != 0 || p.RequestType != string(domain.AttestationRequestSubmit) || p.Mode != mode || p.OrderExternalID != got.OrderExternalID {
+					t.Fatalf("review payload = %+v, want pre_trade_review submit/%s with marks", p, mode)
+				}
+				if off && (env.Alg != fwsigning.AlgNone || env.Signature != "" || got.KeyID != "" || len(signer.signed) != 0) {
+					t.Fatalf("unsigned review envelope=%+v approval=%+v signed=%+v", env, got, signer.signed)
+				}
+				detail := getOrderByToken(t, svc, got)
+				if len(detail.Events) != 2 || detail.Events[0].Type != domain.OrderEventSubmitted || detail.Events[1].Type != domain.OrderEventPreTradeReview {
+					t.Fatalf("review events = %+v", detail.Events)
+				}
+				for _, event := range detail.Events {
+					if event.Attestation == nil || event.Attestation.SignedEnvelope == "" {
+						t.Fatalf("unattested review event = %+v", event)
+					}
+				}
+				if got.SignedApproval != detail.Events[1].Attestation.SignedEnvelope || p.EventExternalID != detail.Events[1].ExternalID.String() {
+					t.Fatal("returned envelope is not the pre_trade_review attestation")
+				}
+				if !hasAudit(fn.auditCalls, domain.AuditActionApprovalIssued) {
+					t.Fatalf("review decision did not audit approval_issued: %+v", fn.auditCalls)
+				}
+			})
+		}
+	}
+}
+
 func TestService_SubmitOrderRiskRejectReturnsSignedDecision(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{
@@ -1499,7 +1625,7 @@ func TestService_SubmitOrderRiskRejectReturnsSignedDecision(t *testing.T) {
 			Details: "notional=10000",
 		},
 	}
-	fn.submitResult = &engine.OrderResult{Accepted: false, Rejects: rejects}
+	fn.submitResult = &engine.OrderResult{Verdict: domain.VerdictReject, Rejects: rejects}
 	ctx := auth.ContextWithCaller(systemCtx(), domain.Caller{
 		Source: domain.SourceAPI, Principal: "trader-reject",
 	})

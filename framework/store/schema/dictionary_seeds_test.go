@@ -39,3 +39,35 @@ func TestAttestationDictionarySeeds(t *testing.T) {
 		t.Fatalf("%s codes = %v, want %v", AttestationModeTable, got, want)
 	}
 }
+
+func TestOrderReviewDictionarySeeds(t *testing.T) {
+	for _, tc := range []struct {
+		table string
+		id    int64
+		code  string
+	}{
+		{OrderStatusTable, 9, "awaiting_review"},
+		{OrderEventTypeTable, 10, "pre_trade_review"},
+		{AttestationRequestTypeTable, 5, "review_confirm"},
+		{AttestationRequestTypeTable, 6, "review_cancel"},
+		{AuditActionTable, 58, "confirm_order_review"},
+		{AuditActionTable, 59, "cancel_order_review"},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			found := false
+			for _, dictionary := range EnumDictionarySeeds() {
+				if dictionary.Table != tc.table {
+					continue
+				}
+				for _, seed := range dictionary.Codes {
+					if seed.Code == tc.code && seed.ID == tc.id {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("missing seed %s id=%d code=%s", tc.table, tc.id, tc.code)
+			}
+		})
+	}
+}

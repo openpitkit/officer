@@ -106,9 +106,8 @@ func (s *Service) ApplyExecutionReport(
 	ctx context.Context, in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, Attestation, error) {
 	targetStatus := in.OrderStatus
-	if !domain.OrderStatusSupported(targetStatus) {
-		return engine.ExecutionReportResult{}, Attestation{}, fmt.Errorf(
-			"backend: invalid execution report status %q: %w", targetStatus, domain.ErrInvalid)
+	if err := domain.ValidateExecutionReportStatus(targetStatus); err != nil {
+		return engine.ExecutionReportResult{}, Attestation{}, err
 	}
 	n := s.node
 	stored, err := n.GetOrder(ctx, in.Order)

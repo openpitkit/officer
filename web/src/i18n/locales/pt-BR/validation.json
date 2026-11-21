@@ -39,6 +39,7 @@
     "scopeNoAsset": "o escopo {{scope}} não pode incluir um ativo",
     "scopeNoAccountGroup": "o escopo {{scope}} não pode incluir um grupo de contas",
     "policyNoAccountGroup": "{{policy}} não pode incluir um grupo de contas",
+    "policyNoMode": "{{policy}} não pode incluir um modo",
     "rateLimitRequires": "rate_limit exige max_orders e window",
     "orderSizeRequires": "order_size_limit exige max_quantity ou max_notional",
     "orderSizeUnderlyingRequires": "um escopo de ativo-objeto exige max_quantity",
@@ -49,7 +50,8 @@
     "pnlCurrencyRequired": "{{policy}} exige uma moeda",
     "pnlRequires": "{{policy}} exige lower_bound ou upper_bound",
     "pnlBoundOrder": "lower_bound deve ser <= upper_bound",
-    "modeRequired": "escolha um modo de limite de fundos"
+    "modeRequired": "escolha um modo de limite de fundos",
+    "orderSizeModeInvalid": "escolha um modo de tamanho de ordem"
   },
   "password": {
     "mismatch": "As senhas não coincidem."

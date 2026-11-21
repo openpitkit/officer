@@ -150,6 +150,7 @@ func TestPutOrderSizeLimit_CreatedAccountBarrierIsEnforced(t *testing.T) {
 
 	// Quantity caps are keyed by the traded underlying asset.
 	if _, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     account,
 		Asset:       "BTC",
@@ -256,7 +257,7 @@ func TestPutSpotFundsPnlBoundsLimit_CreatedAccountBarrierIsEnforced(t *testing.T
 	if _, result, err := n.SubmitImmediate(
 		ctx, buy,
 		domain.MissingAccountCreate, caller,
-	); err != nil || !result.Accepted {
+	); err != nil || result.Verdict != domain.VerdictAccept {
 		t.Fatalf("buy SubmitImmediate: err=%v result=%+v", err, result)
 	}
 	sell := buy
@@ -265,7 +266,7 @@ func TestPutSpotFundsPnlBoundsLimit_CreatedAccountBarrierIsEnforced(t *testing.T
 	if _, result, err := n.SubmitImmediate(
 		ctx, sell,
 		domain.MissingAccountCreate, caller,
-	); err != nil || !result.Accepted {
+	); err != nil || result.Verdict != domain.VerdictAccept {
 		t.Fatalf("sell SubmitImmediate: err=%v result=%+v", err, result)
 	}
 
@@ -318,7 +319,7 @@ func TestPutSpotFundsPnlBoundsLimit_UnrealizedAndTotalBlockOnNextOrder(t *testin
 			buy := missingAccountOrder(account, "1")
 			if _, result, err := n.SubmitImmediate(
 				ctx, buy, domain.MissingAccountCreate, caller,
-			); err != nil || !result.Accepted {
+			); err != nil || result.Verdict != domain.VerdictAccept {
 				t.Fatalf("buy at the mark: err=%v result=%+v", err, result)
 			}
 			if stored, _, err := n.GetAccountState(ctx, account); err != nil || stored.Blocked {
@@ -329,7 +330,7 @@ func TestPutSpotFundsPnlBoundsLimit_UnrealizedAndTotalBlockOnNextOrder(t *testin
 			mark("50")
 			if _, result, err := n.SubmitImmediate(
 				ctx, buy, domain.MissingAccountCreate, caller,
-			); err != nil || result.Accepted {
+			); err != nil || result.Verdict != domain.VerdictReject {
 				t.Fatalf("order after the breach: err=%v result=%+v, want rejected", err, result)
 			}
 			assertPnlBlocked(t, n, account, wantDetails)
@@ -343,7 +344,7 @@ func TestPutSpotFundsPnlBoundsLimit_UnrealizedAndTotalBlockOnNextOrder(t *testin
 			mark("100")
 			if _, result, err := n.SubmitImmediate(
 				ctx, buy, domain.MissingAccountCreate, caller,
-			); err != nil || result.Accepted {
+			); err != nil || result.Verdict != domain.VerdictReject {
 				t.Fatalf("order after the restart: err=%v result=%+v, want rejected", err, result)
 			}
 
@@ -357,7 +358,7 @@ func TestPutSpotFundsPnlBoundsLimit_UnrealizedAndTotalBlockOnNextOrder(t *testin
 			}
 			if _, result, err := n.SubmitImmediate(
 				ctx, buy, domain.MissingAccountCreate, caller,
-			); err != nil || !result.Accepted {
+			); err != nil || result.Verdict != domain.VerdictAccept {
 				t.Fatalf("order after the unblock: err=%v result=%+v, want accepted", err, result)
 			}
 		})
@@ -391,7 +392,7 @@ func TestPutSpotFundsPnlBoundsLimit_RestartWithinBoundStaysUnblocked(t *testing.
 	btcMarker(t, n, caller)("100")
 	if _, result, err := n.SubmitImmediate(
 		ctx, missingAccountOrder(account, "1"), domain.MissingAccountCreate, caller,
-	); err != nil || !result.Accepted {
+	); err != nil || result.Verdict != domain.VerdictAccept {
 		t.Fatalf("buy at the mark: err=%v result=%+v", err, result)
 	}
 
@@ -431,7 +432,7 @@ func TestPutSpotFundsPnlBoundsLimit_RealizedBlocksAtPreTrade(t *testing.T) {
 	for _, o := range []domain.Order{buy, sell} {
 		if _, result, err := n.SubmitImmediate(
 			ctx, o, domain.MissingAccountCreate, caller,
-		); err != nil || !result.Accepted {
+		); err != nil || result.Verdict != domain.VerdictAccept {
 			t.Fatalf("%s SubmitImmediate: err=%v result=%+v", o.Side, err, result)
 		}
 	}
@@ -444,7 +445,7 @@ func TestPutSpotFundsPnlBoundsLimit_RealizedBlocksAtPreTrade(t *testing.T) {
 	}
 	if _, result, err := n.SubmitImmediate(
 		ctx, buy, domain.MissingAccountCreate, caller,
-	); err != nil || result.Accepted {
+	); err != nil || result.Verdict != domain.VerdictReject {
 		t.Fatalf("order after the unblock: err=%v result=%+v, want rejected", err, result)
 	}
 	assertPnlBlocked(t, n, account, "realized pnl")

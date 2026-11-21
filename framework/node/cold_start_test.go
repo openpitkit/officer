@@ -20,6 +20,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -165,6 +166,85 @@ func TestLocalNode_AdjustmentUnderOperatorCallerOnColdStore(t *testing.T) {
 	}
 	if rec.Accepted == nil || rec.Rejected != nil {
 		t.Fatalf("adjustment outcome = %+v, want accepted", rec)
+	}
+}
+
+func TestLocalNode_ReviewSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			base := newFakeEngine()
+			n, realm := newColdStartTestNode(t, base)
+			seedTestPrincipal(t, n)
+			n.engine = &verdictAfterReservationEngine{
+				fakeEngine: base, verdict: domain.VerdictReview,
+				reviews: []domain.ReviewMark{{OrderReject: domain.OrderReject{Code: "order_size_limit"}, Mode: domain.RuleModeReviewWithoutHold}},
+			}
+			if _, err := n.CreateAccount(ctx, testAccount("cold-review"), testCaller); err != nil {
+				t.Fatal(err)
+			}
+			if err := realm.UpsertBalance(ctx, domain.Balance{Account: "cold-review", Asset: "USD", Available: "10000", Held: "0", Incoming: "0"}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := realm.ListBalances(ctx, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			order := domain.Order{
+				ExternalID: "cold-review-order", Account: "cold-review", BaseAsset: "AAPL", QuoteAsset: "USD",
+				Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",
+			}
+			if mode == domain.SubmitModeHold {
+				_, err = n.SubmitOrder(ctx, order, domain.MissingAccountReject, testCaller)
+			} else {
+				_, _, err = n.SubmitImmediate(ctx, order, domain.MissingAccountReject, testCaller)
+			}
+			if err != nil {
+				t.Fatalf("submit review: %v", err)
+			}
+			if err := n.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var seed engine.Snapshot
+			restartedEngine := &verdictAfterReservationEngine{
+				fakeEngine: newFakeEngine(), verdict: domain.VerdictReview,
+				confirmedVerdict: domain.VerdictAccept,
+			}
+			build := func(snapshot engine.Snapshot) (engine.Engine, error) {
+				if _, err := fakeBuild(restartedEngine.fakeEngine, &seed)(snapshot); err != nil {
+					return nil, err
+				}
+				return restartedEngine, nil
+			}
+			restarted, _, err := NewLocalNode(ctx, domain.DefaultRealm, n.db, build, failOnFatal(t))
+			if err != nil {
+				t.Fatalf("restart: %v", err)
+			}
+			t.Cleanup(func() { _ = restarted.Close() })
+			detail, err := restarted.GetOrder(ctx, order.ExternalID)
+			if err != nil || detail.Order.Status != domain.OrderStatusAwaitingReview || detail.Review == nil || detail.Review.Mode != mode || detail.Review.Destination != nil {
+				t.Fatalf("restarted review = %+v, err=%v", detail, err)
+			}
+			if !reflect.DeepEqual(seed.Balances, before) {
+				t.Fatalf("restart seed balances = %+v, want pre-submit %+v", seed.Balances, before)
+			}
+			confirmed, verdict, err := confirmReviewForTest(restarted.(*localNode), mode, order.ExternalID, nil)
+			wantStatus := domain.OrderStatusCommitted
+			if mode == domain.SubmitModeImmediate {
+				wantStatus = domain.OrderStatusFilled
+			}
+			if err != nil || verdict != domain.VerdictAccept || confirmed.Status != wantStatus {
+				t.Fatalf("confirm after restart = %+v, %q, %v", confirmed, verdict, err)
+			}
+			if len(restartedEngine.reviewFlags) != 1 || !restartedEngine.reviewFlags[0].Confirmed {
+				t.Fatalf("restart confirmation flags = %+v, want confirmed", restartedEngine.reviewFlags)
+			}
+			if detail := reviewTestDetail(t, restarted.(*localNode), order.ExternalID); detail.Review != nil {
+				t.Fatalf("confirmed restart still has review: %+v", detail.Review)
+			}
+		})
 	}
 }
 

@@ -141,6 +141,7 @@ func TestLocalNode_PutOrderSizeLimitCreatesNamedAccount(t *testing.T) {
 	ctx := context.Background()
 
 	limit := domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     "fresh",
 		Asset:       "AAPL",
@@ -176,6 +177,7 @@ func TestLocalNode_PutOrderSizeLimitRejectsMissingAccount(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     "fresh",
 		Asset:       "AAPL",

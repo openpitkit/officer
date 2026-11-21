@@ -71,7 +71,7 @@ SELECT 'order_size_limit' AS kind, los.scope AS scope,
        los.max_quantity AS max_quantity, los.max_notional AS max_notional,
        NULL AS max_position,
 	       NULL AS lower_bound, NULL AS upper_bound,
-       NULL AS mode,
+       los.mode AS mode,
        'order_size_limit:' || los.id AS stable_id
 FROM limit_order_size los
 LEFT JOIN account a   ON a.id   = los.account_id
@@ -212,6 +212,10 @@ func policyListWhere(filter fwstore.PolicyListFilter) (string, []any, error) {
 		clauses = append(clauses, "kind = ?")
 		args = append(args, string(*filter.Kind))
 	}
+	if filter.Mode != "" {
+		clauses = append(clauses, "kind = 'order_size_limit' AND mode = ?")
+		args = append(args, filter.Mode)
+	}
 	if len(clauses) == 0 {
 		return "", args, nil
 	}
@@ -242,7 +246,7 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 		direction = "DESC"
 		tieDirection = "DESC"
 	}
-	// The (kind, scope, account, asset) composite is unique across the union, so
+	// The (kind, scope, account, asset, mode) composite is unique across the union, so
 	// it is a deterministic tiebreak that does not depend on the per-table
 	// surrogate id. stable_id stays the final tiebreak for the degenerate case
 	// where the composite repeats.
@@ -250,6 +254,7 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 		", account_code " + tieDirection +
 		", account_group_code " + tieDirection +
 		", COALESCE(asset_code, currency_code) " + tieDirection +
+		", mode " + tieDirection +
 		", stable_id " + tieDirection
 	return " ORDER BY " + column + " " + direction + ", " + tie
 }
@@ -301,6 +306,7 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 		}
 	case fwstore.PolicyKindOrderSize:
 		row.OrderSize = &domain.LimitOrderSize{
+			Mode:        domain.RuleMode(mode.String),
 			Scope:       scope,
 			Account:     account,
 			Asset:       assetCode.String,
@@ -432,6 +438,7 @@ func (r *realmStore) PutRateLimit(ctx context.Context, limit domain.LimitRate) e
 			)
 			return err
 		},
+		nil,
 	)
 }
 
@@ -493,7 +500,7 @@ func (r *realmStore) ListOrderSizeLimits(
 	ctx context.Context, account domain.AccountID,
 ) (value []domain.LimitOrderSize, resultErr error) {
 	q := `
-SELECT los.scope, a.code, ast.code, los.max_quantity, los.max_notional
+SELECT los.scope, a.code, ast.code, los.max_quantity, los.max_notional, los.mode
 FROM limit_order_size los
 LEFT JOIN account a   ON a.id   = los.account_id
 LEFT JOIN asset   ast ON ast.id = los.asset_id`
@@ -502,7 +509,7 @@ LEFT JOIN asset   ast ON ast.id = los.asset_id`
 		q += ` WHERE a.code = ?`
 		args = append(args, account.String())
 	}
-	q += ` ORDER BY los.scope, a.code, ast.code`
+	q += ` ORDER BY los.scope, a.code, ast.code, los.mode`
 
 	db, err := r.db()
 	if err != nil {
@@ -528,7 +535,7 @@ LEFT JOIN asset   ast ON ast.id = los.asset_id`
 	return result, nil
 }
 
-// PutOrderSizeLimit upserts one order-size barrier keyed by its composite.
+// PutOrderSizeLimit upserts one barrier keyed by (scope, account, asset, mode).
 // Uses the same DELETE-then-INSERT pattern as PutRateLimit to handle nullable
 // axis columns correctly in SQLite's UNIQUE constraint.
 func (r *realmStore) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error {
@@ -549,22 +556,28 @@ func (r *realmStore) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOr
 			_, err := exec.ExecContext(
 				ctx,
 				`INSERT INTO limit_order_size
-				 (scope, account_id, asset_id, max_quantity, max_notional)
-				 VALUES (?, ?, ?, ?, ?)`,
+				 (scope, account_id, asset_id, max_quantity, max_notional, mode)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
 				limit.Scope, accountID, assetID,
 				nullableString(limit.MaxQuantity),
 				nullableString(limit.MaxNotional),
+				limit.Mode,
 			)
 			return err
 		},
+		&limit.Mode,
 	)
 }
 
-// DeleteOrderSizeLimit removes the order-size barrier with the given composite.
-// Returns domain.ErrNotFound when absent.
+// DeleteOrderSizeLimit removes the order-size barrier at (scope, account, asset, mode).
+// Returns domain.ErrNotFound when absent and domain.ErrInvalid for an empty or unsupported mode.
 func (r *realmStore) DeleteOrderSizeLimit(
 	ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
+	mode domain.RuleMode,
 ) error {
+	if err := domain.ValidateOrderSizeMode(mode); err != nil {
+		return fmt.Errorf("store: delete order size limit: %w", err)
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -576,8 +589,8 @@ func (r *realmStore) DeleteOrderSizeLimit(
 	res, err := db.ExecContext(
 		ctx,
 		`DELETE FROM limit_order_size
-		 WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
-		scope, accountID, assetID,
+		 WHERE scope = ? AND account_id IS ? AND asset_id IS ? AND mode = ?`,
+		scope, accountID, assetID, mode,
 	)
 	if err != nil {
 		return fmt.Errorf("store: delete order size limit: %w", err)
@@ -590,13 +603,15 @@ func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 		scope                    domain.LimitScope
 		accountCode, assetCode   sql.NullString
 		maxQuantity, maxNotional sql.NullString
+		mode                     domain.RuleMode
 	)
 	if err := rows.Scan(
-		&scope, &accountCode, &assetCode, &maxQuantity, &maxNotional,
+		&scope, &accountCode, &assetCode, &maxQuantity, &maxNotional, &mode,
 	); err != nil {
 		return domain.LimitOrderSize{}, fmt.Errorf("store: scan order size limit: %w", err)
 	}
 	return domain.LimitOrderSize{
+		Mode:        mode,
 		Scope:       scope,
 		Account:     domain.AccountID(accountCode.String),
 		Asset:       assetCode.String,
@@ -667,6 +682,7 @@ func (r *realmStore) PutPositionLimit(ctx context.Context, limit domain.LimitPos
 			)
 			return err
 		},
+		nil,
 	)
 }
 
@@ -842,6 +858,23 @@ func scanSpotFundsPnlBoundsLimit(
 
 // --- Limits-group shared helpers --------------------------------------------
 
+// limitKeyWhere keys on scope, account and asset, plus mode when non-nil.
+// nil is for tables without a mode column. An empty non-nil mode
+// matches no row; the subsequent INSERT fails the mode CHECK constraint.
+func limitKeyWhere(
+	scope domain.LimitScope,
+	accountID, assetID sql.NullInt64,
+	mode *domain.RuleMode,
+) (string, []any) {
+	where := `scope = ? AND account_id IS ? AND asset_id IS ?`
+	args := []any{scope, accountID, assetID}
+	if mode != nil {
+		where += ` AND mode = ?`
+		args = append(args, *mode)
+	}
+	return where, args
+}
+
 // putLimitRow upserts one limit row in table using DELETE-then-INSERT inside a
 // transaction. This is required because SQLite treats NULL as distinct in UNIQUE
 // constraints: two rows with the same (scope, NULL, NULL) are considered
@@ -850,6 +883,8 @@ func scanSpotFundsPnlBoundsLimit(
 // single-writer serialisation; it correctly handles all NULL combinations of
 // the (scope, account_id, asset_id) composite key. insertFn executes the INSERT
 // through the provided execer after the prior row (if any) is deleted.
+// A non-nil mode adds the mode column to the key; nil is for tables without
+// that column.
 func putLimitRow(
 	ctx context.Context,
 	db *sql.DB,
@@ -857,7 +892,9 @@ func putLimitRow(
 	scope domain.LimitScope,
 	accountID, assetID sql.NullInt64,
 	insertFn func(context.Context, sqlExecer) error,
+	mode *domain.RuleMode,
 ) (err error) {
+	where, args := limitKeyWhere(scope, accountID, assetID, mode)
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin put limit %s: %w", table, err)
@@ -866,9 +903,8 @@ func putLimitRow(
 
 	if _, err := tx.ExecContext(
 		ctx,
-		`DELETE FROM `+table+`
-		 WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
-		scope, accountID, assetID,
+		`DELETE FROM `+table+` WHERE `+where,
+		args...,
 	); err != nil {
 		return fmt.Errorf("store: delete old limit %s: %w", table, err)
 	}

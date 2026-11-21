@@ -135,6 +135,9 @@ func (r *memoryRealm) GetOrder(
 		return domain.OrderDetail{}, domain.ErrNotFound
 	}
 	detail := domain.OrderDetail{Order: order}
+	if review, ok := r.orderReviews[id]; ok {
+		detail.Review = &review
+	}
 	for _, event := range r.events {
 		if event.Order == id {
 			if att, ok := r.attestations[event.ExternalID]; ok {
@@ -345,6 +348,12 @@ func (r *memoryRealm) recordOrderSettlement(
 			order.ReservedQuantity = st.ReservedQuantity
 		}
 		r.orders[st.Order] = order
+		if st.ClearReview {
+			delete(r.orderReviews, st.Order)
+		}
+		if st.Review != nil {
+			r.orderReviews[st.Order] = *st.Review
+		}
 	}
 	if st.AccountPnl != "" || st.AccountPnlHaltReason != "" {
 		account, ok := r.accounts[st.Account]

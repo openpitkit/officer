@@ -62,6 +62,7 @@
       "selectTerminal": "All terminal",
       "submitted": "Submitted",
       "accepted": "Accepted",
+      "awaiting_review": "Awaiting review",
       "rejected": "Rejected",
       "committed": "Committed",
       "rolled_back": "Rolled back",
@@ -141,6 +142,8 @@
   },
 
   "addOrder": {
+    "addedAwaitingReview": "Order added and awaiting operator review.",
+    "addedAwaitingReviewWithWarning": "Order added and awaiting operator review. {{warning}}",
     "button": "Add Order",
     "added": "Order added",
     "dialog": {
@@ -229,10 +232,11 @@
         "submitLive": "Submit LIVE order",
         "submit": "Submit order",
         "chooseTarget": "Choose a target",
-        "acknowledged": "Sent to {{venue}} · {{mode}}. Venue order {{venueOrderId}}.",
+        "acknowledged": "Sent to {{venue}}. Venue order {{venueOrderId}}.",
         "refused": "The order was not placed on {{venue}}: {{error}}. Officer recorded it as cancelled.",
         "unknown": "The venue did not confirm the order: {{error}}. Officer is reconciling it; the order status below is authoritative.",
         "preTradeRejected": "Pre-trade checks rejected the order. Nothing was sent to the venue.",
+        "awaitingReview": "The order is awaiting operator review. Nothing was sent to the venue.",
         "networkError": "The send request did not complete: {{message}}. Check Orders before sending again - the order may already exist."
       }
     }
@@ -243,6 +247,7 @@
   },
 
   "check": {
+    "wouldReview": "Preview: would wait for review",
     "checking": "Checking...",
     "previewUnavailable": "Preview unavailable",
     "wouldPass": "Preview: would pass",
@@ -377,6 +382,15 @@
       "fieldSubmitted": "Submitted",
       "fieldDisplayPrice": "Lock price",
       "fieldCommission": "Commission",
+      "review": {
+        "title": "Order review",
+        "retry": "Retry",
+        "lastConfirm": "Last confirmation rejected",
+        "cancelTitle": "Cancel this order?",
+        "cancelDescription": "The order will be cancelled without being sent. This decision cannot be undone.",
+        "approvedForCaller": "Approved. The caller can now send this order.",
+        "uncertainOutcome": "The review request did not complete: {{message}}. The decision may already be recorded; the order status shown is authoritative. Check it before retrying."
+      },
       "workflow": {
         "title": "Workflow shortcuts",
         "description": "Officer recorded a pre-trade approval when this order was submitted, so the shortcuts can confirm or cancel it only while it has no execution-report activity. After any report, submit an explicit execution report instead.",
@@ -400,6 +414,7 @@
           "submitted": "Submitted",
           "pre_trade_accepted": "Pre-trade accepted",
           "pre_trade_rejected": "Pre-trade rejected",
+          "pre_trade_review": "Pre-trade review",
           "committed": "Committed",
           "rolled_back": "Rolled back",
           "confirmed": "Confirmed",
@@ -451,6 +466,8 @@
   },
 
   "requestType": {
+    "reviewConfirm": "Confirm order review",
+    "reviewCancel": "Cancel order review",
     "submit": "Submit",
     "executionReport": "Execution report",
     "confirm": "Confirm",
@@ -458,6 +475,8 @@
   },
 
   "repro": {
+    "responseReviewConfirm": "Review confirmation response",
+    "responseReviewCancel": "Review cancellation response",
     "loading": "Loading the reproduction bundle…",
     "loadError": "The reproduction bundle could not be loaded. {{message}}",
     "noAttestation": "This event carries no persisted attestation, so there is nothing to reproduce.",
@@ -514,6 +533,7 @@
   },
 
   "breakdown": {
+    "reviewMark": "Review mark {{index}}",
     "label": "Human-readable breakdown",
     "readOnlyNote": "Read only - not for copying or verification. Verify against the canonical bytes, never a reformatted copy.",
     "version": "Version",
@@ -563,7 +583,8 @@
     "issuedAt": "Issued at",
     "verdicts": {
       "accept": "Accept",
-      "reject": "Reject"
+      "reject": "Reject",
+      "review": "Review"
     },
     "orderTypes": {
       "market": "Market",

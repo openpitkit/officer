@@ -36,7 +36,8 @@ import (
 // carry no JSON tags; this package owns the encoding and the mapping, except
 // for the DTOs shared with the MCP tools - the account, group, order and trade
 // row DTOs (list_dto.go), the asset DTO (asset_dto.go), the adjustment DTOs
-// (adjustment_dto.go) and the execution-report DTOs (execution_report_dto.go) -
+// (adjustment_dto.go), the execution-report DTOs (execution_report_dto.go),
+// the reject DTO (order_reject_dto.go), the review DTOs (order_review_dto.go)
 // and the limit DTOs (limit_dto.go), shared there so a second surface can take
 // and answer the same body.
 // framework/web/httpapi owns their encoding and mapping.
@@ -52,15 +53,23 @@ type venueOrderDTO struct {
 }
 
 func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
-	if err := domain.ValidateTradingRoute(v.Route); err != nil {
-		return venueOrderDTO{}, fmt.Errorf("stored venue order route is invalid")
+	route, err := storedTradingRouteDTO(v.Route)
+	if err != nil {
+		return venueOrderDTO{}, err
 	}
 	return venueOrderDTO{
 		Connection: v.Connection.String(), VenueAccount: v.VenueAccount,
-		Route: json.RawMessage(v.Route), ClientOrderID: v.ClientOrderID,
+		Route: route, ClientOrderID: v.ClientOrderID,
 		VenueOrderID: v.VenueOrderID, SendAttempted: v.SendAttempted,
 		CreatedAt: v.CreatedAt.Format(time.RFC3339Nano),
 	}, nil
+}
+
+func storedTradingRouteDTO(route string) (json.RawMessage, error) {
+	if err := domain.ValidateTradingRoute(route); err != nil {
+		return nil, fmt.Errorf("stored trading route is invalid")
+	}
+	return json.RawMessage(route), nil
 }
 
 // healthDTO is the body of GET /api/v1/health.
@@ -149,12 +158,13 @@ type policyValuesDTO struct {
 // policy list. The kind discriminator selects which member of values is set;
 // the scope/account/accountGroup/asset axes are shared across all kinds.
 type policyDTO struct {
-	Kind         string          `json:"kind"`
-	Scope        string          `json:"scope"`
-	Account      string          `json:"account"`
-	AccountGroup string          `json:"accountGroup"`
-	Asset        string          `json:"asset"`
-	Values       policyValuesDTO `json:"values"`
+	Kind         string           `json:"kind"`
+	Mode         *domain.RuleMode `json:"mode"`
+	Scope        string           `json:"scope"`
+	Account      string           `json:"account"`
+	AccountGroup string           `json:"accountGroup"`
+	Asset        string           `json:"asset"`
+	Values       policyValuesDTO  `json:"values"`
 }
 
 // auditDTO is the wire shape of a single audit row. An audit row is a machine
@@ -238,6 +248,7 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 			MaxOrders: row.Rate.MaxOrders,
 		}
 	case row.OrderSize != nil:
+		dto.Mode = &row.OrderSize.Mode
 		dto.Values.OrderSize = &policyOrderSizeValuesDTO{
 			MaxQuantity: row.OrderSize.MaxQuantity,
 			MaxNotional: row.OrderSize.MaxNotional,
@@ -264,7 +275,7 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 // handle is its opaque id; no surrogate id is serialized.
 func toAuditDTO(row domain.AuditRow) auditDTO {
 	return auditDTO{
-		OrderID: row.OrderID, Verdict: row.Verdict, RejectCode: row.RejectCode,
+		OrderID: row.OrderID, Verdict: string(row.Verdict), RejectCode: row.RejectCode,
 		ID:           row.ExternalID.String(),
 		At:           row.At,
 		Actor:        row.Actor,
@@ -693,7 +704,7 @@ type eventReproductionRequestDTO struct {
 	PriceCurrency   string                     `json:"priceCurrency"`
 	AccountID       string                     `json:"accountId"`
 	Verdict         string                     `json:"verdict"`
-	Rejects         []orderRejectDTO           `json:"rejects,omitempty"`
+	Rejects         []httpx.OrderRejectDTO     `json:"rejects,omitempty"`
 	ExecutionReport *executionReportRequestDTO `json:"executionReport,omitempty"`
 	Result          *attestationResultDTO      `json:"result"`
 }
@@ -770,7 +781,8 @@ type eventReproductionDTO struct {
 }
 
 // eventReproductionResponseDTO is the exact type-specific API response the robot
-// received for the attested request, reconstructed through the same serializers.
+// received for the attested request, reconstructed through the same serializers;
+// reviewConfirm is the exception and carries only the signed decision.
 // Exactly one facet is populated, matching the request type. The populated
 // facet carries the persisted envelope verbatim.
 type eventReproductionResponseDTO struct {
@@ -782,54 +794,32 @@ type eventReproductionResponseDTO struct {
 	Confirm *orderMutationResponseDTO `json:"confirm,omitempty"`
 	// Cancel reproduces the POST .../cancel response.
 	Cancel *orderMutationResponseDTO `json:"cancel,omitempty"`
+	// ReviewConfirm reproduces the signed decision; the order is not signed by it.
+	ReviewConfirm *reviewDecisionDTO `json:"reviewConfirm,omitempty"`
+	// ReviewCancel reproduces the POST .../review/cancel response.
+	ReviewCancel *orderMutationResponseDTO `json:"reviewCancel,omitempty"`
 }
 
 // --- order check ------------------------------------------------------------
-
-// orderRejectDTO is the wire shape of one engine pre-trade reject from a
-// non-mutating order check.
-type orderRejectDTO struct {
-	Code    string `json:"code"`
-	Scope   string `json:"scope"`
-	Policy  string `json:"policy"`
-	Reason  string `json:"reason"`
-	Details string `json:"details"`
-}
 
 // checkResultDTO is the wire shape of a non-mutating order-check outcome: the
 // would-be display (lock) price on pass, or the structured rejects and any
 // would-be account block on reject. The display price is an exact decimal
 // string, never the opaque lock blob.
 type checkResultDTO struct {
+	Reviews           []httpx.ReviewMarkDTO    `json:"reviews,omitempty"`
 	WouldBlock        *httpx.ExecutionBlockDTO `json:"wouldBlock"`
-	Rejects           []orderRejectDTO         `json:"rejects"`
+	Rejects           []httpx.OrderRejectDTO   `json:"rejects"`
 	WouldDisplayPrice string                   `json:"wouldDisplayPrice"`
 	Passed            bool                     `json:"passed"`
-}
-
-func toOrderRejectDTOs(rejects []domain.OrderReject) []orderRejectDTO {
-	if len(rejects) == 0 {
-		return nil
-	}
-	out := make([]orderRejectDTO, 0, len(rejects))
-	for _, rej := range rejects {
-		out = append(out, orderRejectDTO{
-			Code:    rej.Code,
-			Scope:   rej.Scope,
-			Policy:  rej.Policy,
-			Reason:  rej.Reason,
-			Details: rej.Details,
-		})
-	}
-	return out
 }
 
 // toCheckResultDTO maps a domain.CheckResult onto the wire DTO. It reuses the
 // execution-block shape for the would-be block.
 func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
-	rejects := toOrderRejectDTOs(r.Rejects)
+	rejects := httpx.ToOrderRejectDTOs(r.Rejects)
 	if rejects == nil {
-		rejects = []orderRejectDTO{}
+		rejects = []httpx.OrderRejectDTO{}
 	}
 	var block *httpx.ExecutionBlockDTO
 	if r.WouldBlock != nil {
@@ -842,6 +832,7 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 		}
 	}
 	return checkResultDTO{
+		Reviews:           httpx.ToReviewMarkDTOs(r.Reviews),
 		WouldBlock:        block,
 		Rejects:           rejects,
 		WouldDisplayPrice: r.WouldLockPrice,
@@ -871,7 +862,7 @@ type orderEventDTO struct {
 	RejectPolicy    string                     `json:"rejectPolicy,omitempty"`
 	RejectReason    string                     `json:"rejectReason,omitempty"`
 	RejectDetails   string                     `json:"rejectDetails,omitempty"`
-	Rejects         []orderRejectDTO           `json:"rejects,omitempty"`
+	Rejects         []httpx.OrderRejectDTO     `json:"rejects,omitempty"`
 	FillQuantity    string                     `json:"fillQuantity,omitempty"`
 	FillPrice       string                     `json:"fillPrice,omitempty"`
 	FillLockPrice   string                     `json:"fillLockPrice,omitempty"`
@@ -918,7 +909,7 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 		RejectPolicy:    e.Payload.RejectPolicy,
 		RejectReason:    e.Payload.RejectReason,
 		RejectDetails:   e.Payload.RejectDetails,
-		Rejects:         toOrderRejectDTOs(e.Payload.Rejects),
+		Rejects:         httpx.ToOrderRejectDTOs(e.Payload.Rejects),
 		FillQuantity:    e.Payload.FillQuantity,
 		FillPrice:       e.Payload.FillPrice,
 		FillLockPrice:   e.Payload.FillLockPrice,
@@ -1068,11 +1059,26 @@ type submitOrderFieldsDTO struct {
 // signedApprovalDTO is the response of POST /orders/submit. The authorised order
 // is referenced by its opaque external id, never a surrogate id.
 type signedApprovalDTO struct {
-	SignedApproval  string           `json:"signedApproval"`
-	KeyID           string           `json:"keyId"`
-	OrderExternalID string           `json:"id"`
-	Verdict         string           `json:"verdict"`
-	Reasons         []orderRejectDTO `json:"reasons,omitempty"`
+	Reviews         []httpx.ReviewMarkDTO  `json:"reviews,omitempty"`
+	SignedApproval  string                 `json:"signedApproval"`
+	KeyID           string                 `json:"keyId"`
+	OrderExternalID string                 `json:"id"`
+	Verdict         string                 `json:"verdict"`
+	Reasons         []httpx.OrderRejectDTO `json:"reasons,omitempty"`
+}
+
+type confirmOrderReviewResponseDTO struct {
+	Order     httpx.OrderDTO    `json:"order"`
+	Decision  reviewDecisionDTO `json:"decision"`
+	VenueSend *venueSendDTO     `json:"venueSend,omitempty"`
+}
+
+type reviewDecisionDTO struct {
+	Verdict        string                 `json:"verdict"`
+	Reasons        []httpx.OrderRejectDTO `json:"reasons"`
+	SignedApproval string                 `json:"signedApproval"`
+	KeyID          string                 `json:"keyId"`
+	Signed         bool                   `json:"signed"`
 }
 
 type dropCopyOrderResponseDTO struct {
@@ -1227,4 +1233,19 @@ type venueSendDTO struct {
 	Error      string                        `json:"error,omitempty"`
 	VenueOrder *venueOrderDTO                `json:"venueOrder,omitempty"`
 	Refusal    *trading.TestExecutionRefusal `json:"refusal,omitempty"`
+}
+
+func toVenueSendDTO(send *backend.VenueSend) (*venueSendDTO, error) {
+	if send == nil {
+		return nil, nil
+	}
+	out := &venueSendDTO{Status: send.Status, Error: send.Error, Refusal: send.Refusal}
+	if send.Order != nil {
+		link, err := toVenueOrderDTO(*send.Order)
+		if err != nil {
+			return nil, err
+		}
+		out.VenueOrder = &link
+	}
+	return out, nil
 }

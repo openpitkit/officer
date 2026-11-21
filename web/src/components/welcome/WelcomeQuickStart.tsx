@@ -74,6 +74,7 @@ interface StatusMessage {
 const DEMO_LIMITS: Limit[] = [
   {
     policy: "rate_limit",
+    mode: null,
     scope: "account",
     account: DEMO_ACCOUNT_ID,
     asset: "",
@@ -81,6 +82,7 @@ const DEMO_LIMITS: Limit[] = [
   },
   {
     policy: "order_size_limit",
+    mode: "reject",
     scope: "account_underlying_asset",
     account: DEMO_ACCOUNT_ID,
     asset: "BTC",
@@ -88,6 +90,7 @@ const DEMO_LIMITS: Limit[] = [
   },
   {
     policy: "order_size_limit",
+    mode: "reject",
     scope: "account_settlement_asset",
     account: DEMO_ACCOUNT_ID,
     asset: "USD",
@@ -499,6 +502,7 @@ export function WelcomeQuickStart() {
       page.items.some(
         (row) =>
           row.policy === limit.policy &&
+          row.mode === limit.mode &&
           row.scope === limit.scope &&
           row.account === limit.account &&
           row.asset === limit.asset,

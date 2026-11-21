@@ -331,7 +331,8 @@ func (r *realmStore) DeleteTradingInstrument(
 	return notFoundIfNoRows(res, "trading instrument", externalSymbol)
 }
 
-// DeleteTradingConnection retains every connection referenced by venue orders.
+// DeleteTradingConnection retains every connection referenced by venue orders
+// or waiting-order reviews.
 func (r *realmStore) DeleteTradingConnection(ctx context.Context, id domain.ExternalID) (err error) {
 	db, err := r.db()
 	if err != nil {
@@ -348,8 +349,9 @@ func (r *realmStore) DeleteTradingConnection(ctx context.Context, id domain.Exte
 	}
 	var enabled, hasOrders bool
 	if err := tx.QueryRowContext(ctx,
-		`SELECT enabled, EXISTS(SELECT 1 FROM venue_order WHERE connection_id = ?)
-   FROM trading_connection WHERE id = ?`, connectionID, connectionID).Scan(&enabled, &hasOrders); err != nil {
+		`SELECT enabled, (EXISTS(SELECT 1 FROM venue_order WHERE connection_id = ?)
+          OR EXISTS(SELECT 1 FROM order_review WHERE connection_id = ?))
+   FROM trading_connection WHERE id = ?`, connectionID, connectionID, connectionID).Scan(&enabled, &hasOrders); err != nil {
 		return fmt.Errorf("store: check trading connection deletion: %w", err)
 	}
 	if enabled {

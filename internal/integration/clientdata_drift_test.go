@@ -396,6 +396,27 @@ var clientDataAllowlist = []clientDataAllow{
 	},
 	{
 		Surface: driftBackup,
+		Entity:  "orders",
+		Field:   "orders.Order.Lock",
+		Kind:    "optional-sentinel",
+		Why:     "a waiting review order has no reservation; the filled sentinel covers the lock",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "orders",
+		Field:   "orders.Order.CommissionSubtotals",
+		Kind:    "optional-sentinel",
+		Why:     "a waiting review order has no fills; the filled sentinel covers commission subtotals",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "orders",
+		Field:   "orders.Order.DropCopy",
+		Kind:    "optional-sentinel",
+		Why:     "the review sentinel is a regular submission; the filled sentinel covers drop-copy",
+	},
+	{
+		Surface: driftBackup,
 		Entity:  "order-events",
 		Field:   "order-events.Payload.RejectScope",
 		Kind:    "optional-sentinel",
@@ -854,6 +875,7 @@ var expectedSchemaTableNames = []string{
 	"order_event",
 	"order_event_type",
 	"order_record",
+	"order_review",
 	"order_side",
 	"order_status",
 	"principal",
@@ -1238,6 +1260,15 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"connection_id": "Connection",
 			"revision":      "Revision",
 			"rules":         "Rules",
+		},
+	},
+	"order_review": {
+		backup: map[string]string{
+			"order_id":      "Order",
+			"mode_id":       "Mode",
+			"connection_id": "Connection",
+			"venue_account": "VenueAccount",
+			"route":         "Route",
 		},
 	},
 	"venue_order": {
@@ -1661,12 +1692,14 @@ func seedClientDataDriftRealm(
 		Window:    3 * time.Minute,
 	}))
 	must(t, "PutOrderSizeLimit", rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     "acc-1",
 		Asset:       "AAPL",
 		MaxQuantity: "18.5",
 	}))
 	must(t, "PutOrderSizeLimit notional", rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeAccountSettlementAsset,
 		Account:     "acc-1",
 		Asset:       "AAPL",
@@ -1992,6 +2025,39 @@ func seedClientDataDriftRealm(
 	must(t, "SetVenueOrderID", rs.SetVenueOrderID(
 		ctx, order.ExternalID, "venue-order-sentinel",
 	))
+	reviewOrder, err := rs.CreateOrder(ctx, domain.Order{
+		ExternalID:       "order-review-sentinel-1",
+		Account:          "acc-1",
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Principal:        "operator",
+		Source:           domain.SourcePanel,
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "3.25",
+		Leaves:           "3.25",
+		ReservedQuantity: "0",
+		Price:            "151.25",
+		Status:           domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder review: %v", err)
+	}
+	_, err = rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Order:       reviewOrder.ExternalID,
+		Account:     reviewOrder.Account,
+		OrderStatus: domain.OrderStatusAwaitingReview,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusSubmitted},
+		Review: &domain.OrderReview{
+			Mode: "immediate",
+			Destination: &domain.TradingDestination{
+				Connection:   connection.ExternalID,
+				VenueAccount: "venue-account-sentinel",
+				Route:        `{"strategy":"review-sentinel"}`,
+			},
+		},
+	})
+	must(t, "RecordOrderSettlement review", err)
 	must(t, "SetSetting", rs.SetSetting(ctx, "no_esign", "0"))
 	must(t, "SetMcpAccess", rs.SetMcpAccess(ctx, "submit_order", true))
 	testConnection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
@@ -2185,6 +2251,7 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"trading-access", data.TradingAccess},
 		{"test-execution-policies", data.TestExecutionPolicies},
 		{"venue-orders", data.VenueOrders},
+		{"order-reviews", data.OrderReviews},
 		{"signing-keys", data.SigningKeys},
 		{"settings", data.Settings},
 		{"mcp-access", data.McpAccess},

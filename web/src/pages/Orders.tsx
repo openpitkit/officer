@@ -16,7 +16,8 @@
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, MouseEvent } from "react";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
+import type { TFunction } from "i18next";
 import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -60,9 +61,13 @@ import {
 } from "@/framework";
 import type {
   CheckResult,
+  CheckReject,
   Commission,
   ExecutionBlock,
   Order,
+  OrderDetail,
+  OrderReview,
+  ReviewMark,
   OrderEvent,
   OrderListFilters,
   OrderSide,
@@ -73,9 +78,10 @@ import type {
   TradingDestination,
   TradingMode,
   TradingSnapshot,
-  VenueOrder,
+  VenueSendOutcome,
 } from "@/api/types";
 import { useOrdersPage } from "@/api/useOrders";
+import { ruleModeLabel } from "@/framework/registries/vocabulary";
 import {
   normalizeVenueFilterValue,
   VENUE_FILTER_WIDTH,
@@ -90,6 +96,7 @@ import {
   ACTIVE_ORDER_STATUSES,
   ACTIVE_STATUS_SET,
   ALL_ORDER_STATUSES,
+  FILL_ELIGIBLE_ORDER_STATUSES,
   parseStatusSet,
   sameStatusSet,
   TERMINAL_ORDER_STATUSES,
@@ -265,6 +272,71 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function providerTitle(
+  tradingSnapshot: TradingSnapshot | null,
+  providerType: string,
+): string {
+  return (
+    tradingSnapshot?.providers.find(
+      (provider) => provider.type === providerType,
+    )?.title ?? providerType
+  );
+}
+
+function venueSendBanner(
+  t: TFunction<"orders">,
+  venueSend: VenueSendOutcome | undefined,
+  venueTitle: string,
+  modeLabel?: string,
+): DetailBanner {
+  if (venueSend?.status === "acknowledged") {
+    return {
+      tone: "ok",
+      text: t("addOrder.dialog.venue.acknowledged", {
+        venue: modeLabel ? `${venueTitle} · ${modeLabel}` : venueTitle,
+        venueOrderId: venueSend.venueOrder?.venueOrderId,
+      }),
+    };
+  } else if (venueSend?.status === "refused") {
+    return {
+      tone: "danger",
+      text: t("addOrder.dialog.venue.refused", {
+        venue: venueTitle,
+        error: venueSend.error,
+      }),
+    };
+  } else if (venueSend?.status === "unknown") {
+    return {
+      tone: "warn",
+      text: t("addOrder.dialog.venue.unknown", { error: venueSend.error }),
+    };
+  } else {
+    return {
+      tone: "danger",
+      text: t("addOrder.dialog.venue.preTradeRejected"),
+    };
+  }
+}
+
+function mutationErrorMessage(
+  err: unknown,
+  formatUncertain: (message: string) => string,
+  isDefinitive: (status: number, code: string) => boolean,
+): string {
+  const definitiveServerRefusal =
+    err instanceof ApiError &&
+    err.status !== undefined &&
+    isDefinitive(err.status, err.code);
+  if (definitiveServerRefusal) {
+    return errMessage(err);
+  }
+  return formatUncertain(
+    err instanceof ApiError && err.status !== undefined && err.status >= 500
+      ? `HTTP ${err.status}`
+      : errMessage(err).replace(/[.。]$/, ""),
+  );
+}
+
 /** Order status → badge variant. */
 function statusVariant(status: string): BadgeProps["variant"] {
   switch (status) {
@@ -279,6 +351,7 @@ function statusVariant(status: string): BadgeProps["variant"] {
     case "cancelled":
       return "danger";
     case "partially_filled":
+    case "awaiting_review":
       return "warn";
     default:
       return "neutral";
@@ -301,6 +374,9 @@ function sourceVariant(source: Source): BadgeProps["variant"] {
 
 /** Event type → badge variant. */
 function eventTypeVariant(type: string): BadgeProps["variant"] {
+  if (type === "pre_trade_review") {
+    return "warn";
+  }
   if (type.startsWith("reject")) {
     return "danger";
   }
@@ -375,6 +451,43 @@ type CheckState =
   | { phase: "done"; result: CheckResult }
   | { phase: "error"; message: string };
 
+function CheckRejectList<Reason extends CheckReject>({
+  reasons,
+  tone,
+  renderPrefix,
+}: {
+  reasons: Reason[];
+  tone: "danger" | "warn";
+  renderPrefix?: (reason: Reason, index: number) => ReactNode;
+}) {
+  if (reasons.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-y-1">
+      {reasons.map((r, i) => {
+        const label = rejectLabel(r.code);
+        const details = r.details && r.details !== r.reason ? r.details : "";
+        return (
+          <li
+            key={i}
+            className={cn(
+              "flex flex-wrap gap-x-2 gap-y-0.5",
+              tone === "danger" ? "text-[var(--danger)]" : "text-[var(--warn)]",
+            )}
+          >
+            {renderPrefix?.(r, i)}
+            <span className="font-medium">{label}</span>
+            {r.reason && <span>{r.reason}</span>}
+            {details && <span>{details}</span>}
+            {label !== r.code && (
+              <span className="text-muted-lt text-[11px]">{r.code}</span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function CheckPreview({ state }: { state: CheckState }) {
   const { t } = useTranslation("orders");
 
@@ -396,6 +509,29 @@ function CheckPreview({ state }: { state: CheckState }) {
     );
   }
   const { result } = state;
+  const outcome = !result.passed
+    ? "reject"
+    : result.reviews.length > 0
+      ? "review"
+      : "pass";
+  const presentation = {
+    pass: {
+      borderClass: "border-[var(--ok)] bg-[var(--ok-dim)]",
+      textClass: "text-[var(--ok)]",
+      headlineKey: "check.wouldPass",
+    },
+    review: {
+      borderClass: "border-[var(--warn)] bg-[var(--warn-dim)]",
+      textClass: "text-[var(--warn)]",
+      headlineKey: "check.wouldReview",
+    },
+    reject: {
+      borderClass: "border-[var(--danger)] bg-[var(--danger-dim)]",
+      textClass: "text-[var(--danger)]",
+      headlineKey: "check.wouldReject",
+    },
+  } as const;
+  const { borderClass, textClass, headlineKey } = presentation[outcome];
   const wouldBlock = result.wouldBlock;
   let wouldBlockMessage = "";
   if (wouldBlock) {
@@ -424,44 +560,14 @@ function CheckPreview({ state }: { state: CheckState }) {
     <div
       className={[
         "rounded-card border px-3 py-2 flex flex-col gap-y-2 text-xs",
-        result.passed
-          ? "border-[var(--ok)] bg-[var(--ok-dim)]"
-          : "border-[var(--danger)] bg-[var(--danger-dim)]",
+        borderClass,
       ].join(" ")}
     >
       <div className="flex items-center gap-2">
-        <span
-          className={
-            result.passed
-              ? "text-[var(--ok)] font-medium"
-              : "text-[var(--danger)] font-medium"
-          }
-        >
-          {result.passed ? t("check.wouldPass") : t("check.wouldReject")}
-        </span>
+        <span className={`${textClass} font-medium`}>{t(headlineKey)}</span>
       </div>
-      {result.rejects.length > 0 && (
-        <ul className="flex flex-col gap-y-1">
-          {result.rejects.map((r, i) => {
-            const label = rejectLabel(r.code);
-            const details =
-              r.details && r.details !== r.reason ? r.details : "";
-            return (
-              <li
-                key={i}
-                className="flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--danger)]"
-              >
-                <span className="font-medium">{label}</span>
-                {r.reason && <span>{r.reason}</span>}
-                {details && <span>{details}</span>}
-                {label !== r.code && (
-                  <span className="text-muted-lt text-[11px]">{r.code}</span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      <CheckRejectList reasons={result.rejects} tone="danger" />
+      {outcome === "review" && <ReviewMarkList marks={result.reviews} />}
       {result.wouldDisplayPrice !== "" && (
         <div className="text-muted-lt">
           {t("check.displayPrice", { price: result.wouldDisplayPrice })}
@@ -601,9 +707,7 @@ function SubmitOrderDialog({
     (timeInForceOptions.length === 0 ||
       timeInForceOptions.includes(timeInForce));
   const selectedProviderTitle = selectedDestination
-    ? (tradingSnapshot?.providers.find(
-        (provider) => provider.type === selectedDestination.provider,
-      )?.title ?? selectedDestination.provider)
+    ? providerTitle(tradingSnapshot, selectedDestination.provider)
     : "";
   const selectableDestinations = destinationsAreCurrent
     ? destinations.filter(
@@ -940,60 +1044,45 @@ function SubmitOrderDialog({
         return;
       }
       let banner: DetailBanner;
-      if (result.venueSend?.status === "acknowledged") {
-        banner = {
-          tone: "ok",
-          text: t("addOrder.dialog.venue.acknowledged", {
-            venue: selectedProviderTitle,
-            mode: t(`addOrder.dialog.venue.modeValues.${venueMode}`),
-            venueOrderId: result.venueSend.venueOrder?.venueOrderId,
-          }),
-        };
-      } else if (result.venueSend?.status === "refused") {
-        banner = {
-          tone: "danger",
-          text: t("addOrder.dialog.venue.refused", {
-            venue: selectedProviderTitle,
-            error: result.venueSend.error,
-          }),
-        };
-      } else if (result.venueSend?.status === "unknown") {
-        banner = {
-          tone: "warn",
-          text: t("addOrder.dialog.venue.unknown", {
-            error: result.venueSend.error,
-          }),
-        };
-      } else {
-        banner = {
-          tone: "danger",
-          text: t("addOrder.dialog.venue.preTradeRejected"),
-        };
+      switch (result.verdict) {
+        case "review":
+          banner = {
+            tone: "warn",
+            text: t("addOrder.dialog.venue.awaitingReview"),
+          };
+          break;
+        case "reject":
+          banner = {
+            tone: "danger",
+            text: t("addOrder.dialog.venue.preTradeRejected"),
+          };
+          break;
+        case "accept":
+          banner = venueSendBanner(
+            t,
+            result.venueSend,
+            selectedProviderTitle,
+            t(`addOrder.dialog.venue.modeValues.${venueMode}`),
+          );
+          break;
+        default:
+          onCreated();
+          throw new ApiError("Missing trading decision verdict", "internal");
       }
       onCreated();
       reset();
       onClose();
       onOpenDetail(result.id, banner);
     } catch (err) {
-      const definitiveServerRefusal =
-        err instanceof ApiError &&
-        err.status !== undefined &&
-        ((err.status >= 400 && err.status < 500) ||
-          (err.status === 502 && err.code === "upstream"));
-      if (definitiveServerRefusal) {
-        setError(errMessage(err));
-      } else {
-        setError(
-          t("addOrder.dialog.venue.networkError", {
-            message:
-              err instanceof ApiError &&
-              err.status !== undefined &&
-              err.status >= 500
-                ? `HTTP ${err.status}`
-                : errMessage(err).replace(/[.。]$/, ""),
-          }),
-        );
-      }
+      setError(
+        mutationErrorMessage(
+          err,
+          (message) => t("addOrder.dialog.venue.networkError", { message }),
+          (status, code) =>
+            (status >= 400 && status < 500) ||
+            (status === 502 && code === "upstream"),
+        ),
+      );
     } finally {
       if (submitAbortRef.current === controller) {
         submitAbortRef.current = null;
@@ -1078,7 +1167,18 @@ function SubmitOrderDialog({
       onClose();
       onOpenDetail(
         result.order.id,
-        result.warning ? { text: result.warning, tone: "ok" } : undefined,
+        result.approval?.verdict === "review"
+          ? {
+              text: result.warning
+                ? t("addOrder.addedAwaitingReviewWithWarning", {
+                    warning: result.warning,
+                  })
+                : t("addOrder.addedAwaitingReview"),
+              tone: "warn",
+            }
+          : result.warning
+            ? { text: result.warning, tone: "ok" }
+            : undefined,
       );
     } catch (err) {
       if (controller.signal.aborted) {
@@ -1257,18 +1357,17 @@ function SubmitOrderDialog({
                           const selectable =
                             destination.enabled &&
                             destination.state !== "unavailable";
-                          const providerTitle =
-                            tradingSnapshot?.providers.find(
-                              (provider) =>
-                                provider.type === destination.provider,
-                            )?.title ?? destination.provider;
+                          const destinationProviderTitle = providerTitle(
+                            tradingSnapshot,
+                            destination.provider,
+                          );
                           return (
                             <SelectItem
                               key={destination.connection}
                               value={destination.connection}
                               disabled={!selectable}
                             >
-                              {destination.label} · {providerTitle}
+                              {destination.label} · {destinationProviderTitle}
                               {destination.venueAccount !== "" && (
                                 <> · {destination.venueAccount}</>
                               )}
@@ -2406,6 +2505,15 @@ interface OrderDetailDialogProps {
   /** Called after a workflow shortcut succeeds so the page refetches server
    *  state. */
   onWorkflowShortcutCompleted: (orderExternalId: string) => void;
+  inFlightReviewAction: "confirm" | "cancel" | null;
+  onReviewDecisionStarted: (
+    orderExternalId: string,
+    action: "confirm" | "cancel",
+  ) => void;
+  onReviewDecisionCompleted: (
+    orderExternalId: string,
+    result?: { banner?: DetailBanner },
+  ) => void;
   successBanner?: DetailBanner;
   tradingSnapshot: TradingSnapshot | null;
 }
@@ -2413,13 +2521,7 @@ interface OrderDetailDialogProps {
 type DetailState =
   | { phase: "loading" }
   | { phase: "error"; message: string }
-  | {
-      phase: "ready";
-      order: Order;
-      events: OrderEvent[];
-      trades: Trade[];
-      venueOrder?: VenueOrder;
-    };
+  | ({ phase: "ready" } & OrderDetail);
 
 /** Whether a timeline event carries a persisted attestation the operator can
  *  reproduce and verify. A signed event has a real Ed25519 signature; an
@@ -2451,6 +2553,143 @@ function accountBlockReason(ev: OrderEvent): string | null {
   return details.length > 0 ? `${reason} [${details.join(", ")}]` : reason;
 }
 
+function ReviewMarkList({ marks }: { marks: ReviewMark[] }) {
+  const { t } = useTranslation("orders");
+  return (
+    <CheckRejectList
+      reasons={marks}
+      tone="warn"
+      renderPrefix={(mark) => (
+        <>
+          <span>
+            {t("detail.dialog.timeline.rejectPolicy", { policy: mark.policy })}
+          </span>
+          <Badge variant="warn">{ruleModeLabel(t, mark.mode)}</Badge>
+        </>
+      )}
+    />
+  );
+}
+
+function OrderReviewSection({
+  review,
+  connectionLabel,
+  action,
+  error,
+  onDismissError,
+  onDecision,
+}: {
+  review: OrderReview;
+  connectionLabel: string | undefined;
+  action: "confirm" | "cancel" | null;
+  error: string | null;
+  onDismissError: () => void;
+  onDecision: (action: "confirm" | "cancel") => void;
+}) {
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
+  const [cancelOpen, setCancelOpen] = useState(false);
+  return (
+    <section
+      aria-label={t("detail.dialog.review.title")}
+      className="flex flex-col gap-y-3 rounded-card border border-border bg-surface-2 p-3"
+    >
+      <h4 className="text-xs font-bold text-text">
+        {t("detail.dialog.review.title")}
+      </h4>
+      <ReviewMarkList marks={review.marks} />
+      {review.lastConfirm && (
+        <div className="flex flex-col gap-2 border-t border-border pt-3">
+          <h5 className="text-xs font-bold">
+            {t("detail.dialog.review.lastConfirm")}
+          </h5>
+          <p className="nums text-xs text-muted-lt">
+            {formatDateTime(review.lastConfirm.at)}
+          </p>
+          <CheckRejectList
+            reasons={review.lastConfirm.reasons}
+            tone="danger"
+            renderPrefix={(reason) => (
+              <span>
+                {t("detail.dialog.timeline.rejectPolicy", {
+                  policy: reason.policy,
+                })}
+              </span>
+            )}
+          />
+        </div>
+      )}
+      {review.destination && (
+        <dl className="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <dt className="text-muted-lt">
+              {t("detail.dialog.venue.connection")}
+            </dt>
+            <dd>{connectionLabel ?? review.destination.connection}</dd>
+          </div>
+          {review.destination.venueAccount !== "" && (
+            <div>
+              <dt className="text-muted-lt">
+                {t("detail.dialog.venue.venueAccount")}
+              </dt>
+              <dd>{review.destination.venueAccount}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {error && <ErrorBanner message={error} onDismiss={onDismissError} />}
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={action !== null}
+          onClick={() => onDecision("confirm")}
+        >
+          {action === "confirm"
+            ? t("detail.dialog.workflow.confirmBusy")
+            : review.lastConfirm
+              ? t("detail.dialog.review.retry")
+              : t("detail.dialog.workflow.confirm")}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
+          disabled={action !== null}
+          onClick={() => setCancelOpen(true)}
+        >
+          {action === "cancel"
+            ? t("detail.dialog.workflow.cancelBusy")
+            : t("detail.dialog.workflow.cancel")}
+        </Button>
+      </div>
+      <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-[var(--danger)]">
+              {t("detail.dialog.review.cancelTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("detail.dialog.review.cancelDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={action !== null}>
+              {tc("actions.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="danger"
+              disabled={action !== null}
+              onClick={() => onDecision("cancel")}
+            >
+              {t("detail.dialog.workflow.cancel")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </section>
+  );
+}
+
 function OrderDetailDialog({
   orderExternalId,
   refreshKey,
@@ -2459,12 +2698,21 @@ function OrderDetailDialog({
   onCloneOrder,
   onCloneExecReport,
   onWorkflowShortcutCompleted,
+  inFlightReviewAction,
+  onReviewDecisionStarted,
+  onReviewDecisionCompleted,
   successBanner,
   tradingSnapshot,
 }: OrderDetailDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
-  const { fetchOrderDetail, confirmOrder, cancelOrder } = useOfficerApi();
+  const {
+    fetchOrderDetail,
+    confirmOrder,
+    cancelOrder,
+    confirmOrderReview,
+    cancelOrderReview,
+  } = useOfficerApi();
   const globalAccountFilter = useGlobalAccountFilter();
   const { showsAccounts } = accountScope();
 
@@ -2481,6 +2729,11 @@ function OrderDetailDialog({
   const [cancelFormOpen, setCancelFormOpen] = useState(false);
   const [cancelLeavesQuantity, setCancelLeavesQuantity] = useState("");
   const [pollError, setPollError] = useState<string | null>(null);
+  const [reviewAction, setReviewAction] = useState<"confirm" | "cancel" | null>(
+    null,
+  );
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const reviewRequest = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (orderExternalId === null) {
@@ -2495,21 +2748,26 @@ function OrderDetailDialog({
     setCancelFormOpen(false);
     setCancelLeavesQuantity("");
     setPollError(null);
+    setReviewAction(null);
+    setReviewError(null);
     const controller = new AbortController();
     fetchOrderDetail(orderExternalId, controller.signal)
-      .then(({ order, events, trades, venueOrder }) => {
+      .then((detail) => {
         if (controller.signal.aborted) {
           return;
         }
         setPollError(null);
-        setState({ phase: "ready", order, events, trades, venueOrder });
+        setState({ phase: "ready", ...detail });
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
           setState({ phase: "error", message: errMessage(err) });
         }
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      reviewRequest.current?.abort();
+    };
   }, [fetchOrderDetail, orderExternalId, refreshKey]);
 
   const pollVenueOrder =
@@ -2527,10 +2785,10 @@ function OrderDetailDialog({
       controller = new AbortController();
       const requestController = controller;
       fetchOrderDetail(orderExternalId, requestController.signal)
-        .then(({ order, events, trades, venueOrder }) => {
+        .then((detail) => {
           if (!requestController.signal.aborted) {
             setPollError(null);
-            setState({ phase: "ready", order, events, trades, venueOrder });
+            setState({ phase: "ready", ...detail });
           }
         })
         .catch((err: unknown) => {
@@ -2564,12 +2822,16 @@ function OrderDetailDialog({
     return price;
   }
 
-  // The backend owns activity validation; the UI only checks whether the detail
-  // shows a non-terminal order with a recorded pre-trade accept attestation.
+  const awaitingReview =
+    state.phase === "ready" && state.order.status === "awaiting_review";
+  const canUseExecutionActions = state.phase === "ready" && !awaitingReview;
+  // The backend owns activity validation; review orders cannot execute yet.
   const canUseWorkflowShortcut =
     state.phase === "ready" &&
     state.venueOrder === undefined &&
-    !TERMINAL_ORDER_STATUSES.some((status) => status === state.order.status) &&
+    FILL_ELIGIBLE_ORDER_STATUSES.some(
+      (status) => status === state.order.status,
+    ) &&
     state.events.some(
       (event) =>
         event.type === "pre_trade_accepted" && eventHasAttestation(event),
@@ -2581,15 +2843,19 @@ function OrderDetailDialog({
     cancelLeavesQuantity === "" || isOpenQuantityString(cancelLeavesQuantity);
 
   const venueOrder = state.phase === "ready" ? state.venueOrder : undefined;
+  const review = state.phase === "ready" ? state.review : undefined;
+  const reviewConnection = review?.destination
+    ? tradingSnapshot?.connections.find(
+        (connection) => connection.id === review.destination?.connection,
+      )
+    : undefined;
   const venueConnection = venueOrder
     ? tradingSnapshot?.connections.find(
         (connection) => connection.id === venueOrder.connection,
       )
     : undefined;
   const venueTitle = venueConnection
-    ? (tradingSnapshot?.providers.find(
-        (provider) => provider.type === venueConnection.provider,
-      )?.title ?? venueConnection.provider)
+    ? providerTitle(tradingSnapshot, venueConnection.provider)
     : "";
   const venueOrderIdState =
     state.phase === "ready" && venueOrder && !venueOrder.venueOrderId
@@ -2651,6 +2917,103 @@ function OrderDetailDialog({
       setShortcutError(errMessage(err));
     } finally {
       setShortcutAction(null);
+    }
+  }
+
+  async function runReviewDecision(action: "confirm" | "cancel") {
+    if (
+      !awaitingReview ||
+      !review ||
+      orderExternalId === null ||
+      reviewAction !== null ||
+      inFlightReviewAction !== null
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    reviewRequest.current = controller;
+    onReviewDecisionStarted(orderExternalId, action);
+    setReviewAction(action);
+    setReviewError(null);
+    let banner: DetailBanner | undefined;
+    try {
+      try {
+        if (action === "confirm") {
+          const result = await confirmOrderReview(orderExternalId);
+          if (
+            !controller.signal.aborted &&
+            result.decision.verdict === "accept"
+          ) {
+            if (result.venueSend) {
+              if (!review.destination) {
+                throw new ApiError(
+                  "Review destination is missing for a trading send outcome",
+                  "internal",
+                );
+              }
+              const reviewVenueTitle = reviewConnection
+                ? providerTitle(tradingSnapshot, reviewConnection.provider)
+                : review.destination.connection;
+              banner = venueSendBanner(
+                t,
+                result.venueSend,
+                reviewVenueTitle,
+                reviewConnection
+                  ? t(
+                      `addOrder.dialog.venue.modeValues.${reviewConnection.mode}`,
+                    )
+                  : undefined,
+              );
+            } else {
+              if (review.destination) {
+                throw new ApiError(
+                  "Trading send outcome is missing for a review destination",
+                  "internal",
+                );
+              }
+              banner = {
+                tone: "ok",
+                text: t("detail.dialog.review.approvedForCaller"),
+              };
+            }
+          }
+        } else {
+          await cancelOrderReview(orderExternalId);
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setReviewError(
+            mutationErrorMessage(
+              err,
+              (message) =>
+                t("detail.dialog.review.uncertainOutcome", { message }),
+              (status) =>
+                (status >= 400 && status < 500) ||
+                status === 501 ||
+                status === 502 ||
+                status === 503,
+            ),
+          );
+        }
+      } finally {
+        onReviewDecisionCompleted(
+          orderExternalId,
+          controller.signal.aborted ? undefined : { banner },
+        );
+      }
+      if (controller.signal.aborted) return;
+      const detail = await fetchOrderDetail(orderExternalId, controller.signal);
+      if (!controller.signal.aborted) {
+        setPollError(null);
+        setState({ phase: "ready", ...detail });
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setState({ phase: "error", message: errMessage(err) });
+      }
+    } finally {
+      if (reviewRequest.current === controller) reviewRequest.current = null;
+      if (!controller.signal.aborted) setReviewAction(null);
     }
   }
 
@@ -2717,6 +3080,13 @@ function OrderDetailDialog({
             <ErrorBanner
               message={pollError}
               onDismiss={() => setPollError(null)}
+            />
+          )}
+
+          {reviewError && !awaitingReview && (
+            <ErrorBanner
+              message={reviewError}
+              onDismiss={() => setReviewError(null)}
             />
           )}
 
@@ -2800,6 +3170,17 @@ function OrderDetailDialog({
                   </div>
                 )}
               </div>
+
+              {awaitingReview && review && (
+                <OrderReviewSection
+                  review={review}
+                  connectionLabel={reviewConnection?.label}
+                  action={reviewAction ?? inFlightReviewAction}
+                  error={reviewError}
+                  onDismissError={() => setReviewError(null)}
+                  onDecision={(action) => void runReviewDecision(action)}
+                />
+              )}
 
               {venueOrder && (
                 <div className="flex flex-col gap-y-3">
@@ -3077,7 +3458,8 @@ function OrderDetailDialog({
                               <GitFork className="h-3.5 w-3.5" />
                             </Button>
                           )}
-                          {!venueOrder &&
+                          {canUseExecutionActions &&
+                            !venueOrder &&
                             ev.type === "fill" &&
                             ev.fillQuantity !== undefined && (
                               <Button
@@ -3220,7 +3602,7 @@ function OrderDetailDialog({
                             {formatDateTime(trade.at)}
                           </TableCell>
                           <TableCell className="text-right">
-                            {!venueOrder && (
+                            {canUseExecutionActions && !venueOrder && (
                               <RowActions>
                                 <CloneButton
                                   title={t("clone.execReportAriaLabel", {
@@ -3330,7 +3712,7 @@ function OrderDetailDialog({
               )}
 
               <DialogFooter>
-                {!venueOrder && (
+                {canUseExecutionActions && !venueOrder && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -5197,6 +5579,13 @@ export function Orders() {
     string | null
   >(params.get("order"));
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
+  const [inFlightReviewActions, setInFlightReviewActions] = useState<
+    ReadonlyMap<string, "confirm" | "cancel">
+  >(new Map());
+  const currentDetailOrderExternalId = useRef(detailOrderExternalId);
+  useEffect(() => {
+    currentDetailOrderExternalId.current = detailOrderExternalId;
+  }, [detailOrderExternalId]);
   const [detailSuccessBanner, setDetailSuccessBanner] = useState<
     DetailBanner | undefined
   >(undefined);
@@ -6774,6 +7163,30 @@ export function Orders() {
         onCloneExecReport={openCloneExecReport}
         onWorkflowShortcutCompleted={() => {
           setDetailRefreshKey((value) => value + 1);
+          ordersResult.reload();
+        }}
+        inFlightReviewAction={
+          detailOrderExternalId === null
+            ? null
+            : (inFlightReviewActions.get(detailOrderExternalId) ?? null)
+        }
+        onReviewDecisionStarted={(orderExternalId, action) => {
+          setInFlightReviewActions((current) =>
+            new Map(current).set(orderExternalId, action),
+          );
+        }}
+        onReviewDecisionCompleted={(orderExternalId, result) => {
+          setInFlightReviewActions((current) => {
+            const next = new Map(current);
+            next.delete(orderExternalId);
+            return next;
+          });
+          // undefined means the starting dialog closed and skipped its re-read;
+          // the ref avoids the render closure that started the decision.
+          if (currentDetailOrderExternalId.current === orderExternalId) {
+            if (result) setDetailSuccessBanner(result.banner);
+            else setDetailRefreshKey((value) => value + 1);
+          }
           ordersResult.reload();
         }}
         successBanner={detailSuccessBanner}

@@ -221,6 +221,7 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
 	limit := domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeAccountUnderlyingAsset,
 		Account:     "acc-1",
 		Asset:       "AAPL",
@@ -242,6 +243,7 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("max_quantity=%q max_notional=%q", got.MaxQuantity, got.MaxNotional)
 	}
 	settlement := domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeAccountSettlementAsset,
 		Account:     "acc-1",
 		Asset:       "AAPL",
@@ -253,6 +255,7 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 
 	// Upsert updates.
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 		MaxQuantity: "1000",
 	}); err != nil {
@@ -264,7 +267,7 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 	}
 
 	if err := rs.DeleteOrderSizeLimit(
-		ctx, domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL",
+		ctx, domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL", domain.RuleModeReject,
 	); err != nil {
 		t.Fatalf("DeleteOrderSizeLimit: %v", err)
 	}
@@ -274,14 +277,137 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 	}
 
 	if err := rs.DeleteOrderSizeLimit(
-		ctx, domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL",
+		ctx, domain.ScopeAccountUnderlyingAsset, "acc-1", "AAPL", domain.RuleModeReject,
 	); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("DeleteOrderSizeLimit(missing) = %v, want ErrNotFound", err)
 	}
 	if err := rs.DeleteOrderSizeLimit(
-		ctx, domain.ScopeAccountSettlementAsset, "acc-1", "AAPL",
+		ctx, domain.ScopeAccountSettlementAsset, "acc-1", "AAPL", domain.RuleModeReject,
 	); err != nil {
 		t.Fatalf("DeleteOrderSizeLimit(settlement): %v", err)
+	}
+}
+
+func TestOrderSizeLimitModeRoundTrip(t *testing.T) {
+	for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx, rs := seedLimitFixtures(t)
+			limit := domain.LimitOrderSize{
+				Mode: mode, Scope: domain.ScopeAccountUnderlyingAsset,
+				Account: "acc-1", Asset: "AAPL", MaxQuantity: "10",
+			}
+			if err := rs.PutOrderSizeLimit(ctx, limit); err != nil {
+				t.Fatalf("PutOrderSizeLimit: %v", err)
+			}
+			limits, err := rs.ListOrderSizeLimits(ctx, "")
+			if err != nil || len(limits) != 1 || limits[0] != limit {
+				t.Fatalf("ListOrderSizeLimits = %+v, %v; want %+v", limits, err, limit)
+			}
+			kind := fwstore.PolicyKindOrderSize
+			page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{Kind: &kind})
+			if err != nil || len(page.Rows) != 1 || page.Rows[0].OrderSize == nil || *page.Rows[0].OrderSize != limit {
+				t.Fatalf("ListPolicyRows = %+v, %v; want %+v", page, err, limit)
+			}
+		})
+	}
+}
+
+func TestOrderSizeLimitModeKey(t *testing.T) {
+	for _, target := range []domain.LimitOrderSize{
+		{Scope: domain.ScopeBroker},
+		{Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL"},
+		{Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL"},
+	} {
+		t.Run(string(target.Scope), func(t *testing.T) {
+			ctx, rs := seedLimitFixtures(t)
+			reject, review := target, target
+			reject.Mode, reject.MaxQuantity = domain.RuleModeReject, "10"
+			review.Mode, review.MaxQuantity = domain.RuleModeReviewWithoutHold, "20"
+			// Insert review first so surrogate ids cannot supply the mode ordering.
+			for _, limit := range []domain.LimitOrderSize{review, reject} {
+				if err := rs.PutOrderSizeLimit(ctx, limit); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertLimits := func(want ...domain.LimitOrderSize) {
+				t.Helper()
+				got, err := rs.ListOrderSizeLimits(ctx, "")
+				if err != nil || len(got) != len(want) {
+					t.Fatalf("mode-keyed limits = %+v, %v; want %+v", got, err, want)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("limit %d = %+v, want %+v", i, got[i], want[i])
+					}
+				}
+			}
+			assertLimits(reject, review)
+			for range 3 {
+				kind := fwstore.PolicyKindOrderSize
+				page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{Kind: &kind})
+				if err != nil || page.Total != 2 || len(page.Rows) != 2 ||
+					*page.Rows[0].OrderSize != reject || *page.Rows[1].OrderSize != review {
+					t.Fatalf("mode order = %+v, %v; want reject then review", page, err)
+				}
+			}
+			for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+				if mode == domain.RuleModeReject {
+					reject.MaxQuantity = "9"
+					if err := rs.PutOrderSizeLimit(ctx, reject); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					review.MaxQuantity = "19"
+					if err := rs.PutOrderSizeLimit(ctx, review); err != nil {
+						t.Fatal(err)
+					}
+				}
+				assertLimits(reject, review)
+			}
+			if err := rs.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, ""); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("delete without mode = %v, want ErrInvalid", err)
+			}
+			assertLimits(reject, review)
+			if err := rs.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, review.Mode); err != nil {
+				t.Fatal(err)
+			}
+			assertLimits(reject)
+			if err := rs.PutOrderSizeLimit(ctx, review); err != nil {
+				t.Fatal(err)
+			}
+			if err := rs.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset, reject.Mode); err != nil {
+				t.Fatal(err)
+			}
+			assertLimits(review)
+		})
+	}
+}
+
+func TestListPolicyRowsOrderSizeModeFilter(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+	for _, scope := range []domain.LimitScope{domain.ScopeBroker, domain.ScopeUnderlyingAsset} {
+		for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+			limit := domain.LimitOrderSize{Mode: mode, Scope: scope, MaxQuantity: "10"}
+			if scope == domain.ScopeUnderlyingAsset {
+				limit.Asset = "AAPL"
+			}
+			if err := rs.PutOrderSizeLimit(ctx, limit); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := rs.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, string(domain.SpotFundsLimitModeEnforce)); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+		page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{Mode: mode, Page: fwstore.PageSpec{Limit: 1}})
+		if err != nil || page.Total != 2 || len(page.Rows) != 1 || page.Rows[0].Kind != fwstore.PolicyKindOrderSize || page.Rows[0].OrderSize.Mode != mode {
+			t.Fatalf("mode %s page = %+v, %v", mode, page, err)
+		}
+	}
+	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{Mode: domain.RuleMode(domain.SpotFundsLimitModeEnforce)})
+	if err != nil || page.Total != 0 || len(page.Rows) != 0 {
+		t.Fatalf("Spot Funds setting matched order-size mode filter: %+v, %v", page, err)
 	}
 }
 
@@ -430,12 +556,14 @@ func TestOrderSizeLimitAccountFilter(t *testing.T) {
 
 	// One broker barrier and one account-underlying-asset barrier.
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 		MaxQuantity: "100",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit(acc-1): %v", err)
 	}
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxNotional: "999",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit(broker): %v", err)
@@ -456,6 +584,7 @@ func TestOrderSizeLimitInvalidRejected(t *testing.T) {
 
 	// Both max_quantity and max_notional empty is invalid.
 	err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeBroker,
 	})
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -467,6 +596,7 @@ func TestOrderSizeLimitCascadeOnAssetDelete(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 		MaxQuantity: "100",
 	}); err != nil {
@@ -578,6 +708,7 @@ func seedPolicyFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 		t.Fatalf("PutRateLimit(acc-2): %v", err)
 	}
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL",
 		MaxQuantity: "500",
 	}); err != nil {

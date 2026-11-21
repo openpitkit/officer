@@ -388,19 +388,19 @@ func renameAccountLimits[Limit interface {
 		case domain.LimitRate:
 			if typed.Account == oldCode {
 				typed.Account = newCode
-				key = limitKey(typed.Scope, typed.Account, typed.Asset)
+				key = limitKey(typed.Scope, typed.Account, typed.Asset, "")
 			}
 			out[key] = any(typed).(Limit)
 		case domain.LimitOrderSize:
 			if typed.Account == oldCode {
 				typed.Account = newCode
-				key = limitKey(typed.Scope, typed.Account, typed.Asset)
+				key = limitKey(typed.Scope, typed.Account, typed.Asset, typed.Mode)
 			}
 			out[key] = any(typed).(Limit)
 		case domain.LimitPosition:
 			if typed.Account == oldCode {
 				typed.Account = newCode
-				key = limitKey(typed.Scope, typed.Account, typed.Asset)
+				key = limitKey(typed.Scope, typed.Account, typed.Asset, "")
 			}
 			out[key] = any(typed).(Limit)
 		}

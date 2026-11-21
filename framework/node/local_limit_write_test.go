@@ -91,8 +91,8 @@ func limitWriteCases() []limitWriteCase {
 		{
 			name: "order-size",
 			values: [2]AccountLimits{
-				{OrderSizeLimits: []domain.LimitOrderSize{{Scope: domain.ScopeAccountUnderlyingAsset, Account: "intent-account", Asset: "INTENT", MaxQuantity: "10"}}},
-				{OrderSizeLimits: []domain.LimitOrderSize{{Scope: domain.ScopeAccountUnderlyingAsset, Account: "intent-account", Asset: "INTENT", MaxQuantity: "20"}}},
+				{OrderSizeLimits: []domain.LimitOrderSize{{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "intent-account", Asset: "INTENT", MaxQuantity: "10"}}},
+				{OrderSizeLimits: []domain.LimitOrderSize{{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "intent-account", Asset: "INTENT", MaxQuantity: "20"}}},
 			},
 			put: func(ctx context.Context, n Node, value AccountLimits, write domain.LimitWrite, caller domain.Caller) (marketdata.Sink, error) {
 				return n.PutOrderSizeLimit(ctx, value.OrderSizeLimits[0], write, domain.MissingAccountCreate, caller)

@@ -73,6 +73,8 @@ type AccountLimits struct {
 type LimitTarget struct {
 	// Policy is the policy the barrier belongs to (e.g. domain.PolicyRateLimit).
 	Policy string
+	// Mode identifies an order_size_limit barrier; empty for every other policy.
+	Mode domain.RuleMode
 	// Scope is the axis combination the barrier applies to.
 	Scope domain.LimitScope
 	// Account is the account axis; empty unless Scope carries it.
@@ -446,23 +448,26 @@ type Node interface {
 	// attestFor receives the persisted order and the engine pre-trade result and
 	// returns the attestor applied to every event, so a verdict and its
 	// attestation are durable together or not at all. It returns the recorded
-	// order with the engine result. missing follows SubmitOrder.
+	// order with the engine result. missing follows SubmitOrder. destination is
+	// recorded for a trading order waiting for review; nil denotes a gateway order.
 	SubmitOrderWithAttestation(
 		ctx context.Context,
 		o domain.Order,
 		missing domain.MissingAccountPolicy,
 		caller domain.Caller,
+		destination *domain.TradingDestination,
 		attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 	) (domain.Order, engine.OrderResult, error)
 
 	// SubmitImmediate records the order, runs the engine pre-trade and, on accept,
 	// commits and settles the fill in the same engine call at the order's own
-	// price, persists the lifecycle (filled on accept, rejected on reject), and
-	// returns the recorded order with the engine immediate result. An order
-	// without a price is refused with a validation error before anything is
-	// written. missing follows SubmitOrder. It does not audit the submission
-	// itself - the backend audits approval_issued - but it audits the settled
-	// execution report and any engine block the fill raised.
+	// price. It records filled on accept, rejected on reject, or pre_trade_review
+	// with awaiting_review status and the engine reservation rolled back on review.
+	// It returns the recorded order and the engine result, including Reviews for
+	// review. An order without a price is refused with a validation error before
+	// anything is written. missing follows SubmitOrder. It audits every pre-trade
+	// decision, and on accept also the settled execution report and any engine
+	// block the fill raised. The backend separately audits approval_issued.
 	SubmitImmediate(
 		ctx context.Context, o domain.Order,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
@@ -472,14 +477,47 @@ type Node interface {
 	// transaction, stamps an attestation onto each lifecycle and settling event
 	// it records: attestFor receives the persisted order and the engine immediate
 	// result and returns the attestor applied to every event. missing follows
-	// SubmitOrder; auditing is as for SubmitImmediate.
+	// SubmitOrder; auditing is as for SubmitImmediate. destination is recorded for
+	// a trading order waiting for review; nil denotes a gateway order.
 	SubmitImmediateWithAttestation(
 		ctx context.Context,
 		o domain.Order,
 		missing domain.MissingAccountPolicy,
 		caller domain.Caller,
+		destination *domain.TradingDestination,
 		attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 	) (domain.Order, engine.ImmediateResult, error)
+
+	// ConfirmOrderReview re-runs pre-trade with the confirmed flag for a waiting
+	// hold order. Accept commits the reservation and records accepted/committed
+	// events; reject records its reasons and keeps the order waiting. Both audit
+	// confirm_order_review. A repeated review verdict is an error with no write.
+	// attestFor may be nil; otherwise its attestor stamps each recorded event.
+	// It returns the stored order and the engine decision.
+	ConfirmOrderReview(
+		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+		attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
+	) (domain.Order, engine.OrderResult, error)
+
+	// ConfirmImmediateReview re-runs pre-trade for a waiting immediate order.
+	// Accept commits and settles its fill with the same events and execution
+	// report audit as immediate submit; reject records reasons and keeps it
+	// waiting. Both audit confirm_order_review. Review is an error with no write.
+	// attestFor may be nil; otherwise its attestor stamps each recorded event.
+	// It returns the stored order and the engine decision including settlement.
+	ConfirmImmediateReview(
+		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+		attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
+	) (domain.Order, engine.ImmediateResult, error)
+
+	// CancelOrderReview closes a waiting order without an engine operation,
+	// clears its review row, records cancelled with zero leaves and audits
+	// cancel_order_review. A non-nil attest stamps the event atomically.
+	// It returns the stored cancelled order.
+	CancelOrderReview(
+		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+		attest store.EventAttestor,
+	) (domain.Order, error)
 
 	// ConfirmOrder adds one idempotent history event for an untouched workflow
 	// order. It never changes engine state, balances, locks, leaves, or status.

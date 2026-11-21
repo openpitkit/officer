@@ -35,7 +35,8 @@ func (r *memoryRealm) ListPolicyRows(
 		return store.PolicyListPage{}, err
 	}
 	wantKind := func(kind store.PolicyKind) bool {
-		return filter.Kind == nil || *filter.Kind == kind
+		return (filter.Kind == nil || *filter.Kind == kind) &&
+			(filter.Mode == "" || kind == store.PolicyKindOrderSize)
 	}
 	out := make([]store.PolicyListRow, 0)
 	if wantKind(store.PolicyKindRate) {
@@ -57,7 +58,8 @@ func (r *memoryRealm) ListPolicyRows(
 	}
 	if wantKind(store.PolicyKindOrderSize) {
 		for _, limit := range r.orderSizeLimits {
-			if !restrictionMatches(filter.Restriction, limit.Account) ||
+			if (filter.Mode != "" && limit.Mode != filter.Mode) ||
+				!restrictionMatches(filter.Restriction, limit.Account) ||
 				!textMatches(filter.Account, string(limit.Account)) ||
 				!textMatches(filter.Asset, limit.Asset) {
 				continue
@@ -237,21 +239,21 @@ func (r *memoryRealm) ListRateLimits(
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return limitKey(out[i].Scope, out[i].Account, out[i].Asset) <
-			limitKey(out[j].Scope, out[j].Account, out[j].Asset)
+		return limitKey(out[i].Scope, out[i].Account, out[i].Asset, "") <
+			limitKey(out[j].Scope, out[j].Account, out[j].Asset, "")
 	})
 	return out, nil
 }
 
 func (r *memoryRealm) PutRateLimit(_ context.Context, limit domain.LimitRate) error {
-	r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+	r.rateLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
 	return nil
 }
 
 func (r *memoryRealm) DeleteRateLimit(
 	_ context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
 ) error {
-	key := limitKey(scope, account, asset)
+	key := limitKey(scope, account, asset, "")
 	if _, ok := r.rateLimits[key]; !ok {
 		return domain.ErrNotFound
 	}
@@ -268,20 +270,31 @@ func (r *memoryRealm) ListOrderSizeLimits(
 			out = append(out, limit)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return limitKey(out[i].Scope, out[i].Account, out[i].Asset, out[i].Mode) <
+			limitKey(out[j].Scope, out[j].Account, out[j].Asset, out[j].Mode)
+	})
 	return out, nil
 }
 
 func (r *memoryRealm) PutOrderSizeLimit(
 	_ context.Context, limit domain.LimitOrderSize,
 ) error {
-	r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+	if err := limit.Validate(); err != nil {
+		return err
+	}
+	r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset, limit.Mode)] = limit
 	return nil
 }
 
 func (r *memoryRealm) DeleteOrderSizeLimit(
 	_ context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
+	mode domain.RuleMode,
 ) error {
-	key := limitKey(scope, account, asset)
+	if err := domain.ValidateOrderSizeMode(mode); err != nil {
+		return err
+	}
+	key := limitKey(scope, account, asset, mode)
 	if _, ok := r.orderSizeLimits[key]; !ok {
 		return domain.ErrNotFound
 	}
@@ -300,12 +313,12 @@ func (r *memoryRealm) ListPositionLimits(_ context.Context, account domain.Accou
 }
 
 func (r *memoryRealm) PutPositionLimit(_ context.Context, limit domain.LimitPosition) error {
-	r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+	r.positionLimits[limitKey(limit.Scope, limit.Account, limit.Asset, "")] = limit
 	return nil
 }
 
 func (r *memoryRealm) DeletePositionLimit(_ context.Context, account domain.AccountID, asset string) error {
-	key := limitKey(domain.ScopeAccountAsset, account, asset)
+	key := limitKey(domain.ScopeAccountAsset, account, asset, "")
 	if _, ok := r.positionLimits[key]; !ok {
 		return domain.ErrNotFound
 	}

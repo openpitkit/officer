@@ -536,6 +536,23 @@ func TestListOrdersRows(t *testing.T) {
 	}
 }
 
+func TestListOrdersAwaitingReview(t *testing.T) {
+	src := &listSource{orders: backend.OrderListPage{
+		Rows:  []backend.OrderListRow{{Order: domain.Order{ExternalID: "review-order", Status: domain.OrderStatusAwaitingReview}}},
+		Total: 1,
+	}}
+	text, out, err := listOrdersHandler(src)(t.Context(), nil, listOrdersInput{Status: []string{"awaiting_review"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(src.orderFilter.Status, []domain.OrderStatus{domain.OrderStatusAwaitingReview}) {
+		t.Fatalf("status filter = %v; want awaiting_review", src.orderFilter.Status)
+	}
+	if text != "1 of 1 order(s)" || out.Total != 1 || len(out.Orders) != 1 || out.Orders[0].Status != "awaiting_review" {
+		t.Fatalf("waiting order = %q, %+v; want awaiting_review row", text, out)
+	}
+}
+
 func TestListTradesRows(t *testing.T) {
 	rows := []store.TradeListRow{
 		{

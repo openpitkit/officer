@@ -21,6 +21,8 @@ import {
   ACTIVE_ORDER_STATUSES,
   ACTIVE_STATUS_QUERY,
   ALL_ORDER_STATUSES,
+  FILL_ELIGIBLE_ORDER_STATUSES,
+  isOrderStatus,
   parseStatusSet,
   sameStatusSet,
   TERMINAL_ORDER_STATUSES,
@@ -38,8 +40,17 @@ describe("orderStatus groups", () => {
 
   it("exposes the active query as a stable comma-separated value", () => {
     expect(ACTIVE_STATUS_QUERY).toBe(
-      "submitted,accepted,committed,partially_filled",
+      "submitted,accepted,committed,partially_filled,awaiting_review",
     );
+  });
+
+  it("recognizes awaiting_review as active but not fill eligible", () => {
+    expect(isOrderStatus("awaiting_review")).toBe(true);
+    expect(parseStatusSet("awaiting_review")).toEqual(["awaiting_review"]);
+    expect(ACTIVE_ORDER_STATUSES).toContain("awaiting_review");
+    expect(ACTIVE_STATUS_QUERY.split(",")).toContain("awaiting_review");
+    expect(FILL_ELIGIBLE_ORDER_STATUSES).not.toContain("awaiting_review");
+    expect(TERMINAL_ORDER_STATUSES).not.toContain("awaiting_review");
   });
 });
 

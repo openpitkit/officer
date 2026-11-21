@@ -1,4 +1,11 @@
 {
+  "orderSizeMode": {
+    "label": "Modo de la barrera",
+    "descriptions": {
+      "reject": "Se rechaza una orden que supera la barrera.",
+      "review_without_hold": "Una orden que supera la barrera espera la revisión de un operador; no se reserva ni se envía nada hasta su confirmación."
+    }
+  },
   "spotFundsMode": {
     "modes": {
       "enforce": {
@@ -84,7 +91,8 @@
   },
   "delete": {
     "title": "¿Eliminar la barrera de política?",
-    "description": "Se eliminará la barrera {{policy}} en {{scope}}{{account}}{{asset}}.",
+    "description": "Se eliminará la barrera {{policy}}{{mode}} en {{scope}}{{account}}{{asset}}.",
+    "modeFragment": " en modo {{mode}}",
     "accountFragment": " cuenta {{account}}",
     "accountGroupFragment": " grupo de cuentas {{accountGroup}}",
     "assetFragment": " activo {{asset}}"

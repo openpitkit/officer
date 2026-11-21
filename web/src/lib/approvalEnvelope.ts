@@ -144,6 +144,15 @@ export interface ParsedApprovalResult {
   blocks: ParsedApprovalBlock[];
 }
 
+interface ParsedApprovalReviewMark {
+  code: string;
+  scope: string;
+  policy: string;
+  reason: string;
+  details: string;
+  mode: string;
+}
+
 /** The fields parsed out of an approval payload for the read-only breakdown.
  *  The payload is generalized across request types, so requestType and the
  *  optional recorded result section may be present. */
@@ -169,6 +178,7 @@ export interface ParsedApproval {
   accountId: string;
   accountGroupId: string;
   verdict: string;
+  reviews: ParsedApprovalReviewMark[];
   policySummary: string;
   estimatePrice: string;
   issuedAt: string;
@@ -265,6 +275,28 @@ function parseResult(v: unknown): ParsedApprovalResult | null {
   };
 }
 
+function parseReviews(reviews: unknown): ParsedApprovalReviewMark[] {
+  if (!Array.isArray(reviews)) {
+    return [];
+  }
+  return reviews.flatMap((value) => {
+    if (typeof value !== "object" || value === null) {
+      return [];
+    }
+    const mark = value as Record<string, unknown>;
+    return [
+      {
+        code: str(mark.code),
+        scope: str(mark.scope),
+        policy: str(mark.policy),
+        reason: str(mark.reason),
+        details: str(mark.details),
+        mode: str(mark.mode),
+      },
+    ];
+  });
+}
+
 /** Parse the approval payload object into the read-only breakdown fields. Reads
  *  only; never used as the signed bytes. Gracefully handles the generalized
  *  payload: requestType and a result section may or may not be present. */
@@ -293,6 +325,7 @@ export function parseApprovalFields(
     accountId: str(approval.accountId),
     accountGroupId: str(approval.accountGroupId),
     verdict: str(approval.verdict),
+    reviews: parseReviews(approval.reviews),
     policySummary: str(approval.policySummary),
     estimatePrice: str(approval.estimatePrice),
     issuedAt: str(approval.issuedAt),

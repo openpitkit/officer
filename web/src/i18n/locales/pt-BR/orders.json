@@ -62,6 +62,7 @@
       "selectTerminal": "Todas as finais",
       "submitted": "Enviada",
       "accepted": "Aceita",
+      "awaiting_review": "Aguardando revisão",
       "rejected": "Rejeitada",
       "committed": "Efetivada",
       "rolled_back": "Revertida",
@@ -141,6 +142,8 @@
   },
 
   "addOrder": {
+    "addedAwaitingReview": "Ordem adicionada e aguardando revisão do operador.",
+    "addedAwaitingReviewWithWarning": "Ordem adicionada e aguardando revisão do operador. {{warning}}",
     "button": "Adicionar ordem",
     "added": "Ordem adicionada",
     "dialog": {
@@ -229,10 +232,11 @@
         "submitLive": "Enviar ordem REAL",
         "submit": "Enviar ordem",
         "chooseTarget": "Escolha um destino",
-        "acknowledged": "Enviada para {{venue}} · {{mode}}. Ordem na plataforma {{venueOrderId}}.",
+        "acknowledged": "Enviada para {{venue}}. Ordem na plataforma {{venueOrderId}}.",
         "refused": "A ordem não foi colocada em {{venue}}: {{error}}. O Officer a registrou como cancelada.",
         "unknown": "A plataforma não confirmou a ordem: {{error}}. O Officer está fazendo a conciliação; a situação da ordem exibida abaixo é a que vale.",
         "preTradeRejected": "As verificações pré-negociação rejeitaram a ordem. Nada foi enviado à plataforma.",
+        "awaitingReview": "A ordem está aguardando revisão do operador. Nada foi enviado à plataforma.",
         "networkError": "A solicitação de envio não foi concluída: {{message}}. Verifique Ordens antes de enviar novamente - a ordem pode já existir."
       }
     }
@@ -243,6 +247,7 @@
   },
 
   "check": {
+    "wouldReview": "Prévia: aguardaria revisão",
     "checking": "Verificando...",
     "previewUnavailable": "Prévia indisponível",
     "wouldPass": "Prévia: seria aprovada",
@@ -377,6 +382,15 @@
       "fieldSubmitted": "Envio",
       "fieldDisplayPrice": "Preço travado",
       "fieldCommission": "Comissão",
+      "review": {
+        "title": "Revisão da ordem",
+        "retry": "Tentar novamente",
+        "lastConfirm": "Última confirmação rejeitada",
+        "cancelTitle": "Cancelar esta ordem?",
+        "cancelDescription": "A ordem será cancelada sem envio. Esta decisão não pode ser desfeita.",
+        "approvedForCaller": "Ordem aprovada. O solicitante já pode enviá-la.",
+        "uncertainOutcome": "A solicitação de revisão não foi concluída: {{message}}. A decisão já pode ter sido registrada; a situação da ordem exibida é a vigente. Verifique-a antes de tentar novamente."
+      },
       "workflow": {
         "title": "Atalhos do fluxo",
         "description": "O Officer registrou uma aprovação pré-negociação quando esta ordem foi enviada, portanto os atalhos podem confirmá-la ou cancelá-la somente enquanto ela não tiver atividade de relatórios de execução. Após qualquer relatório, envie um relatório de execução explícito.",
@@ -400,6 +414,7 @@
           "submitted": "Enviada",
           "pre_trade_accepted": "Aceita na pré-negociação",
           "pre_trade_rejected": "Rejeitada na pré-negociação",
+          "pre_trade_review": "Revisão pré-negociação",
           "committed": "Efetivada",
           "rolled_back": "Revertida",
           "confirmed": "Confirmada",
@@ -451,6 +466,8 @@
   },
 
   "requestType": {
+    "reviewConfirm": "Confirmar revisão da ordem",
+    "reviewCancel": "Cancelar revisão da ordem",
     "submit": "Envio",
     "executionReport": "Relatório de execução",
     "confirm": "Confirmação",
@@ -458,6 +475,8 @@
   },
 
   "repro": {
+    "responseReviewConfirm": "Resposta de confirmação de revisão",
+    "responseReviewCancel": "Resposta de cancelamento de revisão",
     "loading": "Carregando o pacote de reprodução…",
     "loadError": "Não foi possível carregar o pacote de reprodução. {{message}}",
     "noAttestation": "Este evento não contém nenhuma atestação salva, portanto não há nada para reproduzir.",
@@ -514,6 +533,7 @@
   },
 
   "breakdown": {
+    "reviewMark": "Marca de revisão {{index}}",
     "label": "Detalhamento legível",
     "readOnlyNote": "Somente leitura - não serve para copiar nem para verificar. Verifique sempre com os bytes canônicos, nunca com uma cópia reformatada.",
     "version": "Versão",
@@ -563,7 +583,8 @@
     "issuedAt": "Emitido em",
     "verdicts": {
       "accept": "Aceitar",
-      "reject": "Rejeitar"
+      "reject": "Rejeitar",
+      "review": "Revisão"
     },
     "orderTypes": {
       "market": "A mercado",

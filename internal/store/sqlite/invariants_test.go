@@ -631,12 +631,14 @@ VALUES (?, NULL, NULL, ?, ?)`, domain.ScopeBroker, 300, int64(time.Minute/time.M
 	// --- limit_order_size ---
 
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeBroker,
 		MaxNotional: "1000000",
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit(broker): %v", err)
 	}
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       domain.ScopeBroker,
 		MaxNotional: "2000000",
 	}); err != nil {

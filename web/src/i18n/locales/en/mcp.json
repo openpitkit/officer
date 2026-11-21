@@ -66,7 +66,7 @@
       "description": "List account groups with filters, including the trading-connection filter, sorting and paging."
     },
     "check_order": {
-      "description": "Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons); changes no state."
+      "description": "Run a non-mutating pre-trade dry-run for an order (pass/reject + reasons; review marks mean do not send); changes no state."
     },
     "add_limit": {
       "description": "Add a risk barrier at a new address. A duplicate returns limit_exists. Use update_limit to change it."

@@ -667,10 +667,12 @@ const (
 	AuditActionSetSigningConfig   AuditAction = "set_signing_config"
 
 	// Signed approval lifecycle.
-	AuditActionApprovalIssued    AuditAction = "approval_issued"
-	AuditActionApprovalFailed    AuditAction = "approval_failed"
-	AuditActionApprovalConfirmed AuditAction = "approval_confirmed"
-	AuditActionApprovalCancelled AuditAction = "approval_cancelled"
+	AuditActionApprovalIssued     AuditAction = "approval_issued"
+	AuditActionApprovalFailed     AuditAction = "approval_failed"
+	AuditActionApprovalConfirmed  AuditAction = "approval_confirmed"
+	AuditActionApprovalCancelled  AuditAction = "approval_cancelled"
+	AuditActionConfirmOrderReview AuditAction = "confirm_order_review"
+	AuditActionCancelOrderReview  AuditAction = "cancel_order_review"
 
 	// Access control.
 	AuditActionSetAccessMode     AuditAction = "set_access_mode"
@@ -699,6 +701,8 @@ func (a AuditAction) Category() AuditCategory {
 	switch a {
 	case AuditActionSubmitOrder, AuditActionSubmitDropCopy, AuditActionExecutionReport:
 		return AuditCategoryTrading
+	case AuditActionConfirmOrderReview, AuditActionCancelOrderReview:
+		return AuditCategoryControl
 	default:
 		return AuditCategoryControl
 	}
@@ -757,6 +761,8 @@ func AllAuditActions() []AuditAction {
 		AuditActionApprovalFailed,
 		AuditActionApprovalConfirmed,
 		AuditActionApprovalCancelled,
+		AuditActionConfirmOrderReview,
+		AuditActionCancelOrderReview,
 		AuditActionSetAccessMode,
 		AuditActionIssueAccessToken,
 		AuditActionSetPanelPassword,
@@ -769,13 +775,15 @@ func AllAuditActions() []AuditAction {
 }
 
 // ValidateAuditDecision enforces the metadata contract for order-decision audit
-// rows. Submit actions require an order id and an accept or reject verdict;
-// other actions must not carry decision metadata.
+// rows. Submit actions require an order id and an accept, reject or review
+// verdict. confirm_order_review requires an order id and an accept or reject
+// verdict, with a reject code allowed only for reject. Other actions must not
+// carry decision metadata.
 func ValidateAuditDecision(
-	action AuditAction, orderID, verdict, rejectCode string,
+	action AuditAction, orderID string, verdict Verdict, rejectCode string,
 ) error {
 	decisionAction := action == AuditActionSubmitOrder ||
-		action == AuditActionSubmitDropCopy
+		action == AuditActionSubmitDropCopy || action == AuditActionConfirmOrderReview
 	if !decisionAction {
 		if orderID != "" || verdict != "" || rejectCode != "" {
 			return fmt.Errorf(
@@ -794,7 +802,7 @@ func ValidateAuditDecision(
 		)
 	}
 	switch verdict {
-	case "accept":
+	case VerdictAccept:
 		if rejectCode != "" {
 			return fmt.Errorf(
 				"store: audit action %q accept verdict has reject code: %w",
@@ -802,7 +810,11 @@ func ValidateAuditDecision(
 				ErrInvalid,
 			)
 		}
-	case "reject":
+	case VerdictReject:
+	case VerdictReview:
+		if action == AuditActionConfirmOrderReview {
+			return fmt.Errorf("store: audit action %q refuses review verdict: %w", action, ErrInvalid)
+		}
 	default:
 		return fmt.Errorf(
 			"store: audit action %q decision verdict %q is invalid: %w",
@@ -869,8 +881,8 @@ type AuditRow struct {
 	// OrderID is the opaque public order handle for a trading decision.
 	// It is empty for actions that do not describe an order decision.
 	OrderID string
-	// Verdict is "accept" or "reject" for a decision, empty for other actions.
-	Verdict string
+	// Verdict is accept, reject or review for a decision, empty otherwise.
+	Verdict Verdict
 	// RejectCode is the primary engine reject code; empty for accepted decisions.
 	RejectCode string
 	// At is the wall-clock time the action was recorded, in UTC.
@@ -932,10 +944,12 @@ type CheckResult struct {
 	WouldBlock *AccountBlock
 	// Rejects are the engine pre-trade rejects; empty when the check passed.
 	Rejects []OrderReject
+	// Reviews are the engine's ordered operator-review marks.
+	Reviews []ReviewMark
 	// WouldLockPrice is the settlement lock price (exact decimal string); empty
 	// when nothing would be locked.
 	WouldLockPrice string
-	// Passed reports whether the order would pass pre-trade.
+	// Passed reports that pre-trade produced no rejects; reviews may remain.
 	Passed bool
 }
 

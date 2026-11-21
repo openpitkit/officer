@@ -21,8 +21,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -38,7 +40,9 @@ import (
 	"go.openpit.dev/openpit/reject"
 
 	officerengine "go.openpit.dev/officer/engine"
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -50,6 +54,138 @@ import (
 	"go.openpit.dev/officer/internal/store/sqlite"
 	appsigning "go.openpit.dev/officer/signing"
 )
+
+func newReviewGateOrder(t *testing.T, realm store.RealmStore, waiting bool) domain.OrderDetail {
+	t.Helper()
+	ctx := context.Background()
+	const acct domain.AccountID = "acc-1"
+	seedRealAccountAndAssets(t, realm, acct)
+	order, err := realm.CreateOrder(ctx, domain.Order{
+		Account: acct, Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
+		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "2",
+		Price: "400", Leaves: "2", ReservedQuantity: "0",
+		Status: domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	if waiting {
+		if _, err := realm.RecordOrderSettlement(ctx, domain.OrderSettlement{
+			Account: acct, Order: order.ExternalID,
+			OrderStatus: domain.OrderStatusAwaitingReview,
+			AllowedFrom: []domain.OrderStatus{order.Status},
+			Review:      &domain.OrderReview{Mode: "hold"},
+		}); err != nil {
+			t.Fatalf("RecordOrderSettlement: %v", err)
+		}
+	}
+	detail, err := realm.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	return detail
+}
+
+func TestLocalNode_ExecutionReportAwaitingReview(t *testing.T) {
+	for _, status := range []domain.OrderStatus{
+		domain.OrderStatusCancelled, domain.OrderStatusSubmitted,
+	} {
+		for _, force := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/force=%t", status, force), func(t *testing.T) {
+				_, realm, eng, n := newRealServiceRouterWithEngine(t)
+				ctx := context.Background()
+				before := newReviewGateOrder(t, realm, true)
+				_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+					ExternalID:  "waiting-report",
+					Order:       before.Order.ExternalID,
+					OrderStatus: status,
+					Force:       force,
+				}, domain.Caller{Source: domain.SourceAPI, Principal: domain.PrincipalOperator})
+				if !errors.Is(err, domain.ErrConflict) ||
+					!strings.Contains(err.Error(), "order is awaiting review") {
+					t.Fatalf("waiting order report = %v, want awaiting review ErrConflict", err)
+				}
+				if len(eng.executionReportLeaves) != 0 {
+					t.Fatalf("waiting order reached engine: %v", eng.executionReportLeaves)
+				}
+				after, err := realm.GetOrder(ctx, before.Order.ExternalID)
+				if err != nil || !reflect.DeepEqual(before, after) || after.Review == nil {
+					t.Fatalf("waiting order changed: before=%+v after=%+v err=%v", before, after, err)
+				}
+			})
+		}
+	}
+}
+
+func TestLocalNode_ExecutionReportRejectsAwaitingReviewTarget(t *testing.T) {
+	for _, withEnginePayload := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enginePayload=%t", withEnginePayload), func(t *testing.T) {
+			_, realm, eng, n := newRealServiceRouterWithEngine(t)
+			ctx := context.Background()
+			before := newReviewGateOrder(t, realm, false)
+			in := domain.ExecutionReportInput{
+				Order: before.Order.ExternalID, OrderStatus: domain.OrderStatusAwaitingReview,
+			}
+			if withEnginePayload {
+				in.Commission = &domain.Commission{Amount: "1", Currency: "USD"}
+			}
+			_, err := n.ApplyExecutionReport(ctx, in,
+				domain.Caller{Source: domain.SourceAPI, Principal: domain.PrincipalOperator})
+			if !errors.Is(err, domain.ErrInvalid) ||
+				!strings.Contains(err.Error(), "execution reports cannot target awaiting_review") {
+				t.Fatalf("review target = %v, want awaiting_review validation ErrInvalid", err)
+			}
+			if len(eng.executionReportLeaves) != 0 {
+				t.Fatalf("invalid target reached engine: %v", eng.executionReportLeaves)
+			}
+			after, err := realm.GetOrder(ctx, before.Order.ExternalID)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("invalid target changed order: after=%+v err=%v", after, err)
+			}
+		})
+	}
+}
+
+func TestOrderAwaitingReview_RealConflictGate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, route, body string
+	}{
+		{"confirm", "confirm", `{}`},
+		{"cancel", "cancel", `{"leavesQuantity":"2","reason":"operator"}`},
+		{"engine", "execution-reports", `{"status":"cancelled"}`},
+		{"engine force", "execution-reports", `{"status":"cancelled","force":true}`},
+		{"workflow", "execution-reports", `{"status":"submitted"}`},
+		{"workflow force", "execution-reports", `{"status":"submitted","force":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, realm, eng, _ := newRealServiceRouterWithEngine(t)
+			ctx := context.Background()
+			before := newReviewGateOrder(t, realm, true)
+			rec := httptest.NewRecorder()
+			path := "/api/v1/orders/" + before.Order.ExternalID.String() + "/" + tc.route
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path,
+				bytes.NewBufferString(tc.body)))
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("waiting order status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+			}
+			body := bodyMap(t, rec.Result())
+			errObj, _ := body["error"].(map[string]any)
+			message, _ := errObj["message"].(string)
+			if errObj["code"] != "conflict" || !strings.Contains(message, "order is awaiting review") {
+				t.Fatalf("waiting order error = %+v, want awaiting review conflict", errObj)
+			}
+			after, err := realm.GetOrder(ctx, before.Order.ExternalID)
+			if err != nil || !reflect.DeepEqual(before, after) || after.Review == nil {
+				t.Fatalf("waiting order changed: after=%+v err=%v", after, err)
+			}
+			if len(eng.executionReportLeaves) != 0 {
+				t.Fatalf("waiting order reached engine: %v", eng.executionReportLeaves)
+			}
+		})
+	}
+}
 
 // TestApplyExecutionReport_RealTerminalGate drives the execution-report endpoint
 // through the REAL http handler backed by a REAL backend.Service and a REAL
@@ -393,6 +529,169 @@ func TestSubmitOrder_RealStoreRequiresRegisteredCallerPrincipal(t *testing.T) {
 	}
 }
 
+type reviewGateTradingRuntime struct {
+	backend.TradingRuntime
+	preChecks int
+	sends     int
+}
+
+func (r *reviewGateTradingRuntime) PreCheck(context.Context, domain.Order, domain.TradingDestination) error {
+	r.preChecks++
+	return nil
+}
+
+func (r *reviewGateTradingRuntime) Send(context.Context, domain.ExternalID, domain.TradingDestination) (domain.VenueOrder, error) {
+	r.sends++
+	return domain.VenueOrder{}, nil
+}
+
+func TestSubmitReview_RealStore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		mode        string
+		tradingMode domain.TradingMode
+	}{
+		{"hold/gateway", backend.SubmitModeHold, ""},
+		{"immediate/gateway", backend.SubmitModeImmediate, ""},
+		{"hold/send-paper", backend.SubmitModeHold, domain.TradingModePaper},
+		{"hold/send-live", backend.SubmitModeHold, domain.TradingModeLive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := auth.ContextWithCaller(context.Background(), domain.Caller{Source: domain.SourceAPI, Principal: domain.PrincipalOperator})
+			_, realm, eng, n := newRealServiceRouterWithEngine(t, trading.Provider{
+				Type: "review-fixture",
+				Build: func(trading.BuildContext) (trading.Connector, error) {
+					return nil, errors.New("review must not build a connector")
+				},
+			})
+			seedRealAccountAndAssets(t, realm, "acc-1")
+			eng.reviews = []domain.ReviewMark{{OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order"}, Mode: domain.RuleModeReviewWithoutHold}}
+			signer, err := appsigning.New(realm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime := &reviewGateTradingRuntime{}
+			svc, err := backend.New(n, nil, signer, officerengine.LockSettlementPrice, backend.WithTradingRuntime(runtime))
+			if err != nil {
+				t.Fatal(err)
+			}
+			order := domain.Order{ExternalID: "real-review-order", Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100"}
+			var approval backend.SignedApproval
+			var destination *domain.TradingDestination
+			if tc.tradingMode == "" {
+				approval, err = svc.SubmitOrder(ctx, order, tc.mode, domain.MissingAccountReject)
+			} else {
+				connection, createErr := realm.CreateTradingConnection(ctx, domain.TradingConnection{
+					Provider: "review-fixture", Label: "Review venue", VenueIdentity: "paper-account",
+					Mode: tc.tradingMode, Credentials: `{"key":"fixture"}`, Enabled: true,
+				})
+				if createErr != nil {
+					t.Fatal(createErr)
+				}
+				if err := realm.PutTradingAccess(ctx, domain.TradingAccess{Account: order.Account, Connection: connection.ExternalID, VenueAccount: "paper-account"}); err != nil {
+					t.Fatal(err)
+				}
+				destination = &domain.TradingDestination{Connection: connection.ExternalID, VenueAccount: "paper-account", Route: "{}"}
+				var sent backend.VenueSendResult
+				dest := backend.SendDestination{Connection: connection.ExternalID, Route: "{}"}
+				if tc.tradingMode == domain.TradingModePaper {
+					sent, err = svc.SendPaperOrder(ctx, order, dest)
+				} else {
+					sent, err = svc.SendLiveOrder(ctx, order, dest)
+				}
+				approval = sent.Approval
+				if sent.Send != nil || runtime.sends != 0 || runtime.preChecks != 1 {
+					t.Fatalf("review send = %+v, calls=%d prechecks=%d", sent, runtime.sends, runtime.preChecks)
+				}
+			}
+			if err != nil {
+				t.Fatalf("submit review: %v", err)
+			}
+			if approval.Verdict != domain.VerdictReview || !reflect.DeepEqual(approval.Reviews, eng.reviews) || len(approval.Reasons) != 0 {
+				t.Fatalf("review approval = %+v", approval)
+			}
+			detail, err := realm.GetOrder(ctx, order.ExternalID)
+			if err != nil || detail.Order.Status != domain.OrderStatusAwaitingReview || detail.Order.Leaves != "0" || detail.Order.ReservedQuantity != "0" || len(detail.Order.Lock) != 0 || !reflect.DeepEqual(detail.Review, &domain.OrderReview{Mode: tc.mode, Destination: destination}) {
+				t.Fatalf("stored waiting order = %+v, err=%v", detail, err)
+			}
+			if len(detail.Events) != 2 || detail.Events[0].Type != domain.OrderEventSubmitted || detail.Events[1].Type != domain.OrderEventPreTradeReview || len(detail.Trades) != 0 || len(eng.executionReportLeaves) != 0 {
+				t.Fatalf("review lifecycle events=%+v trades=%+v reports=%v", detail.Events, detail.Trades, eng.executionReportLeaves)
+			}
+			for _, event := range detail.Events {
+				if event.Attestation == nil || event.Attestation.SignedEnvelope == "" {
+					t.Fatalf("unattested real-store review event: %+v", event)
+				}
+			}
+			archive, err := realm.ExportBackup(ctx, backup.Scope{All: true})
+			if err != nil || len(archive.Data.OrderReviews) != 1 || archive.Data.OrderReviews[0].Order != order.ExternalID || archive.Data.OrderReviews[0].Mode != tc.mode {
+				t.Fatalf("order_review rows = %+v, err=%v", archive.Data.OrderReviews, err)
+			}
+			if destination != nil {
+				row := archive.Data.OrderReviews[0]
+				if row.Connection != destination.Connection || row.VenueAccount != destination.VenueAccount || row.Route != destination.Route {
+					t.Fatalf("exported review destination = %+v, want %+v", row, destination)
+				}
+			}
+		})
+	}
+}
+
+func TestOrderReview_RealServiceREST(t *testing.T) {
+	handler, realm, eng, _ := newRealServiceRouterWithEngine(t)
+	seedRealAccountAndAssets(t, realm, "acc-1")
+	if err := realm.SetSetting(context.Background(), domain.SettingKeyNoESign, "0"); err != nil {
+		t.Fatal(err)
+	}
+	eng.reviews = restReviewMarks()
+	request := func(method, path, body string, status int) map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body)))
+		if rec.Code != status {
+			t.Fatalf("%s %s status=%d, want %d: %s", method, path, rec.Code, status, rec.Body.String())
+		}
+		return bodyMap(t, rec.Result())
+	}
+	submit := request(http.MethodPost, "/orders/submit?missingAccount=reject",
+		`{"id":"real-rest-review","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"hold"}`, http.StatusCreated)
+	if submit["verdict"] != "review" {
+		t.Fatalf("submit=%v", submit)
+	}
+	assertRESTReviewMarks(t, submit["reviews"])
+	path := "/orders/" + submit["id"].(string)
+	detail := request(http.MethodGet, path, "", http.StatusOK)
+	review := detail["review"].(map[string]any)
+	assertRESTReviewMarks(t, review["marks"])
+	if review["lastConfirm"] != nil || review["destination"] != nil {
+		t.Fatalf("initial review=%v", review)
+	}
+	eng.reviews = nil
+	eng.rejects = []domain.OrderReject{{Code: "amount_missing", Scope: "order", Policy: "order_validation", Reason: "amount required"}}
+	confirm := request(http.MethodPost, path+"/review/confirm", "", http.StatusOK)
+	decision := confirm["decision"].(map[string]any)
+	if decision["verdict"] != "reject" || decision["signedApproval"] == "" || decision["signed"] != true {
+		t.Fatalf("confirm=%v", confirm)
+	}
+	detail = request(http.MethodGet, path, "", http.StatusOK)
+	review = detail["review"].(map[string]any)
+	assertRESTReviewMarks(t, review["marks"])
+	last := review["lastConfirm"].(map[string]any)
+	if last["verdict"] != "reject" || !reflect.DeepEqual(last["reasons"], decision["reasons"]) || last["at"] == "" ||
+		detail["order"].(map[string]any)["status"] != "awaiting_review" {
+		t.Fatalf("review after rejected confirm=%v", detail)
+	}
+	cancel := request(http.MethodPost, path+"/review/cancel", "", http.StatusOK)
+	if cancel["order"].(map[string]any)["status"] != "cancelled" || cancel["signedAttestation"] == "" || cancel["signed"] != true {
+		t.Fatalf("cancel=%v", cancel)
+	}
+	detail = request(http.MethodGet, path, "", http.StatusOK)
+	if _, exists := detail["review"]; exists || detail["order"].(map[string]any)["status"] != "cancelled" {
+		t.Fatalf("cancelled detail=%v", detail)
+	}
+}
+
 // newRealServiceRouter builds the full production chain a handler test would
 // otherwise stub: a real SQLite store, a real localNode over an engine fake, a
 // real backend.Service, and the real HTTP router. It returns
@@ -403,7 +702,7 @@ func newRealServiceRouter(t *testing.T) (http.Handler, store.RealmStore) {
 	return handler, realm
 }
 
-func newRealServiceRouterWithEngine(t *testing.T) (
+func newRealServiceRouterWithEngine(t *testing.T, providers ...trading.Provider) (
 	http.Handler,
 	store.RealmStore,
 	*realGateEngine,
@@ -425,7 +724,13 @@ func newRealServiceRouterWithEngine(t *testing.T) (
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if err := st.BindExecutionPolicyProviders(trading.NewRegistry().SupportsExecutionPolicy); err != nil {
+	registry := trading.NewRegistry()
+	for _, provider := range providers {
+		if err := registry.Register(provider); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.BindExecutionPolicyProviders(registry.SupportsExecutionPolicy); err != nil {
 		t.Fatalf("BindTradingProviderClassifier: %v", err)
 	}
 	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
@@ -498,6 +803,8 @@ func seedRealAccountAndAssets(t *testing.T, realm store.RealmStore, id domain.Ac
 // node's own terminal-order guard, not the engine.
 type realGateEngine struct {
 	running               bool
+	reviews               []domain.ReviewMark
+	rejects               []domain.OrderReject
 	executionReportLeaves []string
 	async                 *asyncengine.AsyncEngine
 	driver                *openpit.Engine
@@ -524,7 +831,7 @@ func (e *realGateEngine) ExecutionReportModel(
 		Side:        in.Side,
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "1",
-	})
+	}, engine.ReviewFlags{})
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
@@ -600,7 +907,9 @@ func (*realGateEngine) AppliedAccountAdjustmentBatch(
 	return results, nil, nil
 }
 
-func (*realGateEngine) OrderModel(order domain.Order) (model.Order, error) {
+func (e *realGateEngine) OrderModel(
+	order domain.Order, _ engine.ReviewFlags,
+) (model.Order, error) {
 	base, err := param.NewAsset(order.BaseAsset)
 	if err != nil {
 		return model.Order{}, err
@@ -640,7 +949,10 @@ func (*realGateEngine) OrderModel(order domain.Order) (model.Order, error) {
 	operation.SetInstrument(param.NewInstrument(base, quote))
 	operation.SetAccountID(param.NewAccountIDFromUint64(1))
 	operation.SetSide(side)
-	operation.SetTradeAmount(amount)
+	// A configured rejection lets the real validation policy take OnRejected.
+	if len(e.rejects) == 0 {
+		operation.SetTradeAmount(amount)
+	}
 	if order.Price != "" {
 		price, priceErr := param.NewPriceFromString(order.Price)
 		if priceErr != nil {
@@ -660,20 +972,23 @@ func (e *realGateEngine) CheckOrderModel(probe domain.OrderProbe) (model.Order, 
 		AmountKind:  probe.AmountKind,
 		AmountValue: probe.AmountValue,
 		Price:       probe.Price,
-	})
+	}, engine.ReviewFlags{})
 }
 
-func (*realGateEngine) RejectedOrder(
+func (e *realGateEngine) RejectedOrder(
 	domain.Order, []reject.Reject,
 ) (engine.OrderResult, error) {
-	return engine.OrderResult{}, nil
+	return engine.OrderResult{Verdict: domain.VerdictReject, Rejects: e.rejects}, nil
 }
 
-func (*realGateEngine) ReservedOrder(
+func (e *realGateEngine) ReservedOrder(
 	order domain.Order, _ asyncengine.OperationResult,
 ) (engine.OrderResult, error) {
+	if len(e.reviews) > 0 {
+		return engine.OrderResult{Verdict: domain.VerdictReview, Reviews: e.reviews}, nil
+	}
 	return engine.OrderResult{
-		Accepted:            true,
+		Verdict:             domain.VerdictAccept,
 		SettlementLockPrice: order.Price,
 	}, nil
 }
@@ -690,9 +1005,12 @@ func (*realGateEngine) RejectedImmediate(
 	return engine.ImmediateResult{}, nil
 }
 
-func (*realGateEngine) PrepareImmediateReservation(
+func (e *realGateEngine) PrepareImmediateReservation(
 	domain.Order, asyncengine.OperationResult,
 ) (engine.ImmediatePreparation, error) {
+	if len(e.reviews) > 0 {
+		return engine.ImmediatePreparation{Verdict: domain.VerdictReview, Reviews: e.reviews}, nil
+	}
 	return engine.ImmediatePreparation{}, domain.ErrNotImplemented
 }
 

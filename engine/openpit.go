@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -74,9 +75,11 @@ const (
 // The handle is built by NewOpenPitEngineBuildFunc and lives until Stop. Online
 // limit changes are applied through the binding's Configure surface. rate_limit
 // and order_size_limit retune their axes wholesale (barriers added and removed
-// at runtime). The spot-funds policy is registered at build time; its
-// P&L-bounds axes are reconfigured at runtime, including broker-axis removal
-// through the explicit optional update shape. The residual changes the
+// at runtime). Order size has one instance per mode with barriers; changing
+// that set requires a rebuild. The spot-funds policy is registered at build
+// time; its P&L-bounds axes are reconfigured at runtime. Non-nil empty lists
+// clear rate-limit broker and P&L global slots; the explicit optional update
+// shape clears the order-size broker slot. The residual changes the
 // Configure surface cannot express are configuring a policy that was not
 // registered at build time and removing its last barrier: the SDK requires at
 // least one barrier both when a policy is built and after every update. Those
@@ -87,10 +90,10 @@ const (
 // Replacing an engine stops only that handle. Service ownership and rotation
 // follow the contract on sharedMarketDataService.
 //
-// The adapter tracks the set of policies registered at build time. All handle
+// The adapter tracks the instance names registered at build time. All handle
 // fields and runtime Configure state are guarded by mu. Account-scoped engine
-// calls run through asyncengine lanes and use the handle snapshot captured before
-// submission instead of taking this mutex on the hot path.
+// calls run through asyncengine lanes and use the handle snapshot captured
+// before submission instead of taking this mutex on the hot path.
 type openPitEngine struct {
 	async        *asyncengine.AsyncEngine
 	configurator configure.Configurator
@@ -105,10 +108,13 @@ type openPitEngine struct {
 	sink              *marketDataSink
 	marketDataService *sharedMarketDataService
 
-	// registered is the set of policy names live on the handle. ConfigurePolicy
-	// of an unregistered policy is a not-implemented stub: there is no runtime
-	// policy-registration API.
+	// registered holds the instance names live on the handle. Order size has
+	// one instance per mode with barriers; a changed set requires a rebuild.
 	registered map[string]struct{}
+
+	// orderSizeLimits tracks the last successful barriers per instance, keyed
+	// by stable engine ids and compared using domain cap values. Guarded by mu.
+	orderSizeLimits map[string]map[orderSizeLimitKey]orderSizeLimitValue
 
 	// positionLimits tracks successful SDK calls by stable engine ids, including
 	// pairs whose dictionary aliases have since been renamed or removed.
@@ -155,17 +161,16 @@ func (s *sharedMarketDataService) isClosed() bool {
 	return s != nil && s.closed.Load()
 }
 
-// newOpenPitEngine wraps an already-built *openpit.Engine and its shared
-// market-data service into the Engine adapter. registered is the set of policy
-// names live on the handle and is taken over by the adapter. The adapter never
-// closes the service; its release follows the sharedMarketDataService lifetime
-// contract. res is the code-to-engine-id resolver built from the same Snapshot.
-// seedAccountBlocks are the blocks the engine reported while applying persisted
-// account P&L state, carried on the handle for the node to mirror.
-//
-// newOpenPitEngine wraps an already-built async engine and shared market-data
-// service. The async engine owns the underlying native engine lifecycle; the
-// shared service remains owned by the node generation.
+// newOpenPitEngine wraps an already-built async engine and its shared
+// market-data service into the Engine adapter. registered is the set of
+// instance names live on the handle and is taken over by the adapter. The
+// async engine owns the underlying native engine lifecycle; the shared service
+// remains owned by the node generation. res is the code-to-engine-id resolver
+// built from the same Snapshot. positionLimits and orderSizeLimits carry the
+// last applied barriers by stable engine ids; orderSizeLimits is keyed by
+// instance name and has one entry per registered order-size instance.
+// seedAccountBlocks are the blocks reported while applying persisted account
+// P&L state, carried on the handle for the node to mirror.
 func newOpenPitEngine(
 	async *asyncengine.AsyncEngine,
 	configurator configure.Configurator,
@@ -174,6 +179,7 @@ func newOpenPitEngine(
 	seedAccountBlocks []domain.AccountBlock,
 	res idResolver,
 	positionLimits map[accountAssetKey]positionLimitValue,
+	orderSizeLimits map[string]map[orderSizeLimitKey]orderSizeLimitValue,
 ) fwengine.Engine {
 	if registered == nil {
 		registered = make(map[string]struct{})
@@ -187,6 +193,7 @@ func newOpenPitEngine(
 		marketDataService: service,
 		registered:        registered,
 		positionLimits:    positionLimits,
+		orderSizeLimits:   orderSizeLimits,
 		seedAccountBlocks: seedAccountBlocks,
 		running:           async != nil,
 	}
@@ -351,6 +358,18 @@ func buildOpenPitEngine(
 	}
 
 	positionLimits := make(map[accountAssetKey]positionLimitValue)
+	instances, err := splitOrderSizeLimits(snap.OrderSizeLimits)
+	if err != nil {
+		return releaseOnErr(err)
+	}
+	orderSizeLimits := make(map[string]map[orderSizeLimitKey]orderSizeLimitValue, len(instances))
+	for _, instance := range instances {
+		values, err := orderSizeLimitValues(instance.limits, res)
+		if err != nil {
+			return releaseOnErr(err)
+		}
+		orderSizeLimits[instance.name] = values
+	}
 	if err := configurePositionLimits(
 		eng.Configure(), res, snap.PositionLimits, positionLimits,
 	); err != nil {
@@ -390,6 +409,7 @@ func buildOpenPitEngine(
 		append(buildBlocks, accountPnlBlocks...),
 		res,
 		positionLimits,
+		orderSizeLimits,
 	), service, nil
 }
 
@@ -397,8 +417,6 @@ func barrierCount(policy string, limits fwengine.LimitSet) int {
 	switch policy {
 	case domain.PolicyRateLimit:
 		return len(limits.RateLimits)
-	case domain.PolicyOrderSizeLimit:
-		return len(limits.OrderSizeLimits)
 	case domain.PolicySpotFundsPnlBoundsKillSwitch,
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
@@ -511,12 +529,22 @@ func (e *openPitEngine) AppliedSpotFundsAccountPnl(
 }
 
 // OrderModel resolves an Officer order to the SDK model used as a chain source.
-func (e *openPitEngine) OrderModel(o domain.Order) (model.Order, error) {
+func (e *openPitEngine) OrderModel(
+	o domain.Order, flags fwengine.ReviewFlags,
+) (model.Order, error) {
 	accountID, err := e.res.account(o.Account)
 	if err != nil {
 		return model.Order{}, err
 	}
-	return orderModelFromAccount(o, accountID, e.res)
+	order, err := orderModelFromAccount(o, accountID, e.res)
+	if err != nil {
+		return model.Order{}, err
+	}
+	if flags.Confirmed {
+		review := order.EnsureReviewView()
+		review.SetConfirmed(true)
+	}
+	return order, nil
 }
 
 // CheckOrderModel resolves an Officer dry-run probe to an SDK order model.
@@ -531,26 +559,31 @@ func (e *openPitEngine) CheckOrderModel(
 		AmountKind:  probe.AmountKind,
 		AmountValue: probe.AmountValue,
 		Price:       probe.Price,
-	})
+	}, fwengine.ReviewFlags{})
 }
 
 // ConfigurePolicy applies the change to the live handle via the Configure
 // surface. limits is the complete barrier set for policy.
 //
-// rate_limit / order_size_limit: the full axes are rebuilt from the complete
-// barrier set and replaced in one Configure call. Barriers, including a broker
-// barrier, are added and removed at runtime while the policy remains non-empty.
+// rate_limit replaces the full axes in one Configure call. Barriers, including
+// a broker barrier, are added and removed while the policy remains non-empty.
 //
 // position_limit applies the complete stored set as a per-pair diff against the
 // applied set inside an exclusive section. An empty set is valid and clears
 // every applied pair. An invalid or unresolvable set changes nothing; an SDK
 // error part-way leaves the pairs applied before it live and tracked.
 //
+// Order size resolves and validates every instance before any SDK call, then
+// replaces the axes in one call per changed instance. An invalid or
+// unresolvable set changes nothing. An SDK failure on a later changed instance
+// leaves the earlier ones applied and tracked, as can happen during online
+// restore. A change to the set of modes with barriers returns
+// domain.ErrNotImplemented so the node rebuilds the engine.
 // Configuring an unregistered policy returns a not-implemented stub. Removing
 // the last barrier returns the same stub except for
 // spot_funds_pnl_bounds_kill_switch and position_limit, whose separate SDK
-// surfaces can clear empty sets online. For the other policies live state is
-// changed only on success.
+// surfaces can clear empty sets online. Rate limit and P&L bounds change live
+// state only on success.
 func (e *openPitEngine) ConfigurePolicy(
 	ctx context.Context, policy string, limits fwengine.LimitSet,
 ) (fwengine.PolicyConfigurationResult, error) {
@@ -562,6 +595,9 @@ func (e *openPitEngine) ConfigurePolicy(
 	defer e.mu.Unlock()
 	if !e.running {
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf("engine: configure on stopped engine")
+	}
+	if policy == domain.PolicyOrderSizeLimit {
+		return fwengine.PolicyConfigurationResult{}, e.configureOrderSizeLocked(limits.OrderSizeLimits)
 	}
 
 	if _, ok := e.registered[policyName(policy)]; !ok {
@@ -580,11 +616,6 @@ func (e *openPitEngine) ConfigurePolicy(
 	switch policy {
 	case domain.PolicyRateLimit:
 		if err := e.configureRateLimitLocked(limits.RateLimits); err != nil {
-			return fwengine.PolicyConfigurationResult{}, err
-		}
-		return fwengine.PolicyConfigurationResult{}, nil
-	case domain.PolicyOrderSizeLimit:
-		if err := e.configureOrderSizeLocked(limits.OrderSizeLimits); err != nil {
 			return fwengine.PolicyConfigurationResult{}, err
 		}
 		return fwengine.PolicyConfigurationResult{}, nil
@@ -610,38 +641,75 @@ func (e *openPitEngine) ConfigurePolicy(
 }
 
 // configureRateLimitLocked replaces the rate-limit axes on the live handle from
-// the complete barrier set. The asset/account/account-asset axes are passed as
-// non-nil (possibly empty) slices so each is replaced wholesale; barriers are
-// added and removed at runtime and a surviving key keeps its live counter. The
-// broker axis uses the explicit optional update shape, so a nil broker clears it
-// rather than leaving it unchanged. Callers must hold e.mu.
+// the complete barrier set. All axes are passed as non-nil (possibly empty)
+// slices so each is replaced wholesale; barriers are added and removed at
+// runtime and a surviving key keeps its live counter. Callers must hold e.mu.
 func (e *openPitEngine) configureRateLimitLocked(limits []domain.LimitRate) error {
 	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits, e.res)
 	if err != nil {
 		return err
 	}
-	if err := e.configurator.RateLimitUpdate(
-		nameRateLimit, optional.Some(broker), assets, accounts, accountAssets,
+	if err := e.configurator.RateLimit(
+		nameRateLimit, broker, assets, accounts, accountAssets,
 	); err != nil {
 		return fmt.Errorf("engine: configure rate_limit: %w", err)
 	}
 	return nil
 }
 
-// configureOrderSizeLocked replaces the order-size axes on the live handle from
-// the complete barrier set. Empty asset/account-asset axes are passed as empty
-// non-nil slices so they are cleared rather than left unchanged. The Configure
-// broker axis uses the explicit optional update shape, so a nil broker clears it
-// rather than leaving it unchanged. Callers must hold e.mu.
+// configureOrderSizeLocked updates changed instances from the complete barrier
+// set, validating every instance before any SDK call. A changed set of instance
+// names requires a rebuild. Empty axes are passed as empty non-nil slices so
+// they are cleared rather than left unchanged. The Configure broker axis uses
+// the explicit optional update shape, so a nil broker clears it rather than
+// leaving it unchanged. Callers must hold e.mu.
 func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize) error {
-	broker, assets, accountAssets, err := orderSizeAxes(limits, e.res)
+	instances, err := splitOrderSizeLimits(limits)
 	if err != nil {
 		return err
 	}
-	if err := e.configurator.OrderSizeLimitUpdate(
-		nameOrderSizeLimit, optional.Some(broker), assets, accountAssets,
-	); err != nil {
-		return fmt.Errorf("engine: configure order_size_limit: %w", err)
+	if len(instances) != len(e.orderSizeLimits) {
+		return fmt.Errorf("engine: order_size_limit mode set changed; rebuild required: %w",
+			domain.ErrNotImplemented)
+	}
+	for _, instance := range instances {
+		if _, exists := e.orderSizeLimits[instance.name]; !exists {
+			return fmt.Errorf("engine: order_size_limit mode set changed; rebuild required: %w",
+				domain.ErrNotImplemented)
+		}
+	}
+	type orderSizeUpdate struct {
+		name          string
+		broker        *policies.OrderSizeBrokerBarrier
+		assets        []policies.OrderSizeAssetBarrier
+		accountAssets []policies.OrderSizeAccountAssetBarrier
+		values        map[orderSizeLimitKey]orderSizeLimitValue
+	}
+	var updates []orderSizeUpdate
+	for _, instance := range instances {
+		broker, assets, accountAssets, err := orderSizeAxes(instance.limits, e.res)
+		if err != nil {
+			return err
+		}
+		values, err := orderSizeLimitValues(instance.limits, e.res)
+		if err != nil {
+			return err
+		}
+		if maps.Equal(values, e.orderSizeLimits[instance.name]) {
+			continue
+		}
+		updates = append(updates, orderSizeUpdate{
+			name: instance.name, broker: broker, assets: assets,
+			accountAssets: accountAssets, values: values,
+		})
+	}
+	for _, update := range updates {
+		if err := e.configurator.OrderSizeLimitUpdate(
+			update.name, optional.Some(update.broker), update.assets, update.accountAssets,
+		); err != nil {
+			return fmt.Errorf("engine: configure order_size_limit instance %q: %w", update.name, err)
+		}
+		e.orderSizeLimits[update.name] = update.values
 	}
 	return nil
 }
@@ -664,7 +732,8 @@ func configurePositionLimits(
 			continue
 		}
 		if err := configurator.SpotFundsPositionLimit(
-			nameSpotFunds, key.account, value.asset, optional.Some(value.quantity),
+			nameSpotFunds, key.account, value.asset,
+			reject.RuleModeReject, optional.Some(value.quantity),
 		); err != nil {
 			return fmt.Errorf("engine: configure position_limit: %w", err)
 		}
@@ -675,7 +744,8 @@ func configurePositionLimits(
 			continue
 		}
 		if err := configurator.SpotFundsPositionLimit(
-			nameSpotFunds, key.account, value.asset, optional.None[param.Quantity](),
+			nameSpotFunds, key.account, value.asset,
+			reject.RuleModeReject, optional.None[param.Quantity](),
 		); err != nil {
 			return fmt.Errorf("engine: clear position_limit: %w", err)
 		}
@@ -862,14 +932,41 @@ func (e *openPitEngine) RejectedOrder(
 	if err != nil {
 		return fwengine.OrderResult{}, err
 	}
-	return fwengine.OrderResult{Accepted: false, Rejects: mapped}, nil
+	return fwengine.OrderResult{Verdict: domain.VerdictReject, Rejects: mapped}, nil
 }
 
 // ReservedOrder captures every persistence value while reservation is live.
 func (e *openPitEngine) ReservedOrder(
 	o domain.Order, result asyncengine.OperationResult,
 ) (fwengine.OrderResult, error) {
+	reviews, err := e.reservationReviews(result)
+	if err != nil {
+		return fwengine.OrderResult{}, err
+	}
+	if len(reviews) != 0 {
+		return fwengine.OrderResult{Verdict: domain.VerdictReview, Reviews: reviews}, nil
+	}
 	return e.materializeOrderResult(o, result, nil, "reservation")
+}
+
+func (e *openPitEngine) reservationReviews(result asyncengine.OperationResult) ([]domain.ReviewMark, error) {
+	marks, err := result.Reviews()
+	if err != nil {
+		return nil, fmt.Errorf("engine: read reservation reviews: %w", err)
+	}
+	reviews, err := reviewMarksFrom(marks, e.res)
+	if err != nil {
+		return nil, err
+	}
+	if len(reviews) == 0 {
+		return reviews, nil
+	}
+	for _, mark := range reviews {
+		if mark.Mode == domain.RuleModeReviewWithoutHold {
+			return reviews, nil
+		}
+	}
+	return nil, fmt.Errorf("engine: review with hold is not supported")
 }
 
 // AppliedDropCopyOrder captures the operation values and requested block while
@@ -917,7 +1014,7 @@ func (e *openPitEngine) materializeOrderResult(
 		return fwengine.OrderResult{}, err
 	}
 	return fwengine.OrderResult{
-		Accepted:            true,
+		Verdict:             domain.VerdictAccept,
 		Lock:                lockBytes,
 		Blocks:              blocks,
 		Outcomes:            outcomes,
@@ -930,6 +1027,14 @@ func (e *openPitEngine) materializeOrderResult(
 func (e *openPitEngine) CheckedOrder(
 	probe domain.OrderProbe, result asyncengine.OrderCheckResult,
 ) (domain.CheckResult, error) {
+	marks, err := result.Reviews()
+	if err != nil {
+		return domain.CheckResult{}, fmt.Errorf("engine: read dry-run reviews: %w", err)
+	}
+	reviews, err := reviewMarksFrom(marks, e.res)
+	if err != nil {
+		return domain.CheckResult{}, err
+	}
 	if !result.Passed() {
 		block, err := result.AccountBlock()
 		if err != nil {
@@ -948,6 +1053,7 @@ func (e *openPitEngine) CheckedOrder(
 		return domain.CheckResult{
 			Passed:     false,
 			Rejects:    rejects,
+			Reviews:    reviews,
 			WouldBlock: wouldBlock,
 		}, nil
 	}
@@ -966,7 +1072,7 @@ func (e *openPitEngine) CheckedOrder(
 	lockPrice := settlementPrice(
 		pricesToStrings(prices), "dry-run:"+string(probe.Account),
 	)
-	return domain.CheckResult{Passed: true, WouldLockPrice: lockPrice}, nil
+	return domain.CheckResult{Passed: true, Reviews: reviews, WouldLockPrice: lockPrice}, nil
 }
 
 // SettledExecutionReport maps the canonical SDK post-trade result without
@@ -1063,8 +1169,6 @@ func policyName(policy string) string {
 	switch policy {
 	case domain.PolicyRateLimit:
 		return nameRateLimit
-	case domain.PolicyOrderSizeLimit:
-		return nameOrderSizeLimit
 	case domain.PolicyPositionLimit, domain.PolicySpotFundsPnlBoundsKillSwitch,
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
@@ -1076,11 +1180,13 @@ func policyName(policy string) string {
 
 // buildEngine constructs an OpenPit engine plus its market-data service,
 // registering the order-validation policy plus each risk policy that has at
-// least one barrier in the snapshot. It returns the engine, the service, the set
-// of registered policy names, and a reserved empty block result retained by the
-// private build seam. Account P&L is seeded later through AsyncEngine. The SDK
-// rejects empty rate-limit and order-size-limit settings, so those policies are
-// not registered until their snapshots contain a barrier. res resolves
+// least one barrier in the snapshot. It returns the engine, the service, the
+// set of registered instance names, and a reserved empty block result retained
+// by the private build seam. Account P&L is seeded later through AsyncEngine.
+// The SDK rejects empty rate-limit and order-size-limit settings. Order size
+// registers one instance per mode with barriers; a change of that set requires
+// a rebuild.
+// Rate limit registers when it has a barrier. res resolves
 // account/group codes to engine ids for account-scoped barriers.
 //
 // When service is nil, the market-data service is built before the engine (the
@@ -1092,8 +1198,9 @@ func policyName(policy string) string {
 //
 // The spot-funds policy is always registered and wired to the market-data
 // service via WithMarketOrders(service, defaultMarketOrderSlippageBps): market
-// orders are priced off the mark quote rather than rejected. Instruments without
-// a live quote reject with MarkPriceUnavailable instead of UnsupportedOrderType.
+// orders are priced off the mark quote rather than rejected. Instruments
+// without a live quote reject with MarkPriceUnavailable instead of
+// UnsupportedOrderType.
 // Persisted account blocks are applied immediately after Build, before a P&L
 // barrier can evaluate the implicit zero accumulator and latch a different
 // first cause. Persisted account P&L state is applied later through
@@ -1152,15 +1259,26 @@ func buildEngine(
 		builder = builder.Builtin(ready)
 		registered[nameRateLimit] = struct{}{}
 	}
-	if len(snap.OrderSizeLimits) > 0 {
-		ready, err := orderSizeReady(snap.OrderSizeLimits, res)
+	instances, err := splitOrderSizeLimits(snap.OrderSizeLimits)
+	if err != nil {
+		builder.Close()
+		closeCreatedService()
+		return nil, nil, nil, nil, false, err
+	}
+	for _, instance := range instances {
+		ready, err := orderSizeReady(instance.limits, res)
 		if err != nil {
 			builder.Close()
 			closeCreatedService()
 			return nil, nil, nil, nil, false, err
 		}
-		builder = builder.Builtin(ready)
-		registered[nameOrderSizeLimit] = struct{}{}
+		if instance.mode == domain.RuleModeReject {
+			builder = builder.Builtin(ready)
+		} else {
+			builder = builder.Builtin(ready,
+				openpit.InstanceName(instance.name), openpit.InstanceMode(instance.sdkMode))
+		}
+		registered[instance.name] = struct{}{}
 	}
 	eng, err := builder.Build()
 	if err != nil {

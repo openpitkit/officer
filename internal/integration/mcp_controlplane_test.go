@@ -460,6 +460,7 @@ func TestUpdateAssetToolRefusesCodeChangeOfBarrierAsset(t *testing.T) {
 		t.Fatalf("create asset ETH: %v", err)
 	}
 	if err := service.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeUnderlyingAsset, Asset: "ETH", MaxQuantity: "1",
 	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 		t.Fatalf("cap ETH: %v", err)

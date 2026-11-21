@@ -236,8 +236,9 @@ func handleSubmitOrder(svc backend.ControlPlane) http.HandlerFunc {
 			SignedApproval:  approval.SignedApproval,
 			KeyID:           approval.KeyID,
 			OrderExternalID: approval.OrderExternalID,
-			Verdict:         approval.Verdict,
-			Reasons:         toOrderRejectDTOs(approval.Reasons),
+			Verdict:         string(approval.Verdict),
+			Reasons:         httpx.ToOrderRejectDTOs(approval.Reasons),
+			Reviews:         httpx.ToReviewMarkDTOs(approval.Reviews),
 		})
 	}
 }
@@ -366,6 +367,57 @@ func handleCancelOrder(svc backend.ControlPlane) http.HandlerFunc {
 			SignedAttestation: att.SignedAttestation,
 			AttestationKeyID:  att.KeyID,
 			Signed:            att.Signed,
+		})
+	}
+}
+
+func handleConfirmOrderReview(svc backend.ControlPlane) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orderID, err := httpx.PathOrderExternalID(r)
+		if err != nil {
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
+			return
+		}
+		order, result, err := svc.ConfirmOrderReview(r.Context(), orderID)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		send, err := toVenueSendDTO(result.Send)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		presentation := orderPresentationByID(r.Context(), svc, order.ExternalID)
+		approval := result.Approval
+		reasons := append([]httpx.OrderRejectDTO{}, httpx.ToOrderRejectDTOs(approval.Reasons)...)
+		httpx.WriteJSON(w, http.StatusOK, confirmOrderReviewResponseDTO{
+			Order: httpx.ToOrderDTO(order, presentation.displayPrice, presentation.signed),
+			Decision: reviewDecisionDTO{
+				Verdict: string(approval.Verdict), Reasons: reasons,
+				SignedApproval: approval.SignedApproval, KeyID: approval.KeyID, Signed: approval.Signed,
+			},
+			VenueSend: send,
+		})
+	}
+}
+
+func handleCancelOrderReview(svc backend.ControlPlane) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orderID, err := httpx.PathOrderExternalID(r)
+		if err != nil {
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
+			return
+		}
+		order, att, err := svc.CancelOrderReview(r.Context(), orderID)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		presentation := orderPresentationByID(r.Context(), svc, order.ExternalID)
+		httpx.WriteJSON(w, http.StatusOK, orderMutationResponseDTO{
+			Order:             httpx.ToOrderDTO(order, presentation.displayPrice, presentation.signed),
+			SignedAttestation: att.SignedAttestation, AttestationKeyID: att.KeyID, Signed: att.Signed,
 		})
 	}
 }

@@ -566,20 +566,14 @@ func handleSendVenueOrder(svc backend.ControlPlane, send venueSend) http.Handler
 		approval := result.Approval
 		out := sendVenueOrderResponseDTO{signedApprovalDTO: signedApprovalDTO{
 			SignedApproval: approval.SignedApproval, KeyID: approval.KeyID,
-			OrderExternalID: approval.OrderExternalID, Verdict: approval.Verdict,
-			Reasons: toOrderRejectDTOs(approval.Reasons),
+			OrderExternalID: approval.OrderExternalID, Verdict: string(approval.Verdict),
+			Reasons: httpx.ToOrderRejectDTOs(approval.Reasons),
+			Reviews: httpx.ToReviewMarkDTOs(approval.Reviews),
 		}}
-		if result.Send != nil {
-			out.VenueSend = &venueSendDTO{Status: result.Send.Status,
-				Error: result.Send.Error, Refusal: result.Send.Refusal}
-			if result.Send.Order != nil {
-				link, err := toVenueOrderDTO(*result.Send.Order)
-				if err != nil {
-					httpx.WriteErr(w, err)
-					return
-				}
-				out.VenueSend.VenueOrder = &link
-			}
+		out.VenueSend, err = toVenueSendDTO(result.Send)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
 		}
 		httpx.WriteJSON(w, http.StatusCreated, out)
 	}

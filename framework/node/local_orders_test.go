@@ -60,17 +60,51 @@ type fakeOrderChainDriver struct {
 	trading asyncengine.Driver
 }
 
-type rejectWithoutReasonAfterReservationEngine struct {
+type verdictAfterReservationEngine struct {
 	*fakeEngine
+	verdict          domain.Verdict
+	reviews          []domain.ReviewMark
+	confirmedVerdict domain.Verdict
+	confirmed        bool
+	reviewFlags      []engine.ReviewFlags
 }
 
-func (e *rejectWithoutReasonAfterReservationEngine) ReservedOrder(
-	order domain.Order, _ asyncengine.OperationResult,
+func (e *verdictAfterReservationEngine) OrderModel(order domain.Order, flags engine.ReviewFlags) (model.Order, error) {
+	e.stateMu.Lock()
+	e.confirmed = flags.Confirmed
+	e.reviewFlags = append(e.reviewFlags, flags)
+	e.stateMu.Unlock()
+	return e.fakeEngine.OrderModel(order, flags)
+}
+
+func (e *verdictAfterReservationEngine) ReservedOrder(
+	order domain.Order, reservation asyncengine.OperationResult,
 ) (engine.OrderResult, error) {
+	e.stateMu.Lock()
+	accepted := e.confirmed && e.confirmedVerdict == domain.VerdictAccept
+	e.stateMu.Unlock()
+	if accepted {
+		return e.fakeEngine.ReservedOrder(order, reservation)
+	}
 	if err := e.recordChainSubmit(order); err != nil {
 		return engine.OrderResult{}, err
 	}
-	return engine.OrderResult{Accepted: false}, nil
+	return engine.OrderResult{Verdict: e.verdict, Reviews: e.reviews}, nil
+}
+
+func (e *verdictAfterReservationEngine) PrepareImmediateReservation(
+	order domain.Order, reservation asyncengine.OperationResult,
+) (engine.ImmediatePreparation, error) {
+	e.stateMu.Lock()
+	accepted := e.confirmed && e.confirmedVerdict == domain.VerdictAccept
+	e.stateMu.Unlock()
+	if accepted {
+		return e.fakeEngine.PrepareImmediateReservation(order, reservation)
+	}
+	if err := e.recordChainSubmit(order); err != nil {
+		return engine.ImmediatePreparation{}, err
+	}
+	return engine.ImmediatePreparation{Verdict: e.verdict, Reviews: e.reviews}, nil
 }
 
 type persistedAccountMismatchRealm struct {
@@ -262,7 +296,7 @@ func assertFakeOrderBlock(
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "1",
 		Price:       "100",
-	})
+	}, engine.ReviewFlags{})
 	if err != nil {
 		t.Fatalf("OrderModel(%s): %v", account, err)
 	}
@@ -307,7 +341,7 @@ func assertFakeTypedOrderBlock(
 		Account: account, BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: "1", Price: "100",
-	})
+	}, engine.ReviewFlags{})
 	if err != nil {
 		t.Fatalf("OrderModel(%s): %v", account, err)
 	}
@@ -374,7 +408,7 @@ func assertFakeEffectiveCurrency(
 	}
 	outcomes, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
-		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
+		nil,
 		nil,
 		[]policies.SpotFundsPnlBoundsAccountBarrier{{
 			AccountID: accountID,
@@ -463,7 +497,7 @@ func restoreFakeCurrencyProbe(
 	t.Helper()
 	if _, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
-		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
+		nil,
 		nil,
 		[]policies.SpotFundsPnlBoundsAccountBarrier{},
 	); err != nil {
@@ -510,7 +544,7 @@ func assertFakeAccountPnl(
 	wasBlocked := fakeAdministrativeAccountBlocked(t, eng, account)
 	outcomes, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
-		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
+		nil,
 		nil,
 		[]policies.SpotFundsPnlBoundsAccountBarrier{{
 			AccountID: accountID,
@@ -522,7 +556,7 @@ func assertFakeAccountPnl(
 	}
 	if _, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
-		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
+		nil,
 		nil,
 		[]policies.SpotFundsPnlBoundsAccountBarrier{},
 	); err != nil {
@@ -667,7 +701,7 @@ func assertFakeNoEffectiveCurrency(
 	defer func() {
 		if _, clearErr := driver.Configure().SpotFundsPnlBoundsKillSwitch(
 			policies.SpotFundsPolicyName,
-			optional.Some[*policies.SpotFundsPnlBoundsBarrier](nil),
+			[]policies.SpotFundsPnlBoundsBarrier{},
 			nil,
 			nil,
 		); clearErr != nil {
@@ -691,7 +725,7 @@ func assertFakeNoEffectiveCurrency(
 	}
 	outcomes, err := driver.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
-		optional.Some(&barrier),
+		[]policies.SpotFundsPnlBoundsBarrier{barrier},
 		nil,
 		nil,
 	)
@@ -802,6 +836,9 @@ func (d *fakeOrderChainDriver) StartPreTrade(
 func (d *fakeOrderChainDriver) ExecutePreTrade(
 	order model.Order,
 ) (*pretrade.Reservation, []reject.Reject, error) {
+	d.owner.stateMu.Lock()
+	d.owner.preTradeCalls++
+	d.owner.stateMu.Unlock()
 	if d.owner.failSubmit {
 		return nil, nil, errors.New("submit failed")
 	}
@@ -886,7 +923,9 @@ func (e *fakeEngine) AccountID(
 	return param.NewAccountIDFromUint64(accountID.Uint64()), nil
 }
 
-func (e *fakeEngine) OrderModel(o domain.Order) (model.Order, error) {
+func (e *fakeEngine) OrderModel(
+	o domain.Order, _ engine.ReviewFlags,
+) (model.Order, error) {
 	if err := e.checkKnownOrderAssets(o.BaseAsset, o.QuoteAsset); err != nil {
 		return model.Order{}, err
 	}
@@ -977,7 +1016,7 @@ func (e *fakeEngine) ExecutionReportModel(
 		Side:        in.Side,
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "1",
-	})
+	}, engine.ReviewFlags{})
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
@@ -1290,7 +1329,7 @@ func (e *fakeEngine) CheckOrderModel(
 		AmountKind:  probe.AmountKind,
 		AmountValue: probe.AmountValue,
 		Price:       probe.Price,
-	})
+	}, engine.ReviewFlags{})
 }
 
 func (e *fakeEngine) recordChainSubmit(o domain.Order) error {
@@ -1311,8 +1350,8 @@ func (e *fakeEngine) RejectedOrder(
 ) (engine.OrderResult, error) {
 	_ = e.recordChainSubmit(o)
 	return engine.OrderResult{
-		Accepted: false,
-		Rejects:  []domain.OrderReject{*e.submitReject},
+		Verdict: domain.VerdictReject,
+		Rejects: []domain.OrderReject{*e.submitReject},
 	}, nil
 }
 
@@ -1323,7 +1362,7 @@ func (e *fakeEngine) ReservedOrder(
 		return engine.OrderResult{}, err
 	}
 	return engine.OrderResult{
-		Accepted:            true,
+		Verdict:             domain.VerdictAccept,
 		Lock:                append([]byte(nil), e.submitLock...),
 		Blocks:              append([]domain.AccountBlock(nil), e.submitBlocks...),
 		Outcomes:            append([]engine.BalanceOutcome(nil), e.submitOutcomes...),
@@ -1341,7 +1380,7 @@ func (e *fakeEngine) RejectedImmediate(
 	o domain.Order, _ []reject.Reject,
 ) (engine.ImmediateResult, error) {
 	_ = e.recordChainSubmit(o)
-	result := engine.ImmediateResult{Accepted: false}
+	result := engine.ImmediateResult{Verdict: domain.VerdictReject}
 	if e.submitReject != nil &&
 		*e.submitReject != (domain.OrderReject{}) {
 		result.Rejects = []domain.OrderReject{*e.submitReject}
@@ -1403,6 +1442,7 @@ func (e *fakeEngine) prepareFakeImmediate(
 		state = "drop-copy committed"
 	}
 	return engine.ImmediatePreparation{
+		Verdict:             domain.VerdictAccept,
 		ExecutionReport:     report,
 		ReportInput:         reportInput,
 		Outcomes:            append([]engine.BalanceOutcome(nil), e.submitOutcomes...),
@@ -1414,7 +1454,7 @@ func (e *fakeEngine) prepareFakeImmediate(
 func (e *fakeEngine) fakeImmediateReportModel(
 	o domain.Order, in domain.ExecutionReportInput,
 ) (model.ExecutionReport, error) {
-	order, err := e.OrderModel(o)
+	order, err := e.OrderModel(o, engine.ReviewFlags{})
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
@@ -1495,7 +1535,7 @@ func (e *fakeEngine) SettleImmediate(
 		persistenceResult = &persistence
 	}
 	return engine.ImmediateResult{
-		Accepted:             true,
+		Verdict:              domain.VerdictAccept,
 		Persistence:          persistenceResult,
 		ExecutionReport:      request,
 		Lock:                 append([]byte(nil), e.submitLock...),
@@ -2104,7 +2144,7 @@ func TestLocalNode_SubmitImmediatePassesVolumeToEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitImmediate(volume): %v", err)
 	}
-	if !result.Accepted {
+	if result.Verdict != domain.VerdictAccept {
 		t.Fatalf("SubmitImmediate(volume) = %+v, want accepted", result)
 	}
 	if len(eng.submitCalls) != 1 {
@@ -2362,10 +2402,10 @@ func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
 				if err != nil {
 					t.Fatalf("SubmitImmediate: %v", err)
 				}
-				if result.Accepted == tc.rejected {
+				if (result.Verdict == domain.VerdictAccept) == tc.rejected {
 					t.Fatalf(
 						"accepted = %v, want %v",
-						result.Accepted,
+						(result.Verdict == domain.VerdictAccept),
 						!tc.rejected,
 					)
 				}
@@ -2399,10 +2439,10 @@ func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
 				)
 			}
 			got := decisionRows[0]
-			wantVerdict := "accept"
+			wantVerdict := domain.VerdictAccept
 			wantRejectCode := ""
 			if tc.rejected {
-				wantVerdict = "reject"
+				wantVerdict = domain.VerdictReject
 				wantRejectCode = "order_size"
 			}
 			if got.Action != tc.action ||
@@ -2574,7 +2614,7 @@ func TestLocalNode_SubmitImmediateRejectWithoutReasonFailsBeforePersistence(
 	}
 }
 
-func TestLocalNode_SubmitOrderAcceptedPathRejectWithoutReasonFatals(
+func TestLocalNode_SubmitOrderReservationRejectVerdictRollsBack(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -2585,7 +2625,10 @@ func TestLocalNode_SubmitOrderAcceptedPathRejectWithoutReasonFatals(
 	}
 
 	baseEngine := newFakeEngine()
-	eng := &rejectWithoutReasonAfterReservationEngine{fakeEngine: baseEngine}
+	eng := &verdictAfterReservationEngine{
+		fakeEngine: baseEngine,
+		verdict:    domain.VerdictReject,
+	}
 	var captured engine.Snapshot
 	baseBuild := fakeBuild(baseEngine, &captured)
 	build := func(snapshot engine.Snapshot) (engine.Engine, error) {
@@ -2611,7 +2654,7 @@ func TestLocalNode_SubmitOrderAcceptedPathRejectWithoutReasonFatals(
 	n := service.(*localNode)
 	seedTestPrincipal(t, n)
 
-	const externalID domain.ExternalID = "accepted-path-reject-without-reason"
+	const externalID domain.ExternalID = "reservation-reject-verdict"
 	_, err = n.SubmitOrder(
 		ctx,
 		domain.Order{
@@ -2628,25 +2671,317 @@ func TestLocalNode_SubmitOrderAcceptedPathRejectWithoutReasonFatals(
 		testCaller,
 	)
 	if err == nil ||
-		!strings.Contains(err.Error(), "engine rejection has no reject reason") {
-		t.Fatalf("SubmitOrder error = %v, want missing reject reason", err)
-	}
-	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
-		t.Fatalf("SubmitOrder error = %v, want retry-unsafe marker", err)
+		!strings.Contains(err.Error(), `unexpected reservation verdict "reject"`) {
+		t.Fatalf("SubmitOrder error = %v, want unexpected reject verdict", err)
 	}
 	if len(baseEngine.submitCalls) != 1 {
 		t.Fatalf(
-			"submit calls = %+v, want one applied reservation",
+			"submit calls = %+v, want one attempted reservation",
 			baseEngine.submitCalls,
 		)
 	}
-	if fatalErr == nil ||
-		!strings.Contains(fatalErr.Error(), "operation=\"audit submit order\"") ||
-		!strings.Contains(fatalErr.Error(), "engine rejection has no reject reason") {
-		t.Fatalf("fatal error = %v, want audit operation and missing reason", fatalErr)
+	if fatalErr != nil {
+		t.Fatalf("fatal error = %v, want none after rollback", fatalErr)
 	}
-	if _, getErr := n.realm.GetOrder(ctx, externalID); getErr != nil {
-		t.Fatalf("GetOrder after fatal audit failure: %v", getErr)
+	decisionRows, listErr := n.realm.ListAuditFiltered(
+		ctx,
+		domain.AuditFilter{Actions: []domain.AuditAction{
+			domain.AuditActionSubmitOrder,
+			domain.AuditActionSubmitDropCopy,
+		}},
+		10,
+	)
+	if listErr != nil {
+		t.Fatalf("ListAuditFiltered: %v", listErr)
+	}
+	if len(decisionRows) != 0 {
+		t.Fatalf("decision audit rows = %+v, want none after rollback", decisionRows)
+	}
+	if _, getErr := n.realm.GetOrder(ctx, externalID); !errors.Is(getErr, domain.ErrNotFound) {
+		t.Fatalf("GetOrder after rollback = %v, want not found", getErr)
+	}
+}
+
+func TestLocalNode_ReservationReviewFailures(t *testing.T) {
+	t.Parallel()
+	storeCause := fmt.Errorf("review store failure: %w", domain.ErrInvalid)
+	signerCause := errors.New("review signer failure")
+	auditCause := errors.New("review decision audit failure")
+	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate} {
+		for _, tc := range []struct {
+			name      string
+			noMarks   bool
+			storeErr  error
+			signerErr error
+			auditErr  error
+		}{
+			{name: "no marks", noMarks: true},
+			{name: "store failure", storeErr: storeCause},
+			{name: "signer failure", signerErr: signerCause},
+			{name: "audit failure", auditErr: auditCause},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				memory := newMemoryStore("node.db")
+				st := newRealmWrapStore(memory, func(r store.RealmStore) store.RealmStore {
+					if tc.storeErr != nil {
+						return &failOrderSubmissionAfterApplyRealm{RealmStore: r, err: tc.storeErr}
+					}
+					if tc.auditErr != nil {
+						return &failActionAuditRealm{RealmStore: r, action: domain.AuditActionSubmitOrder, err: tc.auditErr}
+					}
+					return r
+				})
+				if err := st.Migrate(ctx); err != nil {
+					t.Fatalf("Migrate: %v", err)
+				}
+				t.Cleanup(func() { _ = st.Close() })
+				baseEngine := newFakeEngine()
+				eng := &verdictAfterReservationEngine{
+					fakeEngine: baseEngine,
+					verdict:    domain.VerdictReview,
+				}
+				if !tc.noMarks {
+					eng.reviews = []domain.ReviewMark{{
+						OrderReject: domain.OrderReject{Code: "order_size_limit", Reason: "large order"},
+						Mode:        domain.RuleModeReviewWithoutHold,
+					}}
+				}
+				var snapshot engine.Snapshot
+				baseBuild := fakeBuild(baseEngine, &snapshot)
+				build := func(snapshot engine.Snapshot) (engine.Engine, error) {
+					if _, err := baseBuild(snapshot); err != nil {
+						return nil, err
+					}
+					return eng, nil
+				}
+				var fatalErr error
+				service, _, err := NewLocalNode(ctx, domain.DefaultRealm, st, build, func(err error) { fatalErr = err })
+				if err != nil {
+					t.Fatalf("NewLocalNode: %v", err)
+				}
+				t.Cleanup(func() { _ = service.Close() })
+				n := service.(*localNode)
+				seedTestPrincipal(t, n)
+				input := domain.Order{
+					Account: "acc-1", ExternalID: "review-failure",
+					BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+					AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",
+				}
+				attest := func(context.Context, domain.OrderEvent) (domain.EventAttestation, bool, error) {
+					return domain.EventAttestation{SignedEnvelope: "review-envelope"}, true, tc.signerErr
+				}
+				if mode == domain.SubmitModeHold {
+					var attestFor func(domain.Order, engine.OrderResult) store.EventAttestor
+					if tc.storeErr == nil {
+						attestFor = func(domain.Order, engine.OrderResult) store.EventAttestor {
+							return attest
+						}
+					}
+					_, _, err = n.SubmitOrderWithAttestation(ctx, input, domain.MissingAccountCreate, testCaller, nil, attestFor)
+				} else {
+					var attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor
+					if tc.storeErr == nil {
+						attestFor = func(domain.Order, engine.ImmediateResult) store.EventAttestor {
+							return attest
+						}
+					}
+					_, _, err = n.SubmitImmediateWithAttestation(ctx, input, domain.MissingAccountCreate, testCaller, nil, attestFor)
+				}
+				if err == nil {
+					t.Fatal("submit review succeeded, want failure")
+				}
+				if tc.auditErr != nil {
+					if !errors.Is(err, auditCause) || !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+						t.Errorf("submit error = %v, want retry-unsafe audit cause", err)
+					}
+					if !errors.Is(fatalErr, auditCause) || !strings.Contains(fatalErr.Error(), `operation="audit submit order"`) {
+						t.Errorf("fatal error = %v, want audit operation and cause", fatalErr)
+					}
+					detail, getErr := n.realm.GetOrder(ctx, input.ExternalID)
+					if getErr != nil || detail.Order.Status != domain.OrderStatusAwaitingReview || detail.Review == nil || len(detail.Events) != 2 {
+						t.Fatalf("order after audit failure = %+v, err=%v, want committed waiting order", detail, getErr)
+					}
+				} else {
+					if fatalErr != nil {
+						t.Errorf("fatal error = %v, want none before review record commits", fatalErr)
+					}
+					if tc.noMarks {
+						if !strings.Contains(err.Error(), "engine review has no review mark") {
+							t.Errorf("submit error = %v, want missing marks error", err)
+						}
+					}
+					for _, cause := range []error{tc.storeErr, tc.signerErr} {
+						if cause != nil && !errors.Is(err, cause) {
+							t.Errorf("submit error = %v, want cause %v", err, cause)
+						}
+					}
+					if tc.storeErr != nil && !errors.Is(err, domain.ErrInvalid) {
+						t.Errorf("submit error = %v, want invalid domain class", err)
+					}
+					if _, getErr := n.realm.GetOrder(ctx, input.ExternalID); !errors.Is(getErr, domain.ErrNotFound) {
+						t.Errorf("GetOrder = %v, want no order", getErr)
+					}
+					memory.realm.mu.RLock()
+					defer memory.realm.mu.RUnlock()
+					if len(memory.realm.orders) != 0 || len(memory.realm.events) != 0 || len(memory.realm.orderReviews) != 0 || len(memory.realm.attestations) != 0 {
+						t.Errorf("recorded orders/events/reviews/attestations = %d/%d/%d/%d, want nothing recorded", len(memory.realm.orders), len(memory.realm.events), len(memory.realm.orderReviews), len(memory.realm.attestations))
+					}
+				}
+				if len(baseEngine.execReportCalls) != 0 {
+					t.Errorf("review applied execution reports: %+v", baseEngine.execReportCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestLocalNode_ReservationReviewWaitsWithoutHold(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode        string
+		destination *domain.TradingDestination
+	}{
+		{domain.SubmitModeHold, nil},
+		{domain.SubmitModeHold, &domain.TradingDestination{Connection: "paper", VenueAccount: "paper-account", Route: "{}"}},
+		{domain.SubmitModeImmediate, nil},
+		{domain.SubmitModeImmediate, &domain.TradingDestination{Connection: "paper", VenueAccount: "paper-account", Route: "{}"}},
+	} {
+		name := tc.mode + "/gateway"
+		if tc.destination != nil {
+			name = tc.mode + "/trading"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := newMemoryStore("node.db")
+			if err := st.Migrate(ctx); err != nil {
+				t.Fatalf("Migrate: %v", err)
+			}
+			baseEngine := newFakeEngine()
+			eng := &verdictAfterReservationEngine{
+				fakeEngine: baseEngine,
+				verdict:    domain.VerdictReview,
+				reviews: []domain.ReviewMark{
+					{OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order", Details: "quantity=1"}, Mode: domain.RuleModeReviewWithoutHold},
+					{OrderReject: domain.OrderReject{Code: "another_review", Reason: "second mark"}, Mode: domain.RuleModeReviewWithoutHold},
+				},
+			}
+			var captured engine.Snapshot
+			baseBuild := fakeBuild(baseEngine, &captured)
+			build := func(snapshot engine.Snapshot) (engine.Engine, error) {
+				if _, err := baseBuild(snapshot); err != nil {
+					return nil, err
+				}
+				return eng, nil
+			}
+			var fatalErr error
+			service, _, err := NewLocalNode(
+				ctx, domain.DefaultRealm, st, build,
+				func(err error) { fatalErr = err },
+			)
+			if err != nil {
+				t.Fatalf("NewLocalNode: %v", err)
+			}
+			t.Cleanup(func() { _ = service.Close() })
+			n := service.(*localNode)
+			seedTestPrincipal(t, n)
+
+			const externalID domain.ExternalID = "reservation-review-verdict"
+			input := domain.Order{
+				Account:     "acc-1",
+				ExternalID:  externalID,
+				BaseAsset:   "AAPL",
+				QuoteAsset:  "USD",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "1",
+				Price:       "100",
+				Lock:        []byte("caller-supplied-lock"),
+			}
+			attest := func(_ context.Context, event domain.OrderEvent) (domain.EventAttestation, bool, error) {
+				return domain.EventAttestation{SignedEnvelope: "envelope-" + string(event.Type)}, true, nil
+			}
+			var order domain.Order
+			if tc.mode == domain.SubmitModeImmediate {
+				var result engine.ImmediateResult
+				order, result, err = n.SubmitImmediateWithAttestation(
+					ctx, input, domain.MissingAccountCreate, testCaller, tc.destination,
+					func(_ domain.Order, result engine.ImmediateResult) store.EventAttestor {
+						if result.Verdict != domain.VerdictReview || !reflect.DeepEqual(result.Reviews, eng.reviews) {
+							t.Errorf("immediate attestor result = %+v, want review marks", result)
+						}
+						return attest
+					},
+				)
+				if result.Verdict != domain.VerdictReview || !reflect.DeepEqual(result.Reviews, eng.reviews) || result.ExecutionReport != nil {
+					t.Fatalf("immediate result = %+v, want review without execution report", result)
+				}
+			} else {
+				var result engine.OrderResult
+				order, result, err = n.SubmitOrderWithAttestation(
+					ctx, input, domain.MissingAccountCreate, testCaller, tc.destination,
+					func(_ domain.Order, result engine.OrderResult) store.EventAttestor {
+						if result.Verdict != domain.VerdictReview || !reflect.DeepEqual(result.Reviews, eng.reviews) {
+							t.Errorf("hold attestor result = %+v, want review marks", result)
+						}
+						return attest
+					},
+				)
+				if result.Verdict != domain.VerdictReview || !reflect.DeepEqual(result.Reviews, eng.reviews) {
+					t.Fatalf("hold result = %+v, want review marks", result)
+				}
+			}
+			if err != nil {
+				t.Fatalf("submit review: %v", err)
+			}
+			if order.Status != domain.OrderStatusAwaitingReview || order.Leaves != "0" || order.ReservedQuantity != "0" || len(order.Lock) != 0 {
+				t.Fatalf("returned order = %+v, want waiting with zero leaves/reserved and no lock", order)
+			}
+			if len(baseEngine.submitCalls) != 1 {
+				t.Fatalf(
+					"submit calls = %+v, want one attempted reservation",
+					baseEngine.submitCalls,
+				)
+			}
+			if fatalErr != nil {
+				t.Fatalf("fatal error = %v, want none after rollback", fatalErr)
+			}
+			if len(baseEngine.execReportCalls) != 0 || len(baseEngine.execReportLeaves) != 0 {
+				t.Fatalf("review reached execution report: calls=%+v leaves=%v", baseEngine.execReportCalls, baseEngine.execReportLeaves)
+			}
+			decisionRows, listErr := n.realm.ListAuditFiltered(
+				ctx,
+				domain.AuditFilter{Actions: []domain.AuditAction{
+					domain.AuditActionSubmitOrder,
+					domain.AuditActionSubmitDropCopy,
+				}},
+				10,
+			)
+			if listErr != nil {
+				t.Fatalf("ListAuditFiltered: %v", listErr)
+			}
+			if len(decisionRows) != 1 || decisionRows[0].Action != domain.AuditActionSubmitOrder || decisionRows[0].Verdict != domain.VerdictReview || decisionRows[0].RejectCode != eng.reviews[0].Code || decisionRows[0].Detail.Code != domain.AuditDetailSubmitOrderReview {
+				t.Fatalf("decision audit rows = %+v, want one submit_order review with first mark and review detail", decisionRows)
+			}
+			detail, getErr := n.realm.GetOrder(ctx, externalID)
+			if getErr != nil {
+				t.Fatalf("GetOrder after review rollback: %v", getErr)
+			}
+			if !reflect.DeepEqual(detail.Order, order) || !reflect.DeepEqual(detail.Review, &domain.OrderReview{Mode: tc.mode, Destination: tc.destination}) {
+				t.Fatalf("persisted review = %+v, order=%+v", detail.Review, detail.Order)
+			}
+			wantEvents := []domain.OrderEventType{domain.OrderEventSubmitted, domain.OrderEventPreTradeReview}
+			if len(detail.Events) != len(wantEvents) || len(detail.Trades) != 0 {
+				t.Fatalf("review events/trades = %+v / %+v, want only submitted and pre_trade_review", detail.Events, detail.Trades)
+			}
+			for i, event := range detail.Events {
+				if event.Type != wantEvents[i] || event.Attestation == nil || event.Attestation.SignedEnvelope != "envelope-"+string(event.Type) {
+					t.Fatalf("event %d = %+v, want attested %s", i, event, wantEvents[i])
+				}
+			}
+		})
 	}
 }
 
@@ -2688,7 +3023,7 @@ func TestLocalNode_SubmitImmediatePanelDoesNotInferAccountPnl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
-	if !result.Accepted || order.Source != domain.SourcePanel {
+	if result.Verdict != domain.VerdictAccept || order.Source != domain.SourcePanel {
 		t.Fatalf("immediate result=%+v order=%+v, want accepted panel order", result, order)
 	}
 	account, ok, err := st.GetAccount(ctx, "acc-1")
@@ -2925,11 +3260,12 @@ type currencyChangingOrderModelEngine struct {
 
 func (e *currencyChangingOrderModelEngine) OrderModel(
 	order domain.Order,
+	flags engine.ReviewFlags,
 ) (model.Order, error) {
 	if err := e.beforeLane(); err != nil {
 		return model.Order{}, err
 	}
-	return e.fakeEngine.OrderModel(order)
+	return e.fakeEngine.OrderModel(order, flags)
 }
 
 func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
@@ -3024,7 +3360,7 @@ func TestLocalNode_SubmitImmediateDoesNotReadAccountDuringSubmissionApply(
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
-	if !result.Accepted {
+	if result.Verdict != domain.VerdictAccept {
 		t.Fatalf("order=%+v result=%+v, want accepted", order, result)
 	}
 	if guard == nil {

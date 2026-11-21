@@ -20,6 +20,11 @@
     "account_underlying_asset": "Cuenta + activo subyacente",
     "account_settlement_asset": "Cuenta + activo de liquidación"
   },
+  "ruleMode": {
+    "reject": "Rechazo",
+    "review_without_hold": "Revisión sin retención",
+    "review_with_hold": "Revisión con retención"
+  },
   "adjustmentType": {
     "venue_fee": "Comisión de la plataforma",
     "deposit": "Depósito",

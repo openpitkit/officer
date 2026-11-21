@@ -549,6 +549,7 @@ var accountProtections = map[string]func(context.Context, store.RealmStore) erro
 	},
 	"own order-size barrier": func(ctx context.Context, realm store.RealmStore) error {
 		return realm.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccountSettlementAsset, Account: "acc",
 			Asset: "USD", MaxNotional: "100",
 		})
@@ -583,11 +584,13 @@ var assetProtections = map[string]func(context.Context, store.RealmStore) error{
 	},
 	"underlying-asset order-size barrier": func(ctx context.Context, realm store.RealmStore) error {
 		return realm.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "1",
 		})
 	},
 	"account-settlement-asset order-size barrier": func(ctx context.Context, realm store.RealmStore) error {
 		return realm.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccountSettlementAsset, Account: "acc",
 			Asset: "AAPL", MaxNotional: "100",
 		})
@@ -943,6 +946,7 @@ func TestLocalNode_AgentReleasesUnprotectedSubjects(t *testing.T) {
 			Currency: "USD", UpperBound: "10",
 		}))
 	must("cap other", n.realm.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeAccountSettlementAsset, Account: "other",
 		Asset: "USD", MaxNotional: "100",
 	}))
@@ -1262,6 +1266,7 @@ func TestLocalNode_AgentOrderSizeLimitTightensOnly(t *testing.T) {
 	ctx := context.Background()
 	broker := func(quantity, notional string) domain.LimitOrderSize {
 		return domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxQuantity: quantity, MaxNotional: notional,
 		}
 	}
@@ -1320,12 +1325,14 @@ func TestLocalNode_AgentAccountOrderSizeCapTightensAssetCap(t *testing.T) {
 	ctx := context.Background()
 	underlying := func(quantity string) domain.LimitOrderSize {
 		return domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc",
 			Asset: "AAPL", MaxQuantity: quantity,
 		}
 	}
 	settlement := func(notional string) domain.LimitOrderSize {
 		return domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccountSettlementAsset, Account: "acc",
 			Asset: "USD", MaxNotional: notional,
 		}
@@ -1333,8 +1340,8 @@ func TestLocalNode_AgentAccountOrderSizeCapTightensAssetCap(t *testing.T) {
 	newNode := func(t *testing.T) (*localNode, *rebuildProbe) {
 		t.Helper()
 		n, probe := newLimitNode(t, AccountLimits{OrderSizeLimits: []domain.LimitOrderSize{
-			{Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "100"},
-			{Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "1000"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "100"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "1000"},
 		}})
 		if _, err := n.CreateAccount(ctx, domain.Account{Code: "acc"}, testCaller); err != nil {
 			t.Fatalf("CreateAccount(acc): %v", err)
@@ -1396,6 +1403,7 @@ func TestLocalNode_AgentFirstOrderSizeLimitRefusedWhileRateBarrierExists(t *test
 	t.Parallel()
 	ctx := context.Background()
 	first := domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeUnderlyingAsset, Asset: "MSFT", MaxQuantity: "10",
 	}
 	rateBarrier := AccountLimits{RateLimits: []domain.LimitRate{
@@ -1438,6 +1446,45 @@ func TestLocalNode_AgentFirstOrderSizeLimitRefusedWhileRateBarrierExists(t *test
 		t.Parallel()
 		requireInstalled(t, AccountLimits{}, agentCaller)
 	})
+}
+
+func TestLocalNode_AgentOrderSizeModeGuard(t *testing.T) {
+	ctx := context.Background()
+	for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+		t.Run(string(mode), func(t *testing.T) {
+			neighbourMode := domain.RuleModeReject
+			if mode == domain.RuleModeReject {
+				neighbourMode = domain.RuleModeReviewWithoutHold
+			}
+			asset := domain.LimitOrderSize{Mode: mode, Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "100"}
+			neighbour := asset
+			neighbour.Mode, neighbour.MaxQuantity = neighbourMode, "1"
+			n, _ := newLimitNode(t, AccountLimits{OrderSizeLimits: []domain.LimitOrderSize{neighbour, asset}})
+			if _, err := n.CreateAccount(ctx, domain.Account{Code: "acc"}, testCaller); err != nil {
+				t.Fatal(err)
+			}
+			account := asset
+			account.Scope, account.Account, account.MaxQuantity = domain.ScopeAccountUnderlyingAsset, "acc", "90"
+			if _, err := n.PutOrderSizeLimit(ctx, account, domain.LimitWriteAdd, domain.MissingAccountReject, agentCaller); err != nil {
+				t.Fatalf("same-mode tightening refused using neighbour: %v", err)
+			}
+			// A new account barrier above its own asset-tier cap must be refused.
+			if _, err := n.CreateAccount(ctx, domain.Account{Code: "other"}, testCaller); err != nil {
+				t.Fatal(err)
+			}
+			account.Account, account.MaxQuantity = "other", "101"
+			_, err := n.PutOrderSizeLimit(ctx, account, domain.LimitWriteAdd, domain.MissingAccountReject, agentCaller)
+			requireLoosening(t, "same-mode asset reference", err)
+
+			first := domain.LimitOrderSize{Mode: mode, Scope: domain.ScopeBroker, MaxQuantity: "10"}
+			n, _ = newLimitNode(t, AccountLimits{
+				OrderSizeLimits: []domain.LimitOrderSize{neighbour},
+				RateLimits:      []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
+			})
+			_, err = n.PutOrderSizeLimit(ctx, first, domain.LimitWriteAdd, domain.MissingAccountCreate, agentCaller)
+			requireLoosening(t, "first barrier of mode with rate windows", err)
+		})
+	}
 }
 
 // TestLocalNode_AgentSpotFundsPnlBoundsTightensOnly refuses an agent's Spot
@@ -1741,7 +1788,7 @@ func TestLocalNode_AgentDeleteLimitRefused(t *testing.T) {
 			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
-			{Scope: domain.ScopeBroker, MaxQuantity: "100"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "100"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			pnlBound(domain.ScopeGlobal, "", "USD", "-100", "100"),
@@ -1749,7 +1796,7 @@ func TestLocalNode_AgentDeleteLimitRefused(t *testing.T) {
 	}
 	targets := []LimitTarget{
 		{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker},
-		{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker},
+		{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker, Mode: domain.RuleModeReject},
 		{Policy: domain.PolicySpotFundsPnlBoundsKillSwitch, Scope: domain.ScopeGlobal},
 	}
 
@@ -1811,6 +1858,7 @@ func TestLocalNode_AgentLimitFailsOnUnreadableState(t *testing.T) {
 			},
 			put: func(n *localNode) error {
 				_, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+					Mode:  domain.RuleModeReject,
 					Scope: domain.ScopeBroker, MaxQuantity: "10",
 				}, domain.LimitWriteReplace, domain.MissingAccountCreate, agentCaller)
 				return err

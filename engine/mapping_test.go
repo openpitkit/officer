@@ -353,6 +353,7 @@ func orderSize(
 	scope domain.LimitScope, acct, asset, maxQty, maxNotional string,
 ) domain.LimitOrderSize {
 	return domain.LimitOrderSize{
+		Mode:        domain.RuleModeReject,
 		Scope:       scope,
 		Account:     domain.AccountID(acct),
 		Asset:       asset,
@@ -762,7 +763,7 @@ func TestRateLimitAxes_AllAxes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rateLimitAxes: %v", err)
 	}
-	if broker == nil {
+	if len(broker) != 1 {
 		t.Fatalf("want broker barrier")
 	}
 	if assets == nil || accounts == nil || accountAssets == nil {
@@ -794,8 +795,8 @@ func TestOrderSizeAxes_EmptyAxesNonNil(t *testing.T) {
 	}
 }
 
-// TestRateLimitAxes_SecondBrokerBarrierIsError checks the runtime axes refuse a
-// second broker barrier instead of quietly configuring the last one.
+// TestRateLimitAxes_SecondBrokerBarrierIsError checks the mapper itself refuses
+// a second broker barrier: Officer stores at most one broker barrier.
 func TestRateLimitAxes_SecondBrokerBarrierIsError(t *testing.T) {
 	t.Parallel()
 	_, _, _, _, err := rateLimitAxes([]domain.LimitRate{
@@ -826,8 +827,48 @@ func TestOrderSizeAxes_SecondBrokerBarrierIsError(t *testing.T) {
 	}
 }
 
-// TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError checks a second global
-// P&L bound is refused instead of overwriting the first one in the loop.
+func TestOrderSizeAxes_MapsInstanceModes(t *testing.T) {
+	limit := domain.LimitOrderSize{
+		Mode: domain.RuleModeReviewWithoutHold, Scope: domain.ScopeAccountUnderlyingAsset,
+		Account: "acc-1", Asset: "AAPL", MaxQuantity: "10",
+	}
+	broker, assets, accountAssets, err := orderSizeAxes([]domain.LimitOrderSize{limit}, testResolver("acc-1"))
+	if err != nil || broker != nil || len(assets) != 0 || len(accountAssets) != 1 {
+		t.Fatalf("review barrier mapping = %+v, %v; want one account-asset barrier", accountAssets, err)
+	}
+	limit.Mode = domain.RuleModeReject
+	_, _, accountAssets, err = orderSizeAxes([]domain.LimitOrderSize{limit}, testResolver("acc-1"))
+	if err != nil || len(accountAssets) != 1 {
+		t.Fatalf("reject barrier mapping = %+v, %v; want one account-asset barrier", accountAssets, err)
+	}
+}
+
+func TestSplitOrderSizeLimits_RefusesUnsupportedMode(t *testing.T) {
+	limit := domain.LimitOrderSize{
+		Scope:   domain.ScopeAccountUnderlyingAsset,
+		Account: "acc-1", Asset: "AAPL", MaxQuantity: "10",
+	}
+	valid := limit
+	valid.Mode = domain.RuleModeReject
+	for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, "", "unknown"} {
+		limit.Mode = mode
+		instances, err := splitOrderSizeLimits([]domain.LimitOrderSize{valid, limit})
+		if err == nil {
+			t.Fatalf("mode %q split; want explicit unsupported-mode error", mode)
+		}
+		for _, want := range []string{fmt.Sprintf("%q", mode), string(limit.Scope), limit.Account.String(), limit.Asset} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not name %q", err, want)
+			}
+		}
+		if instances != nil {
+			t.Fatal("unsupported mode returned instances")
+		}
+	}
+}
+
+// TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError checks the mapper itself
+// refuses a second global barrier: Officer stores at most one per axis.
 func TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError(t *testing.T) {
 	t.Parallel()
 	_, _, _, err := spotFundsPnlBoundsAxes(
@@ -886,10 +927,10 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spotFundsPnlBoundsAxes: %v", err)
 	}
-	globalBarrier, globalSet := global.Get()
-	if !globalSet || globalBarrier == nil || groups == nil || accounts == nil {
+	if len(global) != 1 || groups == nil || accounts == nil {
 		t.Fatalf("axes must set the global barrier and non-nil account slices")
 	}
+	globalBarrier := global[0]
 	if len(groups) != 1 || len(accounts) != 1 {
 		t.Fatalf(
 			"axis counts wrong: global=%+v groups=%d accounts=%d",
@@ -1883,14 +1924,16 @@ func TestOpenPitEngineBuilder_SeedsFromSnapshot(t *testing.T) {
 }
 
 // TestConfigurePolicy_RateLimitRetuneUnchangedKeys checks the rate-limit retune
-// path: same barrier-key set succeeds on the live handle.
+// applies on the live handle and the broker barrier keeps its live counter.
 func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets: testAssets(),
+		Assets:   testAssets(),
+		Accounts: []domain.Account{account("acc-1")},
+		Balances: []domain.Balance{fundedBalance("acc-1", "USD", "10000")},
 		RateLimits: []domain.LimitRate{
-			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
-			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
+			rateLimit(domain.ScopeBroker, "", "", 100, time.Minute),
+			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Minute),
 		},
 	}
 	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
@@ -1899,13 +1942,24 @@ func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 	}
 	defer eng.Stop()
 
+	order := testOrder()
+	order.Account = "acc-1"
+	order.AmountValue = "1"
+	if result, err := materializeOrderResult(eng, order); err != nil || result.Verdict != domain.VerdictAccept {
+		t.Fatalf("SubmitOrder before retune: err=%v result=%+v", err, result)
+	}
+
 	same := fwengine.LimitSet{RateLimits: []domain.LimitRate{
-		rateLimit(domain.ScopeBroker, "", "", 7, time.Second),
-		rateLimit(domain.ScopeAsset, "", "USD", 3, time.Second),
+		rateLimit(domain.ScopeBroker, "", "", 1, time.Minute),
+		rateLimit(domain.ScopeAsset, "", "USD", 3, time.Minute),
 	}}
 	if _, err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyRateLimit, same); err != nil {
 		t.Fatalf("ConfigurePolicy retune: %v", err)
+	}
+	result, err := materializeOrderResult(eng, order)
+	if err != nil || result.Verdict != domain.VerdictReject || !hasRejectCode(result.Rejects, "rate_limit_exceeded") {
+		t.Fatalf("SubmitOrder after retune lost broker counter: err=%v result=%+v", err, result)
 	}
 }
 
@@ -2069,15 +2123,18 @@ func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 	}
 }
 
-// TestConfigurePolicy_RateLimitDropsBrokerOnline checks the explicit optional
-// update clears a broker axis while an asset axis keeps the policy non-empty.
+// TestConfigurePolicy_RateLimitDropsBrokerOnline checks dropping the broker row
+// clears the live broker barrier without replacing the engine: orders the
+// removed limit refused are accepted while an asset barrier remains.
 func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets: testAssets(),
+		Assets:   testAssets(),
+		Accounts: []domain.Account{account("acc-1")},
+		Balances: []domain.Balance{fundedBalance("acc-1", "USD", "10000")},
 		RateLimits: []domain.LimitRate{
-			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
-			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
+			rateLimit(domain.ScopeBroker, "", "", 1, time.Minute),
+			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Minute),
 		},
 	}
 	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
@@ -2089,7 +2146,18 @@ func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 	asyncBefore := adapter.async
 	sinkBefore := adapter.MarketDataSink()
 
-	dropped := fwengine.LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second)}}
+	order := testOrder()
+	order.Account = "acc-1"
+	order.AmountValue = "1"
+	if result, err := materializeOrderResult(eng, order); err != nil || result.Verdict != domain.VerdictAccept {
+		t.Fatalf("first SubmitOrder: err=%v result=%+v", err, result)
+	}
+	result, err := materializeOrderResult(eng, order)
+	if err != nil || result.Verdict != domain.VerdictReject || !hasRejectCode(result.Rejects, "rate_limit_exceeded") {
+		t.Fatalf("SubmitOrder before broker removal: err=%v result=%+v", err, result)
+	}
+
+	dropped := fwengine.LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeAsset, "", "USD", 50, time.Minute)}}
 	if _, err := eng.ConfigurePolicy(
 		context.Background(), domain.PolicyRateLimit, dropped,
 	); err != nil {
@@ -2097,6 +2165,9 @@ func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 	}
 	if adapter.async != asyncBefore || adapter.MarketDataSink() != sinkBefore {
 		t.Fatal("dropping rate-limit broker replaced engine or market-data sink")
+	}
+	if result, err := materializeOrderResult(eng, order); err != nil || result.Verdict != domain.VerdictAccept {
+		t.Fatalf("SubmitOrder after broker removal: err=%v result=%+v", err, result)
 	}
 }
 
@@ -2356,7 +2427,7 @@ func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder with stale quote: %v", err)
 	}
-	if stale.Accepted || !hasRejectCode(stale.Rejects, "mark_price_unavailable") {
+	if (stale.Verdict == domain.VerdictAccept) || !hasRejectCode(stale.Rejects, "mark_price_unavailable") {
 		t.Fatalf("stale market order = %+v, want mark_price_unavailable reject", stale)
 	}
 
@@ -2370,7 +2441,7 @@ func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder with fresh quote: %v", err)
 	}
-	if !fresh.Accepted {
+	if fresh.Verdict != domain.VerdictAccept {
 		t.Fatalf("aged fresh market order rejected: %+v", fresh.Rejects)
 	}
 }
@@ -2468,7 +2539,7 @@ func TestEngine_InsufficientFundsRejectNamesAssetCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if submitted.Accepted || len(submitted.Rejects) != 1 ||
+	if (submitted.Verdict == domain.VerdictAccept) || len(submitted.Rejects) != 1 ||
 		submitted.Rejects[0].Code != domain.RejectCodeInsufficientFunds ||
 		submitted.Rejects[0].Details != want {
 		t.Fatalf("SubmitOrder = %+v, want one insufficient_funds reject %q", submitted, want)
@@ -2755,7 +2826,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first SubmitOrder: %v", err)
 	}
-	if !first.Accepted {
+	if first.Verdict != domain.VerdictAccept {
 		t.Fatalf("first submit must pass after dry-runs (budget intact), got %+v", first.Rejects)
 	}
 
@@ -2763,7 +2834,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second SubmitOrder: %v", err)
 	}
-	if second.Accepted {
+	if second.Verdict == domain.VerdictAccept {
 		t.Fatalf("second submit must be throttled by max_orders=1")
 	}
 	if !hasRejectCode(second.Rejects, "rate_limit_exceeded") {
@@ -2781,6 +2852,7 @@ func TestEngine_CheckOrderMatchesSubmitOrderSizeVerdict(t *testing.T) {
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{{
+			Mode:        domain.RuleModeReject,
 			Scope:       domain.ScopeAccountUnderlyingAsset,
 			Account:     "acc-1",
 			Asset:       "AAPL",
@@ -2815,10 +2887,10 @@ func TestEngine_CheckOrderMatchesSubmitOrderSizeVerdict(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SubmitOrder quantity %s: %v", quantity, err)
 		}
-		if dryRun.Passed != real.Accepted {
+		if dryRun.Passed != (real.Verdict == domain.VerdictAccept) {
 			t.Fatalf(
 				"quantity %s verdict mismatch: dry-run=%t real=%t dry rejects=%+v real rejects=%+v",
-				quantity, dryRun.Passed, real.Accepted, dryRun.Rejects, real.Rejects,
+				quantity, dryRun.Passed, (real.Verdict == domain.VerdictAccept), dryRun.Rejects, real.Rejects,
 			)
 		}
 		if dryRun.Passed != tc.accepted {
@@ -2910,26 +2982,87 @@ func TestOrderModel_InvalidInputs(t *testing.T) {
 
 	badAsset := base
 	badAsset.BaseAsset = " "
-	if _, err := e.OrderModel(badAsset); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := e.OrderModel(badAsset, fwengine.ReviewFlags{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for blank base asset, got %v", err)
 	}
 
 	badAmount := base
 	badAmount.AmountValue = "not-a-number"
-	if _, err := e.OrderModel(badAmount); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := e.OrderModel(badAmount, fwengine.ReviewFlags{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad amount, got %v", err)
 	}
 
 	badPrice := base
 	badPrice.Price = "not-a-number"
-	if _, err := e.OrderModel(badPrice); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := e.OrderModel(badPrice, fwengine.ReviewFlags{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad price, got %v", err)
 	}
 
 	badAccount := base
 	badAccount.Account = "ghost"
-	if _, err := e.OrderModel(badAccount); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := e.OrderModel(badAccount, fwengine.ReviewFlags{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for unknown account, got %v", err)
+	}
+}
+
+func TestOrderModel_ReviewFlags(t *testing.T) {
+	t.Parallel()
+	e := &openPitEngine{res: testResolver("acc-1")}
+	order := domain.Order{
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+		AmountValue: "2", Price: "125.50",
+	}
+	first, err := e.OrderModel(order, fwengine.ReviewFlags{})
+	if err != nil {
+		t.Fatalf("first-run OrderModel: %v", err)
+	}
+	confirmed, err := e.OrderModel(order, fwengine.ReviewFlags{Confirmed: true})
+	if err != nil {
+		t.Fatalf("confirmed OrderModel: %v", err)
+	}
+
+	t.Run("first_run", func(t *testing.T) {
+		if _, present := first.Review().Get(); present {
+			t.Fatal("first-run review group must be absent")
+		}
+	})
+	t.Run("confirmed", func(t *testing.T) {
+		review, present := confirmed.Review().Get()
+		if !present {
+			t.Fatal("confirmed review group must be present")
+		}
+		if value, present := review.Confirmed().Get(); !present || !value {
+			t.Fatalf("review confirmed = %v (present=%v), want true", value, present)
+		}
+	})
+
+	firstOperation, firstPresent := first.Operation().Get()
+	confirmedOperation, confirmedPresent := confirmed.Operation().Get()
+	if !firstPresent || !confirmedPresent {
+		t.Fatal("both models must contain the operation group")
+	}
+	firstInstrument, firstPresent := firstOperation.Instrument().Get()
+	confirmedInstrument, confirmedPresent := confirmedOperation.Instrument().Get()
+	if !firstPresent || !confirmedPresent {
+		t.Fatal("both models must contain the instrument")
+	}
+	for _, field := range []struct {
+		name             string
+		first, confirmed any
+	}{
+		{"account", firstOperation.AccountID(), confirmedOperation.AccountID()},
+		{"instrument", firstInstrument.String(), confirmedInstrument.String()},
+		{"side", firstOperation.Side(), confirmedOperation.Side()},
+		{"amount", firstOperation.TradeAmount(), confirmedOperation.TradeAmount()},
+		{"price", firstOperation.Price(), confirmedOperation.Price()},
+		{"position", first.Position(), confirmed.Position()},
+		{"margin", first.Margin(), confirmed.Margin()},
+	} {
+		if !reflect.DeepEqual(field.first, field.confirmed) {
+			t.Errorf("%s changed with review flags: %v -> %v",
+				field.name, field.first, field.confirmed)
+		}
 	}
 }
 

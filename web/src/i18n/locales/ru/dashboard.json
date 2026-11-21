@@ -45,6 +45,8 @@
     "title": "Последние записи аудита",
     "noEntries": "Записей в журнале нет",
     "action": {
+      "confirmOrderReview": "Подтверждение ревью ордера",
+      "cancelOrderReview": "Отмена ревью ордера",
       "createAccount": "Создание счёта",
       "blockAccount": "Блокировка счёта",
       "unblockAccount": "Разблокировка счёта",

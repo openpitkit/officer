@@ -289,7 +289,7 @@ func resetTaskFixture(t *testing.T) (*Runtime, node.Node, store.RealmStore, *par
 func taskFill(t *testing.T, n node.Node, code domain.AccountID, price string) {
 	t.Helper()
 	_, result, err := n.SubmitImmediate(context.Background(), domain.Order{Account: code, BaseAsset: "BTC", QuoteAsset: "USD", Side: domain.OrderSideSell, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: price, DropCopy: true}, domain.MissingAccountReject, auth.SystemCaller())
-	if err != nil || !result.Accepted {
+	if err != nil || result.Verdict != domain.VerdictAccept {
 		t.Fatalf("fill %+v %v", result, err)
 	}
 }

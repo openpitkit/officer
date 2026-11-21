@@ -170,6 +170,8 @@ const AUDIT_ACTION_TITLE_KEYS = new Map<string, string>([
   ["approval_failed", "audit.action.approvalFailed"],
   ["approval_confirmed", "audit.action.approvalConfirmed"],
   ["approval_cancelled", "audit.action.approvalCancelled"],
+  ["confirm_order_review", "audit.action.confirmOrderReview"],
+  ["cancel_order_review", "audit.action.cancelOrderReview"],
   ["set_access_mode", "audit.action.setAccessMode"],
   ["issue_access_token", "audit.action.issueAccessToken"],
   ["set_panel_password", "audit.action.setPanelPassword"],

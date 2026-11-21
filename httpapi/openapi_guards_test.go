@@ -35,6 +35,51 @@ const (
 	bearerScheme = "\n  securitySchemes:\n    bearerAuth:\n      type: http\n      scheme: bearer\n"
 )
 
+func TestOpenAPIOrderSizeModesContract(t *testing.T) {
+	spec := string(openapiSpec)
+	lines := strings.Split(spec, "\n")
+	schemas, ok := openAPIComponents(lines, "schemas")
+	if !ok {
+		t.Fatal("OpenAPI schemas are missing")
+	}
+	requests, ok := openAPIComponents(lines, "requestBodies")
+	if !ok {
+		t.Fatal("OpenAPI request bodies are missing")
+	}
+	for _, tc := range []struct{ name, body, declaration string }{
+		{"optional request mode", schemas["OrderSizeLimit"], "required: [scope, asset, maxQuantity, maxNotional]"},
+		{"order-size mode property", schemas["OrderSizeLimit"], "mode:"},
+		{"order-size modes", schemas["OrderSizeLimit"], "enum: [reject, review_without_hold]"},
+		{"order-size default", schemas["OrderSizeLimit"], "default: reject"},
+		{"write request schema", requests["OrderSizeLimitWrite"], `"#/components/schemas/OrderSizeLimit"`},
+		{"required list mode", schemas["Policy"], "required: [kind, mode, scope, account, accountGroup, asset, values]"},
+		{"nullable list mode", schemas["Policy"], `type: [string, "null"]`},
+		{"list modes", schemas["Policy"], "enum: [reject, review_without_hold, null]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(tc.body, tc.declaration) {
+				t.Fatalf("missing declaration %q", tc.declaration)
+			}
+		})
+	}
+	checked := 0
+	for _, operation := range openAPIOperations(spec) {
+		if operation.Path != "/limits" || (operation.Method != "GET" && operation.Method != "DELETE") {
+			continue
+		}
+		checked++
+		body := strings.Join(operation.Lines, "\n")
+		for _, declaration := range []string{"- name: mode", "enum: [reject, review_without_hold]", `"422":`} {
+			if !strings.Contains(body, declaration) {
+				t.Errorf("%s /limits: missing %q", operation.Method, declaration)
+			}
+		}
+	}
+	if checked != 2 {
+		t.Fatalf("checked %d limit operations, want 2", checked)
+	}
+}
+
 // TestOpenAPIBrowserGuardsContract holds the refusals every operation
 // documents before its handler runs: the access resolver's 401 and its 403
 // wrong_token, which answer every operation in token mode; 503 setup_required

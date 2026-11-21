@@ -179,6 +179,52 @@ func getStoredLimitsThroughMCP(t *testing.T, src frameworkmcp.Source) httpx.Acco
 	return listed.StructuredContent.Limits
 }
 
+func TestMCPOrderSizeLimitModes(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	review := domain.LimitOrderSize{
+		Mode: domain.RuleModeReviewWithoutHold, Scope: domain.ScopeBroker, MaxQuantity: "20",
+	}
+	if err := service.PutOrderSizeLimit(systemCtx(), review, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
+		t.Fatal(err)
+	}
+	driver := orderSizeLimitDriver(t, service, src)
+	for _, tool := range []string{"add_limit", "update_limit"} {
+		for _, mode := range []string{"review_without_hold", "reject", ""} {
+			driver.refuses(tool, map[string]any{
+				"policy": "order_size_limit", "scope": "broker", "maxQuantity": "10", "mode": mode,
+			}, "validation", review)
+		}
+	}
+	added := callTool[httpx.PutLimitResultDTO](t, src, "add_limit", map[string]any{
+		"policy": "order_size_limit", "scope": "broker", "maxQuantity": "10",
+	})
+	if added.IsError || added.StructuredContent.OrderSizeLimit == nil || added.StructuredContent.OrderSizeLimit.Mode != "reject" {
+		t.Fatalf("add reject beside review = %+v: %s", added.StructuredContent, textContent(added.Content))
+	}
+	changed := callTool[httpx.PutLimitResultDTO](t, src, "update_limit", map[string]any{
+		"policy": "order_size_limit", "scope": "broker", "maxQuantity": "5",
+	})
+	if changed.IsError || changed.StructuredContent.OrderSizeLimit == nil || changed.StructuredContent.OrderSizeLimit.Mode != "reject" {
+		t.Fatalf("update reject beside review = %+v: %s", changed.StructuredContent, textContent(changed.Content))
+	}
+	listed := getStoredLimitsThroughMCP(t, src).OrderSizeLimits
+	if len(listed) != 2 {
+		t.Fatalf("get_limits = %+v, want both modes", listed)
+	}
+	seen := map[string]string{}
+	for _, limit := range listed {
+		seen[limit.Mode] = limit.MaxQuantity
+	}
+	if seen["reject"] != "5" || seen["review_without_hold"] != "20" {
+		t.Fatalf("get_limits modes and caps = %v", seen)
+	}
+	stored := storedLimits(t, service).OrderSizeLimits
+	if len(stored) != 2 || !slices.Contains(stored, review) {
+		t.Fatalf("MCP writes changed review barrier: %+v", stored)
+	}
+}
+
 // TestUpdateLimitRateOnControlPlane drives add_limit and update_limit for
 // rate_limit through the control-plane Source into a local service, as an
 // agent: a new barrier and a stricter one are stored exactly as sent and
@@ -294,9 +340,14 @@ func TestUpdateLimitOrderSizeOnControlPlane(t *testing.T) {
 		"policy": "order_size_limit", "scope": "broker",
 		"maxQuantity": "10.0000000000000000001", "maxNotional": "1000",
 	}, "order_size_limit broker added", domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxQuantity: "10.0000000000000000001", MaxNotional: "1000",
 	})
+	if limits := storedLimits(t, service).OrderSizeLimits; len(limits) != 1 || limits[0].Mode != domain.RuleModeReject {
+		t.Fatalf("MCP order-size write stored %+v, want reject mode", limits)
+	}
 	stricter := domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxQuantity: "5.0000000000000000001", MaxNotional: "1000",
 	}
 	size.accepts("update_limit", map[string]any{
@@ -333,6 +384,7 @@ func TestUpdateLimitOrderSizeOnControlPlane(t *testing.T) {
 		}
 		size := orderSizeLimitDriver(t, service, src)
 		assetCap := domain.LimitOrderSize{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeUnderlyingAsset, Asset: "USD", MaxQuantity: "2",
 		}
 		size.accepts("add_limit", map[string]any{
@@ -652,6 +704,7 @@ func TestAddLimitRefusesBoundsTheEngineCannotParse(t *testing.T) {
 	orderSizeLimitDriver(t, service, src).accepts("add_limit", map[string]any{
 		"policy": "order_size_limit", "scope": "broker", "maxQuantity": "1",
 	}, "order_size_limit broker added", domain.LimitOrderSize{
+		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxQuantity: "1",
 	})
 	if builds.Load() == built {

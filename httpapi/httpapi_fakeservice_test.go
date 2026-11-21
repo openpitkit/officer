@@ -203,6 +203,10 @@ type fakeService struct {
 	confirmErr           error
 	cancelErr            error
 	cancelCalls          int
+	reviewOrderID        string
+	reviewConfirmCalls   int
+	reviewCancelCalls    int
+	reviewErr            error
 	cancelLeavesQuantity string
 	// Public-key-by-id resolution. publicKeysByID maps keyId to its exported
 	// public material; a missing id reports domain.ErrNotFound so the rotation and
@@ -1087,6 +1091,18 @@ func (f *fakeService) CancelOrder(
 		return o, f.attestation, nil
 	}
 	return f.submitOrder, f.attestation, nil
+}
+
+func (f *fakeService) ConfirmOrderReview(_ context.Context, orderID string) (domain.Order, backend.VenueSendResult, error) {
+	f.reviewOrderID = orderID
+	f.reviewConfirmCalls++
+	return f.submitOrder, f.venueSendResult, f.reviewErr
+}
+
+func (f *fakeService) CancelOrderReview(_ context.Context, orderID string) (domain.Order, backend.Attestation, error) {
+	f.reviewOrderID = orderID
+	f.reviewCancelCalls++
+	return f.submitOrder, f.attestation, f.reviewErr
 }
 
 func (f *fakeService) CommandEnabled(context.Context, string) (bool, error) {

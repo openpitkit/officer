@@ -161,6 +161,7 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 			Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 50,
 		}},
 		OrderSizeLimits: []domain.LimitOrderSize{{
+			Mode:  domain.RuleModeReject,
 			Scope: domain.ScopeAccountUnderlyingAsset, Account: oneAccountFeatures.Account,
 			Asset: "AAPL", MaxQuantity: "10",
 		}},

@@ -88,6 +88,7 @@ type memoryRealm struct {
 
 	adjustments  []domain.AccountAdjustmentRecord
 	orders       map[domain.ExternalID]domain.Order
+	orderReviews map[domain.ExternalID]domain.OrderReview
 	reports      map[domain.ExternalID]domain.ExternalID
 	attestations map[domain.ExternalID]domain.EventAttestation
 	events       []domain.OrderEvent
@@ -157,6 +158,7 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		positionLimits:           map[string]domain.LimitPosition{},
 		spotFundsPnlBoundsLimits: map[string]domain.LimitSpotFundsPnlBounds{},
 		orders:                   map[domain.ExternalID]domain.Order{},
+		orderReviews:             map[domain.ExternalID]domain.OrderReview{},
 		reports:                  map[domain.ExternalID]domain.ExternalID{},
 		attestations:             map[domain.ExternalID]domain.EventAttestation{},
 		instances:                map[domain.ExternalID]domain.MarketDataInstance{},
@@ -212,8 +214,8 @@ func balanceKey(account domain.AccountID, asset string) string {
 	return string(account) + "\x00" + asset
 }
 
-func limitKey(scope domain.LimitScope, account domain.AccountID, asset string) string {
-	return string(scope) + "\x00" + string(account) + "\x00" + asset
+func limitKey(scope domain.LimitScope, account domain.AccountID, asset string, mode domain.RuleMode) string {
+	return string(scope) + "\x00" + string(account) + "\x00" + asset + "\x00" + string(mode)
 }
 
 func spotFundsPnlBoundsLimitKey(
@@ -230,8 +232,12 @@ func instrumentKey(instance domain.ExternalID, externalSymbol string) string {
 }
 
 func policyRowKey(row store.PolicyListRow) string {
+	var mode domain.RuleMode
+	if row.OrderSize != nil {
+		mode = row.OrderSize.Mode
+	}
 	return string(row.Kind) + "\x00" + string(row.Scope) + "\x00" +
-		string(row.Account) + "\x00" + row.AccountGroup + "\x00" + row.Asset
+		string(row.Account) + "\x00" + row.AccountGroup + "\x00" + row.Asset + "\x00" + string(mode)
 }
 
 func pageRows[T any](rows []T, page store.PageSpec) []T {

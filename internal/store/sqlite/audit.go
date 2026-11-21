@@ -110,7 +110,7 @@ func (r *realmStore) AppendAuditBatch(
 
 func validateAuditDecision(
 	action domain.AuditAction,
-	orderID, verdict, rejectCode string,
+	orderID string, verdict domain.Verdict, rejectCode string,
 ) error {
 	return domain.ValidateAuditDecision(action, orderID, verdict, rejectCode)
 }
@@ -571,7 +571,7 @@ func auditRowFromScanned(
 		Action:       domain.AuditAction(action),
 		Source:       domain.Source(source),
 		Detail:       decoded,
-		OrderID:      orderID, Verdict: verdict, RejectCode: rejectCode,
+		OrderID:      orderID, Verdict: domain.Verdict(verdict), RejectCode: rejectCode,
 	}, nil
 }
 

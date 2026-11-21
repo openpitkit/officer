@@ -78,12 +78,17 @@ func pnlBoundV1Fixture(t *testing.T) string {
 		INSERT INTO limit_spot_funds_pnl_bound (scope, currency_asset_id, upper_bound)
 		VALUES ('account_group', (SELECT id FROM asset WHERE code = 'USD'), '500');
 		DELETE FROM schema_migration WHERE version > 1;
+		DROP TABLE order_review;
 		DROP TABLE scheduler_job;
 		DROP TABLE account_pnl_reset_receipt;
 		DROP TABLE scheduler_execution;
 		DROP TABLE trading_test_policy;
 		ALTER TABLE audit DROP COLUMN account_identity;
 		ALTER TABLE audit DROP COLUMN group_identity;
+		DROP INDEX uq_limit_order_size;
+		CREATE UNIQUE INDEX uq_limit_order_size ON limit_order_size
+			(scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
+		ALTER TABLE limit_order_size DROP COLUMN mode;
 		DROP TABLE limit_position;
 		DROP TABLE alert_delivery;
 		DROP TABLE alert_read_state;

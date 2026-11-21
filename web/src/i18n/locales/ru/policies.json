@@ -1,4 +1,11 @@
 {
+  "orderSizeMode": {
+    "label": "Режим барьера",
+    "descriptions": {
+      "reject": "Ордер выше барьера отклоняется.",
+      "review_without_hold": "Ордер выше барьера ждёт ревью оператора; до подтверждения ничего не резервируется и не отправляется."
+    }
+  },
   "spotFundsMode": {
     "modes": {
       "enforce": {
@@ -81,7 +88,8 @@
   },
   "delete": {
     "title": "Удалить риск-барьер?",
-    "description": "Барьер {{policy}} для {{scope}}{{account}}{{asset}} будет удалён.",
+    "description": "Барьер {{policy}}{{mode}} для {{scope}}{{account}}{{asset}} будет удалён.",
+    "modeFragment": " в режиме {{mode}}",
     "accountFragment": " счёт {{account}}",
     "accountGroupFragment": " группа счетов {{accountGroup}}",
     "assetFragment": " актив {{asset}}"

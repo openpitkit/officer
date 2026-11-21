@@ -154,6 +154,19 @@ func handleGetOrder(svc backend.ControlPlane) http.HandlerFunc {
 			}
 			body["venueOrder"] = venue
 		}
+		review, err := backend.OrderReviewView(detail)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		if review != nil {
+			view, err := httpx.ToOrderReviewDTO(review, storedTradingRouteDTO)
+			if err != nil {
+				httpx.WriteErr(w, err)
+				return
+			}
+			body["review"] = view
+		}
 		httpx.WriteJSON(w, http.StatusOK, body)
 	}
 }
@@ -320,8 +333,8 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 		LimitPrice:      p.LimitPrice,
 		PriceCurrency:   p.PriceCurrency,
 		AccountID:       p.AccountID,
-		Verdict:         p.Verdict,
-		Rejects:         toOrderRejectDTOs(p.Rejects),
+		Verdict:         string(p.Verdict),
+		Rejects:         httpx.ToOrderRejectDTOs(p.Rejects),
 		ExecutionReport: toExecutionReportRequestDTO(p.ExecutionReport),
 	}
 	if p.Result != nil {
@@ -353,6 +366,8 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 // response the robot received for the attested request. The envelope is carried
 // verbatim in the response's signedApproval or signedAttestation field, matching
 // the live handler. Only the facet matching the request type is populated.
+// A review confirm is reproduced as its signed decision alone: the order and the
+// venue outcome it returned are not signed by the decision.
 // detail is the order the event belongs to, its events ending with that one.
 func toEventReproductionResponseDTO(
 	event domain.OrderEvent, detail domain.OrderDetail,
@@ -365,8 +380,9 @@ func toEventReproductionResponseDTO(
 			SignedApproval:  att.SignedEnvelope,
 			KeyID:           att.KeyID,
 			OrderExternalID: event.Order.String(),
-			Verdict:         p.Verdict,
+			Verdict:         string(p.Verdict),
 			Reasons:         submitPayloadRejectReasons(p),
+			Reviews:         httpx.ToReviewMarkDTOs(p.Reviews),
 		}
 	case domain.AttestationRequestExecutionReport:
 		reportID := ""
@@ -384,23 +400,30 @@ func toEventReproductionResponseDTO(
 		out.Confirm = orderMutationResponseFromPayload(detail, att, p)
 	case domain.AttestationRequestCancel:
 		out.Cancel = orderMutationResponseFromPayload(detail, att, p)
+	case domain.AttestationRequestReviewConfirm:
+		out.ReviewConfirm = &reviewDecisionDTO{
+			Verdict: string(p.Verdict), Reasons: append([]httpx.OrderRejectDTO{}, submitPayloadRejectReasons(p)...),
+			SignedApproval: att.SignedEnvelope, KeyID: att.KeyID, Signed: eventAttestationSigned(att),
+		}
+	case domain.AttestationRequestReviewCancel:
+		out.ReviewCancel = orderMutationResponseFromPayload(detail, att, p)
 	}
 	return out
 }
 
-func submitPayloadRejectReasons(p domain.ApprovalPayload) []orderRejectDTO {
-	if p.Verdict != "reject" {
+func submitPayloadRejectReasons(p domain.ApprovalPayload) []httpx.OrderRejectDTO {
+	if p.Verdict != domain.VerdictReject {
 		return nil
 	}
 	if len(p.Rejects) > 0 {
-		return toOrderRejectDTOs(p.Rejects)
+		return httpx.ToOrderRejectDTOs(p.Rejects)
 	}
 	if p.RejectCode == "" && p.RejectScope == "" &&
 		p.RejectPolicy == "" && p.RejectReason == "" &&
 		p.RejectDetails == "" {
 		return nil
 	}
-	return []orderRejectDTO{{
+	return []httpx.OrderRejectDTO{{
 		Code:    p.RejectCode,
 		Scope:   p.RejectScope,
 		Policy:  p.RejectPolicy,

@@ -137,6 +137,32 @@ func newTestStore(t *testing.T, opts ...Option) (fwstore.Store, fwstore.RealmSto
 	return s, rs
 }
 
+func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
+	ctx := context.Background()
+	store := openSQLiteStoreForTest(t, filepath.Join(t.TempDir(), "mode-migration.db"))
+	source := schema.NewEmbeddedMigrationSource(store.dialect)
+	migrations, err := source.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migration.Apply(ctx, store.currentDB(), migrationList(migrations[:2]), migration.Config{}, store.dialect); err != nil {
+		t.Fatalf("apply through 0002: %v", err)
+	}
+	if _, err := store.currentDB().ExecContext(ctx, `INSERT INTO limit_order_size (scope, max_quantity) VALUES ('broker', '10')`); err != nil {
+		t.Fatalf("insert released row without mode: %v", err)
+	}
+	if err := migration.Apply(ctx, store.currentDB(), source, migration.Config{}, store.dialect); err != nil {
+		t.Fatalf("apply 0003: %v", err)
+	}
+	var mode domain.RuleMode
+	if err := store.currentDB().QueryRowContext(ctx, `SELECT mode FROM limit_order_size WHERE scope = 'broker'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != domain.RuleModeReject {
+		t.Fatalf("migrated mode = %q, want reject", mode)
+	}
+}
+
 func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 	ctx := context.Background()
 	s, rs := newTestStore(t)

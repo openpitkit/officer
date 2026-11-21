@@ -37,7 +37,7 @@ func (e *openPitEngine) RejectedImmediate(
 	if err != nil {
 		return fwengine.ImmediateResult{}, err
 	}
-	return fwengine.ImmediateResult{Accepted: false, Rejects: mapped}, nil
+	return fwengine.ImmediateResult{Verdict: domain.VerdictReject, Rejects: mapped}, nil
 }
 
 // PrepareImmediateReservation derives the report while the reservation can
@@ -45,6 +45,13 @@ func (e *openPitEngine) RejectedImmediate(
 func (e *openPitEngine) PrepareImmediateReservation(
 	o domain.Order, result asyncengine.OperationResult,
 ) (fwengine.ImmediatePreparation, error) {
+	reviews, err := e.reservationReviews(result)
+	if err != nil {
+		return fwengine.ImmediatePreparation{}, err
+	}
+	if len(reviews) != 0 {
+		return fwengine.ImmediatePreparation{Verdict: domain.VerdictReview, Reviews: reviews}, nil
+	}
 	return e.prepareImmediate(
 		o, result, nil, "reservation", "reservation committed",
 	)
@@ -130,6 +137,7 @@ func (e *openPitEngine) prepareImmediate(
 		}
 	}
 	return fwengine.ImmediatePreparation{
+		Verdict:             domain.VerdictAccept,
 		ExecutionReport:     report,
 		ReportInput:         reportInput,
 		Outcomes:            outcomes,
@@ -145,6 +153,13 @@ func (e *openPitEngine) SettleImmediate(
 	prepared fwengine.ImmediatePreparation,
 	postTrade pretrade.PostTradeResult,
 ) (fwengine.ImmediateResult, error) {
+	switch prepared.Verdict {
+	case domain.VerdictAccept:
+	case domain.VerdictReject, domain.VerdictReview:
+		return fwengine.ImmediateResult{}, fmt.Errorf("engine: cannot settle immediate verdict %q", prepared.Verdict)
+	default:
+		return fwengine.ImmediateResult{}, fmt.Errorf("engine: unknown immediate verdict %q", prepared.Verdict)
+	}
 	postTradeOutcomes, err := balanceOutcomesFromList(
 		postTrade.AccountAdjustments, e.res,
 	)
@@ -200,7 +215,7 @@ func (e *openPitEngine) SettleImmediate(
 		accountPnlHaltReason,
 	)
 	return fwengine.ImmediateResult{
-		Accepted:             true,
+		Verdict:              domain.VerdictAccept,
 		Persistence:          &persistence,
 		ExecutionReport:      domain.ExecutionReportRequestFromInput(prepared.ReportInput),
 		Lock:                 append([]byte(nil), prepared.ReportInput.Lock...),

@@ -20,6 +20,11 @@
     "account_underlying_asset": "Conta + ativo-objeto",
     "account_settlement_asset": "Conta + ativo de liquidação"
   },
+  "ruleMode": {
+    "reject": "Rejeição",
+    "review_without_hold": "Revisão sem retenção",
+    "review_with_hold": "Revisão com retenção"
+  },
   "adjustmentType": {
     "venue_fee": "Taxa da plataforma",
     "deposit": "Depósito",

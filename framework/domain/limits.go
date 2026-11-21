@@ -93,6 +93,8 @@ type LimitRate struct {
 // scopes carry notional. An unset bound is the empty string. Both are exact
 // decimal strings, never float.
 type LimitOrderSize struct {
+	// Mode is the barrier's action; the zero value is not a valid mode.
+	Mode RuleMode
 	// Scope is the axis combination this barrier applies to.
 	Scope LimitScope
 	// Account is the account axis; empty unless Scope carries it.
@@ -266,10 +268,27 @@ func (l LimitRate) Validate() error {
 	return nil
 }
 
-// Validate checks the order-size barrier against the engine mapping: an allowed
-// scope for the order-size policy, consistent axes, and at least one positive
-// decimal ceiling.
+// ValidateOrderSizeMode checks the modes supported by order-size barriers.
+// Empty or unsupported modes return a validation error on /mode.
+func ValidateOrderSizeMode(mode RuleMode) error {
+	switch mode {
+	case RuleModeReject, RuleModeReviewWithoutHold:
+		return nil
+	case "":
+		return invalidField("/mode", "required", fmt.Errorf("mode is required: %w", ErrInvalid))
+	default:
+		return invalidField("/mode", "unsupported_value", fmt.Errorf("unsupported order_size_limit mode %q: %w", mode, ErrInvalid))
+	}
+}
+
+// Validate checks the order-size barrier against the engine mapping: a
+// supported mode (reject or review_without_hold), an allowed scope for the
+// order-size policy, consistent axes, and at least one positive decimal
+// ceiling.
 func (l LimitOrderSize) Validate() error {
+	if err := ValidateOrderSizeMode(l.Mode); err != nil {
+		return err
+	}
 	if err := ValidateLimitScopeAndAxes(
 		PolicyOrderSizeLimit, l.Scope, l.Account, l.Asset, "",
 	); err != nil {

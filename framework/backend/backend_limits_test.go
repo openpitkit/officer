@@ -250,6 +250,7 @@ func TestServiceLimitWriteIntent(t *testing.T) {
 		}},
 		{"order-size", func(s *Service, write domain.LimitWrite) error {
 			return s.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
+				Mode:  domain.RuleModeReject,
 				Scope: domain.ScopeBroker, MaxQuantity: "10",
 			}, write, "")
 		}},
@@ -350,6 +351,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 			name: "order size broker",
 			target: node.LimitTarget{
 				Policy: domain.PolicyOrderSizeLimit,
+				Mode:   domain.RuleModeReject,
 				Scope:  domain.ScopeBroker,
 			},
 			valid: true,
@@ -358,6 +360,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 			name: "order size underlying asset",
 			target: node.LimitTarget{
 				Policy: domain.PolicyOrderSizeLimit,
+				Mode:   domain.RuleModeReject,
 				Scope:  domain.ScopeUnderlyingAsset,
 				Asset:  "AAPL",
 			},
@@ -367,6 +370,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 			name: "order size settlement asset",
 			target: node.LimitTarget{
 				Policy: domain.PolicyOrderSizeLimit,
+				Mode:   domain.RuleModeReject,
 				Scope:  domain.ScopeSettlementAsset,
 				Asset:  "USD",
 			},
@@ -376,6 +380,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 			name: "order size account underlying asset",
 			target: node.LimitTarget{
 				Policy:  domain.PolicyOrderSizeLimit,
+				Mode:    domain.RuleModeReject,
 				Scope:   domain.ScopeAccountUnderlyingAsset,
 				Account: "acc-1",
 				Asset:   "AAPL",
@@ -386,6 +391,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 			name: "order size account settlement asset",
 			target: node.LimitTarget{
 				Policy:  domain.PolicyOrderSizeLimit,
+				Mode:    domain.RuleModeReject,
 				Scope:   domain.ScopeAccountSettlementAsset,
 				Account: "acc-1",
 				Asset:   "USD",
@@ -503,6 +509,37 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 			}
 			if n.deleteCalls != callsBefore {
 				t.Fatalf("invalid target reached node: calls=%d, want %d", n.deleteCalls, callsBefore)
+			}
+		})
+	}
+}
+
+func TestValidateLimitTargetMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, policy string
+		mode         domain.RuleMode
+		valid        bool
+	}{
+		{"reject", domain.PolicyOrderSizeLimit, domain.RuleModeReject, true},
+		{"review", domain.PolicyOrderSizeLimit, domain.RuleModeReviewWithoutHold, true},
+		{"missing", domain.PolicyOrderSizeLimit, "", false},
+		{"unknown", domain.PolicyOrderSizeLimit, "unknown", false},
+		{"foreign_mode", domain.PolicyRateLimit, domain.RuleModeReject, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &limitTestNode{}
+			err := newLimitTestService(t, n).DeleteLimit(systemCtx(), node.LimitTarget{Policy: tc.policy, Scope: domain.ScopeBroker, Mode: tc.mode})
+			if tc.valid {
+				if err != nil || n.deleteCalls != 1 {
+					t.Fatalf("valid target: calls=%d err=%v", n.deleteCalls, err)
+				}
+				return
+			}
+			if !errors.Is(err, domain.ErrInvalid) || n.deleteCalls != 0 {
+				t.Fatalf("invalid mode: calls=%d err=%v", n.deleteCalls, err)
+			}
+			if domain.ValidationPointer(err) != "/mode" {
+				t.Fatalf("validation mode field = %v", err)
 			}
 		})
 	}

@@ -17,9 +17,27 @@
 
 import { useCallback, useMemo } from "react";
 
-import type { Limit, PagedResult, PolicyListFilters } from "@/api/types";
+import type {
+  Limit,
+  OrderSizeLimitMode,
+  PagedResult,
+  PolicyListFilters,
+} from "@/api/types";
+import type { Policy } from "@/api/vocabulary";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
+
+/** Select the barrier count by order-size mode or by policy for other barriers. */
+export function barrierCount(
+  target: Pick<Limit, "policy" | "mode">,
+  policyCounts: Partial<Record<Policy, number>>,
+  orderSizeCounts: Record<OrderSizeLimitMode, number | undefined>,
+): number | undefined {
+  if (target.policy === "order_size_limit") {
+    return target.mode === null ? undefined : orderSizeCounts[target.mode];
+  }
+  return policyCounts[target.policy];
+}
 
 /** Poll the unified, paged GET /api/v1/limits policy list. */
 export function useLimits(filters?: PolicyListFilters): PollingResult<Limit[]> {

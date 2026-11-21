@@ -45,6 +45,8 @@
     "title": "Auditoría reciente",
     "noEntries": "No hay entradas de auditoría",
     "action": {
+      "confirmOrderReview": "Revisión de la orden confirmada",
+      "cancelOrderReview": "Revisión de la orden cancelada",
       "createAccount": "Creación de cuenta",
       "blockAccount": "Bloqueo de cuenta",
       "unblockAccount": "Desbloqueo de cuenta",

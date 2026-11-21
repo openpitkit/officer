@@ -116,6 +116,9 @@ func (s *tradingSource) ListTradingDestinations(_ context.Context, account domai
 
 func tradingFixture() *tradingSource {
 	return &tradingSource{
+		paperSendResult: backend.VenueSendResult{
+			Approval: backend.SignedApproval{Verdict: domain.VerdictReject},
+		},
 		status: backend.TradingStatus{
 			Providers: []backend.TradingProvider{{
 				ExecutionPolicy: false,

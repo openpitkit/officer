@@ -1,4 +1,11 @@
 {
+  "orderSizeMode": {
+    "label": "Barrier mode",
+    "descriptions": {
+      "reject": "An order above the barrier is refused.",
+      "review_without_hold": "An order above the barrier waits for operator review; nothing is held or sent until it is confirmed."
+    }
+  },
   "spotFundsMode": {
     "modes": {
       "enforce": {
@@ -81,7 +88,8 @@
   },
   "delete": {
     "title": "Delete policy barrier?",
-    "description": "This removes the {{policy}} barrier on {{scope}}{{account}}{{asset}}.",
+    "description": "This removes the {{policy}} barrier{{mode}} on {{scope}}{{account}}{{asset}}.",
+    "modeFragment": " in mode {{mode}}",
     "accountFragment": " account {{account}}",
     "accountGroupFragment": " account group {{accountGroup}}",
     "assetFragment": " asset {{asset}}"

@@ -36,7 +36,7 @@ func TestSubmitOrder_DropCopyMarketOrderReturnsPolicyReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder(drop-copy market): %v", err)
 	}
-	if result.Accepted || len(result.Rejects) != 1 {
+	if (result.Verdict == domain.VerdictAccept) || len(result.Rejects) != 1 {
 		t.Fatalf(
 			"drop-copy market result = %+v, want one policy reject", result,
 		)
@@ -62,7 +62,7 @@ func assertWholeSeedAvailable(t *testing.T, e *openPitEngine) {
 	if err != nil {
 		t.Fatalf("SubmitOrder(balance probe): %v", err)
 	}
-	if !result.Accepted {
+	if result.Verdict != domain.VerdictAccept {
 		t.Fatalf(
 			"balance probe rejected: %+v; the drop-copy hold is still in place",
 			result.Rejects,

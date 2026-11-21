@@ -278,6 +278,9 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.OrderEvents, err = r.exportOrderEvents(ctx); err != nil {
 		return backup.Data{}, err
 	}
+	if data.OrderReviews, err = r.exportOrderReviews(ctx); err != nil {
+		return backup.Data{}, err
+	}
 	if data.ExecutionReports, err = r.exportExecutionReports(ctx); err != nil {
 		return backup.Data{}, err
 	}
@@ -354,10 +357,8 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 func (r *realmStore) RestoreBackup(
 	ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 ) (summary backup.RestoreSummary, err error) {
-	if archive.Manifest.FormatVersion != backup.FormatVersion {
-		return backup.RestoreSummary{}, fmt.Errorf(
-			"backup format version %d unsupported, want %d: %w",
-			archive.Manifest.FormatVersion, backup.FormatVersion, domain.ErrInvalid)
+	if err := archive.Upgrade(); err != nil {
+		return backup.RestoreSummary{}, err
 	}
 	if err := domain.ValidateRealmID(
 		domain.RealmID(archive.Manifest.Realm.Code),
@@ -379,6 +380,17 @@ func (r *realmStore) RestoreBackup(
 	scope := opts.Scope.Normalize()
 	if err := backup.ValidatePnlResetScope(archive.Data, scope); err != nil {
 		return backup.RestoreSummary{}, err
+	}
+	if scope.Included(backup.SectionActivityHistory) {
+		archivedOrders := make(map[domain.ExternalID]bool, len(archive.Data.Orders))
+		for _, rec := range archive.Data.Orders {
+			archivedOrders[rec.Order.ExternalID] = true
+		}
+		for _, review := range archive.Data.OrderReviews {
+			if !archivedOrders[review.Order] {
+				return backup.RestoreSummary{}, fmt.Errorf("store: restore %s order review references missing order %q: %w", backup.SectionActivityHistory, review.Order, domain.ErrInvalid)
+			}
+		}
 	}
 	// Re-narrow the archive to the restore scope so a caller may restore a subset
 	// of a full archive; the archive already filtered to its own scope at export.
@@ -484,7 +496,6 @@ func (r *realmStore) RestoreBackup(
 	if err := refuseRunningSchedulerJobs(ctx, tx); err != nil {
 		return backup.RestoreSummary{}, err
 	}
-
 	summary = backup.NewSummary()
 	rt := &restoreTx{
 		store:                             r.store,
@@ -498,6 +509,7 @@ func (r *realmStore) RestoreBackup(
 		disableTradingConnections:         opts.DisableTradingConnections,
 		summary:                           &summary,
 		isolationAccounts:                 make(map[domain.AccountID]bool),
+		restoredOrders:                    make(map[domain.ExternalID]bool),
 	}
 
 	if err := rt.run(ctx, scope, data); err != nil {
@@ -532,6 +544,7 @@ func validateRestoreMode(mode backup.RestoreMode) (backup.RestoreMode, error) {
 // restoreTx carries the in-flight restore transaction, the mode and the running
 // per-section summary so the per-table insert helpers stay small.
 type restoreTx struct {
+	restoredOrders                    map[domain.ExternalID]bool
 	store                             *sqliteStore
 	tx                                *sql.Tx
 	dictionaries                      *enumDictionaries
@@ -620,6 +633,11 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 			return err
 		}
 	}
+	if scope.Included(backup.SectionActivityHistory) {
+		if err := rt.restoreOrderReviews(ctx, data.OrderReviews); err != nil {
+			return err
+		}
+	}
 	if scope.Included(backup.SectionAuditLog) {
 		if err := rt.restoreAudit(ctx, data.Audit); err != nil {
 			return err
@@ -632,6 +650,9 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 				return err
 			}
 		}
+	}
+	if err := checkOrderReviewInvariant(ctx, rt.dictionaries, rt.tx, ""); err != nil {
+		return fmt.Errorf("store: restore %s: %w", backup.SectionActivityHistory, err)
 	}
 	return nil
 }

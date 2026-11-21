@@ -87,6 +87,21 @@ type orderSubmissionBridge struct {
 	accountIdentity domain.EngineAccountID
 }
 
+// readAccountBlockState returns the account's block state and engine identity.
+// A missing account returns domain.ErrNotFound.
+func readAccountBlockState(
+	ctx context.Context, realm store.RealmStore, code domain.AccountID,
+) (bool, domain.EngineAccountID, error) {
+	account, ok, err := realm.GetAccount(ctx, code)
+	if err != nil {
+		return false, 0, fmt.Errorf("read account block state: %w", err)
+	}
+	if !ok {
+		return false, 0, fmt.Errorf("read account block state: account %q: %w", code, domain.ErrNotFound)
+	}
+	return account.Blocked, account.EngineAccountID, nil
+}
+
 func beginOrderSubmission(
 	ctx context.Context,
 	realm store.RealmStore,
@@ -100,23 +115,12 @@ func beginOrderSubmission(
 		abort:      make(chan struct{}),
 		done:       make(chan orderSubmissionCompletion, 1),
 	}
-	{
-		// The store holds one connection, so the read cannot wait until the
-		// transaction below is open.
-		account, ok, err := realm.GetAccount(ctx, draft.Account)
-		if err != nil {
-			return nil, domain.Order{}, fmt.Errorf(
-				"read account block state: %w", err,
-			)
-		}
-		if !ok {
-			return nil, domain.Order{}, fmt.Errorf(
-				"read account block state: account %q: %w",
-				draft.Account, domain.ErrNotFound,
-			)
-		}
-		bridge.accountBlocked = account.Blocked
-		bridge.accountIdentity = account.EngineAccountID
+	var err error
+	// Read before opening the submission transaction below: the store holds
+	// one connection, so this read cannot wait until that transaction is open.
+	bridge.accountBlocked, bridge.accountIdentity, err = readAccountBlockState(ctx, realm, draft.Account)
+	if err != nil {
+		return nil, domain.Order{}, err
 	}
 	go func() {
 		order, err := recordOrderSubmissionWithAttestation(
@@ -237,13 +241,16 @@ type submitImmediateChainState struct {
 // one store transaction. On accept
 // it records pre_trade_accepted and committed, persists the lock, engine opening
 // leaves, balance outcomes, and committed status; on reject it records
-// pre_trade_rejected and rejected status. missing decides whether an order for
-// an account Officer does not know yet registers that account or is rejected.
+// pre_trade_rejected and rejected status. On review it rolls back the engine
+// reservation, records pre_trade_review with awaiting_review status, audits the
+// decision, and returns Reviews through SubmitOrderWithAttestation. missing
+// decides whether an order for an account Officer does not know yet registers
+// that account or is rejected.
 func (n *localNode) SubmitOrder(
 	ctx context.Context, o domain.Order,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Order, error) {
-	order, _, err := n.submitOrder(ctx, o, missing, caller, nil)
+	order, _, err := n.submitOrder(ctx, o, missing, caller, nil, nil)
 	return order, err
 }
 
@@ -252,9 +259,10 @@ func (n *localNode) SubmitOrderWithAttestation(
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
+	destination *domain.TradingDestination,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
-	return n.submitOrder(ctx, o, missing, caller, attestFor)
+	return n.submitOrder(ctx, o, missing, caller, destination, attestFor)
 }
 
 func (n *localNode) submitOrder(
@@ -262,6 +270,7 @@ func (n *localNode) submitOrder(
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
+	destination *domain.TradingDestination,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
 	// Resolve the account and register both order assets before the chain source
@@ -279,7 +288,7 @@ func (n *localNode) submitOrder(
 	defer done()
 
 	draft := submittedOrderDraft(o, caller)
-	source, err := eng.OrderModel(draft)
+	source, err := eng.OrderModel(draft, engine.ReviewFlags{})
 	if err != nil {
 		return domain.Order{}, engine.OrderResult{},
 			fmt.Errorf("submit order: %w", err)
@@ -359,7 +368,7 @@ func (n *localNode) submitOrder(
 		state.order = persisted
 		state.err = n.auditSubmittedOrder(
 			state.ctx, o.Account, state.order, state.result, caller,
-			state.bridge.accountIdentity,
+			state.bridge.accountIdentity, submissionAuditAction(state.order),
 		)
 		return state.err
 	}
@@ -398,6 +407,25 @@ func (n *localNode) submitOrder(
 					state.err = fmt.Errorf("submit order: %w", resultErr)
 					return asyncengine.DecisionRollback, state.err
 				}
+				switch result.Verdict {
+				case domain.VerdictAccept:
+				case domain.VerdictReview:
+					state.result = result
+					if attestFor != nil {
+						state.attest = attestFor(state.order, state.result)
+					}
+					state.order, state.err = n.completeOrderReview(
+						state.ctx, state.bridge, state.order, result.Reviews,
+						domain.SubmitModeHold, destination, caller, "record order submission",
+					)
+					return asyncengine.DecisionRollback, state.err
+				case domain.VerdictReject:
+					state.err = fmt.Errorf("submit order: unexpected reservation verdict %q", result.Verdict)
+					return asyncengine.DecisionRollback, state.err
+				default:
+					state.err = fmt.Errorf("submit order: unknown reservation verdict %q", result.Verdict)
+					return asyncengine.DecisionRollback, state.err
+				}
 				return n.materializeReservedOrder(
 					o.Account, caller, attestFor, state, result,
 				)
@@ -421,7 +449,7 @@ func (n *localNode) submitOrder(
 	) error {
 		state.err = n.auditSubmittedOrder(
 			state.ctx, o.Account, state.order, state.result, caller,
-			state.bridge.accountIdentity,
+			state.bridge.accountIdentity, submissionAuditAction(state.order),
 		)
 		return state.err
 	}).Finally(func(
@@ -470,6 +498,7 @@ func (n *localNode) auditSubmittedOrder(
 	result engine.OrderResult,
 	caller domain.Caller,
 	identity domain.EngineAccountID,
+	action domain.AuditAction,
 ) error {
 	if err := n.mirrorEngineBlocksAudit(
 		ctx, order.ExternalID, result.Blocks, identity,
@@ -479,7 +508,7 @@ func (n *localNode) auditSubmittedOrder(
 		)
 	}
 	return n.auditOrderDecision(
-		ctx, account, order, result.Accepted, result.Rejects, caller, identity,
+		ctx, account, order, result.Verdict, result.Rejects, result.Reviews, caller, identity, action,
 	)
 }
 
@@ -487,18 +516,22 @@ func (n *localNode) auditOrderDecision(
 	ctx context.Context,
 	account domain.AccountID,
 	order domain.Order,
-	accepted bool,
+	verdict domain.Verdict,
 	rejects []domain.OrderReject,
+	reviews []domain.ReviewMark,
 	caller domain.Caller,
 	identity domain.EngineAccountID,
+	action domain.AuditAction,
 ) error {
-	action := domain.AuditActionSubmitOrder
-	if order.DropCopy {
-		action = domain.AuditActionSubmitDropCopy
-	}
-	verdict := "accept"
 	rejectCode := ""
-	if !accepted {
+	var detailCode domain.AuditDetailCode
+	switch verdict {
+	case domain.VerdictAccept:
+		detailCode = domain.AuditDetailSubmitOrderCommitted
+		if action == domain.AuditActionConfirmOrderReview {
+			detailCode = domain.AuditDetailConfirmOrderReviewAccepted
+		}
+	case domain.VerdictReject:
 		if len(rejects) == 0 {
 			return n.fatalPostEnginePersistence(
 				"audit submit order",
@@ -506,14 +539,31 @@ func (n *localNode) auditOrderDecision(
 				fmt.Errorf("audit submit order: engine rejection has no reject reason"),
 			)
 		}
-		verdict = "reject"
 		rejectCode = rejects[0].Code
+		detailCode = domain.AuditDetailSubmitOrderRejected
+		if action == domain.AuditActionConfirmOrderReview {
+			detailCode = domain.AuditDetailConfirmOrderReviewRejected
+		}
+	case domain.VerdictReview:
+		if len(reviews) == 0 {
+			return n.fatalPostEnginePersistence(
+				"audit submit order", account,
+				fmt.Errorf("audit submit order: engine review has no review mark"),
+			)
+		}
+		rejectCode = reviews[0].Code
+		detailCode = domain.AuditDetailSubmitOrderReview
+	default:
+		return n.fatalPostEnginePersistence(
+			"audit submit order", account,
+			fmt.Errorf("audit submit order: unknown verdict %q", verdict),
+		)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: action, Account: account,
 		AccountIdentity: identity,
 		OrderID:         order.ExternalID.String(), Verdict: verdict, RejectCode: rejectCode,
-		Detail: submitOrderDetail(order, accepted),
+		Detail: submitOrderDetail(order, detailCode),
 	}); err != nil {
 		return n.fatalPostEnginePersistence(
 			"audit submit order",
@@ -522,6 +572,13 @@ func (n *localNode) auditOrderDecision(
 		)
 	}
 	return nil
+}
+
+func submissionAuditAction(order domain.Order) domain.AuditAction {
+	if order.DropCopy {
+		return domain.AuditActionSubmitDropCopy
+	}
+	return domain.AuditActionSubmitOrder
 }
 
 func orderAcceptedSettlement(
@@ -631,17 +688,6 @@ func orderRejectedSettlement(
 	account domain.AccountID, order domain.Order, rejects []domain.OrderReject,
 	blocks []domain.AccountBlock, caller domain.Caller,
 ) domain.OrderSettlement {
-	payload := domain.OrderEventPayload{
-		Rejects: append([]domain.OrderReject(nil), rejects...),
-	}
-	if len(rejects) > 0 {
-		r := rejects[0]
-		payload.RejectCode = r.Code
-		payload.RejectScope = r.Scope
-		payload.RejectPolicy = r.Policy
-		payload.RejectReason = r.Reason
-		payload.RejectDetails = r.Details
-	}
 	return domain.OrderSettlement{
 		Account:     account,
 		Order:       order.ExternalID,
@@ -654,7 +700,59 @@ func orderRejectedSettlement(
 		ReservedQuantity: "0",
 		Blocks:           blocks,
 		Events: []domain.OrderEvent{
-			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeRejected, caller, payload),
+			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeRejected, caller, orderRejectedPayload(rejects)),
+		},
+	}
+}
+
+func orderRejectedPayload(rejects []domain.OrderReject) domain.OrderEventPayload {
+	payload := domain.OrderEventPayload{Rejects: append([]domain.OrderReject(nil), rejects...)}
+	if len(rejects) > 0 {
+		r := rejects[0]
+		payload.RejectCode = r.Code
+		payload.RejectScope = r.Scope
+		payload.RejectPolicy = r.Policy
+		payload.RejectReason = r.Reason
+		payload.RejectDetails = r.Details
+	}
+	return payload
+}
+
+func (n *localNode) completeOrderReview(
+	ctx context.Context, bridge *orderSubmissionBridge, order domain.Order,
+	reviews []domain.ReviewMark, mode string,
+	destination *domain.TradingDestination, caller domain.Caller,
+	operation string,
+) (domain.Order, error) {
+	if len(reviews) == 0 {
+		return domain.Order{}, fmt.Errorf("%s: engine review has no review mark", operation)
+	}
+	persisted, err := bridge.complete(orderReviewSettlement(
+		order.Account, order, mode, destination, caller,
+	))
+	if err != nil {
+		return domain.Order{}, fmt.Errorf("%s: %w", operation, err)
+	}
+	return persisted, n.auditOrderDecision(
+		ctx, order.Account, persisted, domain.VerdictReview, nil, reviews,
+		caller, bridge.accountIdentity, submissionAuditAction(persisted),
+	)
+}
+
+func orderReviewSettlement(
+	account domain.AccountID, order domain.Order, mode string,
+	destination *domain.TradingDestination, caller domain.Caller,
+) domain.OrderSettlement {
+	return domain.OrderSettlement{
+		Account:          account,
+		Order:            order.ExternalID,
+		OrderStatus:      domain.OrderStatusAwaitingReview,
+		Leaves:           "0",
+		ReservedQuantity: "0",
+		SetLock:          true,
+		Review:           &domain.OrderReview{Mode: mode, Destination: destination},
+		Events: []domain.OrderEvent{
+			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeReview, caller, domain.OrderEventPayload{}),
 		},
 	}
 }
@@ -662,13 +760,13 @@ func orderRejectedSettlement(
 // SubmitImmediate records the order, runs the engine pre-trade and, on accept,
 // commits and settles the fill in the same engine call at the request trade
 // price so the held amount nets to zero, then persists the filled lifecycle. On
-// reject the order is recorded rejected. missing is handled as in SubmitOrder.
-// The backend audits the issued approval.
+// reject the order is recorded rejected; on review it waits without a hold.
+// missing is handled as in SubmitOrder. The backend audits the issued approval.
 func (n *localNode) SubmitImmediate(
 	ctx context.Context, o domain.Order,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Order, engine.ImmediateResult, error) {
-	return n.submitImmediate(ctx, o, missing, caller, nil)
+	return n.submitImmediate(ctx, o, missing, caller, nil, nil)
 }
 
 func (n *localNode) SubmitImmediateWithAttestation(
@@ -676,9 +774,10 @@ func (n *localNode) SubmitImmediateWithAttestation(
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
+	destination *domain.TradingDestination,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
-	return n.submitImmediate(ctx, o, missing, caller, attestFor)
+	return n.submitImmediate(ctx, o, missing, caller, destination, attestFor)
 }
 
 func (n *localNode) submitImmediate(
@@ -686,6 +785,7 @@ func (n *localNode) submitImmediate(
 	o domain.Order,
 	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
+	destination *domain.TradingDestination,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
 	// An immediate fill is booked at the order's own price, so an order without
@@ -711,7 +811,7 @@ func (n *localNode) submitImmediate(
 	defer done()
 
 	draft := submittedOrderDraft(o, caller)
-	source, err := eng.OrderModel(draft)
+	source, err := eng.OrderModel(draft, engine.ReviewFlags{})
 	if err != nil {
 		return domain.Order{}, engine.ImmediateResult{},
 			fmt.Errorf("submit immediate: %w", err)
@@ -798,9 +898,9 @@ func (n *localNode) submitImmediate(
 			return state.err
 		}
 		state.err = n.auditOrderDecision(
-			state.ctx, o.Account, state.order, state.result.Accepted,
-			state.result.Rejects, caller,
-			state.bridge.accountIdentity,
+			state.ctx, o.Account, state.order, state.result.Verdict,
+			state.result.Rejects, state.result.Reviews, caller,
+			state.bridge.accountIdentity, submissionAuditAction(state.order),
 		)
 		return state.err
 	}
@@ -843,6 +943,27 @@ func (n *localNode) submitImmediate(
 						state.err = fmt.Errorf(
 							"submit immediate: %w", prepareErr,
 						)
+						return asyncengine.DecisionRollback, state.err
+					}
+					switch preparation.Verdict {
+					case domain.VerdictAccept:
+					case domain.VerdictReview:
+						state.result = engine.ImmediateResult{
+							Verdict: preparation.Verdict, Reviews: preparation.Reviews,
+						}
+						if attestFor != nil {
+							state.attest = attestFor(state.order, state.result)
+						}
+						state.order, state.err = n.completeOrderReview(
+							state.ctx, state.bridge, state.order, state.result.Reviews,
+							domain.SubmitModeImmediate, destination, caller, "record immediate submission",
+						)
+						return asyncengine.DecisionRollback, state.err
+					case domain.VerdictReject:
+						state.err = fmt.Errorf("submit immediate: unexpected reservation verdict %q", preparation.Verdict)
+						return asyncengine.DecisionRollback, state.err
+					default:
+						state.err = fmt.Errorf("submit immediate: unknown reservation verdict %q", preparation.Verdict)
 						return asyncengine.DecisionRollback, state.err
 					}
 					state.preparation = preparation
@@ -911,7 +1032,7 @@ func (n *localNode) submitImmediate(
 	) error {
 		state.err = n.auditImmediateSubmission(
 			state.ctx, o.Account, state.order, state.result, caller,
-			state.bridge.accountIdentity,
+			state.bridge.accountIdentity, submissionAuditAction(state.order),
 		)
 		return state.err
 	}).Finally(func(
@@ -947,6 +1068,7 @@ func (n *localNode) auditImmediateSubmission(
 	result engine.ImmediateResult,
 	caller domain.Caller,
 	identity domain.EngineAccountID,
+	action domain.AuditAction,
 ) error {
 	if err := n.mirrorEngineBlocksAudit(
 		ctx, order.ExternalID, result.Blocks, identity,
@@ -983,7 +1105,7 @@ func (n *localNode) auditImmediateSubmission(
 		)
 	}
 	return n.auditOrderDecision(
-		ctx, account, order, result.Accepted, result.Rejects, caller, identity,
+		ctx, account, order, result.Verdict, result.Rejects, result.Reviews, caller, identity, action,
 	)
 }
 

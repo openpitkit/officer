@@ -64,8 +64,8 @@ type AuditEntry struct {
 	// OrderID is the opaque public order handle for a trading decision.
 	// It is empty for actions that do not describe an order decision.
 	OrderID string
-	// Verdict is "accept" or "reject" for a decision, empty for other actions.
-	Verdict string
+	// Verdict is accept, reject or review for a decision, empty otherwise.
+	Verdict domain.Verdict
 	// RejectCode is the primary engine reject code; empty for accepted decisions.
 	RejectCode string
 	// Actor is the code of the principal who initiated the action; empty for a
@@ -993,8 +993,10 @@ type PolicyListFilter struct {
 	Asset        TextMatcher
 	Scope        domain.LimitScope
 	Kind         *PolicyKind
-	Sort         SortSpec
-	Page         PageSpec
+	// Mode narrows the list to order-size barriers of this mode; zero means no filter.
+	Mode domain.RuleMode
+	Sort SortSpec
+	Page PageSpec
 
 	// Restriction is the list's mandatory account restriction, applied in the
 	// query with the filters above before the total and the page are taken.
@@ -1540,13 +1542,16 @@ type RealmStore interface {
 		ctx context.Context, account domain.AccountID,
 	) ([]domain.LimitOrderSize, error)
 
-	// PutOrderSizeLimit upserts one order-size barrier keyed by its composite.
+	// PutOrderSizeLimit upserts one order-size barrier keyed by
+	// (scope, account, asset, mode).
 	PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error
 
 	// DeleteOrderSizeLimit removes the order-size barrier with the given
-	// composite. Returns domain.ErrNotFound when absent.
+	// (scope, account, asset, mode) composite. Returns domain.ErrNotFound when
+	// absent and domain.ErrInvalid for an empty or unsupported mode.
 	DeleteOrderSizeLimit(
 		ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
+		mode domain.RuleMode,
 	) error
 
 	// ListPositionLimits returns every position barrier, optionally narrowed to

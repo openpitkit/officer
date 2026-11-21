@@ -21,14 +21,18 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/framework/store/schema"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	appsigning "go.openpit.dev/officer/signing"
 )
 
@@ -660,6 +664,227 @@ func TestOrderReproduction_SignedResultFields(t *testing.T) {
 	}
 	if report["id"] != reportID.String() {
 		t.Fatalf("executionReport.id = %v, want %s", report["id"], reportID)
+	}
+}
+
+func TestEventReproductionRequestFacets(t *testing.T) {
+	facetsByRequest := map[domain.AttestationRequestType]string{
+		domain.AttestationRequestSubmit:          "submitResponse",
+		domain.AttestationRequestExecutionReport: "executionReport",
+		domain.AttestationRequestConfirm:         "confirm",
+		domain.AttestationRequestCancel:          "cancel",
+		domain.AttestationRequestReviewConfirm:   "reviewConfirm",
+		domain.AttestationRequestReviewCancel:    "reviewCancel",
+	}
+	var codes []schema.EnumCodeSeed
+	for _, seed := range schema.EnumDictionarySeeds() {
+		if seed.Table == schema.AttestationRequestTypeTable {
+			codes = seed.Codes
+			break
+		}
+	}
+	if len(codes) == 0 {
+		t.Fatal("attestation request type seed is missing or empty")
+	}
+	for _, code := range codes {
+		t.Run(code.Code, func(t *testing.T) {
+			request := domain.AttestationRequestType(code.Code)
+			facet, ok := facetsByRequest[request]
+			if !ok {
+				t.Fatalf("request %s has no reproduction facet", request)
+			}
+			payload := reproPayload(extID("repro-facet"))
+			payload.RequestType = string(request)
+			att := &domain.EventAttestation{RequestType: request, SignedEnvelope: "recorded-envelope"}
+			detail := reproDetail(domain.ExternalID(payload.OrderExternalID), att)
+			response := toEventReproductionResponseDTO(detail.Events[0], detail, att, payload)
+			raw, err := json.Marshal(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var facets map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &facets); err != nil {
+				t.Fatal(err)
+			}
+			if len(facets) != 1 || facets[facet] == nil {
+				t.Fatalf("request %s response=%s; want exactly facet %s", request, raw, facet)
+			}
+		})
+	}
+}
+
+func TestOrderReproduction_ReviewSubmit(t *testing.T) {
+	id := extID("repro-review-submit")
+	payload := reproPayload(id)
+	payload.Verdict = domain.VerdictReview
+	payload.Reviews = restReviewMarks()
+	token, err := fwsigning.BuildEnvelope(fwsigning.Envelope{Approval: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := reproDetail(id, attestationFromToken(t, token))
+	router, err := newRouter(&fakeService{orderDetail: detail})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, reproURL(id), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reproduction status=%d: %s", rec.Code, rec.Body.String())
+	}
+	submit := bodyMap(t, rec.Result())["response"].(map[string]any)["submitResponse"].(map[string]any)
+	if submit["verdict"] != "review" || submit["signedApproval"] != token {
+		t.Fatalf("review submit reproduction=%v", submit)
+	}
+	assertRESTReviewMarks(t, submit["reviews"])
+}
+
+func TestOrderReproduction_ReviewConfirm(t *testing.T) {
+	for _, verdict := range []domain.Verdict{domain.VerdictAccept, domain.VerdictReject} {
+		for _, alg := range []string{fwsigning.AlgEd25519, fwsigning.AlgNone} {
+			t.Run(string(verdict)+"/"+alg, func(t *testing.T) {
+				id := extID("repro-review-confirm")
+				payload := reproPayload(id)
+				payload.RequestType = string(domain.AttestationRequestReviewConfirm)
+				payload.Verdict = verdict
+				payload.Result = nil
+				if verdict == domain.VerdictReject {
+					payload.Rejects = []domain.OrderReject{
+						{Code: "funds", Scope: "account", Policy: "funds", Reason: "insufficient", Details: "first"},
+						{Code: "rate", Scope: "account", Policy: "rate", Reason: "too frequent", Details: "second"},
+					}
+				}
+				token, err := fwsigning.BuildEnvelope(fwsigning.Envelope{Approval: payload})
+				if err != nil {
+					t.Fatal(err)
+				}
+				att := attestationFromToken(t, token)
+				att.Alg, att.KeyID = alg, "recorded-key"
+				detail := reproDetail(id, att)
+				// Later account renames, fills and fees must not rewrite the decision.
+				detail.Order.Account, detail.Order.Status, detail.Order.Leaves = "renamed", domain.OrderStatusFilled, "0"
+				detail.Order.CommissionSubtotals = []domain.Commission{{Amount: "1", Currency: "USD"}}
+				detail.DisplayPrice = "150.25"
+				response := toEventReproductionResponseDTO(detail.Events[0], detail, att, payload).ReviewConfirm
+				if response == nil {
+					t.Fatal("missing reviewConfirm facet")
+				}
+				if response.Verdict != string(verdict) ||
+					response.SignedApproval != token || response.KeyID != att.KeyID ||
+					response.Signed != (alg == fwsigning.AlgEd25519) {
+					t.Fatalf("reviewConfirm=%+v", response)
+				}
+				wantReasons := append([]httpx.OrderRejectDTO{}, httpx.ToOrderRejectDTOs(payload.Rejects)...)
+				if !reflect.DeepEqual(response.Reasons, wantReasons) {
+					t.Fatalf("decision reasons=%+v; want %+v", response.Reasons, wantReasons)
+				}
+				raw, err := json.Marshal(response)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decision map[string]any
+				if err := json.Unmarshal(raw, &decision); err != nil {
+					t.Fatal(err)
+				}
+				if len(decision) != 5 || decision["order"] != nil || decision["venueSend"] != nil {
+					t.Fatalf("decision facet=%s; want only the signed decision", raw)
+				}
+			})
+		}
+	}
+}
+
+// TestOrderReproduction_ReviewRealService verifies, through the real service,
+// that a review confirm's events reproduce the live signed decision and a
+// review cancel's event reproduces the cancelled order.
+func TestOrderReproduction_ReviewRealService(t *testing.T) {
+	for _, verdict := range []domain.Verdict{domain.VerdictAccept, domain.VerdictReject} {
+		t.Run(string(verdict), func(t *testing.T) {
+			handler, realm, eng, _ := newRealServiceRouterWithEngine(t)
+			ctx := context.Background()
+			seedRealAccountAndAssets(t, realm, "acc-1")
+			if err := realm.SetSetting(ctx, domain.SettingKeyNoESign, "0"); err != nil {
+				t.Fatal(err)
+			}
+			request := func(method, path, body string, status int) map[string]any {
+				t.Helper()
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body)))
+				if rec.Code != status {
+					t.Fatalf("%s %s status=%d, want %d: %s", method, path, rec.Code, status, rec.Body.String())
+				}
+				return bodyMap(t, rec.Result())
+			}
+			eng.reviews = restReviewMarks()
+			submit := request(http.MethodPost, "/orders/submit?missingAccount=reject",
+				`{"id":"real-repro-review","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"hold"}`, http.StatusCreated)
+			if submit["verdict"] != "review" {
+				t.Fatalf("submit=%v", submit)
+			}
+			id := domain.ExternalID(submit["id"].(string))
+			path := "/orders/" + id.String()
+			eng.reviews = nil
+			if verdict == domain.VerdictReject {
+				eng.rejects = []domain.OrderReject{{Code: "amount_missing", Scope: "order", Policy: "order_validation", Reason: "amount required"}}
+			}
+			confirm := request(http.MethodPost, path+"/review/confirm", "", http.StatusOK)
+			decision := confirm["decision"].(map[string]any)
+			if decision["verdict"] != string(verdict) {
+				t.Fatalf("confirm=%v", confirm)
+			}
+			if verdict == domain.VerdictReject {
+				request(http.MethodPost, path+"/review/cancel", "", http.StatusOK)
+			}
+			detail, err := realm.GetOrder(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := map[domain.OrderEventType]bool{}
+			for _, event := range detail.Events {
+				if event.Attestation == nil || (event.Attestation.RequestType != domain.AttestationRequestReviewConfirm &&
+					event.Attestation.RequestType != domain.AttestationRequestReviewCancel) {
+					continue
+				}
+				seen[event.Type] = true
+				env, err := fwsigning.DecodeEnvelope(event.Attestation.SignedEnvelope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				bundle := request(http.MethodGet, path+"/events/"+event.ExternalID.String()+"/reproduction", "", http.StatusOK)
+				response := bundle["response"].(map[string]any)
+				if event.Attestation.RequestType == domain.AttestationRequestReviewCancel {
+					if env.Approval.Result == nil || env.Approval.Result.OrderStatus != "cancelled" {
+						t.Fatalf("cancel payload result=%+v", env.Approval.Result)
+					}
+					cancel := response["reviewCancel"].(map[string]any)
+					if len(response) != 1 || cancel["order"].(map[string]any)["status"] != "cancelled" ||
+						cancel["signedAttestation"] != event.Attestation.SignedEnvelope {
+						t.Fatalf("cancel reproduction=%v", response)
+					}
+					continue
+				}
+				reproduced := response["reviewConfirm"].(map[string]any)
+				if len(response) != 1 || len(reproduced) != 5 || reproduced["order"] != nil || reproduced["venueSend"] != nil ||
+					reproduced["verdict"] != string(env.Approval.Verdict) || reproduced["keyId"] != event.Attestation.KeyID ||
+					reproduced["signed"] != true || reproduced["signedApproval"] != event.Attestation.SignedEnvelope {
+					t.Fatalf("%s reproduction=%v", event.Type, response)
+				}
+				if event.Type == domain.OrderEventPreTradeAccepted || event.Type == domain.OrderEventPreTradeRejected {
+					if env.Approval.Result != nil || !reflect.DeepEqual(reproduced, decision) {
+						t.Fatalf("decision payload result=%+v reproduction=%v; want %v", env.Approval.Result, reproduced, decision)
+					}
+				}
+			}
+			wantEvents := []domain.OrderEventType{domain.OrderEventPreTradeAccepted, domain.OrderEventCommitted}
+			if verdict == domain.VerdictReject {
+				wantEvents = []domain.OrderEventType{domain.OrderEventPreTradeRejected, domain.OrderEventCancelled}
+			}
+			for _, eventType := range wantEvents {
+				if !seen[eventType] {
+					t.Fatalf("missing reproduced %s event; got %v", eventType, seen)
+				}
+			}
+		})
 	}
 }
 

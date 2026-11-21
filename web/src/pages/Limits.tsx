@@ -31,18 +31,24 @@ import { useSearchParams } from "react-router-dom";
 import type {
   Account,
   Limit,
+  OrderSizeLimitMode,
   PolicyFilter,
   PolicyListFilters,
   SortOrder,
 } from "@/api/types";
-import { useLimitsPage } from "@/api/useLimits";
+import { barrierCount, useLimitsPage } from "@/api/useLimits";
 import { useSpotFundsLimitMode } from "@/api/spotFundsLimitMode";
+import {
+  isOrderSizeLimitMode,
+  ruleModeLabel,
+} from "@/framework/registries/vocabulary";
 import { isInPlacePolicy } from "@/api/spotFundsPnlPolicies";
 import {
   getPolicyCatalogEntry,
   policyCatalogDescription,
   policyLabel,
   scopeLabel,
+  type Policy,
 } from "@/api/vocabulary";
 import {
   EmptyState,
@@ -161,10 +167,18 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function usePolicyCount(policy: Exclude<PolicyFilter, "all">) {
+function usePolicyCount(
+  policy: Exclude<PolicyFilter, "all">,
+  mode?: OrderSizeLimitMode,
+) {
   const filters = useMemo<PolicyListFilters>(
-    () => ({ policy, limit: 1, offset: 0 }),
-    [policy],
+    () => ({
+      policy,
+      ...(mode === undefined ? {} : { mode }),
+      limit: 1,
+      offset: 0,
+    }),
+    [policy, mode],
   );
   return useLimitsPage(filters);
 }
@@ -211,9 +225,22 @@ function policyRowHref(limit: Limit): string {
   return `/policies?${query.toString()}`;
 }
 
-/** The values a row's chips show: the funds limit mode reads as its localized
- *  name, never the wire value; every other kind shows its values as stored. */
+function requireOrderSizeLimitMode(mode: Limit["mode"]): OrderSizeLimitMode {
+  if (!isOrderSizeLimitMode(mode)) {
+    throw new Error("Missing order-size mode");
+  }
+  return mode;
+}
+
+/** The values a row's chips show: order-size and funds limit mode chips read as
+ *  localized names; every other kind shows its values as stored. */
 function chipValues(limit: Limit, t: TFunction): Record<string, string> {
+  if (limit.policy === "order_size_limit") {
+    return {
+      ...limit.values,
+      mode: ruleModeLabel(t, requireOrderSizeLimitMode(limit.mode)),
+    };
+  }
   if (limit.policy !== "spot_funds_limit_mode") {
     return limit.values;
   }
@@ -260,6 +287,7 @@ function DeleteConfirm({
     setError(null);
     try {
       await deleteLimit({
+        mode: target.mode,
         policy: target.policy,
         scope: target.scope,
         account: target.account,
@@ -286,6 +314,15 @@ function DeleteConfirm({
                 policy: target ? policyLabel(tc, target.policy) : "",
                 scope: target ? scopeLabel(tc, target.scope) : "",
                 account: accountFragment,
+                mode:
+                  target?.policy === "order_size_limit"
+                    ? t("delete.modeFragment", {
+                        mode: ruleModeLabel(
+                          t,
+                          requireOrderSizeLimitMode(target.mode),
+                        ),
+                      })
+                    : "",
                 asset: target?.asset
                   ? t("delete.assetFragment", { asset: target.asset })
                   : "",
@@ -431,7 +468,7 @@ function PoliciesTable({
           const readOnly = !showsAccounts && limit.scope === "account_group";
           return (
             <TableRow
-              key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.accountGroup ?? ""}|${limit.asset}`}
+              key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.accountGroup ?? ""}|${limit.asset}|${limit.mode}`}
               className="hover:bg-transparent"
             >
               <TableCell>
@@ -650,7 +687,11 @@ export function Limits() {
   ]);
   const { load, reload } = useLimitsPage(filters);
   const rateCount = usePolicyCount("rate");
-  const orderSizeCount = usePolicyCount("order_size");
+  const orderSizeRejectCount = usePolicyCount("order_size", "reject");
+  const orderSizeReviewCount = usePolicyCount(
+    "order_size",
+    "review_without_hold",
+  );
   const spotFundsPnlBoundsCount = usePolicyCount("spot_funds_pnl_bounds");
   const spotFundsUnrealizedPnlBoundsCount = usePolicyCount(
     "spot_funds_unrealized_pnl_bounds",
@@ -659,12 +700,9 @@ export function Limits() {
     "spot_funds_total_pnl_bounds",
   );
   const policyCounts = useMemo(() => {
-    const next: Record<string, number> = {};
+    const next: Partial<Record<Policy, number>> = {};
     if (rateCount.load.state === "ready") {
       next[POLICY_FILTER_KIND.rate] = rateCount.load.data.total;
-    }
-    if (orderSizeCount.load.state === "ready") {
-      next[POLICY_FILTER_KIND.order_size] = orderSizeCount.load.data.total;
     }
     if (spotFundsPnlBoundsCount.load.state === "ready") {
       next[POLICY_FILTER_KIND.spot_funds_pnl_bounds] =
@@ -680,20 +718,32 @@ export function Limits() {
     }
     return next;
   }, [
-    orderSizeCount.load,
     rateCount.load,
     spotFundsPnlBoundsCount.load,
     spotFundsUnrealizedPnlBoundsCount.load,
     spotFundsTotalPnlBoundsCount.load,
   ]);
+  const orderSizeCounts: Record<OrderSizeLimitMode, number | undefined> = {
+    reject:
+      orderSizeRejectCount.load.state === "ready"
+        ? orderSizeRejectCount.load.data.total
+        : undefined,
+    review_without_hold:
+      orderSizeReviewCount.load.state === "ready"
+        ? orderSizeReviewCount.load.data.total
+        : undefined,
+  };
+
   const reloadPolicyCounts = useCallback(() => {
     rateCount.reload();
-    orderSizeCount.reload();
+    orderSizeRejectCount.reload();
+    orderSizeReviewCount.reload();
     spotFundsPnlBoundsCount.reload();
     spotFundsUnrealizedPnlBoundsCount.reload();
     spotFundsTotalPnlBoundsCount.reload();
   }, [
-    orderSizeCount,
+    orderSizeRejectCount,
+    orderSizeReviewCount,
     rateCount,
     spotFundsPnlBoundsCount,
     spotFundsUnrealizedPnlBoundsCount,
@@ -767,6 +817,10 @@ export function Limits() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Limit | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Limit | null>(null);
+  const deletePolicyCount =
+    deleteTarget === null
+      ? undefined
+      : barrierCount(deleteTarget, policyCounts, orderSizeCounts);
 
   const rows = load.state === "ready" ? load.data.items : [];
   const total = load.state === "ready" ? load.data.total : 0;
@@ -1062,6 +1116,7 @@ export function Limits() {
         accountSuggestions={accountSuggestions.map((account) => account.code)}
         accountGroupSuggestions={accountGroupSuggestions}
         policyCounts={policyCounts}
+        orderSizeCounts={orderSizeCounts}
         onOpenChange={setDialogOpen}
         onSaved={reloadLimits}
       />
@@ -1071,8 +1126,8 @@ export function Limits() {
         requiresEngineRebuild={
           deleteTarget !== null &&
           !isInPlacePolicy(deleteTarget.policy) &&
-          policyCounts[deleteTarget.policy] !== undefined &&
-          policyCounts[deleteTarget.policy] <= 1
+          deletePolicyCount !== undefined &&
+          deletePolicyCount <= 1
         }
         onOpenChange={(next) => {
           if (!next) {

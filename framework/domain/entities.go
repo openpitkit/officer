@@ -813,6 +813,7 @@ const (
 	OrderStatusFilled          OrderStatus = "filled"
 	OrderStatusPartiallyFilled OrderStatus = "partially_filled"
 	OrderStatusCancelled       OrderStatus = "cancelled"
+	OrderStatusAwaitingReview  OrderStatus = "awaiting_review"
 )
 
 // OrderStatusSupported reports whether status is one of the recognized order
@@ -827,7 +828,8 @@ func OrderStatusSupported(status OrderStatus) bool {
 		OrderStatusRolledBack,
 		OrderStatusFilled,
 		OrderStatusPartiallyFilled,
-		OrderStatusCancelled:
+		OrderStatusCancelled,
+		OrderStatusAwaitingReview:
 		return true
 	default:
 		return false
@@ -851,6 +853,12 @@ func OrderStatusesEligibleForFill() []OrderStatus {
 	}
 }
 
+// OrderStatusesActive returns the working set for activity checks.
+// OrderStatusesEligibleForFill remains the fill guard.
+func OrderStatusesActive() []OrderStatus {
+	return append(OrderStatusesEligibleForFill(), OrderStatusAwaitingReview)
+}
+
 // ExecutionReportStatusChangeEvent maps an execution-report target status to a
 // lifecycle event. Fill statuses have no entry here: settlement emits a fill or
 // a dedicated fee-only commission event instead. The bool is false for an
@@ -869,6 +877,8 @@ func ExecutionReportStatusChangeEvent(status OrderStatus) (OrderEventType, bool)
 		return OrderEventRolledBack, true
 	case OrderStatusCancelled:
 		return OrderEventCancelled, true
+	case OrderStatusAwaitingReview:
+		return "", false
 	default:
 		return "", false
 	}
@@ -949,6 +959,27 @@ func executionReportCarriesEnginePayload(in ExecutionReportInput) bool {
 	return in.FillQuantity != "" || in.Commission != nil
 }
 
+// ValidateExecutionReportStatus requires a supported execution-report target
+// status and refuses awaiting_review, which only the review workflow can set.
+func ValidateExecutionReportStatus(status OrderStatus) error {
+	if status == "" {
+		return NewValidationError(
+			"/status", "required", "status is required",
+		)
+	}
+	if !OrderStatusSupported(status) {
+		return NewValidationError(
+			"/status", "format", fmt.Sprintf("invalid status %q", status),
+		)
+	}
+	if status == OrderStatusAwaitingReview {
+		return NewValidationError(
+			"/status", "format", "execution reports cannot target awaiting_review",
+		)
+	}
+	return nil
+}
+
 // ExecutionReportRequiresEngine validates an execution report's routing shape
 // and reports whether it needs engine settlement. Every fill requires caller
 // leaves and targets a fill status. Workflow and terminal no-fill reports may
@@ -958,15 +989,8 @@ func executionReportCarriesEnginePayload(in ExecutionReportInput) bool {
 // settlement-lock fields.
 func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 	status := in.OrderStatus
-	if status == "" {
-		return false, NewValidationError(
-			"/status", "required", "status is required",
-		)
-	}
-	if !OrderStatusSupported(status) {
-		return false, NewValidationError(
-			"/status", "format", fmt.Sprintf("invalid status %q", status),
-		)
+	if err := ValidateExecutionReportStatus(status); err != nil {
+		return false, err
 	}
 	hasQuantity := in.FillQuantity != ""
 	hasPrice := in.FillPrice != ""
@@ -1086,6 +1110,8 @@ func ParseOpenQuantity(value string) (decimal.Decimal, error) {
 // OrderStatusTerminal reports whether the status is a final lifecycle state.
 func OrderStatusTerminal(status OrderStatus) bool {
 	switch status {
+	case OrderStatusAwaitingReview:
+		return false
 	case OrderStatusRejected,
 		OrderStatusRolledBack,
 		OrderStatusFilled,
@@ -1096,9 +1122,31 @@ func OrderStatusTerminal(status OrderStatus) bool {
 	}
 }
 
-// RequireOrderModifiable returns ErrTerminalOrder when the order's status is
-// terminal and the caller did not set force.
+// RequireOrderNotAwaitingReview returns ErrConflict when the order is awaiting
+// review, and nil for every other status.
+func RequireOrderNotAwaitingReview(status OrderStatus) error {
+	if status == OrderStatusAwaitingReview {
+		return fmt.Errorf("order is awaiting review: %w", ErrConflict)
+	}
+	return nil
+}
+
+// RequireOrderAwaitingReview refuses review decisions on every other status,
+// including terminal orders, with ErrConflict.
+func RequireOrderAwaitingReview(status OrderStatus) error {
+	if status != OrderStatusAwaitingReview {
+		return fmt.Errorf("order is not awaiting review: %w", ErrConflict)
+	}
+	return nil
+}
+
+// RequireOrderModifiable returns ErrConflict when the order is awaiting review,
+// regardless of force. It returns ErrTerminalOrder for a terminal status unless
+// the caller set force.
 func RequireOrderModifiable(status OrderStatus, force bool) error {
+	if err := RequireOrderNotAwaitingReview(status); err != nil {
+		return err
+	}
 	if !force && OrderStatusTerminal(status) {
 		return ErrTerminalOrder
 	}
@@ -1182,6 +1230,12 @@ const (
 	AttestationRequestConfirm AttestationRequestType = "confirm"
 	// AttestationRequestCancel is an explicit order cancellation.
 	AttestationRequestCancel AttestationRequestType = "cancel"
+	// AttestationRequestReviewConfirm is an operator confirmation of a waiting
+	// order, carrying the accept or reject verdict of a new pre-trade run.
+	AttestationRequestReviewConfirm AttestationRequestType = "review_confirm"
+	// AttestationRequestReviewCancel is an operator cancellation of a waiting
+	// order.
+	AttestationRequestReviewCancel AttestationRequestType = "review_cancel"
 )
 
 // EventAttestation is the persisted signed attestation over one trading request
@@ -1211,6 +1265,7 @@ type OrderEventType string
 const (
 	OrderEventSubmitted        OrderEventType = "submitted"
 	OrderEventPreTradeAccepted OrderEventType = "pre_trade_accepted"
+	OrderEventPreTradeReview   OrderEventType = "pre_trade_review"
 	OrderEventPreTradeRejected OrderEventType = "pre_trade_rejected"
 	OrderEventCommitted        OrderEventType = "committed"
 	OrderEventRolledBack       OrderEventType = "rolled_back"
@@ -1326,6 +1381,23 @@ type OrderDetail struct {
 	Trades       []Trade
 	// Venue is nil until the order is linked to a trading venue.
 	Venue *VenueOrder
+	// Review is non-nil exactly when the order is awaiting_review.
+	Review *OrderReview
+}
+
+// Submit modes identify the submission path re-run when an order review is confirmed.
+const (
+	SubmitModeHold      = "hold"
+	SubmitModeImmediate = "immediate"
+)
+
+// OrderReview holds the submit settings for an order waiting for operator review.
+type OrderReview struct {
+	// Mode is the submit mode the confirmation re-runs with: "hold" or "immediate".
+	Mode string
+	// Destination is the trading destination for send-paper/send-live orders;
+	// nil for a gateway order.
+	Destination *TradingDestination
 }
 
 // Signed reports the order-level rollup: the order carries at least one
@@ -1351,6 +1423,30 @@ type OrderReject struct {
 	Policy  string `json:"policy,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Details string `json:"details,omitempty"`
+}
+
+// Verdict is the engine's pre-trade decision.
+type Verdict string
+
+const (
+	VerdictAccept Verdict = "accept"
+	VerdictReject Verdict = "reject"
+	VerdictReview Verdict = "review"
+)
+
+// RuleMode determines whether a rule rejects or requests operator review.
+type RuleMode string
+
+const (
+	RuleModeReject            RuleMode = "reject"
+	RuleModeReviewWithHold    RuleMode = "review_with_hold"
+	RuleModeReviewWithoutHold RuleMode = "review_without_hold"
+)
+
+// ReviewMark is an engine reason requiring an operator's decision.
+type ReviewMark struct {
+	OrderReject
+	Mode RuleMode `json:"mode"`
 }
 
 // ExecutionReportInput records either a workflow transition or a post-trade
@@ -1486,6 +1582,10 @@ type BalanceSettlement struct {
 // crash can never leave a half-settled order. It is a plain data carrier: no
 // methods, no engine/store imports.
 type OrderSettlement struct {
+	// Review inserts the order_review row in the same transaction as the status.
+	Review *OrderReview
+	// ClearReview deletes the order_review row in the same transaction as the status.
+	ClearReview bool
 	// Trade is the optional trade row to create in the same tx; nil to skip.
 	Trade *Trade
 	// ReportID identifies the execution-report request that produced this
@@ -1641,9 +1741,9 @@ type ApprovalPayload struct {
 	AccountGroupID string `json:"accountGroupId,omitempty"`
 
 	// Verdict / estimate.
-	Verdict       string `json:"verdict"` // "accept" | "reject"
-	PolicySummary string `json:"policySummary"`
-	EstimatePrice string `json:"estimatePrice"` // decimal string = engine lock price
+	Verdict       Verdict `json:"verdict"` // "accept" | "reject" | "review"
+	PolicySummary string  `json:"policySummary"`
+	EstimatePrice string  `json:"estimatePrice"` // decimal string = engine lock price
 
 	// Lifecycle. Nonce is fresh per issuance so no two issued payloads are
 	// byte-identical; nothing consumes it on verification.
@@ -1678,4 +1778,6 @@ type ApprovalPayload struct {
 	// Rejects is the complete ordered engine reject list for a rejected submit.
 	// The flat Reject* fields above mirror its first entry for legacy readers.
 	Rejects []OrderReject `json:"rejects,omitempty"`
+	// Reviews is the ordered engine mark list, present only for review.
+	Reviews []ReviewMark `json:"reviews,omitempty"`
 }

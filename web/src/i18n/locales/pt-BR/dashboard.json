@@ -45,6 +45,8 @@
     "title": "Auditoria recente",
     "noEntries": "Nenhuma entrada de auditoria",
     "action": {
+      "confirmOrderReview": "Revisão da ordem confirmada",
+      "cancelOrderReview": "Revisão da ordem cancelada",
       "createAccount": "Criação de conta",
       "blockAccount": "Bloqueio de conta",
       "unblockAccount": "Desbloqueio de conta",

@@ -18,6 +18,7 @@
 package mcptools
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -25,8 +26,53 @@ import (
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
+	frameworkmcp "go.openpit.dev/officer/framework/mcp"
+	"go.openpit.dev/officer/framework/node"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+type orderSizeModeSource struct {
+	frameworkmcp.Source
+	limits  []domain.LimitOrderSize
+	written domain.LimitOrderSize
+	write   domain.LimitWrite
+}
+
+func (s *orderSizeModeSource) PutOrderSizeLimit(
+	_ context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, _ domain.MissingAccountPolicy,
+) error {
+	s.written, s.write = limit, write
+	return nil
+}
+
+func (s *orderSizeModeSource) ListLimits(context.Context, domain.AccountID) (node.AccountLimits, error) {
+	return node.AccountLimits{OrderSizeLimits: s.limits}, nil
+}
+
+func TestOrderSizeModeWriteAnswer(t *testing.T) {
+	for _, write := range []domain.LimitWrite{domain.LimitWriteAdd, domain.LimitWriteChange} {
+		t.Run(string(write), func(t *testing.T) {
+			src := &orderSizeModeSource{limits: []domain.LimitOrderSize{
+				{Mode: domain.RuleModeReviewWithoutHold, Scope: domain.ScopeBroker, MaxQuantity: "90"},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "11"},
+			}}
+			handler := addLimitHandler(src)
+			if write == domain.LimitWriteChange {
+				handler = updateLimitHandler(src)
+			}
+			_, out, err := handler(context.Background(), nil, limitWriteInput{Policy: domain.PolicyOrderSizeLimit, Scope: "broker", MaxQuantity: "10"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if src.written.Mode != domain.RuleModeReject || src.write != write {
+				t.Fatalf("MCP write = %+v / %s", src.written, src.write)
+			}
+			if out.OrderSizeLimit == nil || out.OrderSizeLimit.Mode != "reject" || out.OrderSizeLimit.MaxQuantity != "11" {
+				t.Fatalf("MCP write answered with neighbour mode: %+v", out.OrderSizeLimit)
+			}
+		})
+	}
+}
 
 func schemaFieldName(field reflect.StructField) (string, bool) {
 	if !field.IsExported() {
@@ -80,7 +126,10 @@ func TestLimitWriteInputCarriesLimitBodies(t *testing.T) {
 		),
 	}
 	declared := jsonFields(reflect.TypeFor[limitWriteInput]())
+	// MCP writes only reject order-size barriers; mode is a foreign field.
+	delete(bodies[domain.PolicyOrderSizeLimit], "mode")
 	every := map[string]reflect.Type{}
+	every["mode"] = reflect.TypeFor[string]()
 	for policy, body := range bodies {
 		for name, typ := range body {
 			if got, ok := declared[name]; !ok || got != typ {

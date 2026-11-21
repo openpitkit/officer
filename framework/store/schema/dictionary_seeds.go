@@ -65,6 +65,7 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{7, string(domain.OrderEventFill)},
 			{8, string(domain.OrderEventCancelled)},
 			{9, string(domain.OrderEventCommission)},
+			{10, string(domain.OrderEventPreTradeReview)},
 		}},
 		{OrderSideTable, []EnumCodeSeed{
 			{1, string(domain.OrderSideBuy)},
@@ -83,6 +84,7 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{6, string(domain.OrderStatusFilled)},
 			{7, string(domain.OrderStatusPartiallyFilled)},
 			{8, string(domain.OrderStatusCancelled)},
+			{9, string(domain.OrderStatusAwaitingReview)},
 		}},
 		{AdjustmentStatusTable, []EnumCodeSeed{
 			{1, string(domain.AdjustmentStatusAccepted)},
@@ -151,6 +153,8 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{55, string(domain.AuditActionAlertDelivery)},
 			{56, string(domain.AuditActionResolveAlert)},
 			{57, string(domain.AuditActionResetAccountPnl)},
+			{58, string(domain.AuditActionConfirmOrderReview)},
+			{59, string(domain.AuditActionCancelOrderReview)},
 		}},
 		{AttestationAlgTable, []EnumCodeSeed{
 			{1, "ed25519"},
@@ -161,6 +165,8 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{2, string(domain.AttestationRequestExecutionReport)},
 			{3, string(domain.AttestationRequestConfirm)},
 			{4, string(domain.AttestationRequestCancel)},
+			{5, string(domain.AttestationRequestReviewConfirm)},
+			{6, string(domain.AttestationRequestReviewCancel)},
 		}},
 		{AttestationModeTable, []EnumCodeSeed{
 			{1, "immediate"},

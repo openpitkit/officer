@@ -205,7 +205,7 @@ func (f *fakeSource) SetMarketDataInstrumentEnabled(
 func (f *fakeSource) SubmitOrder(
 	_ context.Context, _ domain.Order, _ string, _ domain.MissingAccountPolicy,
 ) (frameworkmcp.SubmitOrderResult, error) {
-	return frameworkmcp.SubmitOrderResult{}, nil
+	return frameworkmcp.SubmitOrderResult{Verdict: domain.VerdictAccept}, nil
 }
 
 func (f *fakeSource) SubmitDropCopyOrder(
@@ -645,6 +645,7 @@ func TestGetLimitsHappyPath(t *testing.T) {
 		limits: node.AccountLimits{
 			OrderSizeLimits: []domain.LimitOrderSize{
 				{
+					Mode:        domain.RuleModeReject,
 					Scope:       domain.ScopeAccountSettlementAsset,
 					Account:     "acc-1",
 					Asset:       "USD",

@@ -1434,6 +1434,7 @@ describe("trading client", () => {
     expect(await api().sendPaperOrder(paperBody, signal)).toEqual({
       ...approval,
       reasons: [],
+      reviews: [],
       venueSend,
     });
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -1472,6 +1473,7 @@ describe("trading client", () => {
     expect(await api().sendLiveOrder(paperBody)).toEqual({
       ...approval,
       reasons: [],
+      reviews: [],
       venueSend,
     });
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -2357,6 +2359,204 @@ describe("business CSV client", () => {
 });
 
 describe("limits client", () => {
+  const orderSizeBarrier = {
+    scope: "broker",
+    account: "",
+    asset: "",
+    maxQuantity: "10",
+    maxNotional: "",
+  };
+
+  it.each(["addLimit", "putLimit"] as const)(
+    "refuses an order-size write with null mode on %s without fetching",
+    async (method) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          orderSizeLimit: { ...orderSizeBarrier, mode: "reject" },
+        }),
+      );
+      const result = api()[method](
+        {
+          policy: "order_size_limit",
+          mode: null,
+          scope: "broker",
+          account: "",
+          asset: "",
+          values: { max_quantity: "10" },
+        },
+        "reject",
+      );
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "validation",
+        message: expect.stringContaining("mode"),
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "unknown", null, "review_with_hold"])(
+    "rejects invalid account order-size mode %s",
+    async (mode) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          account: { code: "desk-alpha" },
+          limits: {
+            rateLimits: [],
+            orderSizeLimits: [{ ...orderSizeBarrier, mode }],
+            positionLimits: [],
+            spotFundsPnlBoundsLimits: [],
+            spotFundsUnrealizedPnlBoundsLimits: [],
+            spotFundsTotalPnlBoundsLimits: [],
+          },
+        }),
+      );
+      const result = api().fetchAccountState("desk-alpha");
+      await expect(result).rejects.toThrow(ApiError);
+      await expect(result).rejects.toThrow(/mode/);
+    },
+  );
+
+  it.each([undefined, "unknown", null, "review_with_hold"])(
+    "rejects invalid PUT order-size mode %s",
+    async (mode) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({ orderSizeLimit: { ...orderSizeBarrier, mode } }),
+      );
+      const result = api().putLimit(
+        {
+          policy: "order_size_limit",
+          mode: "reject",
+          scope: "broker",
+          account: "",
+          asset: "",
+          values: { max_quantity: "10" },
+        },
+        "reject",
+      );
+      await expect(result).rejects.toThrow(ApiError);
+      await expect(result).rejects.toThrow(/mode/);
+    },
+  );
+
+  it.each([
+    ["order_size_limit", undefined],
+    ["order_size_limit", "unknown"],
+    ["order_size_limit", null],
+    ["rate_limit", "reject"],
+    ["spot_funds_limit_mode", "review_without_hold"],
+    ["position_limit", undefined],
+  ])("rejects policy %s with invalid top-level mode %s", async (kind, mode) => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        policies: [
+          {
+            kind,
+            mode,
+            scope: "broker",
+            account: "",
+            asset: "",
+            values: {},
+          },
+        ],
+        total: 1,
+      }),
+    );
+    const result = api().fetchPoliciesPage();
+    await expect(result).rejects.toThrow(ApiError);
+    await expect(result).rejects.toThrow(/mode/);
+  });
+
+  it.each(["reject", "review_without_hold"] as const)(
+    "carries mode %s through account, PUT, POST and policy responses and requests",
+    async (mode) => {
+      const row = { ...orderSizeBarrier, mode };
+      const expected = {
+        policy: "order_size_limit",
+        mode,
+        scope: "broker",
+        account: "",
+        asset: "",
+        values: { max_quantity: "10", max_notional: "" },
+      };
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          account: { code: "desk-alpha" },
+          limits: {
+            rateLimits: [],
+            orderSizeLimits: [row],
+            positionLimits: [],
+            spotFundsPnlBoundsLimits: [],
+            spotFundsUnrealizedPnlBoundsLimits: [],
+            spotFundsTotalPnlBoundsLimits: [],
+          },
+        }),
+      );
+      expect((await api().fetchAccountState("desk-alpha")).limits).toEqual([
+        expected,
+      ]);
+      for (const method of ["putLimit", "addLimit"] as const) {
+        vi.mocked(fetch).mockResolvedValueOnce(
+          jsonResponse({ orderSizeLimit: row }),
+        );
+        expect(await api()[method](expected, "reject")).toEqual(expected);
+        const request = vi.mocked(fetch).mock.lastCall![1] as RequestInit;
+        expect(request.method).toBe(method === "putLimit" ? "PUT" : "POST");
+        expect(JSON.parse(String(request.body))).toEqual(row);
+      }
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          policies: [
+            {
+              kind: "order_size_limit",
+              mode,
+              scope: "broker",
+              account: "",
+              accountGroup: "",
+              asset: "",
+              values: { orderSize: { maxQuantity: "10", maxNotional: "" } },
+            },
+          ],
+          total: 1,
+        }),
+      );
+      expect(
+        (await api().fetchPoliciesPage({ policy: "order_size", mode })).items,
+      ).toEqual([{ ...expected, accountGroup: "" }]);
+      const url = new URL(
+        String(vi.mocked(fetch).mock.lastCall![0]),
+        "http://test",
+      );
+      expect(url.searchParams.get("mode")).toBe(mode);
+      expect(url.searchParams.get("policy")).toBe("order_size");
+    },
+  );
+
+  it("deletes the review barrier with its mode and another policy without mode", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+    const target = {
+      policy: "order_size_limit",
+      mode: "review_without_hold" as const,
+      scope: "broker",
+      account: "",
+      asset: "",
+    };
+    await api().deleteLimit(target);
+    let url = new URL(
+      String(vi.mocked(fetch).mock.lastCall![0]),
+      "http://test",
+    );
+    expect(url.searchParams.get("mode")).toBe("review_without_hold");
+    await api().deleteLimit({ ...target, policy: "rate_limit", mode: null });
+    url = new URL(String(vi.mocked(fetch).mock.lastCall![0]), "http://test");
+    expect(url.searchParams.has("mode")).toBe(false);
+    const calls = vi.mocked(fetch).mock.calls.length;
+    await expect(api().deleteLimit({ ...target, mode: null })).rejects.toThrow(
+      /mode/,
+    );
+    expect(fetch).toHaveBeenCalledTimes(calls);
+  });
+
   it.each([
     ["positionLimit", {}, "Position limit is missing from the API response"],
     [
@@ -2378,6 +2578,7 @@ describe("limits client", () => {
       const result = putLimit(
         {
           policy: "position_limit",
+          mode: null,
           scope: "account_asset",
           account: "desk-alpha",
           asset: "AAPL",
@@ -2405,6 +2606,7 @@ describe("limits client", () => {
           policies: [
             {
               kind: "position_limit",
+              mode: null,
               scope: "account_asset",
               account: "desk-alpha",
               asset: "AAPL",
@@ -2454,6 +2656,7 @@ describe("limits client", () => {
     const limit = await putLimit(
       {
         policy: "position_limit",
+        mode: null,
         scope: "account_asset",
         account: "desk-alpha",
         asset: "AAPL",
@@ -2476,6 +2679,7 @@ describe("limits client", () => {
     );
     expect(limit).toEqual({
       policy: "position_limit",
+      mode: null,
       scope: "account_asset",
       account: "desk-alpha",
       asset: "AAPL",
@@ -2489,6 +2693,7 @@ describe("limits client", () => {
         policies: [
           {
             kind: "position_limit",
+            mode: null,
             scope: "account_asset",
             account: "desk-alpha",
             asset: "AAPL",
@@ -2516,6 +2721,7 @@ describe("limits client", () => {
     expect(page.items).toEqual([
       {
         policy: "position_limit",
+        mode: null,
         scope: "account_asset",
         account: "desk-alpha",
         accountGroup: "",
@@ -2546,6 +2752,7 @@ describe("limits client", () => {
     expect(state.limits).toEqual([
       {
         policy: "position_limit",
+        mode: null,
         scope: "account_asset",
         account: "desk-alpha",
         asset: "AAPL",
@@ -2559,6 +2766,7 @@ describe("limits client", () => {
     const { deleteLimit } = api();
     await deleteLimit({
       policy: "position_limit",
+      mode: null,
       scope: "account_asset",
       account: "desk-alpha",
       asset: "AAPL",
@@ -2607,6 +2815,7 @@ describe("limits client", () => {
         policies: [
           {
             kind: "rate_limit",
+            mode: null,
             scope: "account",
             account: "desk-alpha",
             asset: "",
@@ -2614,6 +2823,7 @@ describe("limits client", () => {
           },
           {
             kind: "order_size_limit",
+            mode: "reject",
             scope: "account_underlying_asset",
             account: "desk-alpha",
             asset: "AAPL",
@@ -2621,6 +2831,7 @@ describe("limits client", () => {
           },
           {
             kind: "spot_funds_pnl_bounds_kill_switch",
+            mode: null,
             scope: "account_group",
             account: "",
             accountGroup: "desk-alpha",
@@ -2635,6 +2846,7 @@ describe("limits client", () => {
           },
           {
             kind: "spot_funds_unrealized_pnl_bounds_kill_switch",
+            mode: null,
             scope: "account",
             account: "desk-alpha",
             asset: "",
@@ -2648,6 +2860,7 @@ describe("limits client", () => {
           },
           {
             kind: "spot_funds_total_pnl_bounds_kill_switch",
+            mode: null,
             scope: "global",
             account: "",
             asset: "",
@@ -2674,6 +2887,7 @@ describe("limits client", () => {
     expect(limits).toEqual([
       {
         policy: "rate_limit",
+        mode: null,
         scope: "account",
         account: "desk-alpha",
         accountGroup: "",
@@ -2682,6 +2896,7 @@ describe("limits client", () => {
       },
       {
         policy: "order_size_limit",
+        mode: "reject",
         scope: "account_underlying_asset",
         account: "desk-alpha",
         accountGroup: "",
@@ -2690,6 +2905,7 @@ describe("limits client", () => {
       },
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "account_group",
         account: "",
         accountGroup: "desk-alpha",
@@ -2698,6 +2914,7 @@ describe("limits client", () => {
       },
       {
         policy: "spot_funds_unrealized_pnl_bounds_kill_switch",
+        mode: null,
         scope: "account",
         account: "desk-alpha",
         accountGroup: "",
@@ -2706,6 +2923,7 @@ describe("limits client", () => {
       },
       {
         policy: "spot_funds_total_pnl_bounds_kill_switch",
+        mode: null,
         scope: "global",
         account: "",
         accountGroup: "",
@@ -2735,6 +2953,7 @@ describe("limits client", () => {
       const limit = await api()[operation](
         {
           policy: "rate_limit",
+          mode: null,
           scope: "account",
           account: "desk-alpha",
           asset: "",
@@ -2749,6 +2968,7 @@ describe("limits client", () => {
       );
       expect(limit).toEqual({
         policy: "rate_limit",
+        mode: null,
         scope: "account",
         account: "desk-alpha",
         asset: "",
@@ -2779,6 +2999,7 @@ describe("limits client", () => {
       client.addLimit(
         {
           policy: "rate_limit",
+          mode: null,
           scope: "account",
           account: "desk-alpha",
           asset: "",
@@ -2815,6 +3036,7 @@ describe("limits client", () => {
     await putLimit(
       {
         policy: "rate_limit",
+        mode: null,
         scope: "account",
         account: "desk-alpha",
         asset: "",
@@ -2833,6 +3055,7 @@ describe("limits client", () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         orderSizeLimit: {
+          mode: "reject",
           scope: "underlying_asset",
           account: "",
           asset: "AAPL",
@@ -2846,6 +3069,7 @@ describe("limits client", () => {
     await putLimit(
       {
         policy: "order_size_limit",
+        mode: "reject",
         scope: "underlying_asset",
         account: "",
         asset: "AAPL",
@@ -2861,6 +3085,7 @@ describe("limits client", () => {
     const request = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
     expect(JSON.parse(String(request.body))).toEqual({
       scope: "underlying_asset",
+      mode: "reject",
       account: "",
       asset: "AAPL",
       maxQuantity: "10",
@@ -2886,6 +3111,7 @@ describe("limits client", () => {
     await putLimit(
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "account_group",
         account: "",
         accountGroup: "desk-alpha",
@@ -2908,6 +3134,7 @@ describe("limits client", () => {
       putLimit(
         {
           policy: "rate_limit",
+          mode: null,
           scope: "account",
           account: "desk-alpha",
           asset: "",
@@ -2938,6 +3165,7 @@ describe("limits client", () => {
     const limit = await putLimit(
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "account",
         account: "desk-alpha",
         asset: "",
@@ -3008,6 +3236,7 @@ describe("limits client", () => {
       const limit = await putLimit(
         {
           policy,
+          mode: null,
           scope: "account",
           account: "desk-alpha",
           asset: "",
@@ -3036,6 +3265,7 @@ describe("limits client", () => {
     const { deleteLimit } = api();
     await deleteLimit({
       policy: "spot_funds_pnl_bounds_kill_switch",
+      mode: null,
       scope: "account_group",
       account: "",
       accountGroup: "desk-alpha",
@@ -3057,6 +3287,7 @@ describe("limits client", () => {
   describe("funds limit mode policy", () => {
     const modePolicy = {
       kind: "spot_funds_limit_mode",
+      mode: null,
       scope: "global",
       account: "",
       accountGroup: "",
@@ -3092,6 +3323,7 @@ describe("limits client", () => {
       await expect(fetchLimits()).resolves.toEqual([
         {
           policy: "spot_funds_limit_mode",
+          mode: null,
           scope: "global",
           account: "",
           accountGroup: "",
@@ -3135,6 +3367,7 @@ describe("limits client", () => {
         api().addLimit(
           {
             policy: "spot_funds_limit_mode",
+            mode: null,
             scope: "global",
             account: "",
             asset: "",
@@ -3159,6 +3392,7 @@ describe("limits client", () => {
       const limit = await putLimit(
         {
           policy: "spot_funds_limit_mode",
+          mode: null,
           scope: "global",
           account: "",
           asset: "",
@@ -3179,6 +3413,7 @@ describe("limits client", () => {
       });
       expect(limit).toEqual({
         policy: "spot_funds_limit_mode",
+        mode: null,
         scope: "global",
         account: "",
         accountGroup: "",
@@ -3197,6 +3432,7 @@ describe("limits client", () => {
         putLimit(
           {
             policy: "spot_funds_limit_mode",
+            mode: null,
             scope: "global",
             account: "",
             asset: "",
@@ -3235,6 +3471,7 @@ describe("limits client", () => {
         putLimit(
           {
             policy: "spot_funds_limit_mode",
+            mode: null,
             scope: "global",
             account: "",
             asset: "",
@@ -3251,6 +3488,7 @@ describe("limits client", () => {
       const { deleteLimit } = api();
       await deleteLimit({
         policy: "spot_funds_limit_mode",
+        mode: null,
         scope: "global",
         account: "",
         accountGroup: "",
@@ -5545,60 +5783,64 @@ describe("Orders createOrder submit lifecycle", () => {
     );
   });
 
-  it("normalizes submitResponse verdict and reasons", async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            order: { id: "ord_rejected_0000001" },
-            submitResponse: {
-              signedApproval: "reject-envelope",
-              keyId: "key-1",
-              id: "ord_rejected_0000001",
-              verdict: "reject",
-              reasons: [
-                {
-                  code: "max_order_size",
-                  scope: "order",
-                  policy: "order-size",
-                  reason: "order too large",
-                  details: "qty=100",
-                },
-              ],
-            },
-          }),
-          { status: 201, headers: { "Content-Type": "application/json" } },
-        ),
-      )
-      .mockResolvedValueOnce(orderResponse("ord_rejected_0000001"));
-    const { createOrder } = api();
-    const result = await createOrder(
-      {
-        account: "desk-alpha",
-        baseAsset: "AAPL",
-        quoteAsset: "USD",
-        side: "buy",
-        amountKind: "quantity",
-        amountValue: "100",
-      },
-      "reject",
-    );
-    expect(result.approval).toEqual({
-      signedApproval: "reject-envelope",
-      keyId: "key-1",
-      id: "ord_rejected_0000001",
-      verdict: "reject",
-      reasons: [
+  it.each(["reject", "review"])(
+    "normalizes submitResponse %s verdict and reasons",
+    async (verdict) => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              order: { id: "ord_rejected_0000001" },
+              submitResponse: {
+                signedApproval: "reject-envelope",
+                keyId: "key-1",
+                id: "ord_rejected_0000001",
+                verdict,
+                reasons: [
+                  {
+                    code: "max_order_size",
+                    scope: "order",
+                    policy: "order-size",
+                    reason: "order too large",
+                    details: "qty=100",
+                  },
+                ],
+              },
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(orderResponse("ord_rejected_0000001"));
+      const { createOrder } = api();
+      const result = await createOrder(
         {
-          code: "max_order_size",
-          scope: "order",
-          policy: "order-size",
-          reason: "order too large",
-          details: "qty=100",
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "100",
         },
-      ],
-    });
-  });
+        "reject",
+      );
+      expect(result.approval).toEqual({
+        signedApproval: "reject-envelope",
+        reviews: [],
+        keyId: "key-1",
+        id: "ord_rejected_0000001",
+        verdict,
+        reasons: [
+          {
+            code: "max_order_size",
+            scope: "order",
+            policy: "order-size",
+            reason: "order too large",
+            details: "qty=100",
+          },
+        ],
+      });
+    },
+  );
 
   it("keeps an empty submitResponse verdict", async () => {
     vi.mocked(fetch)
@@ -5919,6 +6161,360 @@ describe("Orders confirmOrder and cancelOrder", () => {
     expect(result.attestationKeyId).toBe("key-9");
     expect(result.signed).toBe(true);
   });
+});
+
+describe("Order review client", () => {
+  const order = {
+    id: "order/1",
+    leavesQuantity: "10",
+    status: "awaiting_review",
+  };
+  const mark = {
+    code: "policy_reject",
+    scope: "account",
+    policy: "order_size",
+    reason: "Size needs review",
+    details: "100 > 50",
+    mode: "review_without_hold",
+  };
+  const review = {
+    marks: [mark],
+    lastConfirm: {
+      verdict: "reject",
+      reasons: [{ ...mark, mode: undefined }],
+      at: "2026-11-19T10:00:00Z",
+    },
+    destination: {
+      connection: "paper-1",
+      venueAccount: "PA-1",
+      route: { timeInForce: "day" },
+    },
+  };
+  const venueOrder = {
+    connection: "paper-1",
+    venueAccount: "PA-1",
+    route: {},
+    clientOrderId: "order/1",
+    venueOrderId: "venue-1",
+    sendAttempted: true,
+    createdAt: "2026-11-19T10:01:00Z",
+  };
+
+  const input = {
+    account: "desk-alpha",
+    baseAsset: "AAPL",
+    quoteAsset: "USD",
+    side: "buy" as const,
+    amountKind: "quantity" as const,
+    amountValue: "10",
+  };
+
+  it.each([undefined, [mark]])(
+    "normalizes check reviews %j",
+    async (reviews) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          check: {
+            passed: true,
+            rejects: [],
+            ...(reviews === undefined ? {} : { reviews }),
+          },
+        }),
+      );
+      expect((await api().checkOrder(input)).reviews).toEqual(reviews ?? []);
+    },
+  );
+
+  it.each([
+    null,
+    {},
+    "marks",
+    [{ ...mark, mode: "unknown" }],
+    [{ ...mark, mode: "reject" }],
+  ])("refuses invalid check reviews %j", async (reviews) => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ check: { passed: true, reviews } }),
+    );
+    await expect(api().checkOrder(input)).rejects.toMatchObject({
+      code: "internal",
+    });
+  });
+
+  it("preserves review marks on a submit", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ id: order.id, verdict: "review", reviews: [mark] }),
+    );
+    const result = await api().submitOrder(
+      { ...input, mode: "hold" },
+      "reject",
+    );
+    expect(result.approval).toMatchObject({
+      verdict: "review",
+      reviews: [mark],
+    });
+  });
+
+  it.each(["paper", "live"] as const)(
+    "preserves review marks on a manual %s send",
+    async (mode) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({ id: order.id, verdict: "review", reviews: [mark] }),
+      );
+      const send =
+        mode === "paper" ? api().sendPaperOrder : api().sendLiveOrder;
+      const result = await send({
+        ...input,
+        destination: { connection: "paper-1", venueAccount: "PA-1", route: {} },
+      });
+      expect(result).toMatchObject({ verdict: "review", reviews: [mark] });
+      expect(result).not.toHaveProperty("venueSend");
+    },
+  );
+
+  it.each(["reviewConfirm", "reviewCancel"] as const)(
+    "normalizes the %s reproduction facet",
+    async (facet) => {
+      const decision = {
+        verdict: "accept",
+        reasons: [],
+        signedApproval: "review-envelope",
+        keyId: "key-1",
+        signed: true,
+      };
+      const cancel = {
+        order: { ...order, status: "cancelled" },
+        signedAttestation: "cancel-envelope",
+        attestationKeyId: "key-1",
+        signed: true,
+      };
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({
+          event: { id: "event-1" },
+          response: { [facet]: facet === "reviewConfirm" ? decision : cancel },
+        }),
+      );
+      const result = await api().fetchEventReproduction(order.id, "event-1");
+      if (facet === "reviewConfirm") {
+        expect(result.response?.reviewConfirm).toEqual(decision);
+        expect(result.response?.reviewConfirm).not.toHaveProperty("order");
+      } else {
+        expect(result.response?.reviewCancel).toMatchObject(cancel);
+      }
+    },
+  );
+
+  it.each([review, { marks: [mark], lastConfirm: null, destination: null }])(
+    "fetches review marks, last confirmation and destination: %j",
+    async (payload) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({ order, events: [], trades: [], review: payload }),
+      );
+      const result = await api().fetchOrderDetail(order.id);
+      expect(result.review).toEqual(payload);
+      expect(fetch).toHaveBeenCalledWith(
+        "/app/api/v1/orders/order%2F1",
+        expect.objectContaining({ method: "GET" }),
+      );
+    },
+  );
+
+  it("leaves review absent for a non-waiting order", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        order: { ...order, status: "committed" },
+        events: [],
+        trades: [],
+      }),
+    );
+    expect(await api().fetchOrderDetail(order.id)).not.toHaveProperty("review");
+  });
+
+  it("refuses a waiting order whose review is missing", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ order, events: [], trades: [] }),
+    );
+    await expect(api().fetchOrderDetail(order.id)).rejects.toMatchObject({
+      code: "internal",
+      message: "waiting order has no review in the API response",
+    });
+  });
+
+  it.each([
+    { verdict: "accept", venueSend: { status: "acknowledged", venueOrder } },
+    { verdict: "accept" },
+    { verdict: "reject" },
+  ])(
+    "confirms review with %j using a body-less encoded POST",
+    async ({ verdict, venueSend }) => {
+      const decision = {
+        verdict,
+        reasons: verdict === "reject" ? [mark] : [],
+        signedApproval: "approval",
+        keyId: "key-1",
+        signed: true,
+      };
+      const response = { order, decision, ...(venueSend ? { venueSend } : {}) };
+      vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(response));
+      const signal = new AbortController().signal;
+      const result = await api().confirmOrderReview(order.id, signal);
+      expect(result).toEqual({
+        ...response,
+        order: expect.objectContaining(order),
+        decision: {
+          ...decision,
+          reasons: decision.reasons.map(
+            ({ code, scope, policy, reason, details }) => ({
+              code,
+              scope,
+              policy,
+              reason,
+              details,
+            }),
+          ),
+        },
+      });
+      expect(fetch).toHaveBeenCalledWith(
+        "/app/api/v1/orders/order%2F1/review/confirm",
+        expect.objectContaining({ method: "POST", body: undefined, signal }),
+      );
+      if (!venueSend) expect(result).not.toHaveProperty("venueSend");
+    },
+  );
+
+  it("cancels review using a body-less encoded POST", async () => {
+    const response = {
+      order: { ...order, status: "cancelled" },
+      signedAttestation: "cancel",
+      attestationKeyId: "key-1",
+      signed: true,
+    };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(response));
+    const signal = new AbortController().signal;
+    expect(await api().cancelOrderReview(order.id, signal)).toMatchObject(
+      response,
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/order%2F1/review/cancel",
+      expect.objectContaining({ method: "POST", body: undefined, signal }),
+    );
+  });
+
+  it.each(["confirmOrderReview", "cancelOrderReview"] as const)(
+    "%s refuses a non-object 2xx instead of inventing a result",
+    async (operation) => {
+      vi.mocked(fetch).mockResolvedValueOnce(jsonResponse([]));
+      await expect(api()[operation](order.id)).rejects.toMatchObject({
+        code: "internal",
+        message: expect.stringContaining("not a JSON object"),
+      });
+    },
+  );
+
+  it("refuses an invalid venue send outcome on review confirmation", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        order,
+        decision: { verdict: "accept", reasons: [] },
+        venueSend: { status: "made_up" },
+      }),
+    );
+    await expect(api().confirmOrderReview(order.id)).rejects.toMatchObject({
+      code: "internal",
+      message: "Invalid venue send status in the API response",
+    });
+  });
+
+  it.each([
+    [
+      "unknown mark mode",
+      { ...review, marks: [{ ...mark, mode: "unknown" }] },
+      "Invalid review rule mode in the API response",
+    ],
+    [
+      "non-reject lastConfirm verdict",
+      { ...review, lastConfirm: { ...review.lastConfirm, verdict: "accept" } },
+      "Invalid order review in the API response",
+    ],
+    [
+      "missing lastConfirm.at",
+      { ...review, lastConfirm: { ...review.lastConfirm, at: undefined } },
+      "review lastConfirm at is missing from the API response",
+    ],
+    [
+      "non-string lastConfirm.at",
+      { ...review, lastConfirm: { ...review.lastConfirm, at: 123 } },
+      "review lastConfirm at is missing from the API response",
+    ],
+    [
+      "non-array lastConfirm.reasons",
+      { ...review, lastConfirm: { ...review.lastConfirm, reasons: {} } },
+      "Invalid order review in the API response",
+    ],
+    [
+      "missing destination.connection",
+      {
+        ...review,
+        destination: { ...review.destination, connection: undefined },
+      },
+      "review destination connection is missing from the API response",
+    ],
+    [
+      "missing destination.venueAccount",
+      {
+        ...review,
+        destination: { ...review.destination, venueAccount: undefined },
+      },
+      "review destination venueAccount is missing from the API response",
+    ],
+  ])("refuses %s in order review detail", async (_, payload, message) => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ order, events: [], trades: [], review: payload }),
+    );
+    await expect(api().fetchOrderDetail(order.id)).rejects.toMatchObject({
+      code: "internal",
+      message,
+    });
+  });
+
+  it("refuses decision verdict review on review confirmation", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        order,
+        decision: { verdict: "review", reasons: [] },
+      }),
+    );
+    await expect(api().confirmOrderReview(order.id)).rejects.toMatchObject({
+      code: "internal",
+      message: "Invalid review decision verdict in the API response",
+    });
+  });
+
+  it("refuses venueSend on a rejected review confirmation", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        order,
+        decision: { verdict: "reject", reasons: [] },
+        venueSend: { status: "acknowledged", venueOrder },
+      }),
+    );
+    await expect(api().confirmOrderReview(order.id)).rejects.toMatchObject({
+      code: "internal",
+      message:
+        "venueSend requires an accepted review decision in the API response",
+    });
+  });
+
+  it.each([undefined, null, [], "accept"])(
+    "refuses missing or non-object decision %j with a decision-specific error",
+    async (decision) => {
+      vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ order, decision }));
+      await expect(api().confirmOrderReview(order.id)).rejects.toMatchObject({
+        code: "internal",
+        message:
+          "review confirmation decision is missing or not an object in the API response",
+      });
+    },
+  );
 });
 
 describe("Orders conflict error decode", () => {

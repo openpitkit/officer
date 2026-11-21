@@ -463,6 +463,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 			`INSERT INTO limit_rate (scope, account_id, asset_id, max_orders, window)
 			 VALUES (?, ?, ?, ?, ?)`,
 			[]any{l.Scope, accountID, assetID, int64(l.MaxOrders), l.Window.String()},
+			nil,
 		)
 		if err != nil {
 			return err
@@ -484,10 +485,11 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 			return err
 		}
 		applied, err := rt.putLimit(ctx, "limit_order_size", l.Scope, accountID, assetID,
-			`INSERT INTO limit_order_size (scope, account_id, asset_id, max_quantity, max_notional)
-			 VALUES (?, ?, ?, ?, ?)`,
+			`INSERT INTO limit_order_size (scope, account_id, asset_id, max_quantity, max_notional, mode)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
 			[]any{l.Scope, accountID, assetID,
-				nullableString(l.MaxQuantity), nullableString(l.MaxNotional)},
+				nullableString(l.MaxQuantity), nullableString(l.MaxNotional), l.Mode},
+			&l.Mode,
 		)
 		if err != nil {
 			return err
@@ -508,6 +510,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		applied, err := rt.putLimit(ctx, "limit_position", l.Scope, accountID, assetID,
 			`INSERT INTO limit_position (scope, account_id, asset_id, max_position) VALUES (?, ?, ?, ?)`,
 			[]any{l.Scope, accountID, assetID, l.MaxPosition},
+			nil,
 		)
 		if err != nil {
 			return err
@@ -563,7 +566,8 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 }
 
 // putLimit applies one limit row under the restore mode. A limit is keyed by its
-// (scope, account, asset) composite; insert-missing skips an existing composite,
+// (scope, account, asset) composite, plus mode for limit_order_size;
+// insert-missing skips an existing composite,
 // overwrite and replace-all delete-then-insert it (delete-then-insert is required
 // because SQLite treats NULL axes as distinct in the UNIQUE constraint). Returns
 // the number of rows applied (0 when skipped). Position limits have a fixed
@@ -574,9 +578,9 @@ func (rt *restoreTx) putLimit(
 	accountID, assetID sql.NullInt64,
 	insertSQL string,
 	insertArgs []any,
+	mode *domain.RuleMode,
 ) (int, error) {
-	where := `scope = ? AND account_id IS ? AND asset_id IS ?`
-	keyArgs := []any{scope, accountID, assetID}
+	where, keyArgs := limitKeyWhere(scope, accountID, assetID, mode)
 	exists, err := rowExists(
 		ctx, rt.tx,
 		`SELECT 1 FROM `+table+` WHERE `+where,
@@ -1340,6 +1344,36 @@ func (rt *restoreTx) validateTradingAccessFeeAccounts(ctx context.Context) (resu
 	return nil
 }
 
+func (rt *restoreTx) restoreOrderReviews(ctx context.Context, reviews []backup.OrderReview) error {
+	for _, archived := range reviews {
+		orderID, err := lookupOrderID(ctx, rt.tx, archived.Order)
+		if err != nil {
+			return fmt.Errorf("store: restore %s order review %q: %w", backup.SectionActivityHistory, archived.Order, err)
+		}
+		review := domain.OrderReview{Mode: archived.Mode}
+		if !archived.Connection.IsZero() {
+			review.Destination = &domain.TradingDestination{
+				Connection: archived.Connection, VenueAccount: archived.VenueAccount, Route: archived.Route,
+			}
+		} else if archived.VenueAccount != "" || archived.Route != "" {
+			return fmt.Errorf("store: restore %s order review %q has destination without connection: %w", backup.SectionActivityHistory, archived.Order, domain.ErrInvalid)
+		}
+		resolved, err := resolveOrderReview(ctx, rt.dictionaries, rt.tx, archived.Order, review)
+		if err != nil {
+			return fmt.Errorf("store: restore %s order review %q: %w", backup.SectionActivityHistory, archived.Order, err)
+		}
+		if rt.mode == backup.RestoreModeInsertMissing && !rt.restoredOrders[archived.Order] {
+			rt.summary.AddSkipped(backup.SectionActivityHistory, 1)
+			continue
+		}
+		if err := insertOrderReview(ctx, rt.tx, orderID, archived.Order, resolved); err != nil {
+			return fmt.Errorf("store: restore %s order review %q: %w", backup.SectionActivityHistory, archived.Order, err)
+		}
+		rt.summary.AddApplied(backup.SectionActivityHistory, 1)
+	}
+	return nil
+}
+
 func (rt *restoreTx) restoreVenueOrders(
 	ctx context.Context, venueOrders []backup.VenueOrder,
 ) error {
@@ -1853,6 +1887,14 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 	); err != nil {
 		return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
 	}
+	orderID, err := lookupOrderID(ctx, rt.tx, o.ExternalID)
+	if err != nil {
+		return err
+	}
+	if _, err := rt.tx.ExecContext(ctx, `DELETE FROM order_review WHERE order_id = ?`, orderID); err != nil {
+		return fmt.Errorf("store: restore %s clear order review %q: %w", backup.SectionActivityHistory, o.ExternalID, err)
+	}
+	rt.restoredOrders[o.ExternalID] = true
 	rt.summary.AddApplied(backup.SectionActivityHistory, 1)
 	return nil
 }

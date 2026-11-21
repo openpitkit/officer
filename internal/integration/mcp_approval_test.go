@@ -250,6 +250,7 @@ func TestSubmitOrderHappyPath(t *testing.T) {
 			SignedApproval:  "eyFAKETOKEN",
 			KeyID:           "key-1",
 			OrderExternalID: testOrderEID,
+			Verdict:         domain.VerdictAccept,
 		},
 	}
 
@@ -480,7 +481,7 @@ func TestSubmitOrderValidatesMissingAccountPolicy(t *testing.T) {
 // choice through the guarded MCP surface.
 func TestSubmitOrderForwardsRejectMissingAccountPolicy(t *testing.T) {
 	src := &approvalFakeSource{
-		submitResult: frameworkmcp.SubmitOrderResult{OrderExternalID: testOrderEID},
+		submitResult: frameworkmcp.SubmitOrderResult{OrderExternalID: testOrderEID, Verdict: domain.VerdictAccept},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Mode:    "immediate",
@@ -548,7 +549,7 @@ func TestSubmitOrderBackendError(t *testing.T) {
 // order as-is and returned in orderExternalId.
 func TestSubmitOrderSuppliedExternalID(t *testing.T) {
 	src := &approvalFakeSource{
-		submitResult: frameworkmcp.SubmitOrderResult{SignedApproval: "tok", OrderExternalID: testOrderEID},
+		submitResult: frameworkmcp.SubmitOrderResult{SignedApproval: "tok", OrderExternalID: testOrderEID, Verdict: domain.VerdictAccept},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Mode:    "immediate",
@@ -579,7 +580,7 @@ func TestSubmitOrderSuppliedExternalID(t *testing.T) {
 // unset for the backend to generate; the returned id is the one the backend used.
 func TestSubmitOrderGeneratesWhenAbsent(t *testing.T) {
 	src := &approvalFakeSource{
-		submitResult: frameworkmcp.SubmitOrderResult{SignedApproval: "tok", OrderExternalID: testOrderEID},
+		submitResult: frameworkmcp.SubmitOrderResult{SignedApproval: "tok", OrderExternalID: testOrderEID, Verdict: domain.VerdictAccept},
 	}
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Mode:    "immediate",
@@ -603,7 +604,9 @@ func TestSubmitOrderGeneratesWhenAbsent(t *testing.T) {
 // TestSubmitOrderOpaqueExternalID: a caller-supplied id is accepted verbatim
 // without a base64url shape requirement.
 func TestSubmitOrderOpaqueExternalID(t *testing.T) {
-	src := &approvalFakeSource{}
+	src := &approvalFakeSource{
+		submitResult: frameworkmcp.SubmitOrderResult{Verdict: domain.VerdictAccept},
+	}
 	supplied := "not-a-valid-id"
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Mode:    "immediate",

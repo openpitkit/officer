@@ -28,7 +28,12 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Limit, PolicyListFilters, SpotFundsLimitMode } from "@/api/types";
+import type {
+  Limit,
+  OrderSizeLimitMode,
+  PolicyListFilters,
+  SpotFundsLimitMode,
+} from "@/api/types";
 import { useLimitsPage } from "@/api/useLimits";
 import {
   useSpotFundsLimitMode,
@@ -46,7 +51,10 @@ import { Limits } from "@/pages/Limits";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
-vi.mock("@/api/useLimits", () => ({ useLimitsPage: vi.fn() }));
+vi.mock("@/api/useLimits", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/useLimits")>()),
+  useLimitsPage: vi.fn(),
+}));
 // PreMigrationBackupBanner polls GET /database/pre-migration-backups.
 vi.mock("@/api/usePreMigrationBackups", () => ({
   usePreMigrationBackups: () => ({
@@ -259,7 +267,7 @@ function renderLimitDialog(editing: Limit | null) {
       <LimitDialog
         open
         editing={editing}
-        policyCounts={{ order_size_limit: 1 }}
+        orderSizeCounts={{ reject: 1, review_without_hold: 0 }}
         onOpenChange={onOpenChange}
         onSaved={onSaved}
       />
@@ -300,6 +308,7 @@ beforeEach(async () => {
 function modeLimit(mode: SpotFundsLimitMode): Limit {
   return {
     policy: "spot_funds_limit_mode",
+    mode: null,
     scope: "global",
     account: "",
     accountGroup: "",
@@ -326,6 +335,179 @@ function answerFundsMode(
   useSpotFundsModeMock.mockReturnValue(poll);
   return reload;
 }
+
+describe("Limits order-size barrier modes", () => {
+  function barrier(mode: OrderSizeLimitMode, account = ""): Limit {
+    return {
+      policy: "order_size_limit",
+      mode,
+      scope: account ? "account" : "broker",
+      account,
+      asset: "",
+      values: { max_quantity: "10" },
+    };
+  }
+
+  function answerBarriers(rows: Limit[]) {
+    useLimitsMock.mockImplementation((filters) =>
+      readyPage(
+        filters?.policy === "order_size"
+          ? rows.filter((row) => row.mode === filters.mode)
+          : rows,
+      ),
+    );
+  }
+
+  it.each([0, 1])(
+    "confirms adding the first barrier of a mode only when its existing count is %s",
+    async (count) => {
+      const user = userEvent.setup();
+      answerBarriers([
+        barrier("reject"),
+        ...(count ? [barrier("review_without_hold")] : []),
+      ]);
+      renderLimits();
+      await user.click(
+        screen.getAllByRole("button", { name: "Add policy" })[0],
+      );
+      const dialog = screen.getByRole("dialog");
+      await chooseInDialog(user, dialog, 0, "Order size limit");
+      expect(
+        within(dialog).getByRole("radio", { name: "Reject" }),
+      ).toBeChecked();
+      await user.click(
+        within(dialog).getByRole("radio", { name: "Review without hold" }),
+      );
+      await user.type(within(dialog).getByLabelText("max quantity"), "20");
+      await user.click(
+        within(dialog).getByRole("button", { name: "Add policy" }),
+      );
+      if (count === 0) {
+        const confirm = await screen.findByRole("alertdialog", {
+          name: "Rebuild risk engine?",
+        });
+        expect(addLimitMock).not.toHaveBeenCalled();
+        await user.click(
+          within(confirm).getByRole("button", { name: "Rebuild and apply" }),
+        );
+      } else {
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      }
+      await waitFor(() =>
+        expect(addLimitMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            mode: "review_without_hold",
+            policy: "order_size_limit",
+            values: { max_quantity: "20" },
+          }),
+          "reject",
+        ),
+      );
+      expect(useLimitsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ policy: "order_size", mode: "reject" }),
+      );
+      expect(useLimitsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          policy: "order_size",
+          mode: "review_without_hold",
+        }),
+      );
+    },
+  );
+
+  it.each([1, 2])(
+    "confirms deleting the last barrier of its mode and carries its mode when count is %s",
+    async (count) => {
+      const user = userEvent.setup();
+      answerBarriers([
+        barrier("reject"),
+        barrier("review_without_hold"),
+        ...(count === 2 ? [barrier("review_without_hold", "another")] : []),
+      ]);
+      renderLimits();
+      const row = screen.getAllByText("Review without hold")[0].closest("tr")!;
+      await user.click(
+        within(row).getByRole("button", { name: "Delete Order size limit" }),
+      );
+      const confirm = await screen.findByRole("alertdialog", {
+        name: "Delete policy barrier?",
+      });
+      expect(
+        within(confirm).getByText(/in mode Review without hold/),
+      ).toBeInTheDocument();
+      if (count === 1) {
+        expect(
+          within(confirm).getByText(/rebuilds the risk engine/),
+        ).toBeInTheDocument();
+      } else {
+        expect(
+          within(confirm).queryByText(/rebuilds the risk engine/),
+        ).not.toBeInTheDocument();
+      }
+      await user.click(within(confirm).getByRole("button", { name: "Delete" }));
+      await waitFor(() =>
+        expect(deleteLimitMock).toHaveBeenCalledWith({
+          policy: "order_size_limit",
+          mode: "review_without_hold",
+          scope: "broker",
+          account: "",
+          accountGroup: undefined,
+          asset: "",
+        }),
+      );
+    },
+  );
+
+  it("rejects an order-size barrier without a mode", () => {
+    answerBarriers([{ ...barrier("reject"), mode: null }]);
+    expect(() => renderLimits()).toThrow("Missing order-size mode");
+  });
+
+  it("shows reject and review barriers on the same target as two rows with their modes", () => {
+    answerBarriers([barrier("reject"), barrier("review_without_hold")]);
+    const errors = vi.spyOn(console, "error");
+    renderLimits();
+    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText("Reject")).toBeInTheDocument();
+    expect(
+      within(rows[1]).getByText("Review without hold"),
+    ).toBeInTheDocument();
+    expect(
+      errors.mock.calls.some((call) => String(call[0]).includes("same key")),
+    ).toBe(false);
+    errors.mockRestore();
+  });
+
+  it("locks the existing order-size mode on edit and preserves it in the write", async () => {
+    const user = userEvent.setup();
+    renderLimitDialog(barrier("review_without_hold"));
+    const dialog = screen.getByRole("dialog");
+    const review = within(dialog).getByRole("radio", {
+      name: "Review without hold",
+    });
+    const reject = within(dialog).getByRole("radio", { name: "Reject" });
+    expect(review).toBeChecked();
+    expect(review).toBeDisabled();
+    expect(reject).toBeDisabled();
+    await user.click(reject);
+    expect(review).toBeChecked();
+    const quantity = within(dialog).getByLabelText("max quantity");
+    await user.clear(quantity);
+    await user.type(quantity, "25");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(putLimitMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "review_without_hold",
+          values: { max_quantity: "25" },
+        }),
+        "reject",
+      ),
+    );
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+});
 
 describe("Limits video guides", () => {
   it.each(["empty", "mode only"])(
@@ -622,6 +804,7 @@ describe("Limits identity filters", () => {
       readyPage([
         {
           policy: "spot_funds_pnl_bounds_kill_switch",
+          mode: null,
           scope: "account_group",
           account: "",
           accountGroup: "desk-a",
@@ -774,6 +957,7 @@ describe("LimitDialog framework controls", () => {
       expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "position_limit",
+          mode: null,
           scope: "account_asset",
           account: "acc-1",
           accountGroup: "",
@@ -864,6 +1048,7 @@ describe("LimitDialog framework controls", () => {
       readyPage([
         {
           policy: "position_limit",
+          mode: null,
           scope: "account_asset",
           account: "acc-1",
           asset: "AAPL",
@@ -905,6 +1090,7 @@ describe("LimitDialog framework controls", () => {
     const user = userEvent.setup();
     renderLimitDialog({
       policy: "position_limit",
+      mode: null,
       scope: "account_asset",
       account: "acc-1",
       asset: "AAPL",
@@ -921,6 +1107,7 @@ describe("LimitDialog framework controls", () => {
       expect(putLimitMock).toHaveBeenCalledWith(
         {
           policy: "position_limit",
+          mode: null,
           scope: "account_asset",
           account: "acc-1",
           accountGroup: "",
@@ -939,6 +1126,7 @@ describe("LimitDialog framework controls", () => {
       readyPage([
         {
           policy: "position_limit",
+          mode: null,
           scope: "account_asset",
           account: "acc-1",
           asset: "AAPL",
@@ -955,6 +1143,7 @@ describe("LimitDialog framework controls", () => {
     await waitFor(() =>
       expect(deleteLimitMock).toHaveBeenCalledWith({
         policy: "position_limit",
+        mode: null,
         scope: "account_asset",
         account: "acc-1",
         accountGroup: undefined,
@@ -992,6 +1181,7 @@ describe("LimitDialog framework controls", () => {
       expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "order_size_limit",
+          mode: "reject",
           scope: "underlying_asset",
           account: "",
           accountGroup: "",
@@ -1052,6 +1242,7 @@ describe("LimitDialog framework controls", () => {
       expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "order_size_limit",
+          mode: "reject",
           scope: "settlement_asset",
           account: "",
           accountGroup: "",
@@ -1257,6 +1448,7 @@ describe("LimitDialog framework controls", () => {
         expect(addLimitMock).toHaveBeenCalledWith(
           {
             policy,
+            mode: null,
             scope: "account",
             account: "acc-usd",
             accountGroup: "",
@@ -1276,6 +1468,7 @@ describe("LimitDialog framework controls", () => {
     ]);
     renderLimitDialog({
       policy: "spot_funds_pnl_bounds_kill_switch",
+      mode: null,
       scope: "account",
       account: "acc-inherited",
       asset: "",
@@ -1301,6 +1494,7 @@ describe("LimitDialog framework controls", () => {
     fetchAccountsMock.mockResolvedValue([{ code: "acc-no-currency" }]);
     renderLimitDialog({
       policy: "spot_funds_pnl_bounds_kill_switch",
+      mode: null,
       scope: "account",
       account: "acc-no-currency",
       asset: "",
@@ -1386,6 +1580,7 @@ describe("LimitDialog framework controls", () => {
     );
     addLimitMock.mockResolvedValueOnce({
       policy: "spot_funds_pnl_bounds_kill_switch",
+      mode: null,
       scope: "account",
       account: "acc-new",
       accountGroup: "",
@@ -1438,6 +1633,7 @@ describe("LimitDialog framework controls", () => {
       2,
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: null,
         scope: "account",
         account: "acc-new",
         accountGroup: "",
@@ -1455,6 +1651,7 @@ describe("LimitDialog framework controls", () => {
     ]);
     renderLimitDialog({
       policy: "spot_funds_pnl_bounds_kill_switch",
+      mode: null,
       scope: "account",
       account: "acc-usd",
       accountGroup: "",
@@ -1473,6 +1670,7 @@ describe("LimitDialog framework controls", () => {
   it("keeps the PnL currency editable while account-group identity stays locked", async () => {
     renderLimitDialog({
       policy: "spot_funds_pnl_bounds_kill_switch",
+      mode: null,
       scope: "account_group",
       account: "",
       accountGroup: "desk-a",
@@ -1518,6 +1716,7 @@ describe("LimitDialog framework controls", () => {
 function accountRateLimit(account: string): Limit {
   return {
     policy: "rate_limit",
+    mode: null,
     scope: "account",
     account,
     accountGroup: "",
@@ -1529,6 +1728,7 @@ function accountRateLimit(account: string): Limit {
 /** A group-scope PnL barrier as GET /limits lists it. */
 const groupPnlLimit: Limit = {
   policy: "spot_funds_pnl_bounds_kill_switch",
+  mode: null,
   scope: "account_group",
   account: "",
   accountGroup: "desk-a",
@@ -1678,6 +1878,7 @@ describe("LimitDialog funds limit mode", () => {
       expect(putLimitMock).toHaveBeenCalledWith(
         {
           policy: "spot_funds_limit_mode",
+          mode: null,
           scope: "global",
           account: "",
           accountGroup: "",
@@ -1758,6 +1959,7 @@ describe("Limits with accounts shown", () => {
     await waitFor(() =>
       expect(deleteLimitMock).toHaveBeenCalledWith({
         policy: "rate_limit",
+        mode: null,
         scope: "account",
         account: "acc-1",
         accountGroup: "",
@@ -1899,6 +2101,7 @@ describe("Limits with accounts hidden", () => {
     await waitFor(() =>
       expect(deleteLimitMock).toHaveBeenCalledWith({
         policy: "rate_limit",
+        mode: null,
         scope: "account",
         account: "main",
         accountGroup: "",
@@ -1958,6 +2161,7 @@ describe("Limits with accounts hidden", () => {
       expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "rate_limit",
+          mode: null,
           scope: "account",
           account: "main",
           accountGroup: "",
@@ -1986,6 +2190,7 @@ describe("Limits with accounts hidden", () => {
       expect(addLimitMock).toHaveBeenCalledWith(
         {
           policy: "rate_limit",
+          mode: null,
           scope: "broker",
           account: "",
           accountGroup: "",

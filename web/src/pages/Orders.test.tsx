@@ -35,6 +35,8 @@ import type {
   BusinessCsvEntity,
   BusinessCsvExportFilters,
   Order,
+  OrderDetail,
+  OrderReview,
   OrderEvent,
   OrderListFilters,
   Trade,
@@ -47,6 +49,7 @@ import { badgeVariants } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { SidebarProvider } from "@/components/SidebarContext";
 import i18n from "@/i18n";
+import { formatDateTime } from "@/i18n/format";
 import { Orders } from "@/pages/Orders";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
@@ -245,6 +248,8 @@ const fetchPublicKeyByIdMock = vi.fn();
 const submitExecutionReportMock = vi.fn();
 const confirmOrderMock = vi.fn();
 const cancelOrderMock = vi.fn();
+const confirmOrderReviewMock = vi.fn();
+const cancelOrderReviewMock = vi.fn();
 const sendPaperOrderMock = vi.fn();
 const sendLiveOrderMock = vi.fn();
 
@@ -365,6 +370,8 @@ function renderOrders(initialEntry: string) {
         submitExecutionReport: submitExecutionReportMock,
         confirmOrder: confirmOrderMock,
         cancelOrder: cancelOrderMock,
+        confirmOrderReview: confirmOrderReviewMock,
+        cancelOrderReview: cancelOrderReviewMock,
         sendPaperOrder: sendPaperOrderMock,
         sendLiveOrder: sendLiveOrderMock,
       },
@@ -391,6 +398,7 @@ beforeEach(async () => {
   checkOrderMock.mockResolvedValue({
     passed: true,
     rejects: [],
+    reviews: [],
     wouldDisplayPrice: "",
     wouldBlock: null,
   });
@@ -741,7 +749,8 @@ describe("Orders status filter", () => {
     await waitFor(() =>
       expect(lastOrderFilters()).toEqual(
         expect.objectContaining({
-          status: "submitted,accepted,committed,partially_filled",
+          status:
+            "submitted,accepted,committed,partially_filled,awaiting_review",
         }),
       ),
     );
@@ -754,13 +763,14 @@ describe("Orders status filter", () => {
   it("clears the status filter with the All quick button", async () => {
     const user = userEvent.setup();
     renderOrders(
-      "/orders?status=submitted,accepted,committed,partially_filled",
+      "/orders?status=submitted,accepted,committed,partially_filled,awaiting_review",
     );
 
     await waitFor(() =>
       expect(lastOrderFilters()).toEqual(
         expect.objectContaining({
-          status: "submitted,accepted,committed,partially_filled",
+          status:
+            "submitted,accepted,committed,partially_filled,awaiting_review",
         }),
       ),
     );
@@ -842,7 +852,8 @@ describe("Orders status filter", () => {
     await waitFor(() =>
       expect(lastOrderFilters()).toEqual(
         expect.objectContaining({
-          status: "submitted,accepted,committed,partially_filled",
+          status:
+            "submitted,accepted,committed,partially_filled,awaiting_review",
         }),
       ),
     );
@@ -5236,6 +5247,41 @@ describe("Orders venue sending", () => {
     },
   );
 
+  it.each(["", "unknown"])(
+    "reloads the list once and reports a contract error for send verdict=%j",
+    async (verdict) => {
+      const user = userEvent.setup();
+      fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+      sendPaperOrderMock.mockResolvedValue({
+        id: sampleOrder.id,
+        verdict,
+        reasons: [],
+        signedApproval: "",
+        keyId: "",
+      });
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFields(user, dialog);
+      await enablePaperSending(user, dialog);
+      await chooseTimeInForce(user, dialog, "DAY - Day");
+      const reload = useOrdersMock.mock.results.at(-1)!.value.reload;
+      reload.mockClear();
+
+      await user.click(
+        within(dialog).getByRole("button", { name: "Submit PAPER order" }),
+      );
+
+      expect(
+        await within(dialog).findByText(/Missing trading decision verdict/),
+      ).toBeInTheDocument();
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(sendPaperOrderMock).toHaveBeenCalledTimes(1);
+      expect(within(dialog).getByLabelText("Account")).toHaveValue(
+        "desk-alpha",
+      );
+    },
+  );
+
   it.each([
     ["trading_mode_mismatch", 409],
     ["precondition", 422],
@@ -5349,12 +5395,7 @@ describe("Orders venue sending", () => {
 
 async function openSampleOrderDetail(
   user: ReturnType<typeof userEvent.setup>,
-  detail: {
-    order: Order;
-    events: OrderEvent[];
-    trades: Trade[];
-    venueOrder?: VenueOrder;
-  },
+  detail: OrderDetail,
 ) {
   useOrdersMock.mockReturnValue(readyPage<Order>([detail.order]));
   fetchOrderDetailMock.mockResolvedValue(detail);
@@ -5364,6 +5405,1169 @@ async function openSampleOrderDetail(
     name: `Order ${detail.order.id}`,
   });
 }
+
+describe("Order review panel", () => {
+  const review: OrderReview = {
+    marks: [
+      {
+        code: "policy_reject",
+        scope: "account",
+        policy: "order_size",
+        reason: "Size needs review",
+        details: "100 > 50",
+        mode: "review_without_hold",
+      },
+    ],
+    lastConfirm: null,
+    destination: null,
+  };
+  const waiting: OrderDetail = {
+    order: { ...sampleOrder, status: "awaiting_review" },
+    events: [],
+    trades: [],
+    review,
+  };
+  const rejectedReview: OrderReview = {
+    ...review,
+    lastConfirm: {
+      verdict: "reject",
+      reasons: [
+        {
+          code: "policy_reject",
+          scope: "account",
+          policy: "spot_funds",
+          reason: "Insufficient funds after confirmation",
+          details: "Available 20 USD",
+        },
+      ],
+      at: "2026-11-19T10:05:00Z",
+    },
+  };
+  const acceptedDecision = {
+    verdict: "accept",
+    reasons: [],
+    signedApproval: "",
+    keyId: "",
+    signed: false,
+  };
+
+  it.each([
+    [false, false, "Preview: would reject"],
+    [false, true, "Preview: would reject"],
+    [true, true, "Preview: would wait for review"],
+    [true, false, "Preview: would pass"],
+  ])(
+    "previews passed=%s with marks=%s as %s",
+    async (passed, marks, headline) => {
+      const user = userEvent.setup();
+      checkOrderMock.mockResolvedValue({
+        passed,
+        reviews: marks ? review.marks : [],
+        rejects: passed ? [] : [{ ...review.marks[0], reason: "Size refused" }],
+        wouldDisplayPrice: "",
+        wouldBlock: null,
+      });
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFields(user, dialog);
+      const preview = await within(dialog).findByText(headline);
+      if (passed && marks) {
+        expect(preview).toHaveClass("text-[var(--warn)]");
+        expect(
+          within(dialog).getByText("Size needs review"),
+        ).toBeInTheDocument();
+        expect(
+          within(dialog).getByText("Review without hold"),
+        ).toBeInTheDocument();
+        expect(
+          within(dialog).getByText(/policy\s+order_size/),
+        ).toBeInTheDocument();
+        expect(
+          within(dialog).queryByText("Preview: would pass"),
+        ).not.toBeInTheDocument();
+      } else {
+        expect(
+          within(dialog).queryByText("Size needs review"),
+        ).not.toBeInTheDocument();
+        expect(
+          within(dialog).queryByText("Review without hold"),
+        ).not.toBeInTheDocument();
+        expect(
+          within(dialog).queryByText("Preview: would wait for review"),
+        ).not.toBeInTheDocument();
+      }
+      if (!passed) {
+        expect(preview).toHaveClass("text-[var(--danger)]");
+        expect(within(dialog).getByText("Size refused")).toBeInTheDocument();
+      }
+    },
+  );
+
+  it("opens a manual review send with the waiting banner and marks", async () => {
+    const user = userEvent.setup();
+    fetchOrderDetailMock.mockResolvedValue(waiting);
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    sendPaperOrderMock.mockResolvedValue({
+      id: sampleOrder.id,
+      verdict: "review",
+      reviews: review.marks,
+      reasons: [],
+      signedApproval: "",
+      keyId: "",
+    });
+    renderOrders("/orders");
+    const submit = await openDialog(user);
+    await fillOrderFields(user, submit);
+    await enablePaperSending(user, submit);
+    await chooseTimeInForce(user, submit, "DAY - Day");
+    await user.click(
+      within(submit).getByRole("button", { name: "Submit PAPER order" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: `Order ${sampleOrder.id}`,
+    });
+    expect(
+      await within(dialog).findByText(
+        "The order is awaiting operator review. Nothing was sent to the venue.",
+      ),
+    ).toHaveClass("border-[var(--warn)]");
+    expect(
+      within(dialog).queryByText(
+        "Pre-trade checks rejected the order. Nothing was sent to the venue.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      await within(dialog).findByText("Size needs review"),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    [undefined, true],
+    ["Detail enrichment failed", true],
+    ["Detail enrichment failed", false],
+  ])(
+    "opens a review submit with warning %s and detail available=%s in a waiting banner",
+    async (warning, detailAvailable) => {
+      const user = userEvent.setup();
+      createOrderMock.mockResolvedValue({
+        order: waiting.order,
+        approval: { verdict: "review", reviews: review.marks },
+        warning,
+      });
+      if (detailAvailable) {
+        fetchOrderDetailMock.mockResolvedValue(waiting);
+      } else {
+        fetchOrderDetailMock.mockRejectedValue(
+          new ApiError("Order detail unavailable", "network"),
+        );
+      }
+      renderOrders("/orders");
+      const submit = await openDialog(user);
+      await fillOrderFields(user, submit);
+      await user.type(
+        within(submit).getByLabelText("Limit price (required to settle)"),
+        "100",
+      );
+      await user.click(
+        within(submit).getByRole("button", { name: /add order/i }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: `Order ${sampleOrder.id}`,
+      });
+      expect(
+        await within(dialog).findByText(
+          `Order added and awaiting operator review.${warning ? ` ${warning}` : ""}`,
+        ),
+      ).toHaveClass("border-[var(--warn)]");
+      expect(within(dialog).queryByText("Order added")).not.toBeInTheDocument();
+      if (!detailAvailable) {
+        expect(
+          await within(dialog).findByText(/Order detail unavailable/),
+        ).toBeInTheDocument();
+      }
+    },
+  );
+
+  it("shows review marks and every mode with a Confirm action", async () => {
+    const dialog = await openSampleOrderDetail(userEvent.setup(), {
+      ...waiting,
+      review: {
+        ...review,
+        marks: ["reject", "review_without_hold", "review_with_hold"].map(
+          (mode) => ({
+            ...review.marks[0],
+            mode: mode as OrderReview["marks"][number]["mode"],
+          }),
+        ),
+      },
+    });
+    const section = await within(dialog).findByRole("region", {
+      name: "Order review",
+    });
+    for (const label of ["Reject", "Review without hold", "Review with hold"]) {
+      expect(within(section).getByText(label)).toBeInTheDocument();
+    }
+    expect(within(section).getAllByText("policy order_size")).toHaveLength(3);
+    expect(within(section).getAllByText("Size needs review")).toHaveLength(3);
+    expect(within(section).getAllByText("100 > 50")).toHaveLength(3);
+    expect(
+      within(section).getByRole("button", { name: "Confirm" }),
+    ).toBeEnabled();
+    expect(
+      within(section).queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the venue account term when the review destination has no account", async () => {
+    const dialog = await openSampleOrderDetail(userEvent.setup(), {
+      ...waiting,
+      review: {
+        ...review,
+        destination: {
+          connection: alpacaDestination.connection,
+          venueAccount: "",
+          route: {},
+        },
+      },
+    });
+    const section = await within(dialog).findByRole("region", {
+      name: "Order review",
+    });
+    expect(within(section).getByText("Connection")).toBeInTheDocument();
+    expect(
+      within(section).getByText(alpacaDestination.label),
+    ).toBeInTheDocument();
+    expect(
+      within(section).queryByText("Venue account"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Retry, rejection reasons and formatted time after a failed confirmation", async () => {
+    await i18n.changeLanguage("ru");
+    useOrdersMock.mockReturnValue(readyPage<Order>([waiting.order]));
+    fetchOrderDetailMock.mockResolvedValue({
+      ...waiting,
+      review: rejectedReview,
+    });
+    renderOrders("/orders");
+    const user = userEvent.setup();
+    await user.click(screen.getByText(waiting.order.id));
+    const section = await screen.findByRole("region", { name: "Ревью ордера" });
+    expect(
+      within(section).getByRole("button", { name: "Повторить" }),
+    ).toBeEnabled();
+    expect(
+      within(section).queryByRole("button", { name: "Подтвердить" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(section).getByText("Insufficient funds after confirmation"),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByText(formatDateTime(rejectedReview.lastConfirm!.at)),
+    ).toBeInTheDocument();
+  });
+
+  it("re-reads a rejected confirm and retries the same operation", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+    fetchOrderDetailMock.mockResolvedValue({
+      ...waiting,
+      review: rejectedReview,
+    });
+    confirmOrderReviewMock.mockResolvedValue({
+      order: waiting.order,
+      decision: {
+        ...acceptedDecision,
+        verdict: "reject",
+        reasons: rejectedReview.lastConfirm!.reasons,
+      },
+    });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Confirm" }),
+    );
+    expect(
+      await within(dialog).findByText("Insufficient funds after confirmation"),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(confirmOrderReviewMock).toHaveBeenCalledTimes(2),
+    );
+    expect(confirmOrderReviewMock).toHaveBeenCalledWith(sampleOrder.id);
+    expect(fetchOrderDetailMock).toHaveBeenCalledTimes(3);
+    expect(confirmOrderMock).not.toHaveBeenCalled();
+  });
+
+  it("disables both decision buttons until the mutation and re-read finish", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+    let finish!: (value: unknown) => void;
+    confirmOrderReviewMock.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Confirm" }),
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Confirming…" }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel order" }),
+    ).toBeDisabled();
+    let finishRead!: (value: OrderDetail) => void;
+    fetchOrderDetailMock.mockReturnValue(
+      new Promise((resolve) => {
+        finishRead = resolve;
+      }),
+    );
+    await act(async () =>
+      finish({
+        order: waiting.order,
+        decision: { ...acceptedDecision, verdict: "reject" },
+      }),
+    );
+    await waitFor(() => expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2));
+    expect(
+      within(dialog).getByRole("button", { name: "Confirming…" }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel order" }),
+    ).toBeDisabled();
+    await act(async () => finishRead(waiting));
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Confirm" }),
+      ).toBeEnabled(),
+    );
+    expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [
+      "acknowledged",
+      "Sent to Alpaca · paper. Venue order venue-123.",
+      "committed",
+      "border-[var(--ok)]",
+    ],
+    [
+      "refused",
+      "The order was not placed on Alpaca: Venue response detail. Officer recorded it as cancelled.",
+      "cancelled",
+      "border-[var(--danger)]",
+    ],
+    [
+      "unknown",
+      "The venue did not confirm the order: Venue response detail. Officer is reconciling it; the order status below is authoritative.",
+      "committed",
+      "border-[var(--warn)]",
+    ],
+  ])(
+    "shows the %s trading send outcome in the venue detail",
+    async (status, message, orderStatus, toneClass) => {
+      const user = userEvent.setup();
+      const dialog = await openSampleOrderDetail(user, {
+        ...waiting,
+        review: {
+          ...review,
+          destination: {
+            connection: linkedVenueOrder.connection,
+            venueAccount: linkedVenueOrder.venueAccount,
+            route: {},
+          },
+        },
+      });
+      expect(
+        await within(dialog).findByText("Primary Alpaca"),
+      ).toBeInTheDocument();
+      expect(within(dialog).getByText("PA-1")).toBeInTheDocument();
+      const venueOrder = {
+        ...linkedVenueOrder,
+        venueOrderId: status === "acknowledged" ? "venue-123" : undefined,
+      };
+      confirmOrderReviewMock.mockResolvedValue({
+        order: { ...sampleOrder, status: orderStatus },
+        decision: acceptedDecision,
+        venueSend: {
+          status,
+          venueOrder,
+          ...(status === "acknowledged"
+            ? {}
+            : { error: "Venue response detail" }),
+        },
+      });
+      fetchOrderDetailMock.mockResolvedValue({
+        order: { ...sampleOrder, status: orderStatus },
+        events: [],
+        trades: [],
+        venueOrder,
+      });
+      await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
+      expect(await within(dialog).findByText(message)).toHaveClass(toneClass);
+      expect(
+        await within(dialog).findByText("Venue status"),
+      ).toBeInTheDocument();
+      expect(
+        within(dialog).queryByRole("region", { name: "Order review" }),
+      ).not.toBeInTheDocument();
+      if (status === "acknowledged") {
+        expect(within(dialog).getByText("venue-123")).toBeInTheDocument();
+      }
+    },
+  );
+
+  it("shows an accepted gateway order as approved for the caller to send", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+    confirmOrderReviewMock.mockResolvedValue({
+      order: sampleOrder,
+      decision: acceptedDecision,
+    });
+    fetchOrderDetailMock.mockResolvedValue({
+      order: sampleOrder,
+      events: [],
+      trades: [],
+    });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Confirm" }),
+    );
+    expect(
+      await within(dialog).findByText(
+        "Approved. The caller can now send this order.",
+      ),
+    ).toHaveClass("border-[var(--ok)]");
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByRole("region", { name: "Order review" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("asks for destructive confirmation before cancelling and re-reads the cancelled order", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+    cancelOrderReviewMock.mockResolvedValue({
+      order: { ...sampleOrder, status: "cancelled" },
+    });
+    fetchOrderDetailMock.mockResolvedValue({
+      order: { ...sampleOrder, status: "cancelled" },
+      events: [],
+      trades: [],
+    });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Cancel order" }),
+    );
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: "Cancel this order?",
+    });
+    expect(cancelOrderReviewMock).not.toHaveBeenCalled();
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Cancel order" }),
+    );
+    await waitFor(() =>
+      expect(cancelOrderReviewMock).toHaveBeenCalledWith(sampleOrder.id),
+    );
+    expect(await within(dialog).findByText("Cancelled")).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("region", { name: "Order review" }),
+    ).not.toBeInTheDocument();
+    expect(cancelOrderMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [409, "conflict", "Review decision failed"],
+    [503, "engine_restarting", "Review decision failed"],
+    [
+      200,
+      "internal",
+      "The review request did not complete: Review decision failed. The decision may already be recorded; the order status shown is authoritative. Check it before retrying.",
+    ],
+    [
+      500,
+      "internal",
+      "The review request did not complete: HTTP 500. The decision may already be recorded; the order status shown is authoritative. Check it before retrying.",
+    ],
+    [
+      504,
+      "internal",
+      "The review request did not complete: HTTP 504. The decision may already be recorded; the order status shown is authoritative. Check it before retrying.",
+    ],
+  ] as const)(
+    "shows a REST %s error and re-reads the order",
+    async (status, code, message) => {
+      const user = userEvent.setup();
+      const dialog = await openSampleOrderDetail(user, waiting);
+      confirmOrderReviewMock.mockRejectedValue(
+        new ApiError("Review decision failed", code, status),
+      );
+      fetchOrderDetailMock.mockResolvedValue({
+        ...waiting,
+        review: rejectedReview,
+      });
+      await user.click(
+        await within(dialog).findByRole("button", { name: "Confirm" }),
+      );
+      expect(await within(dialog).findByText(message)).toBeInTheDocument();
+      if (status === 500) {
+        expect(
+          within(dialog).queryByText("Review decision failed"),
+        ).not.toBeInTheDocument();
+      }
+      expect(
+        await within(dialog).findByRole("button", { name: "Retry" }),
+      ).toBeEnabled();
+      expect(
+        within(dialog).getByText("Insufficient funds after confirmation"),
+      ).toBeInTheDocument();
+      expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps the accepted banner without the stale review card when the decision re-read fails", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+    await within(dialog).findByRole("button", { name: "Confirm" });
+    confirmOrderReviewMock.mockResolvedValue({
+      order: sampleOrder,
+      decision: acceptedDecision,
+    });
+    fetchOrderDetailMock.mockRejectedValue(
+      new ApiError("Order re-read unavailable", "network"),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    expect(
+      await within(dialog).findByText("Order re-read unavailable"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Approved. The caller can now send this order."),
+    ).toHaveClass("border-[var(--ok)]");
+    expect(
+      within(dialog).queryByText("Awaiting review"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("region", { name: "Order review" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: "Confirm" }),
+    ).not.toBeInTheDocument();
+    expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes the stale Retry card when a rejected confirm re-read fails", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: rejectedReview,
+    });
+    confirmOrderReviewMock.mockResolvedValue({
+      order: waiting.order,
+      decision: {
+        ...acceptedDecision,
+        verdict: "reject",
+        reasons: [
+          {
+            code: "policy_reject",
+            scope: "account",
+            policy: "rate_limit",
+            reason: "Rate limit exceeded",
+            details: "2 > 1",
+          },
+        ],
+      },
+    });
+    fetchOrderDetailMock.mockRejectedValue(
+      new ApiError("Rejected order re-read unavailable", "network"),
+    );
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Retry" }),
+    );
+    expect(
+      await within(dialog).findByText("Rejected order re-read unavailable"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("region", { name: "Order review" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
+    expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["confirm", "accept"],
+    ["confirm", "fail"],
+    ["cancel", "accept"],
+    ["cancel", "fail"],
+  ] as const)(
+    "guards a reopened order during a pending %s and refreshes after %s",
+    async (action, outcome) => {
+      const user = userEvent.setup();
+      const other = { ...waiting, order: { ...waiting.order, id: "order-B" } };
+      useOrdersMock.mockReturnValue(
+        readyPage<Order>([waiting.order, other.order]),
+      );
+      fetchOrderDetailMock.mockImplementation(async (id) =>
+        id === other.order.id ? other : waiting,
+      );
+      renderOrders("/orders");
+      await user.click(screen.getByText(waiting.order.id));
+      const dialog = await screen.findByRole("dialog", {
+        name: `Order ${waiting.order.id}`,
+      });
+      let finish!: (value: unknown) => void;
+      let fail!: (error: Error) => void;
+      const decisionMock =
+        action === "confirm" ? confirmOrderReviewMock : cancelOrderReviewMock;
+      decisionMock.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            finish = resolve;
+            fail = reject;
+          }),
+      );
+      if (action === "confirm") {
+        await user.click(
+          await within(dialog).findByRole("button", { name: "Confirm" }),
+        );
+      } else {
+        await user.click(
+          await within(dialog).findByRole("button", { name: "Cancel order" }),
+        );
+        const alert = await screen.findByRole("alertdialog");
+        await user.click(
+          within(alert).getByRole("button", { name: "Cancel order" }),
+        );
+      }
+      const busyLabel = action === "confirm" ? "Confirming…" : "Cancelling…";
+      const otherLabel = action === "confirm" ? "Cancel order" : "Confirm";
+      await waitFor(() =>
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+      );
+      expect(
+        within(dialog).getByRole("button", { name: busyLabel }),
+      ).toBeDisabled();
+      expect(
+        within(dialog).getByRole("button", { name: otherLabel }),
+      ).toBeDisabled();
+      await user.click(
+        within(dialog).getAllByRole("button", { name: "Close" }).at(-1)!,
+      );
+      await user.click(screen.getByText(other.order.id));
+      const otherDialog = await screen.findByRole("dialog", {
+        name: `Order ${other.order.id}`,
+      });
+      expect(
+        await within(otherDialog).findByRole("button", { name: "Confirm" }),
+      ).toBeEnabled();
+      expect(
+        within(otherDialog).getByRole("button", { name: "Cancel order" }),
+      ).toBeEnabled();
+      await user.click(
+        within(otherDialog).getAllByRole("button", { name: "Close" }).at(-1)!,
+      );
+      await user.click(screen.getByText(waiting.order.id));
+      const reopened = await screen.findByRole("dialog", {
+        name: `Order ${waiting.order.id}`,
+      });
+      await within(reopened).findByRole("region", { name: "Order review" });
+      const busyButtons = [
+        within(reopened).getByRole("button", { name: busyLabel }),
+        within(reopened).getByRole("button", { name: otherLabel }),
+      ];
+      for (const button of busyButtons) {
+        expect(button).toBeDisabled();
+        await user.click(button);
+      }
+      expect(decisionMock).toHaveBeenCalledTimes(1);
+      expect(fetchOrderDetailMock).toHaveBeenCalledTimes(3);
+      const settled: OrderDetail =
+        outcome === "fail"
+          ? { ...waiting, review: rejectedReview }
+          : {
+              order: {
+                ...sampleOrder,
+                status: action === "confirm" ? "accepted" : "cancelled",
+              },
+              events: [],
+              trades: [],
+            };
+      let finishRead!: (value: OrderDetail) => void;
+      fetchOrderDetailMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+      );
+      await act(async () => {
+        if (outcome === "fail")
+          fail(new ApiError("Decision failed", "internal", 500));
+        else finish({ order: settled.order, decision: acceptedDecision });
+      });
+      await waitFor(() =>
+        expect(fetchOrderDetailMock).toHaveBeenCalledTimes(4),
+      );
+      expect(
+        within(reopened).queryByRole("region", { name: "Order review" }),
+      ).not.toBeInTheDocument();
+      await act(async () => {
+        finishRead(settled);
+      });
+      if (outcome === "fail") {
+        expect(
+          await within(reopened).findByRole("button", { name: "Retry" }),
+        ).toBeEnabled();
+        expect(
+          within(reopened).getByRole("button", { name: "Cancel order" }),
+        ).toBeEnabled();
+      } else {
+        expect(
+          await within(reopened).findByText(
+            action === "confirm" ? "Accepted" : "Cancelled",
+          ),
+        ).toBeInTheDocument();
+        expect(
+          within(reopened).queryByRole("region", { name: "Order review" }),
+        ).not.toBeInTheDocument();
+      }
+      expect(fetchOrderDetailMock).toHaveBeenCalledTimes(4);
+    },
+  );
+
+  it("shows the decision error above the order after a failed decision leaves review", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+    await within(dialog).findByRole("button", { name: "Confirm" });
+    confirmOrderReviewMock.mockRejectedValue(
+      new ApiError("Order is no longer waiting", "conflict", 409),
+    );
+    fetchOrderDetailMock.mockResolvedValue({
+      order: sampleOrder,
+      events: [],
+      trades: [],
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    await within(dialog).findByText("Accepted");
+    expect(
+      within(dialog).queryByRole("region", { name: "Order review" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Order is no longer waiting"),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /dismiss/i }));
+    expect(
+      within(dialog).queryByText("Order is no longer waiting"),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["accept", "fail"])(
+    "reloads the list without a banner when a closed in-flight decision settles with %s",
+    async (outcome) => {
+      const user = userEvent.setup();
+      const dialog = await openSampleOrderDetail(user, waiting);
+      await within(dialog).findByRole("button", { name: "Confirm" });
+      const reload = useOrdersMock.mock.results.at(-1)!.value.reload;
+      let finish!: (value: unknown) => void;
+      let fail!: (error: Error) => void;
+      confirmOrderReviewMock.mockImplementation(
+        (_id, signal?: AbortSignal) =>
+          new Promise((resolve, reject) => {
+            finish = resolve;
+            fail = reject;
+            signal?.addEventListener("abort", () =>
+              reject(new DOMException("The request was aborted", "AbortError")),
+            );
+          }),
+      );
+      await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
+      await user.click(
+        within(dialog).getAllByRole("button", { name: "Close" }).at(-1)!,
+      );
+      expect(reload).not.toHaveBeenCalled();
+      await act(async () => {
+        if (outcome === "accept") {
+          finish({ order: sampleOrder, decision: acceptedDecision });
+        } else {
+          fail(new ApiError("Decision failed", "internal", 500));
+        }
+      });
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(fetchOrderDetailMock).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByText("Approved. The caller can now send this order."),
+      ).not.toBeInTheDocument();
+      fetchOrderDetailMock.mockResolvedValue({
+        order: sampleOrder,
+        events: [],
+        trades: [],
+      });
+      await user.click(screen.getByText(sampleOrder.id));
+      const reopened = await screen.findByRole("dialog", {
+        name: `Order ${sampleOrder.id}`,
+      });
+      await within(reopened).findByText("Accepted");
+      expect(
+        within(reopened).queryByText(
+          "Approved. The caller can now send this order.",
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["confirm", "cancel"])(
+    "warns that a %s decision may be recorded after a network failure",
+    async (action) => {
+      const user = userEvent.setup();
+      const dialog = await openSampleOrderDetail(user, waiting);
+      await within(dialog).findByRole("button", { name: "Confirm" });
+      const mutation =
+        action === "confirm" ? confirmOrderReviewMock : cancelOrderReviewMock;
+      mutation.mockRejectedValue(new ApiError("connection reset。", "network"));
+      if (action === "confirm") {
+        await user.click(
+          within(dialog).getByRole("button", { name: "Confirm" }),
+        );
+      } else {
+        await user.click(
+          within(dialog).getByRole("button", { name: "Cancel order" }),
+        );
+        const confirmation = await screen.findByRole("alertdialog");
+        await user.click(
+          within(confirmation).getByRole("button", { name: "Cancel order" }),
+        );
+      }
+      expect(
+        await within(dialog).findByText(
+          "The review request did not complete: connection reset. The decision may already be recorded; the order status shown is authoritative. Check it before retrying.",
+        ),
+      ).toBeInTheDocument();
+      expect(mutation).toHaveBeenCalledTimes(1);
+      expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("uses the same acknowledged trading banner as submitting to the venue", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: {
+        ...review,
+        destination: {
+          connection: linkedVenueOrder.connection,
+          venueAccount: linkedVenueOrder.venueAccount,
+          route: {},
+        },
+      },
+    });
+    await within(dialog).findByRole("button", { name: "Confirm" });
+    const venueSend = { status: "acknowledged", venueOrder: linkedVenueOrder };
+    confirmOrderReviewMock.mockResolvedValue({
+      order: sampleOrder,
+      decision: acceptedDecision,
+      venueSend,
+    });
+    fetchOrderDetailMock.mockResolvedValue({
+      order: sampleOrder,
+      events: [],
+      trades: [],
+      venueOrder: linkedVenueOrder,
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    const reviewBanner = await within(dialog).findByText(
+      "Sent to Alpaca · paper. Venue order venue-123.",
+    );
+    const text = reviewBanner.textContent;
+    const classes = reviewBanner.className;
+    await user.click(
+      within(dialog).getAllByRole("button", { name: "Close" }).at(-1)!,
+    );
+    fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+    sendPaperOrderMock.mockResolvedValue({
+      id: sampleOrder.id,
+      verdict: "accept",
+      reasons: [],
+      signedApproval: "",
+      keyId: "",
+      venueSend,
+    });
+    const submit = await openDialog(user);
+    await fillOrderFields(user, submit);
+    await enablePaperSending(user, submit);
+    await chooseTimeInForce(user, submit, "DAY - Day");
+    await user.click(
+      within(submit).getByRole("button", { name: "Submit PAPER order" }),
+    );
+    const submittedBanner = await screen.findByText(text!);
+    expect(submittedBanner.className).toBe(classes);
+  });
+
+  it("names an unresolved review connection by id without inventing its mode", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: {
+        ...review,
+        destination: {
+          connection: "missing-connection",
+          venueAccount: "PA-1",
+          route: {},
+        },
+      },
+    });
+    await within(dialog).findByText("missing-connection");
+    const section = within(dialog).getByRole("region", {
+      name: "Order review",
+    });
+    expect(within(section).getByText("Venue account")).toBeInTheDocument();
+    expect(within(section).getByText("PA-1")).toBeInTheDocument();
+    confirmOrderReviewMock.mockResolvedValue({
+      order: sampleOrder,
+      decision: acceptedDecision,
+      venueSend: {
+        status: "acknowledged",
+        venueOrder: { ...linkedVenueOrder, connection: "missing-connection" },
+      },
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    expect(
+      await within(dialog).findByText(
+        "Sent to missing-connection. Venue order venue-123.",
+      ),
+    ).toHaveClass("border-[var(--ok)]");
+  });
+
+  it("rejects an accepted trading confirmation without a send outcome and re-reads", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: {
+        ...review,
+        destination: {
+          connection: linkedVenueOrder.connection,
+          venueAccount: linkedVenueOrder.venueAccount,
+          route: {},
+        },
+      },
+    });
+    await within(dialog).findByRole("button", { name: "Confirm" });
+    confirmOrderReviewMock.mockResolvedValue({
+      order: sampleOrder,
+      decision: acceptedDecision,
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    expect(
+      await within(dialog).findByText(
+        /Trading send outcome is missing for a review destination/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(
+        "Approved. The caller can now send this order.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["reject", "cancel", "fail", "accept"])(
+    "replaces the existing banner when a visible review decision settles with %s",
+    async (outcome) => {
+      const user = userEvent.setup();
+      fetchOrderDetailMock.mockResolvedValue(waiting);
+      fetchTradingDestinationsMock.mockResolvedValue([alpacaDestination]);
+      sendPaperOrderMock.mockResolvedValue({
+        id: sampleOrder.id,
+        verdict: "reject",
+        reasons: [],
+        signedApproval: "",
+        keyId: "",
+      });
+      renderOrders("/orders");
+      const submit = await openDialog(user);
+      await fillOrderFields(user, submit);
+      await enablePaperSending(user, submit);
+      await chooseTimeInForce(user, submit, "DAY - Day");
+      await user.click(
+        within(submit).getByRole("button", { name: "Submit PAPER order" }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: `Order ${sampleOrder.id}`,
+      });
+      const oldBanner =
+        "Pre-trade checks rejected the order. Nothing was sent to the venue.";
+      expect(await within(dialog).findByText(oldBanner)).toBeInTheDocument();
+      await within(dialog).findByRole("button", { name: "Confirm" });
+      if (outcome === "fail") {
+        confirmOrderReviewMock.mockRejectedValue(
+          new ApiError("Review decision failed", "conflict", 409),
+        );
+      } else {
+        confirmOrderReviewMock.mockResolvedValue({
+          order: waiting.order,
+          decision: {
+            ...acceptedDecision,
+            verdict: outcome === "accept" ? "accept" : "reject",
+          },
+        });
+      }
+      if (outcome === "cancel") {
+        cancelOrderReviewMock.mockResolvedValue({
+          order: { ...sampleOrder, status: "cancelled" },
+        });
+        await user.click(
+          within(dialog).getByRole("button", { name: "Cancel order" }),
+        );
+        const confirmation = await screen.findByRole("alertdialog");
+        await user.click(
+          within(confirmation).getByRole("button", { name: "Cancel order" }),
+        );
+      } else {
+        await user.click(
+          within(dialog).getByRole("button", { name: "Confirm" }),
+        );
+      }
+      await waitFor(() =>
+        expect(fetchOrderDetailMock).toHaveBeenCalledTimes(2),
+      );
+      expect(within(dialog).queryByText(oldBanner)).not.toBeInTheDocument();
+      if (outcome === "accept") {
+        expect(
+          within(dialog).getByText(
+            "Approved. The caller can now send this order.",
+          ),
+        ).toBeInTheDocument();
+      }
+    },
+  );
+
+  it("keeps order B's banner when order A's hidden review decision settles", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+    await within(dialog).findByRole("button", { name: "Confirm" });
+    const reload = useOrdersMock.mock.results.at(-1)!.value.reload;
+    let finish!: (value: unknown) => void;
+    confirmOrderReviewMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    await user.click(
+      within(dialog).getAllByRole("button", { name: "Close" }).at(-1)!,
+    );
+    const orderB = { ...sampleOrder, id: "order-B" };
+    const bannerB = "Order B enrichment warning";
+    createOrderMock.mockResolvedValue({ order: orderB, warning: bannerB });
+    fetchOrderDetailMock.mockResolvedValue({
+      order: orderB,
+      events: [],
+      trades: [],
+    });
+    const submit = await openDialog(user);
+    await fillOrderFields(user, submit);
+    await user.type(
+      within(submit).getByLabelText("Limit price (required to settle)"),
+      "100",
+    );
+    await user.click(
+      within(submit).getByRole("button", { name: /add order/i }),
+    );
+    const detailB = await screen.findByRole("dialog", {
+      name: "Order order-B",
+    });
+    expect(await within(detailB).findByText(bannerB)).toBeInTheDocument();
+    reload.mockClear();
+    fetchOrderDetailMock.mockClear();
+    await act(async () => {
+      finish({ order: sampleOrder, decision: acceptedDecision });
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(fetchOrderDetailMock).not.toHaveBeenCalled();
+    expect(within(detailB).getByText(bannerB)).toBeInTheDocument();
+    expect(
+      within(detailB).queryByText(
+        "Approved. The caller can now send this order.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer execution-report or workflow shortcuts for awaiting_review", async () => {
+    const dialog = await openSampleOrderDetail(userEvent.setup(), {
+      ...waiting,
+      events: [
+        {
+          id: "accepted",
+          order: sampleOrder.id,
+          at: sampleOrder.at,
+          type: "pre_trade_accepted",
+          source: "panel",
+          principal: "",
+          signed: true,
+          alg: "ed25519",
+        },
+        {
+          id: "fill",
+          order: sampleOrder.id,
+          at: sampleOrder.at,
+          type: "fill",
+          source: "panel",
+          principal: "",
+          signed: false,
+          fillQuantity: "1",
+          fillPrice: "10",
+        },
+      ],
+      trades: [sampleTrade],
+    });
+    await within(dialog).findByRole("region", { name: "Order review" });
+    expect(
+      within(dialog).queryByText("Workflow shortcuts"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: "Submit execution report" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: /clone execution report/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getAllByRole("button", { name: "Confirm" }),
+    ).toHaveLength(1);
+  });
+
+  it.each(["accepted", "committed", "cancelled", "rejected"])(
+    "does not offer review decisions for %s even if review data remains",
+    async (status) => {
+      const dialog = await openSampleOrderDetail(userEvent.setup(), {
+        ...waiting,
+        order: { ...sampleOrder, status },
+      });
+      await within(dialog).findByText(i18n.t(`orders:filter.status.${status}`));
+      expect(
+        within(dialog).queryByRole("region", { name: "Order review" }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(dialog).queryByRole("button", { name: "Confirm" }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(dialog).queryByRole("button", { name: "Retry" }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(dialog).queryByRole("button", { name: "Cancel order" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("shows the waiting status label in the list and the advanced filter option", async () => {
+    useOrdersMock.mockReturnValue(readyPage<Order>([waiting.order]));
+    renderOrders("/orders");
+    expect(screen.getByText("Awaiting review")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Awaiting review" }),
+    ).toBeChecked();
+  });
+});
 
 describe("Order detail venue section", () => {
   it("Binance market detail omits the time-in-force row for an empty route", async () => {
@@ -5730,6 +6934,7 @@ describe("Order detail venue section", () => {
 function failedCheckBlocking(account: string, code: string, reason: string) {
   return {
     passed: false,
+    reviews: [],
     rejects: [
       { code, scope: "account", policy: "daily_loss", reason, details: "" },
     ],
