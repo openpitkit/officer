@@ -100,11 +100,11 @@ func (r *realmStore) RecordAccountPnlReset(ctx context.Context, account domain.A
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	if err := setAccountPnl(ctx, tx, account.Code, "0", ""); err != nil {
 		return err
 	}

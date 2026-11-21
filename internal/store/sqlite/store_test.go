@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -135,6 +136,180 @@ func newTestStore(t *testing.T, opts ...Option) (fwstore.Store, fwstore.RealmSto
 		t.Fatalf("ForRealm(default): %v", err)
 	}
 	return s, rs
+}
+
+type transactionCodeError struct {
+	code int
+}
+
+func (e *transactionCodeError) Error() string { return fmt.Sprintf("sqlite code %d", e.code) }
+func (e *transactionCodeError) Code() int     { return e.code }
+
+type transactionBeginDriver struct {
+	onBegin  func()
+	beginErr error
+}
+
+func (d *transactionBeginDriver) Connect(context.Context) (driver.Conn, error) {
+	return d, nil
+}
+
+func (d *transactionBeginDriver) Driver() driver.Driver { return d }
+
+func (d *transactionBeginDriver) Open(string) (driver.Conn, error) { return d, nil }
+
+func (d *transactionBeginDriver) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected Prepare call")
+}
+
+func (d *transactionBeginDriver) Close() error { return nil }
+
+func (d *transactionBeginDriver) Begin() (driver.Tx, error) {
+	return nil, errors.New("unexpected Begin call")
+}
+
+func (d *transactionBeginDriver) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	d.onBegin()
+	return nil, d.beginErr
+}
+
+func TestBeginTxClassifiesCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		code     int
+		canceled bool
+		classify bool
+	}{
+		{"canceled_interrupt", sqlite3.SQLITE_INTERRUPT, true, true},
+		{"live_interrupt", sqlite3.SQLITE_INTERRUPT, false, false},
+		{"canceled_busy", sqlite3.SQLITE_BUSY, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			original := &transactionCodeError{code: test.code}
+			db := sql.OpenDB(&transactionBeginDriver{
+				onBegin: func() {
+					if test.canceled {
+						cancel()
+					}
+				},
+				beginErr: original,
+			})
+			t.Cleanup(func() {
+				if err := db.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			})
+			tx, err := beginTx(ctx, db, nil)
+			if tx != nil {
+				t.Fatal("expected nil transaction after BEGIN failure")
+			}
+			if !test.classify {
+				if err != original {
+					t.Fatalf("error changed: got %v, want original %v", err, original)
+				}
+				return
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("missing cancellation: %v", err)
+			}
+			var preserved *transactionCodeError
+			if !errors.As(err, &preserved) || preserved != original {
+				t.Fatalf("missing original SQLite error: %v", err)
+			}
+		})
+	}
+}
+
+func TestClassifyTxCancel(t *testing.T) {
+	interrupt := &transactionCodeError{code: sqlite3.SQLITE_INTERRUPT}
+	for _, canceled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("canceled=%t", canceled), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if canceled {
+				cancel()
+			}
+			for _, test := range []struct {
+				name     string
+				err      error
+				classify bool
+			}{
+				{"interrupt", interrupt, true},
+				{"wrapped_interrupt", fmt.Errorf("begin: %w", interrupt), true},
+				{"extended_interrupt", &transactionCodeError{code: sqlite3.SQLITE_INTERRUPT | 1<<8}, true},
+				{"tx_done", sql.ErrTxDone, true},
+				{"wrapped_tx_done", fmt.Errorf("store: commit x: %w", sql.ErrTxDone), true},
+				{"busy", &transactionCodeError{code: sqlite3.SQLITE_BUSY}, false},
+				{"plain", errors.New("store failed"), false},
+				{"canceled", context.Canceled, false},
+				{"wrapped_canceled", fmt.Errorf("store: %w", context.Canceled), false},
+				{"already_classified", classifyTxCancel(ctx, sql.ErrTxDone), false},
+				{"nil", nil, false},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					got := classifyTxCancel(ctx, test.err)
+					if !canceled || !test.classify {
+						if got != test.err {
+							t.Fatalf("error changed: got %v, want original %v", got, test.err)
+						}
+						return
+					}
+					if !errors.Is(got, context.Canceled) {
+						t.Fatalf("missing cancellation: %v", got)
+					}
+					if !errors.Is(got, test.err) {
+						t.Fatalf("missing original error %v: %v", test.err, got)
+					}
+					var original, preserved *transactionCodeError
+					if errors.As(test.err, &original) &&
+						(!errors.As(got, &preserved) || preserved != original) {
+						t.Fatalf("missing original SQLite error: %v", got)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRollbackTransactionClassifiesCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		canceled bool
+		err      error
+		classify bool
+	}{
+		{"canceled_tx_done", true, sql.ErrTxDone, true},
+		{"canceled_genuine_error", true, errors.New("store failed"), false},
+		{"live_tx_done", false, sql.ErrTxDone, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, realm := newTestStore(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			got := func() (result error) {
+				tx, err := beginTx(ctx, realm.(*realmStore).rawDB(), nil)
+				if err != nil {
+					t.Fatalf("beginTx: %v", err)
+				}
+				defer rollbackTransaction(ctx, &result, tx)
+				if test.canceled {
+					cancel()
+				}
+				return test.err
+			}()
+			if !test.classify {
+				if got != test.err {
+					t.Fatalf("error changed: got %v, want original %v", got, test.err)
+				}
+				return
+			}
+			if !errors.Is(got, context.Canceled) || !errors.Is(got, test.err) {
+				t.Fatalf("expected cancellation and original error %v, got %v", test.err, got)
+			}
+		})
+	}
 }
 
 func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {

@@ -488,11 +488,11 @@ func (r *realmStore) RestoreBackup(
 		r.store.alertResolutionMu.Lock()
 		defer r.store.alertResolutionMu.Unlock()
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return backup.RestoreSummary{}, fmt.Errorf("store: begin restore: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	if err := refuseRunningSchedulerJobs(ctx, tx); err != nil {
 		return backup.RestoreSummary{}, err
 	}

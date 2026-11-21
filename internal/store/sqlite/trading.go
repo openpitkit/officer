@@ -83,11 +83,11 @@ func (r *realmStore) CreateTradingConnection(
 	if err != nil {
 		return connection, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return connection, fmt.Errorf("store: begin create trading connection: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	classifier, err := r.store.executionPolicyProviders()
 	if err != nil {
 		return connection, err
@@ -338,11 +338,11 @@ func (r *realmStore) DeleteTradingConnection(ctx context.Context, id domain.Exte
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete trading connection: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	connectionID, err := resolveTradingConnectionID(ctx, tx, id)
 	if err != nil {
 		return err
@@ -586,11 +586,11 @@ func (r *realmStore) PutTradingAccess(
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	accountID, groupID, err := resolveSubjectIDs(
 		ctx, tx, access.Account, access.AccountGroup,
 	)

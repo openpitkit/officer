@@ -215,11 +215,11 @@ func (r *realmStore) recordOrderSubmission(
 	if err != nil {
 		return domain.Order{}, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return domain.Order{}, fmt.Errorf("store: begin order submission: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	order, err := createOrderTx(ctx, dictionaries, tx, o)
 	if err != nil {
@@ -295,11 +295,11 @@ func (r *realmStore) UpdateOrderStatus(
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin order status update: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	res, err := tx.ExecContext(
 		ctx,
 		`UPDATE order_record SET status_id = ? WHERE external_id = ?`,
@@ -425,11 +425,11 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return domain.OrderDetail{}, fmt.Errorf("store: begin order read: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	row := tx.QueryRowContext(ctx, orderSelect+` WHERE o.external_id = ?`, id.Bytes())
 	o, err := scanOrderRow(dictionaries, row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1885,11 +1885,11 @@ func (r *realmStore) recordOrderSettlement(
 	if err != nil {
 		return "", err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return "", fmt.Errorf("store: begin record_order_settlement: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	reportID, err := r.recordOrderSettlementTx(ctx, dictionaries, tx, st, attest)
 	if err != nil {

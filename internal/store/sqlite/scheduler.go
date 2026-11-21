@@ -273,11 +273,11 @@ func (s *SchedulerStore) Claim(ctx context.Context, now time.Time) (result sched
 	if err != nil {
 		return scheduler.Job{}, false, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return scheduler.Job{}, false, err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	job, err := scanSchedulerJob(tx.QueryRowContext(ctx,
 		schedulerJobSelect+` WHERE j.state = 'ready' AND j.next_at <= ?
 		 ORDER BY j.next_at, j.job_id LIMIT 1`, timeStr(now)))
@@ -316,11 +316,11 @@ func (s *SchedulerStore) Finish(ctx context.Context, job scheduler.Job, executio
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	if err := updateSchedulerJob(ctx, tx, job, "state = 'running' AND run_id = ?", execution.ID); err != nil {
 		return err
 	}
@@ -351,11 +351,11 @@ func (s *SchedulerStore) Recover(ctx context.Context, now time.Time) (err error)
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	jobs, err := listSchedulerJobs(ctx, tx, scheduler.Running)
 	if err != nil {
 		return err

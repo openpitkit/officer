@@ -230,11 +230,11 @@ func (r *realmStore) ListAlerts(ctx context.Context, principal string) (_ []aler
 	if err != nil {
 		return nil, err
 	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	rows, err := tx.QueryContext(ctx, alertSelect+` ORDER BY a.at DESC,a.id DESC`, principal)
 	if err != nil {
 		return nil, err
@@ -286,11 +286,11 @@ func (r *realmStore) GetAlert(ctx context.Context, id, principal string) (_ aler
 	if err != nil {
 		return alerts.Alert{}, err
 	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return alerts.Alert{}, err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	a, err := scanAlert(tx.QueryRowContext(ctx, alertSelect+` WHERE a.external_id=?`, principal, id))
 	if err != nil {
 		return a, err
@@ -342,11 +342,11 @@ func (r *realmStore) RecordAlertDelivery(ctx context.Context, id string, d alert
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	result, err := tx.ExecContext(ctx, `INSERT INTO alert_delivery(alert_id,channel,failed)
  SELECT id,?,? FROM actionable_alert WHERE external_id=?
  ON CONFLICT(alert_id,channel) DO UPDATE SET failed=excluded.failed`, d.Channel, d.Failed, id)
@@ -395,11 +395,11 @@ func (r *realmStore) ResolveAlert(ctx context.Context, id string, decide func(al
 	if err != nil {
 		return alerts.Resolution{}, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return alerts.Resolution{}, err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	if err := appendAudit(ctx, tx, dict, audit); err != nil {
 		return alerts.Resolution{}, err
 	}

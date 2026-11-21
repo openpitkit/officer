@@ -87,6 +87,18 @@ which review still catches:
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
 
+### `store-transaction-helper`
+
+`checks/semgrep/store-transaction-helper.yml` requires SQLite store transactions
+to open through `beginTx`, which classifies context-ended transactions while
+preserving the original error. Pass the same context to `rollbackTransaction`
+so statement and commit errors receive the same classification. Raw `BeginTx`
+selectors, including method values, are allowed only inside the helper; tests
+and rule fixtures are excluded.
+Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
 ### `test-slog-default-restore`
 
 `checks/semgrep/test-slog-default-restore.yml` forbids direct `slog.SetDefault`

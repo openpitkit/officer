@@ -92,11 +92,11 @@ func (r *realmStore) AppendAuditBatch(
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin audit batch: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	for _, entry := range entries {
 		if err := appendAudit(ctx, tx, dictionaries, entry); err != nil {
 			return err
@@ -299,11 +299,11 @@ func (r *realmStore) ListAuditRows(
 	var reader sqlQueryer = db
 	var readTx *sql.Tx
 	if filter.Restriction.Selection != nil {
-		readTx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		readTx, err = beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return fwstore.AuditListPage{}, fmt.Errorf("store: begin audit read: %w", err)
 		}
-		defer rollbackTransaction(&resultErr, readTx)
+		defer rollbackTransaction(ctx, &resultErr, readTx)
 		reader = readTx
 		unrestricted := filter
 		unrestricted.Restriction = domain.AccountRestriction{}

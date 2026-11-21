@@ -187,11 +187,11 @@ func (s *sqliteStore) sealRealm(
 	if err != nil {
 		return 0, fmt.Errorf("store: derive master key verifier for sealing: %w", err)
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return 0, fmt.Errorf("store: begin secret sealing: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	signingKeys, err := s.sealTextKeyedSecrets(
 		ctx, tx, key,

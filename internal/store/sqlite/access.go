@@ -60,7 +60,7 @@ func (s *sqliteStore) SetupState(ctx context.Context) (_ access.SetupState, err 
 	if err != nil {
 		return access.SetupState{}, err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	var step string
 	var declinedAt sql.NullString
@@ -96,7 +96,7 @@ func (s *sqliteStore) SetSetupStep(
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	if _, err := access.ParseSetupStep(string(step)); err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (s *sqliteStore) DeclineEncryption(ctx context.Context, at time.Time) (err 
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE access_state
 		 SET encryption_declined_at = COALESCE(encryption_declined_at, ?)
@@ -141,7 +141,7 @@ func (s *sqliteStore) CompleteSetupOpen(
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	if err := setAccessMode(ctx, tx, access.ModeOpen); err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func (s *sqliteStore) CompleteSetupToken(
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	if err := s.storeTokenMode(ctx, tx, credentials, session); err != nil {
 		return err
 	}
@@ -203,7 +203,7 @@ func (s *sqliteStore) EnableTokenMode(
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if err := s.storeTokenMode(ctx, tx, credentials, session); err != nil {
 		return err
@@ -248,7 +248,7 @@ func (s *sqliteStore) DisableTokenMode(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM access_credential`); err != nil {
 		return fmt.Errorf("store: delete access credentials: %w", err)
@@ -283,7 +283,7 @@ func (s *sqliteStore) ReplaceToken(
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if err := s.putAccessCredential(
 		ctx, tx, credentialKind, []byte(value), time.Now(),
@@ -302,7 +302,7 @@ func (s *sqliteStore) ReplacePassword(
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if err := s.putAccessCredential(
 		ctx, tx, panelPasswordKind, []byte(password.Hash), password.SetAt,
@@ -329,7 +329,7 @@ func (s *sqliteStore) ResetPassword(
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if err := s.putAccessCredential(
 		ctx, tx, panelPasswordKind, []byte(password.Hash), password.SetAt,
@@ -356,7 +356,7 @@ func (s *sqliteStore) CreateSession(
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if err := storeSession(ctx, tx, session); err != nil {
 		return err
@@ -496,7 +496,7 @@ func (s *sqliteStore) beginAccessWrite(
 	if err != nil {
 		return nil, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: begin access write: %w", err)
 	}
@@ -511,7 +511,7 @@ func (s *sqliteStore) beginAccessWrite(
 		)
 	}
 	if err != nil {
-		rollbackTransaction(&err, tx)
+		rollbackTransaction(ctx, &err, tx)
 		return nil, err
 	}
 	return tx, nil

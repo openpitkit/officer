@@ -195,11 +195,11 @@ func (r *realmStore) UpdateAsset(
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return domain.Asset{}, fmt.Errorf("store: begin update asset: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	assetID, err := resolveAssetID(ctx, tx, oldCode)
 	if err != nil {
@@ -247,11 +247,11 @@ func (r *realmStore) DeleteAsset(ctx context.Context, code string, force bool) (
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete asset: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	assetID, err := resolveAssetID(ctx, tx, code)
 	if err != nil {
@@ -461,11 +461,11 @@ func (r *realmStore) DeleteAssetClass(
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete asset class: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	classID, err := resolveAssetClassID(ctx, tx, code)
 	if err != nil {
@@ -1012,11 +1012,11 @@ func (r *realmStore) DeleteGroup(
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete group: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	groupID, err := resolveGroupID(ctx, tx, code)
 	if err != nil {
@@ -1156,11 +1156,11 @@ func (r *realmStore) CreateAccount(
 	if err != nil {
 		return domain.Account{}, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("store: begin create account: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	groupID, err := optionalGroupID(ctx, tx, account.GroupCode)
 	if err != nil {
@@ -1439,11 +1439,11 @@ func (r *realmStore) SetAccountGroup(
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return err
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	groupID, err := optionalGroupID(ctx, tx, groupCode)
 	if err != nil {
 		return err
@@ -1588,11 +1588,11 @@ func (r *realmStore) DeleteAccount(
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete account: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	accountID, err := resolveAccountID(ctx, tx, code)
 	if err != nil {

@@ -170,11 +170,11 @@ func (r *realmStore) DeactivateAllSigningKeys(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin deactivate signing keys: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	rows, err := tx.QueryContext(ctx, `SELECT key_id FROM signing_key WHERE active = 1`)
 	if err != nil {

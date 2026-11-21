@@ -169,12 +169,12 @@ func (r *realmStore) recordAccountAdjustment(
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return domain.AccountAdjustmentRecord{},
 			fmt.Errorf("store: begin account adjustment tx: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if in.UpsertBalance != nil {
 		if err := upsertBalancesTx(ctx, tx, []domain.Balance{*in.UpsertBalance}); err != nil {

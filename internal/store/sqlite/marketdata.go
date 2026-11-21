@@ -218,11 +218,11 @@ func (r *realmStore) DeleteMarketDataInstance(
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete market data instance: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	instanceID, err := resolveInstanceID(ctx, tx, id)
 	if err != nil {

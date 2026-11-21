@@ -38,6 +38,7 @@ import (
 	"go.openpit.dev/officer/internal/access"
 
 	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const driverName = "sqlite"
@@ -532,8 +533,38 @@ func RemoveDatabaseFiles(path string) error {
 	return result
 }
 
-// rollbackTransaction returns a rollback failure alongside the operation result.
-func rollbackTransaction(result *error, tx *sql.Tx) {
+// classifyTxCancel preserves context-ended transaction errors as cancellation.
+// modernc's *sqlite.Error carries SQLITE_INTERRUPT through its Code method;
+// database/sql may return ErrTxDone after context cancellation rolls back a tx.
+// The interrupt is matched by interface, not by type, because *sqlite.Error has
+// no exported constructor: any error in the chain whose Code() low byte is
+// SQLITE_INTERRUPT counts as an interrupt. Revisit if a domain error with a
+// Code() int method appears.
+func classifyTxCancel(ctx context.Context, err error) error {
+	if err == nil {
+		return err
+	}
+	ctxErr := ctx.Err()
+	if ctxErr == nil || errors.Is(err, ctxErr) {
+		return err
+	}
+	var coded interface{ Code() int }
+	if errors.Is(err, sql.ErrTxDone) ||
+		(errors.As(err, &coded) && coded.Code()&0xff == sqlite3.SQLITE_INTERRUPT) {
+		return fmt.Errorf("store: transaction ended by its context: %w: %w", ctxErr, err)
+	}
+	return err
+}
+
+func beginTx(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (*sql.Tx, error) {
+	tx, err := db.BeginTx(ctx, opts)
+	return tx, classifyTxCancel(ctx, err)
+}
+
+// rollbackTransaction classifies context cancellation and returns a rollback
+// failure alongside the operation result.
+func rollbackTransaction(ctx context.Context, result *error, tx *sql.Tx) {
+	*result = classifyTxCancel(ctx, *result)
 	err := tx.Rollback()
 	if err == nil || errors.Is(err, sql.ErrTxDone) {
 		return
@@ -749,11 +780,11 @@ var errEnumDictionaryCodeMissing = errors.New("enum dictionary code is missing")
 func seedEnumDictionaries(
 	ctx context.Context, db *sql.DB,
 ) (seeded *enumDictionaries, err error) {
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: begin enum dictionary seed: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	for _, dictionary := range schema.EnumDictionarySeeds() {
 		for _, seed := range dictionary.Codes {

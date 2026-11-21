@@ -36,11 +36,11 @@ func (r *realmStore) GetTestExecutionPolicy(ctx context.Context, connection doma
 	if err != nil {
 		return domain.TestExecutionPolicyState{}, err
 	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return domain.TestExecutionPolicyState{}, fmt.Errorf("store: begin test policy read: %w", err)
 	}
-	defer rollbackTransaction(&resultErr, tx)
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	id, class, err := r.executionPolicyConnection(ctx, tx, connection)
 	if err != nil {
 		return domain.TestExecutionPolicyState{}, err
@@ -65,11 +65,11 @@ func (r *realmStore) ReplaceTestExecutionPolicy(
 	if err != nil {
 		return oldState, newState, err
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return oldState, newState, fmt.Errorf("store: begin test policy write: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 	id, class, err := r.executionPolicyConnection(ctx, tx, connection)
 	if err != nil {
 		return oldState, newState, err

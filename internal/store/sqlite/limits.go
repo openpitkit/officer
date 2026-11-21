@@ -895,11 +895,11 @@ func putLimitRow(
 	mode *domain.RuleMode,
 ) (err error) {
 	where, args := limitKeyWhere(scope, accountID, assetID, mode)
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin put limit %s: %w", table, err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if _, err := tx.ExecContext(
 		ctx,
@@ -950,11 +950,11 @@ func putSpotFundsPnlBoundsRow(
 	accountID, groupID sql.NullInt64,
 	insertFn func(context.Context, sqlExecer) error,
 ) (err error) {
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin put spot funds pnl bounds limit: %w", err)
 	}
-	defer rollbackTransaction(&err, tx)
+	defer rollbackTransaction(ctx, &err, tx)
 
 	if _, err := tx.ExecContext(
 		ctx,
