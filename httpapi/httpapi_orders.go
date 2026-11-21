@@ -366,8 +366,8 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 // response the robot received for the attested request. The envelope is carried
 // verbatim in the response's signedApproval or signedAttestation field, matching
 // the live handler. Only the facet matching the request type is populated.
-// A review confirm is reproduced as its signed decision alone: the order and the
-// venue outcome it returned are not signed by the decision.
+// Review confirm and force are reproduced as their signed decision alone: the
+// order and venue outcome they returned are not signed by the decision.
 // detail is the order the event belongs to, its events ending with that one.
 func toEventReproductionResponseDTO(
 	event domain.OrderEvent, detail domain.OrderDetail,
@@ -400,10 +400,15 @@ func toEventReproductionResponseDTO(
 		out.Confirm = orderMutationResponseFromPayload(detail, att, p)
 	case domain.AttestationRequestCancel:
 		out.Cancel = orderMutationResponseFromPayload(detail, att, p)
-	case domain.AttestationRequestReviewConfirm:
-		out.ReviewConfirm = &reviewDecisionDTO{
+	case domain.AttestationRequestReviewConfirm, domain.AttestationRequestReviewForce:
+		decision := &reviewDecisionDTO{
 			Verdict: string(p.Verdict), Reasons: append([]httpx.OrderRejectDTO{}, submitPayloadRejectReasons(p)...),
 			SignedApproval: att.SignedEnvelope, KeyID: att.KeyID, Signed: eventAttestationSigned(att),
+		}
+		if att.RequestType == domain.AttestationRequestReviewForce {
+			out.ReviewForce = decision
+		} else {
+			out.ReviewConfirm = decision
 		}
 	case domain.AttestationRequestReviewCancel:
 		out.ReviewCancel = orderMutationResponseFromPayload(detail, att, p)

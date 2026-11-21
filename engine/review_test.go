@@ -28,14 +28,127 @@ import (
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
 
 type reviewOperationResult struct {
-	t     *testing.T
-	marks []reject.Reject
-	err   error
+	t      *testing.T
+	marks  []reject.Reject
+	err    error
+	output *heldOperationResult
+}
+
+type heldOperationResult struct {
+	marks       []reject.Reject
+	lock        pretrade.Lock
+	adjustments []accountadjustment.Outcome
+}
+
+func (r heldOperationResult) Reviews() ([]reject.Reject, error) { return r.marks, nil }
+func (r heldOperationResult) Lock() (pretrade.Lock, error)      { return r.lock, nil }
+func (r heldOperationResult) AccountAdjustments() ([]accountadjustment.Outcome, error) {
+	return r.adjustments, nil
+}
+
+func TestOrderModelHeldFlags(t *testing.T) {
+	e := newTestEngine(t)
+	if _, err := e.OrderModel(testOrder(), fwengine.ReviewFlags{AlreadyHeld: true}); err == nil || !strings.Contains(err.Error(), "requires Confirmed") {
+		t.Fatalf("AlreadyHeld without Confirmed error = %v, want explicit error", err)
+	}
+	order, err := e.OrderModel(testOrder(), fwengine.ReviewFlags{Confirmed: true, AlreadyHeld: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, ok := order.Review().Get()
+	if !ok {
+		t.Fatal("confirmed already-held order has no review group")
+	}
+	confirmed, confirmedSet := review.Confirmed().Get()
+	held, heldSet := review.AlreadyHeld().Get()
+	if !confirmedSet || !confirmed || !heldSet || !held {
+		t.Fatalf("review flags = %+v, want Confirmed and AlreadyHeld", review.Values())
+	}
+}
+
+func TestForcedHeldReservationValidation(t *testing.T) {
+	e := newTestEngine(t)
+	price, err := param.NewPriceFromString(testLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{{Price: price}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := marshalLock(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		held fwengine.HeldReservation
+		want string
+	}{
+		{"lock", fwengine.HeldReservation{Quantity: testQty}, "lock is empty"},
+		{"quantity", fwengine.HeldReservation{Lock: stored}, "quantity is invalid"},
+		{"zero", fwengine.HeldReservation{Lock: stored, Quantity: "0"}, "quantity is zero"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := e.ForcedHeldOrder(testOrder(), tc.held)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("forced hold error = %v, want %q", err, tc.want)
+			}
+			_, err = e.PrepareForcedHeldImmediate(testOrder(), tc.held)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("forced immediate error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestHeldReservationValidation(t *testing.T) {
+	e := newTestEngine(t)
+	price, err := param.NewPriceFromString(testLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{{Price: price}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := marshalLock(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := fwengine.HeldReservation{Lock: stored, Quantity: testQty}
+	for _, tc := range []struct {
+		name   string
+		held   fwengine.HeldReservation
+		result heldOperationResult
+		want   string
+	}{
+		{"missing lock", fwengine.HeldReservation{Quantity: testQty}, heldOperationResult{lock: pretrade.NewLock()}, "held reservation lock is empty"},
+		{"missing quantity", fwengine.HeldReservation{Lock: stored}, heldOperationResult{lock: pretrade.NewLock()}, "held reservation quantity is invalid"},
+		{"decimal zero quantity", fwengine.HeldReservation{Lock: stored, Quantity: "0.0"}, heldOperationResult{lock: pretrade.NewLock()}, "held reservation quantity is zero"},
+		{"negative quantity", fwengine.HeldReservation{Lock: stored, Quantity: "-1"}, heldOperationResult{lock: pretrade.NewLock()}, "held reservation quantity is invalid"},
+		{"review marks", held, heldOperationResult{lock: pretrade.NewLock(), marks: []reject.Reject{{Policy: "unexpected"}}}, "returned review marks"},
+		{"lock", held, heldOperationResult{lock: lock}, "returned a non-empty lock"},
+		{"adjustments", held, heldOperationResult{lock: pretrade.NewLock(), adjustments: []accountadjustment.Outcome{{}}}, "returned account adjustments"},
+		{"invalid stored lock", fwengine.HeldReservation{Lock: []byte("invalid"), Quantity: testQty}, heldOperationResult{lock: pretrade.NewLock()}, "unmarshal lock"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := e.ReservedHeldOrder(testOrder(), tc.result, tc.held)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ReservedHeldOrder error = %v, want %q", err, tc.want)
+			}
+			_, err = e.PrepareImmediateHeldReservation(testOrder(), tc.result, tc.held)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("PrepareImmediateHeldReservation error = %v, want %q", err, tc.want)
+			}
+		})
+	}
 }
 
 func (r reviewOperationResult) Reviews() ([]reject.Reject, error) {
@@ -43,11 +156,17 @@ func (r reviewOperationResult) Reviews() ([]reject.Reject, error) {
 }
 
 func (r reviewOperationResult) Lock() (pretrade.Lock, error) {
+	if r.output != nil {
+		return r.output.lock, nil
+	}
 	r.t.Fatal("review verdict read Lock")
 	return pretrade.Lock{}, nil
 }
 
 func (r reviewOperationResult) AccountAdjustments() ([]accountadjustment.Outcome, error) {
+	if r.output != nil {
+		return r.output.adjustments, nil
+	}
 	r.t.Fatal("review verdict read AccountAdjustments")
 	return nil, nil
 }
@@ -71,12 +190,15 @@ func TestReservedOrderReview(t *testing.T) {
 		modes []reject.RuleMode
 		want  []domain.ReviewMark
 		err   string
+		held  bool
 	}{
 		{name: "without hold", modes: []reject.RuleMode{reject.RuleModeReviewWithoutHold}, want: []domain.ReviewMark{want}},
 		{name: "mixed", modes: []reject.RuleMode{reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold}, want: []domain.ReviewMark{
 			{OrderReject: want.OrderReject, Mode: domain.RuleModeReviewWithHold}, want,
 		}},
-		{name: "with hold", modes: []reject.RuleMode{reject.RuleModeReviewWithHold}, err: "review with hold is not supported"},
+		{name: "with hold", modes: []reject.RuleMode{reject.RuleModeReviewWithHold}, held: true, want: []domain.ReviewMark{
+			{OrderReject: want.OrderReject, Mode: domain.RuleModeReviewWithHold},
+		}},
 		{name: "reject mark", modes: []reject.RuleMode{reject.RuleModeReject}, err: "reject mode in review marks"},
 		{name: "unknown mode", modes: []reject.RuleMode{255}, err: "unknown rule mode"},
 	} {
@@ -86,7 +208,11 @@ func TestReservedOrderReview(t *testing.T) {
 				marks[i] = mark
 				marks[i].Mode = mode
 			}
-			result, err := e.ReservedOrder(testOrder(), reviewOperationResult{t: t, marks: marks})
+			operation := reviewOperationResult{t: t, marks: marks}
+			if tc.held {
+				operation.output = &heldOperationResult{lock: pretrade.NewLock()}
+			}
+			result, err := e.ReservedOrder(testOrder(), operation)
 			if tc.err != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.err) {
 					t.Fatalf("ReservedOrder error = %v, want %q", err, tc.err)
@@ -97,6 +223,15 @@ func TestReservedOrderReview(t *testing.T) {
 				t.Fatal(err)
 			}
 			expected := fwengine.OrderResult{Verdict: domain.VerdictReview, Reviews: tc.want}
+			if tc.held {
+				expected.Held = true
+				expected.Outcomes = []fwengine.BalanceOutcome{}
+				expected.Blocks = []domain.AccountBlock{}
+				expected.Lock, _, err = capturePreTradeOutput(operation.output.lock, testOrder())
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if !reflect.DeepEqual(result, expected) {
 				t.Fatalf("ReservedOrder = %+v, want review marks only: %+v", result, expected)
 			}

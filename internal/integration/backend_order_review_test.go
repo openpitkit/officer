@@ -36,7 +36,7 @@ import (
 	"go.openpit.dev/officer/signing"
 )
 
-func newBackendReviewTest(t *testing.T, mode string, off bool) (*backend.Service, *fakeNode, *signing.Service, backend.SignedApproval) {
+func newBackendReviewTest(t *testing.T, mode string, off bool, held ...bool) (*backend.Service, *fakeNode, *signing.Service, backend.SignedApproval) {
 	t.Helper()
 	ctx := systemCtx()
 	key, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
@@ -69,11 +69,19 @@ func newBackendReviewTest(t *testing.T, mode string, off bool) (*backend.Service
 	marks := []domain.ReviewMark{{OrderReject: domain.OrderReject{Code: "order_size_limit", Reason: "review required"}, Mode: domain.RuleModeReviewWithoutHold}}
 	n.submitResult = &engine.OrderResult{Verdict: domain.VerdictReview, Reviews: marks}
 	n.immediateResult = &engine.ImmediateResult{Verdict: domain.VerdictReview, Reviews: marks}
+	if len(held) > 0 && held[0] {
+		marks[0].Mode = domain.RuleModeReviewWithHold
+		n.submitResult.Held = true
+		n.submitResult.Lock = []byte("123.45")
+		n.submitResult.SettlementLockPrice = "123.45"
+		n.immediateResult.Lock = []byte("123.45")
+		n.immediateResult.SettlementLockPrice = "123.45"
+	}
 	approval, err := svc.SubmitOrder(ctx, sampleOrder(), mode, domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	n.submitResult = &engine.OrderResult{Verdict: domain.VerdictAccept, SettlementLockPrice: "123.45"}
+	n.submitResult = &engine.OrderResult{Verdict: domain.VerdictAccept, SettlementLockPrice: "234.56"}
 	n.immediateResult = nil
 	n.accountCalls = nil
 	n.getOrderCount.Store(0)
@@ -114,18 +122,32 @@ func replaceReviewTestPayload(t *testing.T, n *fakeNode, signer *signing.Service
 }
 
 func TestService_ConfirmOrderReviewDecision(t *testing.T) {
+	testServiceOrderReviewDecision(t, false)
+}
+
+func TestService_ForceOrderReviewDecision(t *testing.T) {
+	testServiceOrderReviewDecision(t, true)
+}
+
+func testServiceOrderReviewDecision(t *testing.T, force bool) {
 	t.Parallel()
 	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate} {
 		for _, off := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/eSignOff=%t", mode, off), func(t *testing.T) {
 				t.Parallel()
-				svc, n, signer, review := newBackendReviewTest(t, mode, off)
+				svc, n, signer, review := newBackendReviewTest(t, mode, off, force)
 				id := domain.ExternalID(review.OrderExternalID)
 				original := verifiedReviewTestPayload(t, signer, review.SignedApproval, n.orders[id])
 				caller := domain.Caller{Source: domain.SourceAPI, Principal: "review-operator"}
 				ctx := auth.ContextWithCaller(context.Background(), caller)
 				audits := len(n.auditCalls)
-				order, result, err := svc.ConfirmOrderReview(ctx, review.OrderExternalID)
+				decide := svc.ConfirmOrderReview
+				requestType := domain.AttestationRequestReviewConfirm
+				if force {
+					decide = svc.ForceOrderReview
+					requestType = domain.AttestationRequestReviewForce
+				}
+				order, result, err := decide(ctx, review.OrderExternalID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -134,6 +156,9 @@ func TestService_ConfirmOrderReviewDecision(t *testing.T) {
 				if mode == domain.SubmitModeImmediate {
 					wantStatus, wantMethod = domain.OrderStatusFilled, "ConfirmImmediateReview"
 				}
+				if force {
+					wantMethod = strings.Replace(wantMethod, "Confirm", "Force", 1)
+				}
 				if order.Status != wantStatus || !reflect.DeepEqual(order, n.orders[id]) || result.Send != nil || result.Approval.Verdict != domain.VerdictAccept || len(result.Approval.Reviews) != 0 || result.Approval.Signed == off {
 					t.Fatalf("confirm order=%+v result=%+v", order, result)
 				}
@@ -141,11 +166,15 @@ func TestService_ConfirmOrderReviewDecision(t *testing.T) {
 					t.Fatalf("calls=%v audits=%v reads=%d", n.accountCalls, n.auditCalls, n.getOrderCount.Load())
 				}
 				p := verifiedReviewTestPayload(t, signer, result.Approval.SignedApproval, order)
-				if p.RequestType != string(domain.AttestationRequestReviewConfirm) || p.ApprovalRef != original.ApprovalID || p.ApprovalID == "" || p.ApprovalID == original.ApprovalID || p.Principal != caller.Principal || p.Mode != mode {
+				if p.RequestType != string(requestType) || p.ApprovalRef != original.ApprovalID || p.ApprovalID == "" || p.ApprovalID == original.ApprovalID || p.Principal != caller.Principal || p.Mode != mode {
 					t.Fatalf("confirm payload=%+v original=%+v", p, original)
 				}
-				if mode == domain.SubmitModeHold && p.EstimatePrice != "123.45" {
-					t.Fatalf("lock price=%q, want 123.45", p.EstimatePrice)
+				wantPrice := "234.56"
+				if force {
+					wantPrice = "123.45"
+				}
+				if mode == domain.SubmitModeHold && p.EstimatePrice != wantPrice {
+					t.Fatalf("lock price=%q, want %s", p.EstimatePrice, wantPrice)
 				}
 				submitted, err := svc.SubmitOrder(ctx, sampleOrder(), mode, domain.MissingAccountCreate)
 				if err != nil {
@@ -175,7 +204,7 @@ func TestService_ConfirmOrderReviewDecision(t *testing.T) {
 					}
 					if event.Type == domain.OrderEventCommitted {
 						committed = true
-						if payload.RequestType != string(domain.AttestationRequestReviewConfirm) || payload.ApprovalRef != p.ApprovalID {
+						if payload.RequestType != string(requestType) || payload.ApprovalRef != p.ApprovalID {
 							t.Fatalf("committed payload=%+v", payload)
 						}
 						if payload.Result == nil || payload.Result.LeavesQuantity != submittedResult.LeavesQuantity {
@@ -191,6 +220,15 @@ func TestService_ConfirmOrderReviewDecision(t *testing.T) {
 				}
 				if !committed {
 					t.Fatal("confirm has no committed event")
+				}
+				if _, exists := n.orderReviews[id]; exists {
+					t.Fatal("accepted review row was not removed")
+				}
+				if force {
+					calls := len(n.accountCalls)
+					if _, _, err := svc.ForceOrderReview(ctx, review.OrderExternalID); !errors.Is(err, domain.ErrConflict) || len(n.accountCalls) != calls {
+						t.Fatalf("second force err=%v calls=%v", err, n.accountCalls)
+					}
 				}
 			})
 		}
@@ -250,12 +288,24 @@ func TestService_CancelOrderReview(t *testing.T) {
 }
 
 func TestService_ReviewConfirmedShortcuts(t *testing.T) {
+	testServiceReviewShortcuts(t, false)
+}
+
+func TestService_ReviewForcedShortcuts(t *testing.T) {
+	testServiceReviewShortcuts(t, true)
+}
+
+func testServiceReviewShortcuts(t *testing.T, force bool) {
 	t.Parallel()
 	for _, cancel := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cancel=%t", cancel), func(t *testing.T) {
 			t.Parallel()
-			svc, _, _, review := newBackendReviewTest(t, domain.SubmitModeHold, false)
-			if _, _, err := svc.ConfirmOrderReview(systemCtx(), review.OrderExternalID); err != nil {
+			svc, _, _, review := newBackendReviewTest(t, domain.SubmitModeHold, false, force)
+			decide := svc.ConfirmOrderReview
+			if force {
+				decide = svc.ForceOrderReview
+			}
+			if _, _, err := decide(systemCtx(), review.OrderExternalID); err != nil {
 				t.Fatal(err)
 			}
 			var err error
@@ -272,14 +322,26 @@ func TestService_ReviewConfirmedShortcuts(t *testing.T) {
 }
 
 func TestService_ReviewConfirmedShortcutRefusals(t *testing.T) {
+	testServiceReviewShortcutRefusals(t, false)
+}
+
+func TestService_ReviewForcedShortcutRefusals(t *testing.T) {
+	testServiceReviewShortcutRefusals(t, true)
+}
+
+func testServiceReviewShortcutRefusals(t *testing.T, force bool) {
 	t.Parallel()
 	for _, fault := range []string{"wrong_reference", "empty_reference", "missing_review", "unverifiable_review", "mode_mismatch", "derived_accept"} {
 		for _, cancel := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/cancel=%t", fault, cancel), func(t *testing.T) {
 				t.Parallel()
-				svc, n, signer, review := newBackendReviewTest(t, domain.SubmitModeHold, false)
+				svc, n, signer, review := newBackendReviewTest(t, domain.SubmitModeHold, false, force)
 				id := domain.ExternalID(review.OrderExternalID)
-				if _, _, err := svc.ConfirmOrderReview(systemCtx(), review.OrderExternalID); err != nil {
+				decide := svc.ConfirmOrderReview
+				if force {
+					decide = svc.ForceOrderReview
+				}
+				if _, _, err := decide(systemCtx(), review.OrderExternalID); err != nil {
 					t.Fatal(err)
 				}
 				switch fault {
@@ -325,15 +387,21 @@ func TestService_ReviewConfirmedShortcutRefusals(t *testing.T) {
 
 func TestService_OrderReviewRefusals(t *testing.T) {
 	t.Parallel()
-	for _, operation := range []string{"confirm", "cancel"} {
-		for _, fault := range []string{"mcp", "not_waiting", "missing_review_approval", "unverifiable", "mode_mismatch", "wrong_verdict", "wrong_request", "approval_reference", "result", "execution_report", "unknown_mode", "missing_row", "trading_immediate", "invalid_id"} {
+	for _, operation := range []string{"confirm", "cancel", "force"} {
+		faults := []string{"mcp", "not_waiting", "missing_review_approval", "unverifiable", "mode_mismatch", "wrong_verdict", "wrong_request", "approval_reference", "result", "execution_report", "unknown_mode", "missing_row", "trading_immediate", "invalid_id"}
+		if operation == "force" {
+			faults = append(faults, "not_held")
+		}
+		for _, fault := range faults {
 			t.Run(operation+"/"+fault, func(t *testing.T) {
 				t.Parallel()
-				svc, n, signer, review := newBackendReviewTest(t, domain.SubmitModeHold, false)
+				svc, n, signer, review := newBackendReviewTest(t, domain.SubmitModeHold, false, operation == "force" && fault != "not_held")
 				id := domain.ExternalID(review.OrderExternalID)
 				ctx := systemCtx()
 				want := domain.ErrApprovalRequired
 				switch fault {
+				case "not_held":
+					want = domain.ErrConflict
 				case "mcp":
 					ctx = auth.ContextWithCaller(context.Background(), domain.Caller{Source: domain.SourceMCP, Principal: "agent"})
 					want = domain.ErrForbidden
@@ -384,13 +452,17 @@ func TestService_OrderReviewRefusals(t *testing.T) {
 					})
 				}
 				before := n.orders[id]
+				attestations := len(n.attestations)
 				var err error
-				if operation == "confirm" {
+				switch operation {
+				case "confirm":
 					_, _, err = svc.ConfirmOrderReview(ctx, review.OrderExternalID)
-				} else {
+				case "force":
+					_, _, err = svc.ForceOrderReview(ctx, review.OrderExternalID)
+				default:
 					_, _, err = svc.CancelOrderReview(ctx, review.OrderExternalID)
 				}
-				if err == nil || (want != nil && !errors.Is(err, want)) || len(n.accountCalls) != 0 || !reflect.DeepEqual(n.orders[id], before) {
+				if err == nil || (want != nil && !errors.Is(err, want)) || len(n.accountCalls) != 0 || len(n.attestations) != attestations || !reflect.DeepEqual(n.orders[id], before) {
 					t.Fatalf("review refusal err=%v want=%v calls=%v order=%+v", err, want, n.accountCalls, n.orders[id])
 				}
 				if (fault == "mcp" || fault == "invalid_id") && n.getOrderCount.Load() != 0 {
@@ -406,16 +478,20 @@ func TestService_OrderReviewRefusals(t *testing.T) {
 
 func TestService_OrderReviewMissingAttestationFailsClosed(t *testing.T) {
 	t.Parallel()
-	for _, operation := range []string{"confirm", "cancel"} {
+	for _, operation := range []string{"confirm", "cancel", "force"} {
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
-			svc, n, _, review := newBackendReviewTest(t, domain.SubmitModeHold, false)
+			svc, n, _, review := newBackendReviewTest(t, domain.SubmitModeHold, false, operation == "force")
 			n.skipAttestNewEvents = true
 			var err error
 			request := domain.AttestationRequestReviewConfirm
-			if operation == "confirm" {
+			switch operation {
+			case "confirm":
 				_, _, err = svc.ConfirmOrderReview(systemCtx(), review.OrderExternalID)
-			} else {
+			case "force":
+				request = domain.AttestationRequestReviewForce
+				_, _, err = svc.ForceOrderReview(systemCtx(), review.OrderExternalID)
+			default:
 				request = domain.AttestationRequestReviewCancel
 				_, _, err = svc.CancelOrderReview(systemCtx(), review.OrderExternalID)
 			}
@@ -444,17 +520,20 @@ func TestService_CancelTradingOrderReviewWithoutRuntime(t *testing.T) {
 
 func TestService_OrderReviewNodeError(t *testing.T) {
 	t.Parallel()
-	for _, operation := range []string{"confirm", "cancel"} {
+	for _, operation := range []string{"confirm", "cancel", "force"} {
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
-			svc, n, _, review := newBackendReviewTest(t, domain.SubmitModeHold, false)
+			svc, n, _, review := newBackendReviewTest(t, domain.SubmitModeHold, false, operation == "force")
 			failure := errors.New("node decision failed")
 			n.confirmErr, n.cancelErr = failure, failure
 			audits := len(n.auditCalls)
 			var err error
-			if operation == "confirm" {
+			switch operation {
+			case "confirm":
 				_, _, err = svc.ConfirmOrderReview(systemCtx(), review.OrderExternalID)
-			} else {
+			case "force":
+				_, _, err = svc.ForceOrderReview(systemCtx(), review.OrderExternalID)
+			default:
 				_, _, err = svc.CancelOrderReview(systemCtx(), review.OrderExternalID)
 			}
 			if err != failure || len(n.auditCalls) != audits {

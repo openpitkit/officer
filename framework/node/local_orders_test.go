@@ -67,6 +67,8 @@ type verdictAfterReservationEngine struct {
 	confirmedVerdict domain.Verdict
 	confirmed        bool
 	reviewFlags      []engine.ReviewFlags
+	held             bool
+	heldReservations []engine.HeldReservation
 }
 
 func (e *verdictAfterReservationEngine) OrderModel(order domain.Order, flags engine.ReviewFlags) (model.Order, error) {
@@ -89,7 +91,12 @@ func (e *verdictAfterReservationEngine) ReservedOrder(
 	if err := e.recordChainSubmit(order); err != nil {
 		return engine.OrderResult{}, err
 	}
-	return engine.OrderResult{Verdict: e.verdict, Reviews: e.reviews}, nil
+	result := engine.OrderResult{Verdict: e.verdict, Reviews: e.reviews, Held: e.held}
+	if e.held {
+		result.Lock, result.Outcomes = e.submitLock, e.submitOutcomes
+		result.SettlementLockPrice = e.submitSettlementLockPrice
+	}
+	return result, nil
 }
 
 func (e *verdictAfterReservationEngine) PrepareImmediateReservation(
@@ -104,7 +111,49 @@ func (e *verdictAfterReservationEngine) PrepareImmediateReservation(
 	if err := e.recordChainSubmit(order); err != nil {
 		return engine.ImmediatePreparation{}, err
 	}
-	return engine.ImmediatePreparation{Verdict: e.verdict, Reviews: e.reviews}, nil
+	result := engine.ImmediatePreparation{Verdict: e.verdict, Reviews: e.reviews, Held: e.held}
+	if e.held {
+		result.Lock, result.Outcomes = e.submitLock, e.submitOutcomes
+		result.SettlementLockPrice = e.submitSettlementLockPrice
+	}
+	return result, nil
+}
+
+func (e *verdictAfterReservationEngine) ReservedHeldOrder(
+	order domain.Order, _ asyncengine.OperationResult, held engine.HeldReservation,
+) (engine.OrderResult, error) {
+	e.heldReservations = append(e.heldReservations, held)
+	return engine.OrderResult{Verdict: e.confirmedVerdict, Lock: held.Lock}, nil
+}
+
+func (e *verdictAfterReservationEngine) PrepareImmediateHeldReservation(
+	order domain.Order, _ asyncengine.OperationResult, held engine.HeldReservation,
+) (engine.ImmediatePreparation, error) {
+	e.heldReservations = append(e.heldReservations, held)
+	order.AmountValue = held.Quantity
+	lock := e.submitLock
+	e.submitLock = nil
+	prepared, err := e.prepareFakeImmediate(order, nil)
+	e.submitLock = lock
+	if err != nil {
+		return engine.ImmediatePreparation{}, err
+	}
+	prepared.ReportInput.Lock = held.Lock
+	prepared.ReconciliationState = "held reservation committed"
+	prepared.ExecutionReport, err = e.fakeImmediateReportModel(order, prepared.ReportInput)
+	return prepared, err
+}
+
+func (e *verdictAfterReservationEngine) ForcedHeldOrder(
+	order domain.Order, held engine.HeldReservation,
+) (engine.OrderResult, error) {
+	return e.ReservedHeldOrder(order, nil, held)
+}
+
+func (e *verdictAfterReservationEngine) PrepareForcedHeldImmediate(
+	order domain.Order, held engine.HeldReservation,
+) (engine.ImmediatePreparation, error) {
+	return e.PrepareImmediateHeldReservation(order, nil, held)
 }
 
 type persistedAccountMismatchRealm struct {
@@ -167,6 +216,34 @@ func fakeStoredLock(t *testing.T) []byte {
 		t.Fatalf("marshal fake stored lock: %v", err)
 	}
 	return payload
+}
+
+func TestLocalNode_HeldReviewRequiresBaseDelta(t *testing.T) {
+	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate} {
+		t.Run(mode, func(t *testing.T) {
+			base := newFakeEngine()
+			base.submitLock = fakeStoredLock(t)
+			base.submitOutcomes = []engine.BalanceOutcome{{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{HeldDelta: "100", HeldResult: "100"}}}
+			n, _ := newTestNode(t, base)
+			t.Cleanup(func() { _ = n.Close() })
+			n.engine = &verdictAfterReservationEngine{fakeEngine: base, verdict: domain.VerdictReview, held: true,
+				reviews: []domain.ReviewMark{{OrderReject: domain.OrderReject{Code: "order_size_limit"}, Mode: domain.RuleModeReviewWithHold}}}
+			order := domain.Order{ExternalID: "no-held-base", Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100"}
+			ctx := context.Background()
+			var err error
+			if mode == domain.SubmitModeImmediate {
+				_, _, err = n.SubmitImmediate(ctx, order, domain.MissingAccountCreate, testCaller)
+			} else {
+				_, err = n.SubmitOrder(ctx, order, domain.MissingAccountCreate, testCaller)
+			}
+			if err == nil || !strings.Contains(err.Error(), "no reserved quantity") {
+				t.Fatalf("held review without base delta error = %v", err)
+			}
+			if _, err := n.GetOrder(ctx, order.ExternalID); !errors.Is(err, domain.ErrNotFound) {
+				t.Fatalf("held review without reservation persisted: %v", err)
+			}
+		})
+	}
 }
 
 func (e *fakeEngine) AsyncEngine() *asyncengine.AsyncEngine {
@@ -882,6 +959,7 @@ func (d *fakeOrderChainDriver) ApplyExecutionReport(
 	d.owner.execReportLeaves = append(
 		d.owner.execReportLeaves, reservationRemainder,
 	)
+	d.owner.execReportModels = append(d.owner.execReportModels, report)
 	d.owner.stateMu.Unlock()
 	return d.trading.ApplyExecutionReport(report)
 }
@@ -1004,6 +1082,9 @@ func (e *fakeEngine) ExecutionReportModel(
 	in domain.ExecutionReportInput,
 	reservationRemainder string,
 ) (model.ExecutionReport, error) {
+	e.stateMu.Lock()
+	e.execReportRemainders = append(e.execReportRemainders, reservationRemainder)
+	e.stateMu.Unlock()
 	if in.Commission != nil {
 		if err := e.checkKnownAsset(in.Commission.Currency); err != nil {
 			return model.ExecutionReport{}, err
@@ -1370,6 +1451,22 @@ func (e *fakeEngine) ReservedOrder(
 	}, nil
 }
 
+func (*fakeEngine) ReservedHeldOrder(domain.Order, asyncengine.OperationResult, engine.HeldReservation) (engine.OrderResult, error) {
+	return engine.OrderResult{}, errors.New("fakeEngine: held review rerun is not supported")
+}
+
+func (*fakeEngine) ForcedHeldOrder(domain.Order, engine.HeldReservation) (engine.OrderResult, error) {
+	return engine.OrderResult{}, errors.New("fakeEngine: held review force is not supported")
+}
+
+func (*fakeEngine) PrepareForcedHeldImmediate(domain.Order, engine.HeldReservation) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, errors.New("fakeEngine: held review force is not supported")
+}
+
+func (*fakeEngine) PrepareImmediateHeldReservation(domain.Order, asyncengine.OperationResult, engine.HeldReservation) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, errors.New("fakeEngine: held review rerun is not supported")
+}
+
 func (e *fakeEngine) AppliedDropCopyOrder(
 	o domain.Order, result asyncengine.DropCopyResult,
 ) (engine.OrderResult, error) {
@@ -1488,7 +1585,11 @@ func (e *fakeEngine) fakeImmediateReportModel(
 	fill.SetRemainingReservedQuantity(leaves)
 	fill.SetIsFinal(true)
 	if len(in.Lock) > 0 {
-		if err := fill.SetLock(in.Lock); err != nil {
+		lock, err := pretrade.NewLockFromMsgPack(in.Lock)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		if err := fill.SetLock(lock.Bytes()); err != nil {
 			return model.ExecutionReport{}, err
 		}
 	}

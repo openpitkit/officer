@@ -383,12 +383,20 @@
       "fieldDisplayPrice": "Precio fijado",
       "fieldCommission": "Comisión",
       "review": {
+        "funds": "Fondos",
+        "held": "Retenidos",
+        "notHeld": "No retenidos",
+        "force": "Forzar",
+        "forceBusy": "Forzando…",
+        "forceTitle": "¿Forzar esta orden?",
+        "forceDescription": "La orden continúa sin control pre-negociación. Una orden enviada para esperar los informes de ejecución queda confirmada y después se envía a su conexión de negociación o, si no tiene ninguna, queda aprobada para el solicitante. Una orden enviada para liquidarse de inmediato se ejecuta. Esta decisión no se puede deshacer.",
         "title": "Revisión de la orden",
         "retry": "Reintentar",
         "lastConfirm": "Última confirmación rechazada",
         "cancelTitle": "¿Cancelar esta orden?",
         "cancelDescription": "La orden se cancelará sin enviarse. Esta decisión no se puede deshacer.",
         "approvedForCaller": "Orden aprobada. El solicitante ya puede enviarla.",
+        "filled": "Orden ejecutada.",
         "uncertainOutcome": "La solicitud de revisión no se completó: {{message}}. Es posible que la decisión ya se haya registrado; el estado de la orden que se muestra es el vigente. Compruébelo antes de reintentar."
       },
       "workflow": {
@@ -466,6 +474,7 @@
   },
 
   "requestType": {
+    "reviewForce": "Forzar revisión de la orden",
     "reviewConfirm": "Confirmar revisión de la orden",
     "reviewCancel": "Cancelar revisión de la orden",
     "submit": "Envío",
@@ -475,6 +484,7 @@
   },
 
   "repro": {
+    "responseReviewForce": "Respuesta de revisión forzada",
     "responseReviewConfirm": "Respuesta de confirmación de revisión",
     "responseReviewCancel": "Respuesta de cancelación de revisión",
     "loading": "Cargando el paquete de reproducción…",

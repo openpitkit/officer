@@ -50,8 +50,10 @@ func TestOrderReviewDictionarySeeds(t *testing.T) {
 		{OrderEventTypeTable, 10, "pre_trade_review"},
 		{AttestationRequestTypeTable, 5, "review_confirm"},
 		{AttestationRequestTypeTable, 6, "review_cancel"},
+		{AttestationRequestTypeTable, 7, "review_force"},
 		{AuditActionTable, 58, "confirm_order_review"},
 		{AuditActionTable, 59, "cancel_order_review"},
+		{AuditActionTable, 60, "force_order_review"},
 	} {
 		t.Run(tc.code, func(t *testing.T) {
 			found := false

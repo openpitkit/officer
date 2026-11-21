@@ -72,7 +72,9 @@ type fakeEngine struct {
 	submitCalls            []domain.Order
 	preTradeCalls          int
 	execReportCalls        []domain.ExecutionReportInput
+	execReportRemainders   []string
 	execReportLeaves       []string
+	execReportModels       []model.ExecutionReport
 	// Canned engine outcomes for the trading/spot-funds/group paths.
 	adjustmentAccepted         *domain.AdjustmentOutcomeAccepted
 	adjustmentReject           *domain.AdjustmentOutcomeRejected

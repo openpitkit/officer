@@ -50,13 +50,20 @@ func newLocalNodeBuiltBy(
 	t *testing.T, build fwengine.BuildFunc, providers ...trading.Provider,
 ) (node.Node, store.RealmStore) {
 	t.Helper()
+	return newLocalNodeAt(t, filepath.Join(t.TempDir(), "officer.db"), build, providers...)
+}
+
+func newLocalNodeAt(
+	t *testing.T, path string, build fwengine.BuildFunc, providers ...trading.Provider,
+) (node.Node, store.RealmStore) {
+	t.Helper()
 	ctx := systemCtx()
 	masterKey, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	if err != nil {
 		t.Fatalf("ParseMasterKey: %v", err)
 	}
 	st, err := sqlite.New(
-		filepath.Join(t.TempDir(), "officer.db"),
+		path,
 		domain.DefaultRealm,
 		sqlite.WithMasterKey(masterKey),
 	)

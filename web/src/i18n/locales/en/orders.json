@@ -383,12 +383,20 @@
       "fieldDisplayPrice": "Lock price",
       "fieldCommission": "Commission",
       "review": {
+        "funds": "Funds",
+        "held": "Held",
+        "notHeld": "Not held",
+        "force": "Force",
+        "forceBusy": "Forcing…",
+        "forceTitle": "Force this order?",
+        "forceDescription": "The order proceeds without a pre-trade check. An order submitted to wait for execution reports is committed, then sent to its trading connection, or approved for its caller when it has none. An order submitted to settle at once is filled. This decision cannot be undone.",
         "title": "Order review",
         "retry": "Retry",
         "lastConfirm": "Last confirmation rejected",
         "cancelTitle": "Cancel this order?",
         "cancelDescription": "The order will be cancelled without being sent. This decision cannot be undone.",
         "approvedForCaller": "Approved. The caller can now send this order.",
+        "filled": "Order filled.",
         "uncertainOutcome": "The review request did not complete: {{message}}. The decision may already be recorded; the order status shown is authoritative. Check it before retrying."
       },
       "workflow": {
@@ -466,6 +474,7 @@
   },
 
   "requestType": {
+    "reviewForce": "Force order review",
     "reviewConfirm": "Confirm order review",
     "reviewCancel": "Cancel order review",
     "submit": "Submit",
@@ -475,6 +484,7 @@
   },
 
   "repro": {
+    "responseReviewForce": "Forced review response",
     "responseReviewConfirm": "Review confirmation response",
     "responseReviewCancel": "Review cancellation response",
     "loading": "Loading the reproduction bundle…",

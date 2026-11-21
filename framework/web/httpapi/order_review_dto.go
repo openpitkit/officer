@@ -45,6 +45,7 @@ func ToReviewMarkDTOs(marks []domain.ReviewMark) []ReviewMarkDTO {
 // OrderReviewDTO shares the review wire shape while each surface owns its route
 // encoding.
 type OrderReviewDTO[RouteDTO any] struct {
+	Held        bool                            `json:"held"`
 	Marks       []ReviewMarkDTO                 `json:"marks"`
 	LastConfirm *ReviewConfirmDTO               `json:"lastConfirm"`
 	Destination *ReviewDestinationDTO[RouteDTO] `json:"destination"`
@@ -68,7 +69,7 @@ type ReviewConfirmDTO struct {
 
 // ToOrderReviewDTO maps a review using the surface's stored-route converter.
 func ToOrderReviewDTO[RouteDTO any](view *backend.ReviewView, route func(string) (RouteDTO, error)) (OrderReviewDTO[RouteDTO], error) {
-	out := OrderReviewDTO[RouteDTO]{Marks: ToReviewMarkDTOs(view.Marks)}
+	out := OrderReviewDTO[RouteDTO]{Held: view.Held, Marks: ToReviewMarkDTOs(view.Marks)}
 	if view.LastConfirm != nil {
 		out.LastConfirm = &ReviewConfirmDTO{
 			Verdict: string(view.LastConfirm.Verdict),

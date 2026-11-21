@@ -2505,10 +2505,10 @@ interface OrderDetailDialogProps {
   /** Called after a workflow shortcut succeeds so the page refetches server
    *  state. */
   onWorkflowShortcutCompleted: (orderExternalId: string) => void;
-  inFlightReviewAction: "confirm" | "cancel" | null;
+  inFlightReviewAction: ReviewAction | null;
   onReviewDecisionStarted: (
     orderExternalId: string,
-    action: "confirm" | "cancel",
+    action: ReviewAction,
   ) => void;
   onReviewDecisionCompleted: (
     orderExternalId: string,
@@ -2571,6 +2571,52 @@ function ReviewMarkList({ marks }: { marks: ReviewMark[] }) {
   );
 }
 
+type ReviewAction = "confirm" | "cancel" | "force";
+
+function ReviewDecisionAlert({
+  open,
+  onOpenChange,
+  title,
+  description,
+  confirmLabel,
+  busy,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  busy: boolean;
+  onConfirm: () => void;
+}) {
+  const { t: tc } = useTranslation();
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle className="text-[var(--danger)]">
+            {title}
+          </AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>
+            {tc("actions.cancel")}
+          </AlertDialogCancel>
+          <AlertDialogAction
+            variant="danger"
+            disabled={busy}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function OrderReviewSection({
   review,
   connectionLabel,
@@ -2581,14 +2627,14 @@ function OrderReviewSection({
 }: {
   review: OrderReview;
   connectionLabel: string | undefined;
-  action: "confirm" | "cancel" | null;
+  action: ReviewAction | null;
   error: string | null;
   onDismissError: () => void;
-  onDecision: (action: "confirm" | "cancel") => void;
+  onDecision: (action: ReviewAction) => void;
 }) {
   const { t } = useTranslation("orders");
-  const { t: tc } = useTranslation();
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [forceOpen, setForceOpen] = useState(false);
   return (
     <section
       aria-label={t("detail.dialog.review.title")}
@@ -2598,6 +2644,18 @@ function OrderReviewSection({
         {t("detail.dialog.review.title")}
       </h4>
       <ReviewMarkList marks={review.marks} />
+      <dl className="grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <dt className="text-muted-lt">{t("detail.dialog.review.funds")}</dt>
+          <dd>
+            {t(
+              review.held
+                ? "detail.dialog.review.held"
+                : "detail.dialog.review.notHeld",
+            )}
+          </dd>
+        </div>
+      </dl>
       {review.lastConfirm && (
         <div className="flex flex-col gap-2 border-t border-border pt-3">
           <h5 className="text-xs font-bold">
@@ -2661,31 +2719,40 @@ function OrderReviewSection({
             ? t("detail.dialog.workflow.cancelBusy")
             : t("detail.dialog.workflow.cancel")}
         </Button>
+        {review.held && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
+            disabled={action !== null}
+            onClick={() => setForceOpen(true)}
+          >
+            {action === "force"
+              ? t("detail.dialog.review.forceBusy")
+              : t("detail.dialog.review.force")}
+          </Button>
+        )}
       </div>
-      <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-[var(--danger)]">
-              {t("detail.dialog.review.cancelTitle")}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("detail.dialog.review.cancelDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={action !== null}>
-              {tc("actions.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="danger"
-              disabled={action !== null}
-              onClick={() => onDecision("cancel")}
-            >
-              {t("detail.dialog.workflow.cancel")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {review.held && (
+        <ReviewDecisionAlert
+          open={forceOpen}
+          onOpenChange={setForceOpen}
+          title={t("detail.dialog.review.forceTitle")}
+          description={t("detail.dialog.review.forceDescription")}
+          confirmLabel={t("detail.dialog.review.force")}
+          busy={action !== null}
+          onConfirm={() => onDecision("force")}
+        />
+      )}
+      <ReviewDecisionAlert
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        title={t("detail.dialog.review.cancelTitle")}
+        description={t("detail.dialog.review.cancelDescription")}
+        confirmLabel={t("detail.dialog.workflow.cancel")}
+        busy={action !== null}
+        onConfirm={() => onDecision("cancel")}
+      />
     </section>
   );
 }
@@ -2711,6 +2778,7 @@ function OrderDetailDialog({
     confirmOrder,
     cancelOrder,
     confirmOrderReview,
+    forceOrderReview,
     cancelOrderReview,
   } = useOfficerApi();
   const globalAccountFilter = useGlobalAccountFilter();
@@ -2729,9 +2797,7 @@ function OrderDetailDialog({
   const [cancelFormOpen, setCancelFormOpen] = useState(false);
   const [cancelLeavesQuantity, setCancelLeavesQuantity] = useState("");
   const [pollError, setPollError] = useState<string | null>(null);
-  const [reviewAction, setReviewAction] = useState<"confirm" | "cancel" | null>(
-    null,
-  );
+  const [reviewAction, setReviewAction] = useState<ReviewAction | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const reviewRequest = useRef<AbortController | null>(null);
 
@@ -2920,7 +2986,7 @@ function OrderDetailDialog({
     }
   }
 
-  async function runReviewDecision(action: "confirm" | "cancel") {
+  async function runReviewDecision(action: ReviewAction) {
     if (
       !awaitingReview ||
       !review ||
@@ -2938,8 +3004,10 @@ function OrderDetailDialog({
     let banner: DetailBanner | undefined;
     try {
       try {
-        if (action === "confirm") {
-          const result = await confirmOrderReview(orderExternalId);
+        if (action === "confirm" || action === "force") {
+          const decide =
+            action === "force" ? forceOrderReview : confirmOrderReview;
+          const result = await decide(orderExternalId);
           if (
             !controller.signal.aborted &&
             result.decision.verdict === "accept"
@@ -2971,10 +3039,22 @@ function OrderDetailDialog({
                   "internal",
                 );
               }
-              banner = {
-                tone: "ok",
-                text: t("detail.dialog.review.approvedForCaller"),
-              };
+              if (result.order.status === "filled") {
+                banner = {
+                  tone: "ok",
+                  text: t("detail.dialog.review.filled"),
+                };
+              } else if (result.order.status === "committed") {
+                banner = {
+                  tone: "ok",
+                  text: t("detail.dialog.review.approvedForCaller"),
+                };
+              } else {
+                throw new ApiError(
+                  `Unexpected order status ${result.order.status} after an accepted review decision`,
+                  "internal",
+                );
+              }
             }
           }
         } else {
@@ -5580,7 +5660,7 @@ export function Orders() {
   >(params.get("order"));
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const [inFlightReviewActions, setInFlightReviewActions] = useState<
-    ReadonlyMap<string, "confirm" | "cancel">
+    ReadonlyMap<string, ReviewAction>
   >(new Map());
   const currentDetailOrderExternalId = useRef(detailOrderExternalId);
   useEffect(() => {

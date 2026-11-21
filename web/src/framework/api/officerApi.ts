@@ -4307,6 +4307,7 @@ function normalizeOrderReview(v: unknown): OrderReview {
   const lastConfirm = v.lastConfirm;
   const destination = v.destination;
   if (
+    typeof v.held !== "boolean" ||
     !Array.isArray(v.marks) ||
     (lastConfirm !== null &&
       (!isObject(lastConfirm) ||
@@ -4338,6 +4339,7 @@ function normalizeOrderReview(v: unknown): OrderReview {
     };
   }
   return {
+    held: v.held,
     marks: v.marks.map(normalizeReviewMark),
     lastConfirm:
       lastConfirm === null
@@ -4551,6 +4553,8 @@ function normalizeEventReproductionResponse(
     cancel: normalizeOrderMutationResponse(pick(v, "cancel", "Cancel")),
     reviewConfirm:
       v.reviewConfirm == null ? null : normalizeReviewDecision(v.reviewConfirm),
+    reviewForce:
+      v.reviewForce == null ? null : normalizeReviewDecision(v.reviewForce),
     reviewCancel: normalizeOrderMutationResponse(v.reviewCancel),
   };
 }
@@ -4767,6 +4771,24 @@ async function confirmOrderReview(
     `${client.baseUrl}/orders/${encode(id)}/review/confirm`,
     { method: "POST", signal },
   );
+  return normalizeConfirmOrderReviewResponse(v);
+}
+
+async function forceOrderReview(
+  client: ApiClient,
+  id: string,
+  signal?: AbortSignal,
+): Promise<ConfirmOrderReviewResponse> {
+  const v = await client.request(
+    `${client.baseUrl}/orders/${encode(id)}/review/force`,
+    { method: "POST", signal },
+  );
+  return normalizeConfirmOrderReviewResponse(v);
+}
+
+function normalizeConfirmOrderReviewResponse(
+  v: unknown,
+): ConfirmOrderReviewResponse {
   if (!isObject(v)) {
     throw new ApiError(
       "review confirmation response was not a JSON object",
@@ -5373,6 +5395,7 @@ export function createOfficerApi(client: ApiClient) {
     submitExecutionReport: bind(submitExecutionReport),
     confirmOrder: bind(confirmOrder),
     confirmOrderReview: bind(confirmOrderReview),
+    forceOrderReview: bind(forceOrderReview),
     cancelOrderReview: bind(cancelOrderReview),
     cancelOrder: bind(cancelOrder),
     fetchTradesPage: bind(fetchTradesPage),

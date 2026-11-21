@@ -151,7 +151,8 @@ func RegisterRoutes(
 	register(registry, "orders.submit-drop-copy.post", http.MethodPost, "/orders/drop-copy/submit", handleSubmitDropCopyOrder(svc))
 	register(registry, "orders.confirm.post", http.MethodPost, "/orders/{id}/confirm", handleConfirmExecution(svc))
 	register(registry, "orders.cancel.post", http.MethodPost, "/orders/{id}/cancel", handleCancelOrder(svc))
-	register(registry, "orders.review.confirm.post", http.MethodPost, "/orders/{id}/review/confirm", handleConfirmOrderReview(svc))
+	register(registry, "orders.review.confirm.post", http.MethodPost, "/orders/{id}/review/confirm", handleDecideOrderReview(svc, svc.ConfirmOrderReview))
+	register(registry, "orders.review.force.post", http.MethodPost, "/orders/{id}/review/force", handleDecideOrderReview(svc, svc.ForceOrderReview))
 	register(registry, "orders.review.cancel.post", http.MethodPost, "/orders/{id}/review/cancel", handleCancelOrderReview(svc))
 
 	register(registry, "market-data.list.get", http.MethodGet, "/market-data", handleListMarketData(svc))

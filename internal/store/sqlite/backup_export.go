@@ -595,7 +595,7 @@ func (r *realmStore) exportOrderReviews(ctx context.Context) (result []backup.Or
 		return nil, err
 	}
 	rows, err := db.QueryContext(ctx,
-		`SELECT o.external_id, m.code, c.external_id, r.venue_account, r.route
+		`SELECT o.external_id, m.code, r.held, c.external_id, r.venue_account, r.route
 		 FROM order_review r
 		 JOIN order_record o ON o.id = r.order_id
 		 JOIN attestation_mode m ON m.id = r.mode_id
@@ -607,11 +607,13 @@ func (r *realmStore) exportOrderReviews(ctx context.Context) (result []backup.Or
 	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	for rows.Next() {
 		var review backup.OrderReview
+		var held bool
 		var order, connection []byte
 		var account, route sql.NullString
-		if err := rows.Scan(&order, &review.Mode, &connection, &account, &route); err != nil {
+		if err := rows.Scan(&order, &review.Mode, &held, &connection, &account, &route); err != nil {
 			return nil, fmt.Errorf("store: scan order review for export: %w", err)
 		}
+		review.Held = &held
 		review.Order, err = domain.ExternalIDFromBytes(order)
 		if err != nil {
 			return nil, fmt.Errorf("store: decode order review for export: %w", err)

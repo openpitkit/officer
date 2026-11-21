@@ -33,6 +33,7 @@ import (
 // ReviewView presents the recorded review of an order awaiting a decision.
 // Marks are decoded for display only; decision authorization verifies the envelope.
 type ReviewView struct {
+	Held        bool
 	Marks       []domain.ReviewMark
 	LastConfirm *ReviewConfirmView
 	Destination *domain.TradingDestination
@@ -86,7 +87,7 @@ func OrderReviewView(detail domain.OrderDetail) (*ReviewView, error) {
 	if len(env.Approval.Reviews) == 0 {
 		return nil, fmt.Errorf("backend: awaiting-review order %s review envelope has no review marks", detail.Order.ExternalID)
 	}
-	view := &ReviewView{Marks: env.Approval.Reviews, Destination: detail.Review.Destination}
+	view := &ReviewView{Held: detail.Review.Held, Marks: env.Approval.Reviews, Destination: detail.Review.Destination}
 	for _, event := range detail.Events {
 		if event.Type != domain.OrderEventPreTradeRejected ||
 			event.Attestation == nil || event.Attestation.RequestType != domain.AttestationRequestReviewConfirm {
@@ -114,9 +115,49 @@ func OrderReviewView(detail domain.OrderDetail) (*ReviewView, error) {
 func (s *Service) ConfirmOrderReview(
 	ctx context.Context, orderID string,
 ) (order domain.Order, result VenueSendResult, err error) {
-	stored, review, signer, caller, err := s.orderReviewForDecision(ctx, orderID, "confirmed")
+	return s.decideOrderReview(ctx, orderID, false)
+}
+
+// ForceOrderReview commits or immediately fills a held waiting order without a
+// pre-trade call, then sends a trading order to its stored venue destination.
+// It refuses MCP callers with ErrForbidden, non-waiting or non-held orders with
+// ErrConflict, and missing, unverifiable or inconsistent review approvals with
+// ErrApprovalRequired. Trading orders require a runtime (ErrNotImplemented),
+// their stored binding and venue account (ErrForbidden), and a successful venue
+// pre-check (ErrInvalid for venue refusal, ErrUpstream for upstream failure).
+// Other domain errors from the venue pre-check are returned unchanged.
+// The node refuses an account blocked by its own flag or group, a changed hold,
+// or a mode mismatch with ErrConflict inside the account lane before any write;
+// changed chain input returns ErrInvalid. Node errors pass through unchanged
+// and prevent sending. Missing stored settlement data, an unknown mode, an
+// unexpected verdict or a missing decision attestation is an explicit error.
+// It returns the recorded order and its signed (or eSign-off) accept decision.
+// Send carries the trading outcome; "refused" means the order was cancelled.
+func (s *Service) ForceOrderReview(
+	ctx context.Context, orderID string,
+) (domain.Order, VenueSendResult, error) {
+	return s.decideOrderReview(ctx, orderID, true)
+}
+
+func (s *Service) decideOrderReview(
+	ctx context.Context, orderID string, force bool,
+) (order domain.Order, result VenueSendResult, err error) {
+	action, operation := "confirmed", "confirm"
+	requestType := domain.AttestationRequestReviewConfirm
+	decideHold := s.node.ConfirmOrderReview
+	decideImmediate := s.node.ConfirmImmediateReview
+	if force {
+		action, operation = "forced", "force"
+		requestType = domain.AttestationRequestReviewForce
+		decideHold = s.node.ForceOrderReview
+		decideImmediate = s.node.ForceImmediateReview
+	}
+	stored, review, signer, caller, err := s.orderReviewForDecision(ctx, orderID, action)
 	if err != nil {
 		return domain.Order{}, VenueSendResult{}, err
+	}
+	if force && !stored.Review.Held {
+		return domain.Order{}, VenueSendResult{}, fmt.Errorf("backend: order review is not held: %w", domain.ErrConflict)
 	}
 	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
@@ -150,12 +191,14 @@ func (s *Service) ConfirmOrderReview(
 	var issued Attestation
 	var payload domain.ApprovalPayload
 	attestFor := func(persisted domain.Order, decision decisionPayloadInputs) store.EventAttestor {
-		persisted.Leaves = "" // Decision payloads use the submitted draft's leaves, not the waiting state's zero.
+		// Decision payloads use the submitted draft's leaves, not the waiting
+		// order's stored leaves.
+		persisted.Leaves = ""
 		decision.mode = stored.Review.Mode
 		decision.approvalID = approvalID
 		decision.approvalRef = review.ApprovalID
 		return eventAttestor(
-			signer, off, keyID, domain.AttestationRequestReviewConfirm,
+			signer, off, keyID, requestType,
 			func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
 				eventOrder := orderForEvent(persisted, stored.Order.Account, event, caller)
 				return s.buildDecisionEventPayload(eventOrder, event, decision)
@@ -168,7 +211,7 @@ func (s *Service) ConfirmOrderReview(
 	switch stored.Review.Mode {
 	case domain.SubmitModeHold:
 		var decision engine.OrderResult
-		order, decision, err = s.node.ConfirmOrderReview(ctx, stored.Order.ExternalID, caller,
+		order, decision, err = decideHold(ctx, stored.Order.ExternalID, caller,
 			func(persisted domain.Order, submitted engine.OrderResult) store.EventAttestor {
 				return attestFor(persisted, decisionPayloadInputs{
 					verdict: submitted.Verdict, rejects: submitted.Rejects, reviews: submitted.Reviews,
@@ -178,7 +221,7 @@ func (s *Service) ConfirmOrderReview(
 		verdict, rejects = decision.Verdict, decision.Rejects
 	case domain.SubmitModeImmediate:
 		var decision engine.ImmediateResult
-		order, decision, err = s.node.ConfirmImmediateReview(ctx, stored.Order.ExternalID, caller,
+		order, decision, err = decideImmediate(ctx, stored.Order.ExternalID, caller,
 			func(persisted domain.Order, immediate engine.ImmediateResult) store.EventAttestor {
 				return attestFor(persisted, decisionPayloadInputs{
 					verdict: immediate.Verdict, rejects: immediate.Rejects, reviews: immediate.Reviews,
@@ -192,11 +235,11 @@ func (s *Service) ConfirmOrderReview(
 	if err != nil {
 		return domain.Order{}, VenueSendResult{}, err
 	}
-	if verdict != domain.VerdictAccept && verdict != domain.VerdictReject {
-		return domain.Order{}, VenueSendResult{}, fmt.Errorf("backend: confirm order review verdict %q is invalid", verdict)
+	if verdict != domain.VerdictAccept && (force || verdict != domain.VerdictReject) {
+		return domain.Order{}, VenueSendResult{}, fmt.Errorf("backend: %s order review verdict %q is invalid", operation, verdict)
 	}
 	if issued.SignedAttestation == "" {
-		return domain.Order{}, VenueSendResult{}, missingAttestationError(domain.AttestationRequestReviewConfirm)
+		return domain.Order{}, VenueSendResult{}, missingAttestationError(requestType)
 	}
 	result.Approval = SignedApproval{
 		SignedApproval: issued.SignedAttestation, KeyID: issued.KeyID,
@@ -209,11 +252,13 @@ func (s *Service) ConfirmOrderReview(
 	return order, result, nil
 }
 
-// CancelOrderReview cancels an order awaiting operator review without calling
-// the engine or trading venue. It refuses MCP callers with ErrForbidden, orders
-// not awaiting review with ErrConflict, and missing, unverifiable or inconsistent
-// review approvals with ErrApprovalRequired. It returns the cancelled order with
-// zero leaves and the signed (or eSign-off) review_cancel attestation.
+// CancelOrderReview cancels an order awaiting operator review. A held review
+// uses a cancel execution report to release the hold through the engine; a
+// review without hold makes no engine call. It never calls the trading venue.
+// It refuses MCP callers with ErrForbidden and orders not awaiting review with
+// ErrConflict. Missing, unverifiable or inconsistent review approvals return
+// ErrApprovalRequired. It returns the cancelled order with zero leaves and the
+// signed (or eSign-off) review_cancel attestation.
 func (s *Service) CancelOrderReview(
 	ctx context.Context, orderID string,
 ) (domain.Order, Attestation, error) {
@@ -286,6 +331,13 @@ func (s *Service) orderReviewForDecision(
 	}
 	if payload.Mode != stored.Review.Mode {
 		return domain.OrderDetail{}, domain.ApprovalPayload{}, nil, caller, fmt.Errorf("backend: recorded approval %s mode %q differs from review mode %q and cannot be %s: %w", payload.ApprovalID, payload.Mode, stored.Review.Mode, action, domain.ErrApprovalRequired)
+	}
+	held, err := domain.ReviewMarksHeld(payload.Reviews)
+	if err != nil {
+		return domain.OrderDetail{}, domain.ApprovalPayload{}, nil, caller, fmt.Errorf("backend: recorded approval %s has invalid review marks for review held %t and cannot be %s: %v: %w", payload.ApprovalID, stored.Review.Held, action, err, domain.ErrApprovalRequired)
+	}
+	if held != stored.Review.Held {
+		return domain.OrderDetail{}, domain.ApprovalPayload{}, nil, caller, fmt.Errorf("backend: recorded approval %s held %t differs from review held %t and cannot be %s: %w", payload.ApprovalID, held, stored.Review.Held, action, domain.ErrApprovalRequired)
 	}
 	return stored, payload, signer, caller, nil
 }

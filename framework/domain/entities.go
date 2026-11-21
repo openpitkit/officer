@@ -1236,6 +1236,9 @@ const (
 	// AttestationRequestReviewCancel is an operator cancellation of a waiting
 	// order.
 	AttestationRequestReviewCancel AttestationRequestType = "review_cancel"
+	// AttestationRequestReviewForce is an operator's forced send of a held
+	// waiting order without a pre-trade rerun.
+	AttestationRequestReviewForce AttestationRequestType = "review_force"
 )
 
 // EventAttestation is the persisted signed attestation over one trading request
@@ -1395,6 +1398,9 @@ const (
 type OrderReview struct {
 	// Mode is the submit mode the confirmation re-runs with: "hold" or "immediate".
 	Mode string
+	// Held is true when the review committed a with-hold reservation and the
+	// order's funds are held while it waits.
+	Held bool
 	// Destination is the trading destination for send-paper/send-live orders;
 	// nil for a gateway order.
 	Destination *TradingDestination
@@ -1447,6 +1453,23 @@ const (
 type ReviewMark struct {
 	OrderReject
 	Mode RuleMode `json:"mode"`
+}
+
+// ReviewMarksHeld reports whether non-empty marks all require a hold.
+// Any without-hold mark makes the result false. A mode other than the two
+// review modes is an error identifying the mark's code and mode.
+func ReviewMarksHeld(marks []ReviewMark) (bool, error) {
+	held := len(marks) > 0
+	for _, mark := range marks {
+		switch mark.Mode {
+		case RuleModeReviewWithHold:
+		case RuleModeReviewWithoutHold:
+			held = false
+		default:
+			return false, fmt.Errorf("review mark %q has invalid mode %q", mark.Code, mark.Mode)
+		}
+	}
+	return held, nil
 }
 
 // ExecutionReportInput records either a workflow transition or a post-trade

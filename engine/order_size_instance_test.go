@@ -123,6 +123,7 @@ func TestOrderSizeInstances_ModeMapping(t *testing.T) {
 	}{
 		{domain.RuleModeReject, reject.RuleModeReject},
 		{domain.RuleModeReviewWithoutHold, reject.RuleModeReviewWithoutHold},
+		{domain.RuleModeReviewWithHold, reject.RuleModeReviewWithHold},
 	} {
 		got, err := orderSizeInstanceMode(tc.mode)
 		if err != nil || got != tc.want {
@@ -133,7 +134,7 @@ func TestOrderSizeInstances_ModeMapping(t *testing.T) {
 			t.Fatalf("mode %q instances = %+v, %v; want SDK mode %v", tc.mode, instances, err, tc.want)
 		}
 	}
-	for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, "", "unknown"} {
+	for _, mode := range []domain.RuleMode{"", "unknown"} {
 		if _, err := orderSizeInstanceMode(mode); err == nil || !strings.Contains(err.Error(), string(mode)) {
 			t.Fatalf("unsupported mode %q error = %v", mode, err)
 		}

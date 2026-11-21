@@ -28,6 +28,7 @@ import (
 
 type resolvedOrderReview struct {
 	modeID     int64
+	held       bool
 	connection any
 	account    any
 	route      any
@@ -40,7 +41,7 @@ func resolveOrderReview(ctx context.Context, dictionaries *enumDictionaries, tx 
 	if err != nil {
 		return resolvedOrderReview{}, fmt.Errorf("store: order %q review: %w", order, err)
 	}
-	resolved := resolvedOrderReview{modeID: modeID}
+	resolved := resolvedOrderReview{modeID: modeID, held: review.Held}
 	if review.Destination != nil {
 		destination := review.Destination
 		if err := domain.ValidateTradingDestination(*destination); err != nil {
@@ -62,8 +63,8 @@ func insertOrderReview(ctx context.Context, tx *sql.Tx,
 	orderID int64, order domain.ExternalID, review resolvedOrderReview,
 ) error {
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO order_review (order_id, mode_id, connection_id, venue_account, route)
-		 VALUES (?, ?, ?, ?, ?)`, orderID, review.modeID, review.connection, review.account, review.route,
+		`INSERT INTO order_review (order_id, mode_id, held, connection_id, venue_account, route)
+		 VALUES (?, ?, ?, ?, ?, ?)`, orderID, review.modeID, review.held, review.connection, review.account, review.route,
 	); err != nil {
 		return fmt.Errorf("store: insert review for order %q: %w", order, err)
 	}
@@ -75,13 +76,13 @@ func getOrderReview(ctx context.Context, q sqlQueryer, order domain.ExternalID) 
 	var connection []byte
 	var account, route sql.NullString
 	err := q.QueryRowContext(ctx,
-		`SELECT m.code, c.external_id, r.venue_account, r.route
+		`SELECT m.code, r.held, c.external_id, r.venue_account, r.route
 		 FROM order_review r
 		 JOIN order_record o ON o.id = r.order_id
 		 JOIN attestation_mode m ON m.id = r.mode_id
 		 LEFT JOIN trading_connection c ON c.id = r.connection_id
 		 WHERE o.external_id = ?`, order.Bytes(),
-	).Scan(&review.Mode, &connection, &account, &route)
+	).Scan(&review.Mode, &review.Held, &connection, &account, &route)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

@@ -268,11 +268,11 @@ func (l LimitRate) Validate() error {
 	return nil
 }
 
-// ValidateOrderSizeMode checks the modes supported by order-size barriers.
+// ValidateOrderSizeMode accepts reject, review_without_hold and review_with_hold.
 // Empty or unsupported modes return a validation error on /mode.
 func ValidateOrderSizeMode(mode RuleMode) error {
 	switch mode {
-	case RuleModeReject, RuleModeReviewWithoutHold:
+	case RuleModeReject, RuleModeReviewWithoutHold, RuleModeReviewWithHold:
 		return nil
 	case "":
 		return invalidField("/mode", "required", fmt.Errorf("mode is required: %w", ErrInvalid))
@@ -282,9 +282,9 @@ func ValidateOrderSizeMode(mode RuleMode) error {
 }
 
 // Validate checks the order-size barrier against the engine mapping: a
-// supported mode (reject or review_without_hold), an allowed scope for the
-// order-size policy, consistent axes, and at least one positive decimal
-// ceiling.
+// supported mode (reject, review_without_hold or review_with_hold), an allowed
+// scope for the order-size policy, consistent axes, and at least one positive
+// decimal ceiling.
 func (l LimitOrderSize) Validate() error {
 	if err := ValidateOrderSizeMode(l.Mode); err != nil {
 		return err

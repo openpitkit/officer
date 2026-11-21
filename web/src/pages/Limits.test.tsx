@@ -267,7 +267,11 @@ function renderLimitDialog(editing: Limit | null) {
       <LimitDialog
         open
         editing={editing}
-        orderSizeCounts={{ reject: 1, review_without_hold: 0 }}
+        orderSizeCounts={{
+          reject: 1,
+          review_without_hold: 0,
+          review_with_hold: 0,
+        }}
         onOpenChange={onOpenChange}
         onSaved={onSaved}
       />
@@ -358,14 +362,16 @@ describe("Limits order-size barrier modes", () => {
     );
   }
 
-  it.each([0, 1])(
-    "confirms adding the first barrier of a mode only when its existing count is %s",
-    async (count) => {
+  it.each([
+    ["review_without_hold", "Review without hold", 0],
+    ["review_without_hold", "Review without hold", 1],
+    ["review_with_hold", "Review with hold", 0],
+    ["review_with_hold", "Review with hold", 1],
+  ] as const)(
+    "confirms adding %s only when its existing count is zero (%s, %s)",
+    async (mode, label, count) => {
       const user = userEvent.setup();
-      answerBarriers([
-        barrier("reject"),
-        ...(count ? [barrier("review_without_hold")] : []),
-      ]);
+      answerBarriers([barrier("reject"), ...(count ? [barrier(mode)] : [])]);
       renderLimits();
       await user.click(
         screen.getAllByRole("button", { name: "Add policy" })[0],
@@ -375,9 +381,7 @@ describe("Limits order-size barrier modes", () => {
       expect(
         within(dialog).getByRole("radio", { name: "Reject" }),
       ).toBeChecked();
-      await user.click(
-        within(dialog).getByRole("radio", { name: "Review without hold" }),
-      );
+      await user.click(within(dialog).getByRole("radio", { name: label }));
       await user.type(within(dialog).getByLabelText("max quantity"), "20");
       await user.click(
         within(dialog).getByRole("button", { name: "Add policy" }),
@@ -396,7 +400,7 @@ describe("Limits order-size barrier modes", () => {
       await waitFor(() =>
         expect(addLimitMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            mode: "review_without_hold",
+            mode,
             policy: "order_size_limit",
             values: { max_quantity: "20" },
           }),
@@ -409,23 +413,28 @@ describe("Limits order-size barrier modes", () => {
       expect(useLimitsMock).toHaveBeenCalledWith(
         expect.objectContaining({
           policy: "order_size",
-          mode: "review_without_hold",
+          mode,
         }),
       );
     },
   );
 
-  it.each([1, 2])(
-    "confirms deleting the last barrier of its mode and carries its mode when count is %s",
-    async (count) => {
+  it.each([
+    ["review_without_hold", "Review without hold", 1],
+    ["review_without_hold", "Review without hold", 2],
+    ["review_with_hold", "Review with hold", 1],
+    ["review_with_hold", "Review with hold", 2],
+  ] as const)(
+    "confirms deleting the last %s barrier (%s, count %s)",
+    async (mode, label, count) => {
       const user = userEvent.setup();
       answerBarriers([
         barrier("reject"),
-        barrier("review_without_hold"),
-        ...(count === 2 ? [barrier("review_without_hold", "another")] : []),
+        barrier(mode),
+        ...(count === 2 ? [barrier(mode, "another")] : []),
       ]);
       renderLimits();
-      const row = screen.getAllByText("Review without hold")[0].closest("tr")!;
+      const row = screen.getAllByText(label)[0].closest("tr")!;
       await user.click(
         within(row).getByRole("button", { name: "Delete Order size limit" }),
       );
@@ -433,7 +442,7 @@ describe("Limits order-size barrier modes", () => {
         name: "Delete policy barrier?",
       });
       expect(
-        within(confirm).getByText(/in mode Review without hold/),
+        within(confirm).getByText(new RegExp(`in mode ${label}`)),
       ).toBeInTheDocument();
       if (count === 1) {
         expect(
@@ -448,7 +457,7 @@ describe("Limits order-size barrier modes", () => {
       await waitFor(() =>
         expect(deleteLimitMock).toHaveBeenCalledWith({
           policy: "order_size_limit",
-          mode: "review_without_hold",
+          mode,
           scope: "broker",
           account: "",
           accountGroup: undefined,

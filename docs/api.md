@@ -521,16 +521,20 @@ price.
 ## Order review
 
 A review-mode rule can return `verdict: review` with `reviews` (the rule marks
-and their `mode`). The order waits in `awaiting_review`: nothing is held or
-sent. Any verdict other than `accept` means **do not send**. Submit and
-send-paper/send-live return the marks; check returns them without mutation.
+and their `mode`). The order waits in `awaiting_review` without being sent.
+Funds are held if and only if the review has at least one mark and every mark
+is `review_with_hold`; any
+`review_without_hold` mark means nothing is held. `review.held` on
+`GET /orders/{id}` is the authority. Any verdict other than `accept` means
+**do not send**. Submit and send-paper/send-live return the marks; check returns
+them without mutation.
 
-`GET /orders/{id}` includes `review` only while waiting: `marks`, the last
+`GET /orders/{id}` includes `review` only while waiting: `held`, `marks`, the last
 failed confirmation (`lastConfirm`, or null), and the stored trading
 `destination` (or null for a gateway order). A gateway polls this endpoint
 after a review verdict. A `pre_trade_accepted` event attested as `review_confirm`
-means approved to send (`committed` in hold mode, `filled` or `partially_filled`
-in immediate mode); `cancelled` means do not send.
+or `review_force` means approved to send (`committed` in hold mode, `filled` or
+`partially_filled` in immediate mode); `cancelled` means do not send.
 
 `POST /orders/{id}/review/confirm` has no body and returns the order, a signed
 `decision` (`accept` or `reject`) and `venueSend` only for an accepted trading
@@ -543,9 +547,19 @@ order unchanged. After a 500 the decision may already be recorded; check
 `GET /orders/{id}` for its state before retrying.
 Every confirmation runs pre-trade again and spends rate-limit
 units again. `POST /orders/{id}/review/cancel`, also without a body, returns
-the cancelled order and its signed attestation. Execution reports and the
-ordinary `/confirm` and `/cancel` shortcuts refuse waiting orders with 409
-`conflict`. MCP shows review status only; it cannot confirm, retry or cancel.
+the cancelled order and its signed attestation, releasing a held review's hold.
+Execution reports and the ordinary `/confirm` and `/cancel` shortcuts refuse
+waiting orders with 409
+`conflict`. MCP shows review status only; it cannot confirm, retry, force or cancel.
+
+`POST /orders/{id}/review/force` has no body and accepts only held waiting
+orders, without a pre-trade run. It returns an `accept` decision and the order:
+`committed` in hold mode (with `venueSend` for a trading order), `filled` in
+immediate mode. A review without hold or an account blocked by its own flag or
+group returns 409 `conflict`. A blocked order keeps waiting with its hold;
+lift the block before forcing it. A trading force has the same binding and venue
+pre-check refusals as confirm (403, 404, 409, leaving the order waiting) and the
+same 500 rule: check `GET /orders/{id}` before retrying.
 
 ## Backups
 
@@ -711,8 +725,9 @@ Both return the stored barrier, with `201 Created` for POST and `200 OK` for PUT
 A POST to an existing key returns `409` with code `limit_exists` and leaves the
 barrier intact. Use PUT to edit the barrier.
 
-An order-size body accepts `mode`: `reject` or `review_without_hold`. An absent
-or empty mode means `reject`. Its key is (scope, account, asset, mode), so a
+An order-size body accepts `mode`: `reject`, `review_without_hold` or
+`review_with_hold`. An absent or empty mode means `reject`.
+Its key is (scope, account, asset, mode), so a
 reject and a review barrier can share a target. Changing a barrier's mode
 requires deleting it and adding a barrier with the new mode.
 

@@ -173,6 +173,7 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
       confirm: null,
       cancel: null,
       reviewConfirm: null,
+      reviewForce: null,
       reviewCancel: null,
     },
     canonicalApproval: fixture.canonical,
@@ -248,6 +249,7 @@ function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
       confirm: null,
       cancel: null,
       reviewConfirm: null,
+      reviewForce: null,
       reviewCancel: null,
     },
     canonicalApproval: fixture.canonical,
@@ -313,6 +315,7 @@ describe("OrderVerificationPanel - reproduction mode", () => {
   it.each([
     ["review_confirm", "Confirm order review", "Review confirmation response"],
     ["review_cancel", "Cancel order review", "Review cancellation response"],
+    ["review_force", "Force order review", "Forced review response"],
   ])(
     "renders %s request and its own response envelope",
     async (requestType, label, responseLabel) => {
@@ -336,6 +339,16 @@ describe("OrderVerificationPanel - reproduction mode", () => {
         cancel: null,
         reviewConfirm:
           requestType === "review_confirm"
+            ? {
+                verdict: "accept",
+                reasons: [],
+                signedApproval: facetFixture.envelope,
+                keyId: facetFixture.keyId,
+                signed: true,
+              }
+            : null,
+        reviewForce:
+          requestType === "review_force"
             ? {
                 verdict: "accept",
                 reasons: [],

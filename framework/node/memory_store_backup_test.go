@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +59,11 @@ func (r *memoryRealm) RestoreBackup(
 	data := archive.Data
 	if err := backup.ValidateAccountBlocks(data.Accounts); err != nil {
 		return backup.RestoreSummary{}, err
+	}
+	for _, review := range data.OrderReviews {
+		if review.Held == nil {
+			return backup.RestoreSummary{}, fmt.Errorf("store: restore %s order review %q missing held: %w", backup.SectionActivityHistory, review.Order, domain.ErrInvalid)
+		}
 	}
 	// Mirror the real store: the normalized scope drives whether runtime data can
 	// land (Normalize force-includes the accounts+groups and market-data parents an
@@ -204,7 +211,8 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		data.Orders = append(data.Orders, backup.OrderRecord{Order: order})
 	}
 	for id, review := range r.orderReviews {
-		row := backup.OrderReview{Order: id, Mode: review.Mode}
+		held := review.Held
+		row := backup.OrderReview{Order: id, Mode: review.Mode, Held: &held}
 		if review.Destination != nil {
 			row.Connection = review.Destination.Connection
 			row.VenueAccount = review.Destination.VenueAccount
@@ -365,7 +373,7 @@ func (r *memoryRealm) restoreDataWithCredentialForm(
 	}
 	r.orderReviews = map[domain.ExternalID]domain.OrderReview{}
 	for _, row := range data.OrderReviews {
-		review := domain.OrderReview{Mode: row.Mode}
+		review := domain.OrderReview{Mode: row.Mode, Held: *row.Held}
 		if !row.Connection.IsZero() {
 			review.Destination = &domain.TradingDestination{
 				Connection: row.Connection, VenueAccount: row.VenueAccount, Route: row.Route,
@@ -480,6 +488,52 @@ func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) in
 		return len(r.audit)
 	default:
 		return 0
+	}
+}
+
+func TestMemoryRealmOrderReviewBackupRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	src := newMemoryStore("review-backup-source.db").realm
+	src.orderReviews["held-order"] = domain.OrderReview{Mode: "hold", Held: true}
+	src.orderReviews["immediate-order"] = domain.OrderReview{Mode: "immediate"}
+	for id := range src.orderReviews {
+		src.orders[id] = domain.Order{
+			ExternalID: id, Status: domain.OrderStatusAwaitingReview,
+		}
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archive.Data.OrderReviews) != 2 {
+		t.Fatalf("exported reviews=%+v, want two", archive.Data.OrderReviews)
+	}
+	for _, row := range archive.Data.OrderReviews {
+		if row.Held == nil || *row.Held != src.orderReviews[row.Order].Held {
+			t.Fatalf("exported review=%+v, want held=%t", row, src.orderReviews[row.Order].Held)
+		}
+	}
+	dst := newMemoryStore("review-backup-target.db").realm
+	opts := backup.RestoreOptions{Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll}
+	if _, err := dst.RestoreBackup(ctx, archive, opts); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dst.orderReviews, src.orderReviews) {
+		t.Fatalf("restored reviews=%+v, want %+v", dst.orderReviews, src.orderReviews)
+	}
+	invalid := archive
+	invalid.Data.OrderReviews = append([]backup.OrderReview(nil), archive.Data.OrderReviews...)
+	invalid.Data.OrderReviews[1].Held = nil
+	invalid.Data.Assets = []backup.Asset{{Code: "must-not-land"}}
+	_, err = dst.RestoreBackup(ctx, invalid, opts)
+	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "missing held") || !strings.Contains(err.Error(), fmt.Sprintf("%q", invalid.Data.OrderReviews[1].Order)) {
+		t.Fatalf("restore error=%v, want order and missing held ErrInvalid", err)
+	}
+	if _, ok := dst.assets["must-not-land"]; ok {
+		t.Fatal("missing held restore added asset must-not-land")
+	}
+	if !reflect.DeepEqual(dst.orderReviews, src.orderReviews) {
+		t.Fatalf("missing held restore changed reviews=%+v, want %+v", dst.orderReviews, src.orderReviews)
 	}
 }
 

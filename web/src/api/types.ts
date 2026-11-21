@@ -1015,6 +1015,7 @@ export interface ReviewMark extends CheckReject {
 
 /** Review history and the stored trading destination of a waiting order. */
 export interface OrderReview {
+  held: boolean;
   marks: ReviewMark[];
   lastConfirm: {
     verdict: "reject";
@@ -1352,7 +1353,8 @@ export type AttestationRequestType =
   | "confirm"
   | "cancel"
   | "review_confirm"
-  | "review_cancel";
+  | "review_cancel"
+  | "review_force";
 
 /** Identified public-key material (never private): the key resolved by a keyId,
  *  paired with its export format. Mirrors the reproduction bundle's publicKey and
@@ -1473,6 +1475,7 @@ export interface EventReproductionResponse {
   confirm: OrderMutationResponse | null;
   cancel: OrderMutationResponse | null;
   reviewConfirm: ConfirmOrderReviewResponse["decision"] | null;
+  reviewForce: ConfirmOrderReviewResponse["decision"] | null;
   reviewCancel: OrderMutationResponse | null;
 }
 

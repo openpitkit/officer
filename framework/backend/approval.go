@@ -842,7 +842,8 @@ func (s *Service) authorizeShortcutSubmitVerdict(
 		)
 	}
 	authorized := isOriginalSubmitVerdict(payload)
-	if payload.RequestType == string(domain.AttestationRequestReviewConfirm) &&
+	if (payload.RequestType == string(domain.AttestationRequestReviewConfirm) ||
+		payload.RequestType == string(domain.AttestationRequestReviewForce)) &&
 		payload.Result == nil && payload.ExecutionReport == nil && payload.ApprovalRef != "" {
 		review, _, err := s.verifyReviewApproval(ctx, stored, action)
 		if err != nil {
@@ -951,6 +952,7 @@ func (s *Service) buildDecisionEventPayload(
 		p, err := buildSubmitDecisionPayload(
 			order, decision.mode, decision.approvalID,
 			decision.verdict, decision.rejects, decision.reviews,
+			decision.settlementLockPrice,
 			time.Now().UTC(), nonce,
 		)
 		p.ApprovalRef = decision.approvalRef
@@ -1044,12 +1046,14 @@ func orderForEvent(
 }
 
 // buildSubmitDecisionPayload binds a rejected or review pre-trade decision to
-// the same order parameters as the accept path, with an empty estimate. It
-// preserves the ordered rejects or review marks and mirrors the first reject
-// onto the singular Reject* fields.
+// the same order parameters as the accept path. Its estimate is the settlement
+// lock price for a held review, empty when the engine gave none. It preserves
+// the ordered rejects or review marks and mirrors the first reject onto the
+// singular Reject* fields.
 func buildSubmitDecisionPayload(
 	order domain.Order, mode, approvalID string, verdict domain.Verdict,
 	rejects []domain.OrderReject, reviews []domain.ReviewMark,
+	settlementLockPrice string,
 	issuedAt time.Time, nonce string,
 ) (domain.ApprovalPayload, error) {
 	var summary string
@@ -1084,7 +1088,7 @@ func buildSubmitDecisionPayload(
 		AccountID:       string(order.Account),
 		Verdict:         verdict,
 		PolicySummary:   summary,
-		EstimatePrice:   "",
+		EstimatePrice:   settlementLockPrice,
 		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
 		Nonce:           nonce,
 		RejectCode:      reject.Code,

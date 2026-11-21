@@ -383,12 +383,20 @@
       "fieldDisplayPrice": "锁定价格",
       "fieldCommission": "佣金",
       "review": {
+        "funds": "资金",
+        "held": "已预留",
+        "notHeld": "未预留",
+        "force": "强制处理",
+        "forceBusy": "强制处理中…",
+        "forceTitle": "强制处理此订单？",
+        "forceDescription": "订单将跳过交易前检查。等待执行报告的订单将被确认，随后发送至其交易连接；如无交易连接，则订单获批准，调用方可以发送此订单。立即结算的订单将完全成交。此决定无法撤销。",
         "title": "订单审核",
         "retry": "重试",
         "lastConfirm": "上次确认被拒绝",
         "cancelTitle": "取消此订单？",
         "cancelDescription": "订单将被取消，不会发送。此决定无法撤销。",
         "approvedForCaller": "订单已获批准。调用方现在可以发送此订单。",
+        "filled": "订单已完全成交。",
         "uncertainOutcome": "审核请求未完成：{{message}}。决定可能已记录；显示的订单状态为准。重试前请先检查该状态。"
       },
       "workflow": {
@@ -466,6 +474,7 @@
   },
 
   "requestType": {
+    "reviewForce": "强制处理订单审核",
     "reviewConfirm": "确认订单审核",
     "reviewCancel": "取消订单审核",
     "submit": "提交",
@@ -475,6 +484,7 @@
   },
 
   "repro": {
+    "responseReviewForce": "审核强制处理响应",
     "responseReviewConfirm": "审核确认响应",
     "responseReviewCancel": "审核取消响应",
     "loading": "正在加载复现数据包…",

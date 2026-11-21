@@ -121,6 +121,55 @@ func TestOrderReviewConfirmREST(t *testing.T) {
 	}
 }
 
+func TestOrderReviewForceREST(t *testing.T) {
+	for _, mount := range []string{"/api/v1", "/app/api/v1"} {
+		for _, trading := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/trading=%t", mount, trading), func(t *testing.T) {
+				svc := &fakeService{
+					submitOrder: domain.Order{ExternalID: "review-order", Status: domain.OrderStatusCommitted},
+					orderDetail: domain.OrderDetail{DisplayPrice: "123.45", Events: []domain.OrderEvent{{
+						Attestation: &domain.EventAttestation{Alg: fwsigning.AlgEd25519},
+					}}},
+					venueSendResult: backend.VenueSendResult{Approval: backend.SignedApproval{
+						Verdict: domain.VerdictAccept, SignedApproval: "force-envelope", KeyID: "key", Signed: true,
+					}},
+				}
+				if trading {
+					svc.venueSendResult.Send = &backend.VenueSend{Status: "acknowledged", Order: &domain.VenueOrder{
+						Connection: "paper", VenueAccount: "desk", Route: `{}`, ClientOrderID: "client", VenueOrderID: "remote",
+					}}
+				}
+				rec := callTrading(t, svc, mount, http.MethodPost, "/orders/review-order/review/force", "")
+				if rec.Code != http.StatusOK {
+					t.Fatalf("force status=%d: %s", rec.Code, rec.Body.String())
+				}
+				body := bodyMap(t, rec.Result())
+				order := body["order"].(map[string]any)
+				if order["id"] != "review-order" || order["status"] != "committed" || order["displayPrice"] != "123.45" || order["signed"] != true {
+					t.Fatalf("order=%v", order)
+				}
+				decision := body["decision"].(map[string]any)
+				if len(decision) != 5 || decision["verdict"] != "accept" || decision["signedApproval"] != "force-envelope" || decision["keyId"] != "key" || decision["signed"] != true || len(decision["reasons"].([]any)) != 0 {
+					t.Fatalf("decision=%v", decision)
+				}
+				send, present := body["venueSend"]
+				if present != trading {
+					t.Fatalf("venueSend=%v present=%t", send, present)
+				}
+				if present {
+					v := send.(map[string]any)
+					if v["status"] != "acknowledged" || v["venueOrder"].(map[string]any)["connection"] != "paper" {
+						t.Fatalf("venueSend=%v", v)
+					}
+				}
+				if svc.reviewOrderID != "review-order" || svc.reviewForceCalls != 1 || svc.reviewConfirmCalls != 0 || svc.reviewCancelCalls != 0 {
+					t.Fatalf("force calls=%d confirm=%d cancel=%d", svc.reviewForceCalls, svc.reviewConfirmCalls, svc.reviewCancelCalls)
+				}
+			})
+		}
+	}
+}
+
 func TestOrderReviewCancelREST(t *testing.T) {
 	for _, mount := range []string{"/api/v1", "/app/api/v1"} {
 		t.Run(mount, func(t *testing.T) {
@@ -144,7 +193,7 @@ func TestOrderReviewCancelREST(t *testing.T) {
 }
 
 func TestOrderReviewRESTErrors(t *testing.T) {
-	for _, operation := range []string{"confirm", "cancel"} {
+	for _, operation := range []string{"confirm", "cancel", "force"} {
 		for _, tc := range []struct {
 			name   string
 			err    error
@@ -181,7 +230,7 @@ func TestOrderReviewRESTErrors(t *testing.T) {
 			req.URL.RawPath = "/api/v1/orders/%ZZ/review/" + operation
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
-			if rec.Code != 400 || svc.reviewConfirmCalls != 0 || svc.reviewCancelCalls != 0 {
+			if rec.Code != 400 || svc.reviewConfirmCalls != 0 || svc.reviewCancelCalls != 0 || svc.reviewForceCalls != 0 {
 				t.Fatalf("bad id status=%d calls=%d/%d: %s", rec.Code, svc.reviewConfirmCalls, svc.reviewCancelCalls, rec.Body.String())
 			}
 		})
@@ -243,10 +292,20 @@ func restReviewDetail(t *testing.T) domain.OrderDetail {
 }
 
 func TestOrderReviewRESTGet(t *testing.T) {
-	for _, trading := range []bool{false, true} {
+	for _, tc := range []struct {
+		trading bool
+		held    bool
+	}{
+		{trading: false, held: false},
+		{trading: false, held: true},
+		{trading: true, held: false},
+		{trading: true, held: true},
+	} {
+		trading, held := tc.trading, tc.held
 		for _, failed := range []bool{false, true} {
-			t.Run(fmt.Sprintf("trading=%t/failed=%t", trading, failed), func(t *testing.T) {
+			t.Run(fmt.Sprintf("trading=%t/held=%t/failed=%t", trading, held, failed), func(t *testing.T) {
 				detail := restReviewDetail(t)
+				detail.Review.Held = held
 				if trading {
 					detail.Review.Destination = &domain.TradingDestination{Connection: "paper", VenueAccount: "desk", Route: `{"timeInForce":"day"}`}
 				}
@@ -263,7 +322,7 @@ func TestOrderReviewRESTGet(t *testing.T) {
 					t.Fatalf("get status=%d: %s", rec.Code, rec.Body.String())
 				}
 				view := bodyMap(t, rec.Result())["review"].(map[string]any)
-				if len(view) != 3 {
+				if len(view) != 4 || view["held"] != held {
 					t.Fatalf("review=%v", view)
 				}
 				assertRESTReviewMarks(t, view["marks"])

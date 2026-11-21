@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -97,8 +98,9 @@ func newTestSharedMarketDataService(t *testing.T) *sharedMarketDataService {
 
 // newTestEngine builds a real engine adapter with one account ("1") that carries
 // a stored engine id and is seeded with testQuoteFund of the quote asset, enough
-// to reserve exactly two test orders. The adapter is stopped via t.Cleanup.
-func newTestEngine(t *testing.T) *openPitEngine {
+// to reserve exactly two test orders. Each reviewModes entry adds a broker
+// order-size limit of 4. The adapter is stopped via t.Cleanup.
+func newTestEngine(t *testing.T, reviewModes ...domain.RuleMode) *openPitEngine {
 	t.Helper()
 	snap := fwengine.Snapshot{
 		Accounts: []domain.Account{account(testAccount)},
@@ -107,6 +109,11 @@ func newTestEngine(t *testing.T) *openPitEngine {
 	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
+	}
+	for _, mode := range reviewModes {
+		snap.OrderSizeLimits = append(snap.OrderSizeLimits, domain.LimitOrderSize{
+			Mode: mode, Scope: domain.ScopeBroker, MaxQuantity: "4",
+		})
 	}
 	eng, service, registered, _, _, err := buildEngine(snap, res, nil)
 	if err != nil {
@@ -194,6 +201,215 @@ type testDropCopyResult struct {
 // asyncengine.OperationResult specifies that drop-copy exposes no review marks.
 func (testDropCopyResult) Reviews() ([]reject.Reject, error) {
 	return nil, nil
+}
+
+func executeReviewReservation(t *testing.T, e *openPitEngine, order domain.Order, flags fwengine.ReviewFlags) *asyncengine.AsyncReservation {
+	t.Helper()
+	source, err := e.OrderModel(order, flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	reservation, rejects, err := e.AsyncEngine().ExecutePreTrade(ctx, source).Await(ctx)
+	if err != nil || len(rejects) != 0 || reservation == nil {
+		t.Fatalf("ExecutePreTrade = %v, %+v, %v; want reservation", reservation, rejects, err)
+	}
+	t.Cleanup(func() { _, _ = reservation.RollbackAndClose(ctx).Await(ctx) })
+	return reservation
+}
+
+// Read actual SDK balances with zero deltas to observe committed state rather
+// than merely rechecking the reservation's reported outcomes.
+func assertReviewBalances(t *testing.T, e *openPitEngine, available, held, incoming string) {
+	t.Helper()
+	zero := &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "0"}
+	reqs := []domain.AdjustmentRequest{
+		{Asset: testQuote, Balance: zero, Held: zero},
+		{Asset: testBase, Incoming: zero},
+	}
+	adjustments, err := e.AccountAdjustmentModels(reqs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountID, err := e.AccountID(testAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	batch, err := e.AsyncEngine().ApplyAccountAdjustment(ctx, accountID, adjustments).Await(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, rejected, err := e.AppliedAccountAdjustmentBatch(testAccount, reqs, batch)
+	if err != nil || rejected != nil || len(results) != 2 || results[0].Accepted == nil || results[1].Accepted == nil {
+		t.Fatalf("balance read = %+v, %+v, %v", results, rejected, err)
+	}
+	quote, base := results[0].Accepted, results[1].Accepted
+	if quote.BalanceResult != available || quote.HeldResult != held || base.IncomingResult != incoming {
+		t.Fatalf("balances = available %q held %q incoming %q, want %q %q %q", quote.BalanceResult, quote.HeldResult, base.IncomingResult, available, held, incoming)
+	}
+}
+
+func TestHeldReviewLifecycle(t *testing.T) {
+	e := newTestEngine(t, domain.RuleModeReviewWithHold)
+	order := testOrder()
+	ctx := context.Background()
+	reservation := executeReviewReservation(t, e, order, fwengine.ReviewFlags{})
+	first, err := e.ReservedOrder(order, reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Verdict != domain.VerdictReview || !first.Held || len(first.Lock) == 0 || first.SettlementLockPrice != testLimit || len(first.Reviews) != 1 || first.Reviews[0].Mode != domain.RuleModeReviewWithHold {
+		t.Fatalf("held first run = %+v, want review with held lock", first)
+	}
+	var heldFunds bool
+	for _, outcome := range first.Outcomes {
+		if outcome.Asset == testQuote && outcome.Outcome.HeldDelta == "500" {
+			heldFunds = true
+		}
+	}
+	if !heldFunds {
+		t.Fatalf("held review outcomes = %+v, want held delta 500", first.Outcomes)
+	}
+	if _, err := reservation.CommitAndClose(ctx).Await(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertReviewBalances(t, e, "500", "500", testQty)
+	rerun := executeReviewReservation(t, e, order, fwengine.ReviewFlags{Confirmed: true, AlreadyHeld: true})
+	accepted, err := e.ReservedHeldOrder(order, rerun, fwengine.HeldReservation{Lock: first.Lock, Quantity: testQty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.Verdict != domain.VerdictAccept || !bytes.Equal(accepted.Lock, first.Lock) || accepted.SettlementLockPrice != testLimit || accepted.Outcomes != nil || accepted.Held || len(accepted.Reviews) != 0 {
+		t.Fatalf("held rerun = %+v, want accept with first lock and no outcomes", accepted)
+	}
+	if _, err := rerun.CommitAndClose(ctx).Await(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertReviewBalances(t, e, "500", "500", testQty)
+	cancelled, err := materializeExecutionReport(e, domain.ExecutionReportInput{
+		BaseAsset: testBase, QuoteAsset: testQuote, LeavesQuantity: "0",
+		Lock: first.Lock, Account: testAccount, Side: order.Side,
+		OrderStatus: domain.OrderStatusCancelled,
+	}, testQty)
+	if err != nil || len(cancelled.Blocks) != 0 {
+		t.Fatalf("held cancel = %+v, %v; want no blocks", cancelled, err)
+	}
+	assertReviewBalances(t, e, testQuoteFund, "0", "0")
+}
+
+func TestHeldReviewMixed(t *testing.T) {
+	e := newTestEngine(t, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold)
+	ctx := context.Background()
+	for _, immediate := range []bool{false, true} {
+		reservation := executeReviewReservation(t, e, testOrder(), fwengine.ReviewFlags{})
+		if immediate {
+			result, err := e.PrepareImmediateReservation(testOrder(), reservation)
+			if err != nil || result.Verdict != domain.VerdictReview || result.Held || len(result.Reviews) != 2 || len(result.Lock) != 0 || len(result.Outcomes) != 0 || result.SettlementLockPrice != "" || result.ReportInput.FillQuantity != "" || !reflect.DeepEqual(result.ExecutionReport, model.ExecutionReport{}) {
+				t.Fatalf("mixed immediate review = %+v, %v; want marks only", result, err)
+			}
+		} else {
+			result, err := e.ReservedOrder(testOrder(), reservation)
+			if err != nil || result.Verdict != domain.VerdictReview || result.Held || len(result.Reviews) != 2 || len(result.Lock) != 0 || len(result.Outcomes) != 0 || result.SettlementLockPrice != "" {
+				t.Fatalf("mixed review = %+v, %v; want marks only", result, err)
+			}
+		}
+		if _, err := reservation.RollbackAndClose(ctx).Await(ctx); err != nil {
+			t.Fatal(err)
+		}
+		assertReviewBalances(t, e, testQuoteFund, "0", "0")
+	}
+}
+
+func TestForcedHeldReservation(t *testing.T) {
+	for _, volume := range []bool{false, true} {
+		name := "quantity"
+		if volume {
+			name = "volume"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newTestEngine(t, domain.RuleModeReviewWithHold)
+			order := testOrder()
+			if volume {
+				order.AmountKind, order.AmountValue = domain.OrderAmountKindVolume, "500"
+			}
+			reservation := executeReviewReservation(t, e, order, fwengine.ReviewFlags{})
+			first, err := e.ReservedOrder(order, reservation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			quantity, err := immediateFillQuantity(order, first.Outcomes)
+			if err != nil || quantity != testQty {
+				t.Fatalf("stored quantity = %q, %v", quantity, err)
+			}
+			ctx := context.Background()
+			if _, err := reservation.CommitAndClose(ctx).Await(ctx); err != nil {
+				t.Fatal(err)
+			}
+			held := fwengine.HeldReservation{Lock: first.Lock, Quantity: quantity}
+			order.Price = "200"
+			accepted, err := e.ForcedHeldOrder(order, held)
+			if err != nil || accepted.Verdict != domain.VerdictAccept || !bytes.Equal(accepted.Lock, first.Lock) || accepted.SettlementLockPrice != testLimit || len(accepted.Outcomes) != 0 {
+				t.Fatalf("forced hold = %+v, %v", accepted, err)
+			}
+			prepared, err := e.PrepareForcedHeldImmediate(order, held)
+			if err != nil || prepared.Verdict != domain.VerdictAccept || prepared.ReportInput.FillQuantity != quantity || prepared.ReportInput.LeavesQuantity != "0" || prepared.ReportInput.OrderStatus != domain.OrderStatusFilled || !bytes.Equal(prepared.ReportInput.Lock, first.Lock) || prepared.ReportInput.LockPrice != testLimit || prepared.ReportInput.FillPrice != "200" || prepared.ReconciliationState != "held reservation committed" {
+				t.Fatalf("forced immediate = %+v, %v", prepared, err)
+			}
+			postTrade, err := e.AsyncEngine().ApplyExecutionReport(ctx, prepared.ExecutionReport).Await(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled, err := e.SettleImmediate(order, prepared, postTrade)
+			if err != nil || settled.FillQuantity != quantity || settled.TradePrice != "200" {
+				t.Fatalf("forced fill = %+v, %v", settled, err)
+			}
+		})
+	}
+}
+
+func TestImmediateHeldReviewVolume(t *testing.T) {
+	e := newTestEngine(t, domain.RuleModeReviewWithHold)
+	order := testOrder()
+	order.AmountKind, order.AmountValue = domain.OrderAmountKindVolume, "500"
+	ctx := context.Background()
+	reservation := executeReviewReservation(t, e, order, fwengine.ReviewFlags{})
+	first, err := e.PrepareImmediateReservation(order, reservation)
+	if err != nil || first.Verdict != domain.VerdictReview || !first.Held || len(first.Lock) == 0 || first.SettlementLockPrice != testLimit || len(first.Outcomes) == 0 || first.ReportInput.FillQuantity != "" || len(first.Reviews) != 1 || !reflect.DeepEqual(first.ExecutionReport, model.ExecutionReport{}) {
+		t.Fatalf("immediate held review = %+v, %v; want held reservation without report", first, err)
+	}
+	quantity, err := immediateFillQuantity(order, first.Outcomes)
+	if err != nil || quantity != testQty {
+		t.Fatalf("stored quantity = %q, %v; want %q", quantity, err, testQty)
+	}
+	if _, err := reservation.CommitAndClose(ctx).Await(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// A new request price must not replace the stored opening leaves or lock.
+	order.Price = "200"
+	rerun := executeReviewReservation(t, e, order, fwengine.ReviewFlags{Confirmed: true, AlreadyHeld: true})
+	prepared, err := e.PrepareImmediateHeldReservation(order, rerun, fwengine.HeldReservation{Lock: first.Lock, Quantity: quantity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Verdict != domain.VerdictAccept || prepared.ReportInput.FillQuantity != quantity || !bytes.Equal(prepared.ReportInput.Lock, first.Lock) || prepared.ReportInput.LockPrice != testLimit || prepared.ReportInput.FillPrice != "200" || prepared.Outcomes != nil {
+		t.Fatalf("immediate held rerun = %+v, want stored quantity %q and first lock", prepared, quantity)
+	}
+	if prepared.ReconciliationState != "held reservation committed" {
+		t.Fatalf("immediate held reconciliation state = %q, want %q", prepared.ReconciliationState, "held reservation committed")
+	}
+	if _, err := rerun.CommitAndClose(ctx).Await(ctx); err != nil {
+		t.Fatal(err)
+	}
+	postTrade, err := e.AsyncEngine().ApplyExecutionReport(ctx, prepared.ExecutionReport).Await(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, err := e.SettleImmediate(order, prepared, postTrade)
+	if err != nil || len(settled.Blocks) != 0 || settled.FillQuantity != quantity {
+		t.Fatalf("immediate held settlement = %+v, %v", settled, err)
+	}
+	assertReviewBalances(t, e, "0", "0", "0")
 }
 
 func materializeOrderResult(

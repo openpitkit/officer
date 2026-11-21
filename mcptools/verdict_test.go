@@ -268,17 +268,28 @@ func reviewToolDetail(t *testing.T) domain.OrderDetail {
 }
 
 func TestGetOrderReview(t *testing.T) {
-	for _, trading := range []bool{false, true} {
+	for _, tc := range []struct {
+		trading bool
+		held    bool
+	}{
+		{trading: false, held: false},
+		{trading: false, held: true},
+		{trading: true, held: false},
+		{trading: true, held: true},
+	} {
+		trading, held := tc.trading, tc.held
 		for _, confirmed := range []bool{false, true} {
 			name := "gateway"
 			if trading {
 				name = "trading"
 			}
+			name += fmt.Sprintf("/held=%t", held)
 			if confirmed {
 				name += "/rejected-confirm"
 			}
 			t.Run(name, func(t *testing.T) {
 				detail := reviewToolDetail(t)
+				detail.Review.Held = held
 				var wantTextParts []string
 				if trading {
 					detail.Review.Destination = &domain.TradingDestination{
@@ -306,13 +317,16 @@ func TestGetOrderReview(t *testing.T) {
 				if err := json.Unmarshal(out["review"], &raw); err != nil {
 					t.Fatal(err)
 				}
-				if len(raw) != 3 || raw["marks"] == nil || raw["lastConfirm"] == nil || raw["destination"] == nil {
-					t.Fatalf("review keys = %v; want exactly marks, lastConfirm, destination", raw)
+				if len(raw) != 4 || raw["held"] == nil || raw["marks"] == nil || raw["lastConfirm"] == nil || raw["destination"] == nil {
+					t.Fatalf("review keys = %v; want held, marks, lastConfirm, destination", raw)
 				}
 				requireReviewToolMarks(t, raw["marks"])
 				var review httpx.OrderReviewDTO[map[string]any]
 				if err := json.Unmarshal(out["review"], &review); err != nil {
 					t.Fatal(err)
+				}
+				if review.Held != held {
+					t.Fatalf("held = %t; want %t", review.Held, held)
 				}
 				if confirmed {
 					want := &httpx.ReviewConfirmDTO{Verdict: "reject", Reasons: []httpx.OrderRejectDTO{{Code: "latest", Scope: "order", Policy: "size", Reason: "rejected", Details: "limit"}}, At: at.Add(time.Second).Format(time.RFC3339Nano)}
@@ -344,6 +358,33 @@ func TestGetOrderWithoutReview(t *testing.T) {
 		"order review-order: committed (0 fill(s))", false)
 	if _, ok := out["review"]; ok {
 		t.Fatal("non-waiting order exposed review")
+	}
+}
+
+func TestGetOrderReviewForceApproval(t *testing.T) {
+	detail := reviewToolDetail(t)
+	token, err := fwsigning.BuildEnvelope(fwsigning.Envelope{Approval: domain.ApprovalPayload{
+		Verdict: domain.VerdictAccept, RequestType: string(domain.AttestationRequestReviewForce),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Events = append(detail.Events, domain.OrderEvent{
+		Type: domain.OrderEventPreTradeAccepted,
+		Attestation: &domain.EventAttestation{
+			SignedEnvelope: token, RequestType: domain.AttestationRequestReviewForce,
+		},
+	})
+	detail.Order.Status = domain.OrderStatusCommitted
+	detail.Review = nil
+	out := callReviewTool(t, reviewToolSource{detail: detail}, "get_order", getOrderInput{OrderExternalID: "review-order"},
+		"order review-order: committed (0 fill(s))", false)
+	var approval orderApprovalDTO
+	if err := json.Unmarshal(out["approval"], &approval); err != nil {
+		t.Fatal(err)
+	}
+	if approval.SignedEnvelope != token {
+		t.Fatalf("force approval envelope = %q; want %q", approval.SignedEnvelope, token)
 	}
 }
 

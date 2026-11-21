@@ -387,6 +387,9 @@ func (r *realmStore) RestoreBackup(
 			archivedOrders[rec.Order.ExternalID] = true
 		}
 		for _, review := range archive.Data.OrderReviews {
+			if review.Held == nil {
+				return backup.RestoreSummary{}, fmt.Errorf("store: restore %s order review %q missing held: %w", backup.SectionActivityHistory, review.Order, domain.ErrInvalid)
+			}
 			if !archivedOrders[review.Order] {
 				return backup.RestoreSummary{}, fmt.Errorf("store: restore %s order review references missing order %q: %w", backup.SectionActivityHistory, review.Order, domain.ErrInvalid)
 			}

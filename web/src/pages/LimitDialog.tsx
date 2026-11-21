@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ShieldX, ClipboardCheck } from "lucide-react";
+import { ShieldX, ClipboardCheck, LockKeyhole } from "lucide-react";
 
 import {
   isInPlacePolicy,
@@ -777,7 +777,12 @@ export function LimitDialog({
                         value: mode,
                         title: ruleModeLabel(t, mode),
                         description: t(`orderSizeMode.descriptions.${mode}`),
-                        icon: mode === "reject" ? ShieldX : ClipboardCheck,
+                        icon:
+                          mode === "reject"
+                            ? ShieldX
+                            : mode === "review_without_hold"
+                              ? ClipboardCheck
+                              : LockKeyhole,
                       }))}
                       value={form.mode}
                       onChange={(mode) =>

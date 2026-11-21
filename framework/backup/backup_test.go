@@ -36,6 +36,28 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+func TestOrderReviewHeldJSON(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		review := OrderReview{Order: "waiting-order", Mode: "hold", Held: &held}
+		raw, err := json.Marshal(review)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		var encoded *bool
+		if err := json.Unmarshal(fields["held"], &encoded); err != nil || encoded == nil || *encoded != held {
+			t.Fatalf("held JSON=%s want=%t err=%v", fields["held"], held, err)
+		}
+		var decoded OrderReview
+		if err := json.Unmarshal(raw, &decoded); err != nil || !reflect.DeepEqual(decoded, review) {
+			t.Fatalf("decoded review=%+v want=%+v err=%v", decoded, review, err)
+		}
+	}
+}
+
 // TestFixtureArchiveDecodes loads the on-disk fixture and asserts it carries the
 // portable identity model end to end: dictionaries by code, machine records by
 // external id, links by code/external id, no version field.

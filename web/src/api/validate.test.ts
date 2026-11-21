@@ -35,7 +35,7 @@ describe("validateLimit barrier mode", () => {
     expect(validateLimit({ ...barrier, mode })).toBeNull();
   });
 
-  it.each([undefined, null, "review_with_hold", "unknown", 1])(
+  it.each([undefined, null, "unknown", 1])(
     "rejects invalid order-size mode %s",
     (mode) => {
       expect(validateLimit({ ...barrier, mode } as Limit)).toEqual({
@@ -44,7 +44,7 @@ describe("validateLimit barrier mode", () => {
     },
   );
 
-  it.each([undefined, "reject", "review_without_hold"])(
+  it.each([undefined, "reject", "review_without_hold", "review_with_hold"])(
     "rejects non-null mode %s on another policy",
     (mode) => {
       const policy = "rate_limit";

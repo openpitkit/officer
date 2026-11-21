@@ -178,6 +178,7 @@ export function isSpotFundsLimitMode(
 export const ORDER_SIZE_LIMIT_MODES = [
   "reject",
   "review_without_hold",
+  "review_with_hold",
 ] as const;
 
 /** The mode of an order-size barrier, derived from ORDER_SIZE_LIMIT_MODES. */

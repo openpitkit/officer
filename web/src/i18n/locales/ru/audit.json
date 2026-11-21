@@ -143,6 +143,7 @@
     "confirm_order_review_accepted": "Подтверждение ревью ордера {{order}}, счёт {{account}}, {{base}}/{{quote}}, {{side}}: принят",
     "confirm_order_review_rejected": "Подтверждение ревью ордера {{order}}, счёт {{account}}, {{base}}/{{quote}}, {{side}}: отклонён",
     "cancel_order_review": "Ордер {{order}}, ожидающий ревью, отменён, счёт {{account}}, {{base}}/{{quote}}, {{side}}",
+    "force_order_review": "Ордер {{order}}, ожидающий ревью, проведён принудительно без предторговой проверки, счёт {{account}}, {{base}}/{{quote}}, {{side}}",
     "execution_report": "Отчёт об исполнении ордера {{order}}, счёт {{account}}, {{base}}/{{quote}}: кол-во {{qty}}, осталось {{leavesQty}}, {{status}}, блокировок: {{blocks}}",
     "execution_report_force_refused": "Принудительный отчёт об исполнении ордера {{order}} (счёт {{account}}) отклонён: {{refusal}}",
     "adjustment_accepted": "Корректировка счёта {{account}}, актив {{asset}}, тип {{adjustmentType}}: принята",

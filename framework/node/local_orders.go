@@ -25,6 +25,7 @@ import (
 
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 
@@ -87,19 +88,19 @@ type orderSubmissionBridge struct {
 	accountIdentity domain.EngineAccountID
 }
 
-// readAccountBlockState returns the account's block state and engine identity.
+// readOrderAccount returns the order's account.
 // A missing account returns domain.ErrNotFound.
-func readAccountBlockState(
+func readOrderAccount(
 	ctx context.Context, realm store.RealmStore, code domain.AccountID,
-) (bool, domain.EngineAccountID, error) {
+) (domain.Account, error) {
 	account, ok, err := realm.GetAccount(ctx, code)
 	if err != nil {
-		return false, 0, fmt.Errorf("read account block state: %w", err)
+		return domain.Account{}, fmt.Errorf("read account block state: %w", err)
 	}
 	if !ok {
-		return false, 0, fmt.Errorf("read account block state: account %q: %w", code, domain.ErrNotFound)
+		return domain.Account{}, fmt.Errorf("read account block state: account %q: %w", code, domain.ErrNotFound)
 	}
-	return account.Blocked, account.EngineAccountID, nil
+	return account, nil
 }
 
 func beginOrderSubmission(
@@ -115,13 +116,13 @@ func beginOrderSubmission(
 		abort:      make(chan struct{}),
 		done:       make(chan orderSubmissionCompletion, 1),
 	}
-	var err error
 	// Read before opening the submission transaction below: the store holds
 	// one connection, so this read cannot wait until that transaction is open.
-	bridge.accountBlocked, bridge.accountIdentity, err = readAccountBlockState(ctx, realm, draft.Account)
+	account, err := readOrderAccount(ctx, realm, draft.Account)
 	if err != nil {
 		return nil, domain.Order{}, err
 	}
+	bridge.accountBlocked, bridge.accountIdentity = account.Blocked, account.EngineAccountID
 	go func() {
 		order, err := recordOrderSubmissionWithAttestation(
 			ctx,
@@ -226,26 +227,29 @@ type submitOrderChainState struct {
 }
 
 type submitImmediateChainState struct {
-	ctx               context.Context
-	bridge            *orderSubmissionBridge
-	order             domain.Order
-	result            engine.ImmediateResult
-	preparation       engine.ImmediatePreparation
-	attest            store.EventAttestor
-	err               error
-	preTradeFinalized bool
-	reportSettled     bool
+	ctx                 context.Context
+	bridge              *orderSubmissionBridge
+	order               domain.Order
+	result              engine.ImmediateResult
+	preparation         engine.ImmediatePreparation
+	attest              store.EventAttestor
+	err                 error
+	preTradeFinalized   bool
+	reportSettled       bool
+	heldSettlement      domain.OrderSettlement
+	heldReviewCompleted bool
 }
 
 // SubmitOrder runs pre-trade and caller persistence in one account chain and
-// one store transaction. On accept
-// it records pre_trade_accepted and committed, persists the lock, engine opening
-// leaves, balance outcomes, and committed status; on reject it records
-// pre_trade_rejected and rejected status. On review it rolls back the engine
-// reservation, records pre_trade_review with awaiting_review status, audits the
-// decision, and returns Reviews through SubmitOrderWithAttestation. missing
-// decides whether an order for an account Officer does not know yet registers
-// that account or is rejected.
+// one store transaction. On accept it records pre_trade_accepted and committed,
+// persists the lock, engine opening leaves, balance outcomes, and committed
+// status; on reject it records pre_trade_rejected and rejected status. On
+// review it commits the reservation when held, leaving the funds held while
+// awaiting review; otherwise it rolls the reservation back. It records
+// pre_trade_review with awaiting_review status, audits the decision, and
+// returns Reviews through SubmitOrderWithAttestation. missing decides whether
+// an order for an account Officer does not know yet registers that account or
+// is rejected.
 func (n *localNode) SubmitOrder(
 	ctx context.Context, o domain.Order,
 	missing domain.MissingAccountPolicy, caller domain.Caller,
@@ -411,6 +415,18 @@ func (n *localNode) submitOrder(
 				case domain.VerdictAccept:
 				case domain.VerdictReview:
 					state.result = result
+					if result.Held {
+						state.settlement, state.err = heldOrderReviewSettlement(
+							state.order, result, domain.SubmitModeHold, destination, caller,
+						)
+						if state.err != nil {
+							return asyncengine.DecisionRollback, state.err
+						}
+						if attestFor != nil {
+							state.attest = attestFor(state.order, result)
+						}
+						return asyncengine.DecisionCommit, nil
+					}
 					if attestFor != nil {
 						state.attest = attestFor(state.order, state.result)
 					}
@@ -757,10 +773,33 @@ func orderReviewSettlement(
 	}
 }
 
+func heldOrderReviewSettlement(
+	order domain.Order, result engine.OrderResult, mode string,
+	destination *domain.TradingDestination, caller domain.Caller,
+) (domain.OrderSettlement, error) {
+	settlement, err := orderAcceptedSettlement(order.Account, order, result, caller)
+	if err != nil {
+		return domain.OrderSettlement{}, err
+	}
+	if err := validateHeldQuantity(settlement.Leaves); err != nil {
+		return domain.OrderSettlement{}, err
+	}
+	settlement.OrderStatus = domain.OrderStatusAwaitingReview
+	settlement.Review = &domain.OrderReview{Mode: mode, Destination: destination, Held: true}
+	settlement.Events = []domain.OrderEvent{
+		fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeReview, caller, domain.OrderEventPayload{}),
+	}
+	return settlement, nil
+}
+
+var errImmediateHeldReviewCompleted = errors.New("immediate held review completed")
+
 // SubmitImmediate records the order, runs the engine pre-trade and, on accept,
 // commits and settles the fill in the same engine call at the request trade
 // price so the held amount nets to zero, then persists the filled lifecycle. On
-// reject the order is recorded rejected; on review it waits without a hold.
+// reject the order is recorded rejected; on review it commits the reservation
+// when held and waits with the funds held, otherwise it rolls back and waits
+// without a hold.
 // missing is handled as in SubmitOrder. The backend audits the issued approval.
 func (n *localNode) SubmitImmediate(
 	ctx context.Context, o domain.Order,
@@ -951,6 +990,21 @@ func (n *localNode) submitImmediate(
 						state.result = engine.ImmediateResult{
 							Verdict: preparation.Verdict, Reviews: preparation.Reviews,
 						}
+						if preparation.Held {
+							state.result.Lock = preparation.Lock
+							state.result.SettlementLockPrice = preparation.SettlementLockPrice
+							state.preparation = preparation
+							state.heldSettlement, state.err = heldOrderReviewSettlement(
+								state.order, engine.OrderResult{
+									Outcomes: preparation.Outcomes, Lock: preparation.Lock,
+									Blocks: preparation.Blocks,
+								}, domain.SubmitModeImmediate, destination, caller,
+							)
+							if state.err != nil {
+								return asyncengine.DecisionRollback, state.err
+							}
+							return asyncengine.DecisionCommit, nil
+						}
 						if attestFor != nil {
 							state.attest = attestFor(state.order, state.result)
 						}
@@ -976,6 +1030,24 @@ func (n *localNode) submitImmediate(
 		_ context.Context, state *submitImmediateChainState,
 	) error {
 		state.preTradeFinalized = true
+		if state.preparation.Held {
+			if attestFor != nil {
+				state.attest = attestFor(state.order, state.result)
+			}
+			state.order, state.err = state.bridge.complete(state.heldSettlement)
+			if state.err != nil {
+				state.err = n.fatalPostEnginePersistence("record immediate submission", o.Account, state.err)
+				return state.err
+			}
+			state.err = n.auditSubmittedOrder(state.ctx, o.Account, state.order, engine.OrderResult{
+				Verdict: state.result.Verdict, Reviews: state.result.Reviews, Blocks: state.preparation.Blocks,
+			}, caller, state.bridge.accountIdentity, submissionAuditAction(state.order))
+			if state.err != nil {
+				return state.err
+			}
+			state.heldReviewCompleted = true
+			return errImmediateHeldReviewCompleted
+		}
 		return nil
 	})
 	builder.ApplyExecutionReport(
@@ -1040,7 +1112,7 @@ func (n *localNode) submitImmediate(
 		state *submitImmediateChainState,
 		outcome asyncengine.ChainOutcome,
 	) error {
-		if state.err == nil && state.preTradeFinalized &&
+		if !state.heldReviewCompleted && state.err == nil && state.preTradeFinalized &&
 			!state.reportSettled && outcome.Err != nil {
 			state.err = immediateReconciliationError(
 				state.order,
@@ -1053,6 +1125,9 @@ func (n *localNode) submitImmediate(
 		return nil
 	})
 	_, chainErr := runner.Run(ctx, eng.AsyncEngine()).Await(context.Background())
+	if state.heldReviewCompleted && errors.Is(chainErr, errImmediateHeldReviewCompleted) {
+		return state.order, state.result, nil
+	}
 	if runErr := accountChainRunError(
 		"submit immediate", state.err, chainErr,
 	); runErr != nil {
@@ -1103,6 +1178,13 @@ func (n *localNode) auditImmediateSubmission(
 			account,
 			fmt.Errorf("audit immediate execution report: %w", err),
 		)
+	}
+	if action == domain.AuditActionForceOrderReview {
+		if err := n.audit(ctx, caller, reviewActionAudit(order, identity, action,
+			domain.AuditDetailForceOrderReview)); err != nil {
+			return n.fatalPostEnginePersistence("audit force immediate review", account, err)
+		}
+		return nil
 	}
 	return n.auditOrderDecision(
 		ctx, account, order, result.Verdict, result.Rejects, result.Reviews, caller, identity, action,
@@ -1366,6 +1448,47 @@ func (n *localNode) cancelOrder(
 	if err != nil {
 		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}
+	operation := cancelReportOperation{
+		name: "cancellation",
+		prepare: func() (domain.Order, error) {
+			detail, err := n.realm.GetOrder(ctx, order)
+			if err != nil {
+				return domain.Order{}, fmt.Errorf("get order: %w", err)
+			}
+			if err := domain.RequireOrderModifiable(detail.Order.Status, false); err != nil {
+				return domain.Order{}, err
+			}
+			return detail.Order, nil
+		},
+		audit: func(state *executionReportChainState) store.AuditEntry {
+			return store.AuditEntry{
+				Action:          domain.AuditActionExecutionReport,
+				Account:         state.in.Account,
+				AccountIdentity: domain.EngineAccountID(source.Handle()),
+				Detail: executionReportDetail(
+					state.in, state.reservationRemainder,
+					domain.OrderStatusCancelled, len(state.result.Blocks),
+				),
+			}
+		},
+	}
+	return n.cancelOrderReport(ctx, eng, source, routeDetail.Order.Account,
+		order, leavesQuantity, caller, attest, operation)
+}
+
+type cancelReportOperation struct {
+	name        string
+	prepare     func() (domain.Order, error)
+	allowedFrom []domain.OrderStatus
+	clearReview bool
+	audit       func(*executionReportChainState) store.AuditEntry
+}
+
+func (n *localNode) cancelOrderReport(
+	ctx context.Context, eng engine.Engine, source param.AccountID,
+	account domain.AccountID, order domain.ExternalID, leavesQuantity string,
+	caller domain.Caller, attest store.EventAttestor, operation cancelReportOperation,
+) (domain.Order, engine.ExecutionReportResult, error) {
 	state := &executionReportChainState{
 		ctx:       ctx,
 		adapter:   eng,
@@ -1376,14 +1499,8 @@ func (n *localNode) cancelOrder(
 			state.err = err
 			return nil, err
 		}
-		detail, err := n.realm.GetOrder(ctx, order)
+		stored, err := operation.prepare()
 		if err != nil {
-			state.err = fmt.Errorf("get order: %w", err)
-			return nil, state.err
-		}
-		if err := domain.RequireOrderModifiable(
-			detail.Order.Status, false,
-		); err != nil {
 			state.err = err
 			return nil, err
 		}
@@ -1396,27 +1513,29 @@ func (n *localNode) cancelOrder(
 			state.err = err
 			return nil, err
 		}
-		state.order = detail.Order
+		state.order = stored
 		state.in = domain.ExecutionReportInput{
 			Order:          order,
-			Account:        detail.Order.Account,
-			BaseAsset:      detail.Order.BaseAsset,
-			QuoteAsset:     detail.Order.QuoteAsset,
-			Side:           detail.Order.Side,
+			Account:        stored.Account,
+			BaseAsset:      stored.BaseAsset,
+			QuoteAsset:     stored.QuoteAsset,
+			Side:           stored.Side,
 			LeavesQuantity: leavesQuantity,
-			Lock:           append([]byte(nil), detail.Order.Lock...),
+			Lock:           append([]byte(nil), stored.Lock...),
 			OrderStatus:    domain.OrderStatusCancelled,
 		}
 		if _, err := domain.ExecutionReportRequiresEngine(state.in); err != nil {
 			state.err = fmt.Errorf(
-				"build cancellation execution report: %w", err,
+				"build %s execution report: %w", operation.name, err,
 			)
 			return nil, state.err
 		}
-		state.reservationRemainder, err = executionReservedQuantity(state.in, detail)
+		state.reservationRemainder, err = executionReservedQuantity(
+			state.in, domain.OrderDetail{Order: stored},
+		)
 		if err != nil {
 			state.err = fmt.Errorf(
-				"build cancellation reservation remainder: %w", err,
+				"build %s reservation remainder: %w", operation.name, err,
 			)
 			return nil, state.err
 		}
@@ -1426,7 +1545,7 @@ func (n *localNode) cancelOrder(
 		)
 		if err != nil {
 			state.err = fmt.Errorf(
-				"apply cancellation execution report: %w", err,
+				"apply %s execution report: %w", operation.name, err,
 			)
 			return nil, state.err
 		}
@@ -1435,7 +1554,7 @@ func (n *localNode) cancelOrder(
 	persist := func(state *executionReportChainState) error {
 		if state.result.Persistence == nil {
 			return fmt.Errorf(
-				"apply cancellation execution report returned no persistence write set",
+				"apply %s execution report returned no persistence write set", operation.name,
 			)
 		}
 		persistence := stampExecutionReportPersistence(
@@ -1443,7 +1562,7 @@ func (n *localNode) cancelOrder(
 		)
 		reservedQuantity, err := reservationAfterOutcomes(state.order, persistence.Balances)
 		if err != nil {
-			return n.fatalPostEnginePersistence("record cancellation reservation", routeDetail.Order.Account, err)
+			return n.fatalPostEnginePersistence("record "+operation.name+" reservation", account, err)
 		}
 		settlement := domain.OrderSettlement{
 			ReservedQuantity: reservedQuantity,
@@ -1455,14 +1574,16 @@ func (n *localNode) cancelOrder(
 			Events:           persistence.Events,
 			Trade:            persistence.Trade,
 			Blocks:           persistence.Blocks,
+			AllowedFrom:      operation.allowedFrom,
+			ClearReview:      operation.clearReview,
 		}
 		if _, err := recordOrderSettlementWithAttestation(
 			ctx, n.realm, settlement, attest,
 		); err != nil {
 			return n.fatalPostEnginePersistence(
-				"record cancellation execution report",
-				routeDetail.Order.Account,
-				fmt.Errorf("record cancellation execution report: %w", err),
+				"record "+operation.name+" execution report",
+				account,
+				fmt.Errorf("record %s execution report: %w", operation.name, err),
 			)
 		}
 		state.persistenceCompleted = true
@@ -1470,26 +1591,16 @@ func (n *localNode) cancelOrder(
 			ctx, order, state.result.Blocks, domain.EngineAccountID(source.Handle()),
 		); err != nil {
 			return n.fatalPostEnginePersistence(
-				"audit cancellation execution report engine blocks",
-				routeDetail.Order.Account,
+				"audit "+operation.name+" execution report engine blocks",
+				account,
 				err,
 			)
 		}
-		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action:          domain.AuditActionExecutionReport,
-			Account:         state.in.Account,
-			AccountIdentity: domain.EngineAccountID(source.Handle()),
-			Detail: executionReportDetail(
-				state.in,
-				state.reservationRemainder,
-				domain.OrderStatusCancelled,
-				len(state.result.Blocks),
-			),
-		}); err != nil {
+		if err := n.audit(ctx, caller, operation.audit(state)); err != nil {
 			return n.fatalPostEnginePersistence(
-				"audit cancellation execution report",
-				routeDetail.Order.Account,
-				fmt.Errorf("audit cancellation execution report: %w", err),
+				"audit "+operation.name+" execution report",
+				account,
+				fmt.Errorf("audit %s execution report: %w", operation.name, err),
 			)
 		}
 		state.order.Status = persistence.OrderStatus
@@ -1506,8 +1617,8 @@ func (n *localNode) cancelOrder(
 		state,
 		begin,
 		persist,
-		"apply cancellation execution report",
-		routeDetail.Order.Account,
+		"apply "+operation.name+" execution report",
+		account,
 	); err != nil {
 		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}

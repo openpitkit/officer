@@ -205,6 +205,7 @@ type fakeService struct {
 	cancelCalls          int
 	reviewOrderID        string
 	reviewConfirmCalls   int
+	reviewForceCalls     int
 	reviewCancelCalls    int
 	reviewErr            error
 	cancelLeavesQuantity string
@@ -1096,6 +1097,12 @@ func (f *fakeService) CancelOrder(
 func (f *fakeService) ConfirmOrderReview(_ context.Context, orderID string) (domain.Order, backend.VenueSendResult, error) {
 	f.reviewOrderID = orderID
 	f.reviewConfirmCalls++
+	return f.submitOrder, f.venueSendResult, f.reviewErr
+}
+
+func (f *fakeService) ForceOrderReview(_ context.Context, orderID string) (domain.Order, backend.VenueSendResult, error) {
+	f.reviewOrderID = orderID
+	f.reviewForceCalls++
 	return f.submitOrder, f.venueSendResult, f.reviewErr
 }
 

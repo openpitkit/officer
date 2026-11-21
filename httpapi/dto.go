@@ -796,6 +796,8 @@ type eventReproductionResponseDTO struct {
 	Cancel *orderMutationResponseDTO `json:"cancel,omitempty"`
 	// ReviewConfirm reproduces the signed decision; the order is not signed by it.
 	ReviewConfirm *reviewDecisionDTO `json:"reviewConfirm,omitempty"`
+	// ReviewForce reproduces the signed force decision.
+	ReviewForce *reviewDecisionDTO `json:"reviewForce,omitempty"`
 	// ReviewCancel reproduces the POST .../review/cancel response.
 	ReviewCancel *orderMutationResponseDTO `json:"reviewCancel,omitempty"`
 }

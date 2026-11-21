@@ -510,9 +510,40 @@ type Node interface {
 		attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 	) (domain.Order, engine.ImmediateResult, error)
 
-	// CancelOrderReview closes a waiting order without an engine operation,
-	// clears its review row, records cancelled with zero leaves and audits
-	// cancel_order_review. A non-nil attest stamps the event atomically.
+	// ForceOrderReview commits a held waiting order without a pre-trade call
+	// or engine operation. It preserves the hold and clears the review row.
+	// A non-waiting or non-held review, a changed held flag, or a mode other
+	// than hold returns domain.ErrConflict. Changed chain input returns
+	// domain.ErrInvalid. A missing review row, empty lock or empty or zero
+	// reserved quantity is an explicit error.
+	// An account blocked by its own flag or its group returns domain.ErrConflict.
+	// A non-nil attestFor builds the attestor for the accepted event.
+	ForceOrderReview(
+		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+		attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
+	) (domain.Order, engine.OrderResult, error)
+
+	// ForceImmediateReview fills a held waiting order through one execution
+	// report using its stored lock and quantity, without a pre-trade call.
+	// It clears the review row. A non-waiting or non-held review, a changed
+	// held flag, or a mode other than immediate returns domain.ErrConflict.
+	// An account blocked by its own flag or its group returns domain.ErrConflict.
+	// Changed chain input returns domain.ErrInvalid.
+	// A missing review row, empty lock or empty or zero reserved quantity is
+	// an explicit error. Once the report reaches the engine, every failure
+	// is fatal and requires reconciliation.
+	// A non-nil attestFor builds the attestor for the accepted event.
+	ForceImmediateReview(
+		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+		attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
+	) (domain.Order, engine.ImmediateResult, error)
+
+	// CancelOrderReview closes a waiting order. Without a hold there is no
+	// engine operation. A held review uses an engine cancel execution report
+	// with the stored reserved quantity as remainder and the first-run lock
+	// to release the hold. Both paths clear the review row, record cancelled
+	// with zero leaves and audit cancel_order_review. A non-nil attest stamps
+	// the event atomically.
 	// It returns the stored cancelled order.
 	CancelOrderReview(
 		ctx context.Context, order domain.ExternalID, caller domain.Caller,

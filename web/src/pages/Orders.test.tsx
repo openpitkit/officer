@@ -249,6 +249,7 @@ const submitExecutionReportMock = vi.fn();
 const confirmOrderMock = vi.fn();
 const cancelOrderMock = vi.fn();
 const confirmOrderReviewMock = vi.fn();
+const forceOrderReviewMock = vi.fn();
 const cancelOrderReviewMock = vi.fn();
 const sendPaperOrderMock = vi.fn();
 const sendLiveOrderMock = vi.fn();
@@ -371,6 +372,7 @@ function renderOrders(initialEntry: string) {
         confirmOrder: confirmOrderMock,
         cancelOrder: cancelOrderMock,
         confirmOrderReview: confirmOrderReviewMock,
+        forceOrderReview: forceOrderReviewMock,
         cancelOrderReview: cancelOrderReviewMock,
         sendPaperOrder: sendPaperOrderMock,
         sendLiveOrder: sendLiveOrderMock,
@@ -5408,6 +5410,7 @@ async function openSampleOrderDetail(
 
 describe("Order review panel", () => {
   const review: OrderReview = {
+    held: false,
     marks: [
       {
         code: "policy_reject",
@@ -5618,6 +5621,194 @@ describe("Order review panel", () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each([
+    [true, "Held"],
+    [false, "Not held"],
+  ] as const)(
+    "shows held=%s as %s and offers Force only with hold",
+    async (held, label) => {
+      const dialog = await openSampleOrderDetail(userEvent.setup(), {
+        ...waiting,
+        review: { ...review, held },
+      });
+      const section = await within(dialog).findByRole("region", {
+        name: "Order review",
+      });
+      expect(within(section).getByText("Funds")).toBeInTheDocument();
+      expect(within(section).getByText(label)).toBeInTheDocument();
+      if (held) {
+        expect(
+          within(section).getByRole("button", { name: "Force" }),
+        ).toBeEnabled();
+      } else {
+        expect(
+          within(section).queryByRole("button", { name: "Force" }),
+        ).not.toBeInTheDocument();
+      }
+    },
+  );
+
+  it("requires its own danger confirmation before forcing a held trading order", async () => {
+    const user = userEvent.setup();
+    const heldReview = {
+      ...review,
+      held: true,
+      destination: {
+        connection: linkedVenueOrder.connection,
+        venueAccount: linkedVenueOrder.venueAccount,
+        route: {},
+      },
+    };
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: heldReview,
+    });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Force" }),
+    );
+    let confirm = await screen.findByRole("alertdialog", {
+      name: "Force this order?",
+    });
+    expect(
+      within(confirm).getByText(/without a pre-trade check/),
+    ).toHaveTextContent(
+      "The order proceeds without a pre-trade check. An order submitted to wait for execution reports is committed, then sent to its trading connection, or approved for its caller when it has none. An order submitted to settle at once is filled. This decision cannot be undone.",
+    );
+    expect(within(confirm).getByRole("button", { name: "Force" })).toHaveClass(
+      ...buttonVariants({ variant: "danger", size: null }).split(" "),
+    );
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(forceOrderReviewMock).not.toHaveBeenCalled();
+    expect(confirmOrderReviewMock).not.toHaveBeenCalled();
+    const venueOrder = { ...linkedVenueOrder, venueOrderId: "venue-123" };
+    let finish!: (value: unknown) => void;
+    forceOrderReviewMock.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    fetchOrderDetailMock.mockResolvedValue({
+      order: { ...sampleOrder, status: "committed" },
+      events: [],
+      trades: [],
+      venueOrder,
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Force" }));
+    confirm = await screen.findByRole("alertdialog", {
+      name: "Force this order?",
+    });
+    await user.click(within(confirm).getByRole("button", { name: "Force" }));
+    expect(forceOrderReviewMock).toHaveBeenCalledTimes(1);
+    expect(forceOrderReviewMock).toHaveBeenCalledWith(sampleOrder.id);
+    expect(confirmOrderReviewMock).not.toHaveBeenCalled();
+    expect(
+      await within(dialog).findByRole("button", { name: "Forcing…" }),
+    ).toBeDisabled();
+    await act(async () =>
+      finish({
+        order: { ...sampleOrder, status: "committed" },
+        decision: acceptedDecision,
+        venueSend: { status: "acknowledged", venueOrder },
+      }),
+    );
+    expect(
+      await within(dialog).findByText(
+        "Sent to Alpaca · paper. Venue order venue-123.",
+      ),
+    ).toHaveClass("border-[var(--ok)]");
+    expect(
+      within(dialog).queryByRole("region", { name: "Order review" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a filled banner after forcing a held order without a destination", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: { ...review, held: true },
+    });
+    const filledOrder = { ...sampleOrder, status: "filled" as const };
+    forceOrderReviewMock.mockResolvedValue({
+      order: filledOrder,
+      decision: acceptedDecision,
+    });
+    fetchOrderDetailMock.mockResolvedValue({
+      order: filledOrder,
+      events: [],
+      trades: [],
+    });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Force" }),
+    );
+    const confirm = await screen.findByRole("alertdialog", {
+      name: "Force this order?",
+    });
+    await user.click(within(confirm).getByRole("button", { name: "Force" }));
+    expect(await within(dialog).findByText("Order filled.")).toHaveClass(
+      "border-[var(--ok)]",
+    );
+    expect(
+      within(dialog).queryByText(
+        "Approved. The caller can now send this order.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows an error after forcing a held order returns an unexpected accepted status", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: { ...review, held: true },
+    });
+    forceOrderReviewMock.mockResolvedValue({
+      order: sampleOrder,
+      decision: acceptedDecision,
+    });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Force" }),
+    );
+    const confirm = await screen.findByRole("alertdialog", {
+      name: "Force this order?",
+    });
+    await user.click(within(confirm).getByRole("button", { name: "Force" }));
+    expect(
+      await within(dialog).findByText(
+        "The review request did not complete: Unexpected order status accepted after an accepted review decision. The decision may already be recorded; the order status shown is authoritative. Check it before retrying.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText("Order filled.")).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(
+        "Approved. The caller can now send this order.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a held order waiting and shows the review error when force returns 409", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: { ...review, held: true },
+    });
+    forceOrderReviewMock.mockRejectedValue(
+      new ApiError("Account is blocked", "conflict", 409),
+    );
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Force" }),
+    );
+    const confirm = await screen.findByRole("alertdialog", {
+      name: "Force this order?",
+    });
+    await user.click(within(confirm).getByRole("button", { name: "Force" }));
+    expect(
+      await within(dialog).findByText("Account is blocked"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("Awaiting review")).toBeInTheDocument();
+    expect(within(dialog).getByText("Held")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Force" })).toBeEnabled();
+    expect(confirmOrderReviewMock).not.toHaveBeenCalled();
+  });
+
   it("hides the venue account term when the review destination has no account", async () => {
     const dialog = await openSampleOrderDetail(userEvent.setup(), {
       ...waiting,
@@ -5697,9 +5888,12 @@ describe("Order review panel", () => {
     expect(confirmOrderMock).not.toHaveBeenCalled();
   });
 
-  it("disables both decision buttons until the mutation and re-read finish", async () => {
+  it("disables all review decision buttons until the mutation and re-read finish", async () => {
     const user = userEvent.setup();
-    const dialog = await openSampleOrderDetail(user, waiting);
+    const dialog = await openSampleOrderDetail(user, {
+      ...waiting,
+      review: { ...review, held: true },
+    });
     let finish!: (value: unknown) => void;
     confirmOrderReviewMock.mockReturnValue(
       new Promise((resolve) => {
@@ -5711,6 +5905,9 @@ describe("Order review panel", () => {
     );
     expect(
       within(dialog).getByRole("button", { name: "Confirming…" }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "Force" }),
     ).toBeDisabled();
     expect(
       within(dialog).getByRole("button", { name: "Cancel order" }),
@@ -5820,7 +6017,7 @@ describe("Order review panel", () => {
     const user = userEvent.setup();
     const dialog = await openSampleOrderDetail(user, waiting);
     confirmOrderReviewMock.mockResolvedValue({
-      order: sampleOrder,
+      order: { ...sampleOrder, status: "committed" },
       decision: acceptedDecision,
     });
     fetchOrderDetailMock.mockResolvedValue({
@@ -5928,7 +6125,7 @@ describe("Order review panel", () => {
     const dialog = await openSampleOrderDetail(user, waiting);
     await within(dialog).findByRole("button", { name: "Confirm" });
     confirmOrderReviewMock.mockResolvedValue({
-      order: sampleOrder,
+      order: { ...sampleOrder, status: "committed" },
       decision: acceptedDecision,
     });
     fetchOrderDetailMock.mockRejectedValue(
@@ -6101,7 +6298,14 @@ describe("Order review panel", () => {
       await act(async () => {
         if (outcome === "fail")
           fail(new ApiError("Decision failed", "internal", 500));
-        else finish({ order: settled.order, decision: acceptedDecision });
+        else
+          finish({
+            order:
+              action === "confirm"
+                ? { ...settled.order, status: "committed" }
+                : settled.order,
+            decision: acceptedDecision,
+          });
       });
       await waitFor(() =>
         expect(fetchOrderDetailMock).toHaveBeenCalledTimes(4),
@@ -6185,7 +6389,10 @@ describe("Order review panel", () => {
       expect(reload).not.toHaveBeenCalled();
       await act(async () => {
         if (outcome === "accept") {
-          finish({ order: sampleOrder, decision: acceptedDecision });
+          finish({
+            order: { ...sampleOrder, status: "committed" },
+            decision: acceptedDecision,
+          });
         } else {
           fail(new ApiError("Decision failed", "internal", 500));
         }
@@ -6350,7 +6557,7 @@ describe("Order review panel", () => {
     });
     await within(dialog).findByRole("button", { name: "Confirm" });
     confirmOrderReviewMock.mockResolvedValue({
-      order: sampleOrder,
+      order: { ...sampleOrder, status: "committed" },
       decision: acceptedDecision,
     });
     await user.click(within(dialog).getByRole("button", { name: "Confirm" }));
@@ -6401,7 +6608,10 @@ describe("Order review panel", () => {
         );
       } else {
         confirmOrderReviewMock.mockResolvedValue({
-          order: waiting.order,
+          order:
+            outcome === "accept"
+              ? { ...waiting.order, status: "committed" }
+              : waiting.order,
           decision: {
             ...acceptedDecision,
             verdict: outcome === "accept" ? "accept" : "reject",
@@ -6478,7 +6688,10 @@ describe("Order review panel", () => {
     reload.mockClear();
     fetchOrderDetailMock.mockClear();
     await act(async () => {
-      finish({ order: sampleOrder, decision: acceptedDecision });
+      finish({
+        order: { ...sampleOrder, status: "committed" },
+        decision: acceptedDecision,
+      });
     });
     expect(reload).toHaveBeenCalledTimes(1);
     expect(fetchOrderDetailMock).not.toHaveBeenCalled();

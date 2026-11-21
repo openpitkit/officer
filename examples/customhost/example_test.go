@@ -958,6 +958,22 @@ func (*fakeEngine) ReservedOrder(
 	return engine.OrderResult{}, errUnexpectedOrderChain
 }
 
+func (*fakeEngine) ReservedHeldOrder(domain.Order, asyncengine.OperationResult, engine.HeldReservation) (engine.OrderResult, error) {
+	return engine.OrderResult{}, errors.New("fakeEngine: held review rerun is not supported")
+}
+
+func (*fakeEngine) PrepareImmediateHeldReservation(domain.Order, asyncengine.OperationResult, engine.HeldReservation) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, errors.New("fakeEngine: held review rerun is not supported")
+}
+
+func (*fakeEngine) ForcedHeldOrder(domain.Order, engine.HeldReservation) (engine.OrderResult, error) {
+	return engine.OrderResult{}, errors.New("fakeEngine: held review force is not supported")
+}
+
+func (*fakeEngine) PrepareForcedHeldImmediate(domain.Order, engine.HeldReservation) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, errors.New("fakeEngine: held review force is not supported")
+}
+
 func (*fakeEngine) AppliedDropCopyOrder(
 	domain.Order, asyncengine.DropCopyResult,
 ) (engine.OrderResult, error) {

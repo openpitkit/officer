@@ -143,6 +143,7 @@
     "confirm_order_review_accepted": "Order {{order}} review confirmed, account {{account}}, {{base}}/{{quote}}, {{side}}: accepted",
     "confirm_order_review_rejected": "Order {{order}} review confirmed, account {{account}}, {{base}}/{{quote}}, {{side}}: rejected",
     "cancel_order_review": "Order {{order}} awaiting review cancelled, account {{account}}, {{base}}/{{quote}}, {{side}}",
+    "force_order_review": "Order {{order}} awaiting review forced without pre-trade, account {{account}}, {{base}}/{{quote}}, {{side}}",
     "execution_report": "Execution report for order {{order}}, account {{account}}, {{base}}/{{quote}}: qty {{qty}}, remaining {{leavesQty}}, {{status}}, blocks: {{blocks}}",
     "execution_report_force_refused": "Forced execution report for order {{order}} (account {{account}}) refused: {{refusal}}",
     "adjustment_accepted": "Adjustment for account {{account}}, asset {{asset}}, type {{adjustmentType}}: accepted",

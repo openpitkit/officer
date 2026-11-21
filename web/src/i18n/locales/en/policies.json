@@ -2,6 +2,7 @@
   "orderSizeMode": {
     "label": "Barrier mode",
     "descriptions": {
+      "review_with_hold": "An order above the barrier waits for operator review with its funds held. Confirm reruns pre-trade without a second hold: the order proceeds if it passes and keeps waiting with its hold if not. Cancel releases the hold.",
       "reject": "An order above the barrier is refused.",
       "review_without_hold": "An order above the barrier waits for operator review; nothing is held or sent until it is confirmed."
     }

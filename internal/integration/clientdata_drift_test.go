@@ -1266,6 +1266,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 		backup: map[string]string{
 			"order_id":      "Order",
 			"mode_id":       "Mode",
+			"held":          "Held",
 			"connection_id": "Connection",
 			"venue_account": "VenueAccount",
 			"route":         "Route",
@@ -2050,6 +2051,7 @@ func seedClientDataDriftRealm(
 		AllowedFrom: []domain.OrderStatus{domain.OrderStatusSubmitted},
 		Review: &domain.OrderReview{
 			Mode: "immediate",
+			Held: true,
 			Destination: &domain.TradingDestination{
 				Connection:   connection.ExternalID,
 				VenueAccount: "venue-account-sentinel",

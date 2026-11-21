@@ -1577,7 +1577,7 @@ func TestLimitOrderSize_ValidateMode(t *testing.T) {
 		{"reject", domain.RuleModeReject, true},
 		{"review_without_hold", domain.RuleModeReviewWithoutHold, true},
 		{"empty", "", false},
-		{"review_with_hold", domain.RuleModeReviewWithHold, false},
+		{"review_with_hold", domain.RuleModeReviewWithHold, true},
 		{"unknown", "unknown", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1965,6 +1965,7 @@ func TestAuditAction_Category(t *testing.T) {
 		domain.AuditActionExecutionReport:    domain.AuditCategoryTrading,
 		domain.AuditActionConfirmOrderReview: domain.AuditCategoryControl,
 		domain.AuditActionCancelOrderReview:  domain.AuditCategoryControl,
+		domain.AuditActionForceOrderReview:   domain.AuditCategoryControl,
 	}
 	for _, action := range domain.AllAuditActions() {
 		want := domain.AuditCategoryControl

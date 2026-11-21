@@ -383,12 +383,20 @@
       "fieldDisplayPrice": "Preço travado",
       "fieldCommission": "Comissão",
       "review": {
+        "funds": "Fundos",
+        "held": "Retidos",
+        "notHeld": "Não retidos",
+        "force": "Forçar",
+        "forceBusy": "Forçando…",
+        "forceTitle": "Forçar esta ordem?",
+        "forceDescription": "A ordem prossegue sem controle pré-negociação. Uma ordem enviada para aguardar os relatórios de execução é efetivada e depois enviada à sua conexão de negociação ou, se não tiver nenhuma, aprovada para o solicitante. Uma ordem enviada para liquidação imediata é executada. Esta decisão não pode ser desfeita.",
         "title": "Revisão da ordem",
         "retry": "Tentar novamente",
         "lastConfirm": "Última confirmação rejeitada",
         "cancelTitle": "Cancelar esta ordem?",
         "cancelDescription": "A ordem será cancelada sem envio. Esta decisão não pode ser desfeita.",
         "approvedForCaller": "Ordem aprovada. O solicitante já pode enviá-la.",
+        "filled": "Ordem executada.",
         "uncertainOutcome": "A solicitação de revisão não foi concluída: {{message}}. A decisão já pode ter sido registrada; a situação da ordem exibida é a vigente. Verifique-a antes de tentar novamente."
       },
       "workflow": {
@@ -466,6 +474,7 @@
   },
 
   "requestType": {
+    "reviewForce": "Forçar revisão da ordem",
     "reviewConfirm": "Confirmar revisão da ordem",
     "reviewCancel": "Cancelar revisão da ordem",
     "submit": "Envio",
@@ -475,6 +484,7 @@
   },
 
   "repro": {
+    "responseReviewForce": "Resposta de revisão forçada",
     "responseReviewConfirm": "Resposta de confirmação de revisão",
     "responseReviewCancel": "Resposta de cancelamento de revisão",
     "loading": "Carregando o pacote de reprodução…",

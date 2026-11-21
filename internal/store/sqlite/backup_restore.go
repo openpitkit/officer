@@ -1350,7 +1350,7 @@ func (rt *restoreTx) restoreOrderReviews(ctx context.Context, reviews []backup.O
 		if err != nil {
 			return fmt.Errorf("store: restore %s order review %q: %w", backup.SectionActivityHistory, archived.Order, err)
 		}
-		review := domain.OrderReview{Mode: archived.Mode}
+		review := domain.OrderReview{Mode: archived.Mode, Held: *archived.Held}
 		if !archived.Connection.IsZero() {
 			review.Destination = &domain.TradingDestination{
 				Connection: archived.Connection, VenueAccount: archived.VenueAccount, Route: archived.Route,

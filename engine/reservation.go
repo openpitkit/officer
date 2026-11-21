@@ -45,11 +45,22 @@ func (e *openPitEngine) RejectedImmediate(
 func (e *openPitEngine) PrepareImmediateReservation(
 	o domain.Order, result asyncengine.OperationResult,
 ) (fwengine.ImmediatePreparation, error) {
-	reviews, err := e.reservationReviews(result)
+	reviews, held, err := e.reservationReviews(result)
 	if err != nil {
 		return fwengine.ImmediatePreparation{}, err
 	}
 	if len(reviews) != 0 {
+		if held {
+			materialized, err := e.materializeOrderResult(o, result, nil, "reservation")
+			if err != nil {
+				return fwengine.ImmediatePreparation{}, err
+			}
+			return fwengine.ImmediatePreparation{
+				Verdict: domain.VerdictReview, Reviews: reviews, Held: true,
+				Lock: materialized.Lock, SettlementLockPrice: materialized.SettlementLockPrice,
+				Outcomes: materialized.Outcomes,
+			}, nil
+		}
 		return fwengine.ImmediatePreparation{Verdict: domain.VerdictReview, Reviews: reviews}, nil
 	}
 	return e.prepareImmediate(
@@ -104,6 +115,53 @@ func (e *openPitEngine) prepareImmediate(
 	if err != nil {
 		return fwengine.ImmediatePreparation{}, err
 	}
+	prepared, err := e.prepareImmediateReport(o, lockBytes, settlement, tradePrice, fillQuantity, reconciliationState)
+	if err != nil {
+		return fwengine.ImmediatePreparation{}, err
+	}
+	var blocks []domain.AccountBlock
+	if block != nil {
+		blocks, err = executionBlocksFrom(
+			[]reject.AccountBlock{*block}, o.Account, e.res,
+		)
+		if err != nil {
+			return fwengine.ImmediatePreparation{}, err
+		}
+	}
+	prepared.Outcomes = outcomes
+	prepared.Blocks = blocks
+	return prepared, nil
+}
+
+// PrepareImmediateHeldReservation validates the already-held re-run and builds
+// its fill from the stored first-run lock and reserved base quantity.
+func (e *openPitEngine) PrepareImmediateHeldReservation(
+	o domain.Order, result asyncengine.OperationResult, held fwengine.HeldReservation,
+) (fwengine.ImmediatePreparation, error) {
+	if err := validateHeldRerun(result); err != nil {
+		return fwengine.ImmediatePreparation{}, err
+	}
+	return e.PrepareForcedHeldImmediate(o, held)
+}
+
+func (e *openPitEngine) PrepareForcedHeldImmediate(
+	o domain.Order, held fwengine.HeldReservation,
+) (fwengine.ImmediatePreparation, error) {
+	settlement, err := heldSettlementPrice(o, held)
+	if err != nil {
+		return fwengine.ImmediatePreparation{}, err
+	}
+	tradePrice, err := immediateTradePrice(o)
+	if err != nil {
+		return fwengine.ImmediatePreparation{}, err
+	}
+	return e.prepareImmediateReport(o, held.Lock, settlement, tradePrice, held.Quantity, "held reservation committed")
+}
+
+func (e *openPitEngine) prepareImmediateReport(
+	o domain.Order, lockBytes []byte, settlement, tradePrice, fillQuantity string,
+	reconciliationState string,
+) (fwengine.ImmediatePreparation, error) {
 	reportInput := domain.ExecutionReportInput{
 		BaseAsset:      o.BaseAsset,
 		QuoteAsset:     o.QuoteAsset,
@@ -127,21 +185,10 @@ func (e *openPitEngine) prepareImmediate(
 	if err != nil {
 		return fwengine.ImmediatePreparation{}, err
 	}
-	var blocks []domain.AccountBlock
-	if block != nil {
-		blocks, err = executionBlocksFrom(
-			[]reject.AccountBlock{*block}, o.Account, e.res,
-		)
-		if err != nil {
-			return fwengine.ImmediatePreparation{}, err
-		}
-	}
 	return fwengine.ImmediatePreparation{
 		Verdict:             domain.VerdictAccept,
 		ExecutionReport:     report,
 		ReportInput:         reportInput,
-		Outcomes:            outcomes,
-		Blocks:              blocks,
 		ReconciliationState: reconciliationState,
 	}, nil
 }

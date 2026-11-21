@@ -2395,7 +2395,7 @@ describe("limits client", () => {
     },
   );
 
-  it.each([undefined, "unknown", null, "review_with_hold"])(
+  it.each([undefined, "unknown", null])(
     "rejects invalid account order-size mode %s",
     async (mode) => {
       vi.mocked(fetch).mockResolvedValue(
@@ -2417,7 +2417,7 @@ describe("limits client", () => {
     },
   );
 
-  it.each([undefined, "unknown", null, "review_with_hold"])(
+  it.each([undefined, "unknown", null])(
     "rejects invalid PUT order-size mode %s",
     async (mode) => {
       vi.mocked(fetch).mockResolvedValue(
@@ -2467,7 +2467,7 @@ describe("limits client", () => {
     await expect(result).rejects.toThrow(/mode/);
   });
 
-  it.each(["reject", "review_without_hold"] as const)(
+  it.each(["reject", "review_without_hold", "review_with_hold"] as const)(
     "carries mode %s through account, PUT, POST and policy responses and requests",
     async (mode) => {
       const row = { ...orderSizeBarrier, mode };
@@ -6178,6 +6178,7 @@ describe("Order review client", () => {
     mode: "review_without_hold",
   };
   const review = {
+    held: true,
     marks: [mark],
     lastConfirm: {
       verdict: "reject",
@@ -6271,7 +6272,7 @@ describe("Order review client", () => {
     },
   );
 
-  it.each(["reviewConfirm", "reviewCancel"] as const)(
+  it.each(["reviewConfirm", "reviewCancel", "reviewForce"] as const)(
     "normalizes the %s reproduction facet",
     async (facet) => {
       const decision = {
@@ -6290,20 +6291,38 @@ describe("Order review client", () => {
       vi.mocked(fetch).mockResolvedValueOnce(
         jsonResponse({
           event: { id: "event-1" },
-          response: { [facet]: facet === "reviewConfirm" ? decision : cancel },
+          response: { [facet]: facet !== "reviewCancel" ? decision : cancel },
         }),
       );
       const result = await api().fetchEventReproduction(order.id, "event-1");
-      if (facet === "reviewConfirm") {
-        expect(result.response?.reviewConfirm).toEqual(decision);
-        expect(result.response?.reviewConfirm).not.toHaveProperty("order");
+      if (facet !== "reviewCancel") {
+        expect(result.response?.[facet]).toEqual(decision);
+        expect(result.response?.[facet]).not.toHaveProperty("order");
       } else {
         expect(result.response?.reviewCancel).toMatchObject(cancel);
       }
     },
   );
 
-  it.each([review, { marks: [mark], lastConfirm: null, destination: null }])(
+  it("rejects an invalid reviewForce reproduction verdict", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        event: { id: "event-1" },
+        response: { reviewForce: { verdict: "bogus" } },
+      }),
+    );
+    const result = api().fetchEventReproduction(order.id, "event-1");
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "internal",
+      message: "Invalid review decision verdict in the API response",
+    });
+  });
+
+  it.each([
+    review,
+    { held: false, marks: [mark], lastConfirm: null, destination: null },
+  ])(
     "fetches review marks, last confirmation and destination: %j",
     async (payload) => {
       vi.mocked(fetch).mockResolvedValueOnce(
@@ -6381,6 +6400,36 @@ describe("Order review client", () => {
     },
   );
 
+  it.each([true, false])(
+    "forces review with venue send=%s using a body-less encoded POST",
+    async (trading) => {
+      const decision = {
+        verdict: "accept",
+        reasons: [],
+        signedApproval: "force-approval",
+        keyId: "key-1",
+        signed: true,
+      };
+      const response = {
+        order,
+        decision,
+        ...(trading
+          ? { venueSend: { status: "acknowledged", venueOrder } }
+          : {}),
+      };
+      vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(response));
+      const signal = new AbortController().signal;
+      expect(await api().forceOrderReview(order.id, signal)).toEqual({
+        ...response,
+        order: expect.objectContaining(order),
+      });
+      expect(fetch).toHaveBeenCalledWith(
+        "/app/api/v1/orders/order%2F1/review/force",
+        expect.objectContaining({ method: "POST", body: undefined, signal }),
+      );
+    },
+  );
+
   it("cancels review using a body-less encoded POST", async () => {
     const response = {
       order: { ...order, status: "cancelled" },
@@ -6399,7 +6448,11 @@ describe("Order review client", () => {
     );
   });
 
-  it.each(["confirmOrderReview", "cancelOrderReview"] as const)(
+  it.each([
+    "confirmOrderReview",
+    "cancelOrderReview",
+    "forceOrderReview",
+  ] as const)(
     "%s refuses a non-object 2xx instead of inventing a result",
     async (operation) => {
       vi.mocked(fetch).mockResolvedValueOnce(jsonResponse([]));
@@ -6425,6 +6478,16 @@ describe("Order review client", () => {
   });
 
   it.each([
+    [
+      "missing held",
+      { ...review, held: undefined },
+      "Invalid order review in the API response",
+    ],
+    [
+      "non-boolean held",
+      { ...review, held: "false" },
+      "Invalid order review in the API response",
+    ],
     [
       "unknown mark mode",
       { ...review, marks: [{ ...mark, mode: "unknown" }] },

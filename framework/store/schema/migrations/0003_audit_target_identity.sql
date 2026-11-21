@@ -23,7 +23,7 @@ ALTER TABLE audit ADD COLUMN group_identity BIGINT NOT NULL DEFAULT 0;
 
 -- Released order-size barriers reject; new writes carry their mode explicitly.
 ALTER TABLE limit_order_size ADD COLUMN mode TEXT NOT NULL DEFAULT 'reject'
-    CHECK (mode IN ('reject', 'review_without_hold'));
+    CHECK (mode IN ('reject', 'review_without_hold', 'review_with_hold'));
 DROP INDEX uq_limit_order_size;
 CREATE UNIQUE INDEX uq_limit_order_size
     ON limit_order_size (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0), mode);
@@ -122,6 +122,7 @@ CREATE TABLE trading_test_policy (
 CREATE TABLE order_review (
     order_id      INTEGER PRIMARY KEY REFERENCES order_record(id) ON DELETE CASCADE,
     mode_id       INTEGER NOT NULL REFERENCES attestation_mode(id),
+    held          {{BOOL}} NOT NULL,
     connection_id INTEGER REFERENCES trading_connection(id) ON DELETE RESTRICT,
     venue_account TEXT,
     route         TEXT,

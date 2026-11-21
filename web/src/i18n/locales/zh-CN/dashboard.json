@@ -45,6 +45,7 @@
     "title": "近期审计",
     "noEntries": "暂无审计记录",
     "action": {
+      "forceOrderReview": "订单审核已强制处理",
       "confirmOrderReview": "订单审核已确认",
       "cancelOrderReview": "订单审核已取消",
       "createAccount": "创建账户",

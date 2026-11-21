@@ -155,6 +155,7 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{57, string(domain.AuditActionResetAccountPnl)},
 			{58, string(domain.AuditActionConfirmOrderReview)},
 			{59, string(domain.AuditActionCancelOrderReview)},
+			{60, string(domain.AuditActionForceOrderReview)},
 		}},
 		{AttestationAlgTable, []EnumCodeSeed{
 			{1, "ed25519"},
@@ -167,6 +168,7 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{4, string(domain.AttestationRequestCancel)},
 			{5, string(domain.AttestationRequestReviewConfirm)},
 			{6, string(domain.AttestationRequestReviewCancel)},
+			{7, string(domain.AttestationRequestReviewForce)},
 		}},
 		{AttestationModeTable, []EnumCodeSeed{
 			{1, "immediate"},

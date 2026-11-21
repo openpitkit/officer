@@ -49,12 +49,12 @@ func TestOpenAPIOrderSizeModesContract(t *testing.T) {
 	for _, tc := range []struct{ name, body, declaration string }{
 		{"optional request mode", schemas["OrderSizeLimit"], "required: [scope, asset, maxQuantity, maxNotional]"},
 		{"order-size mode property", schemas["OrderSizeLimit"], "mode:"},
-		{"order-size modes", schemas["OrderSizeLimit"], "enum: [reject, review_without_hold]"},
+		{"order-size modes", schemas["OrderSizeLimit"], "enum: [reject, review_without_hold, review_with_hold]"},
 		{"order-size default", schemas["OrderSizeLimit"], "default: reject"},
 		{"write request schema", requests["OrderSizeLimitWrite"], `"#/components/schemas/OrderSizeLimit"`},
 		{"required list mode", schemas["Policy"], "required: [kind, mode, scope, account, accountGroup, asset, values]"},
 		{"nullable list mode", schemas["Policy"], `type: [string, "null"]`},
-		{"list modes", schemas["Policy"], "enum: [reject, review_without_hold, null]"},
+		{"list modes", schemas["Policy"], "enum: [reject, review_without_hold, review_with_hold, null]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !strings.Contains(tc.body, tc.declaration) {
@@ -69,7 +69,7 @@ func TestOpenAPIOrderSizeModesContract(t *testing.T) {
 		}
 		checked++
 		body := strings.Join(operation.Lines, "\n")
-		for _, declaration := range []string{"- name: mode", "enum: [reject, review_without_hold]", `"422":`} {
+		for _, declaration := range []string{"- name: mode", "enum: [reject, review_without_hold, review_with_hold]", `"422":`} {
 			if !strings.Contains(body, declaration) {
 				t.Errorf("%s /limits: missing %q", operation.Method, declaration)
 			}

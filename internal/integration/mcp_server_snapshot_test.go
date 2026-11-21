@@ -54,7 +54,8 @@ func TestServerToolSnapshot(t *testing.T) {
 			description: "Return account row and its account-scoped risk barriers, " +
 				"each with the fields add_limit and update_limit take, the rate window as windowMs " +
 				"in milliseconds. An order-size barrier also carries " +
-				"read-only mode: reject or review_without_hold. mode is not a write argument " +
+				"read-only mode: reject, review_without_hold or review_with_hold. " +
+				"mode is not a write argument " +
 				"for order-size barriers. add_limit and update_limit address only reject " +
 				"order-size barriers; review barriers are read-only for an agent, and MCP " +
 				"deletes no barrier. Read-only - no secrets, no order-flow control.",
@@ -64,7 +65,8 @@ func TestServerToolSnapshot(t *testing.T) {
 			description: "Return risk barriers and P&L-bound currencies, optionally " +
 				"filtered by account; each barrier has the fields add_limit and update_limit take, " +
 				"the rate window as windowMs in milliseconds. An order-size barrier also carries " +
-				"read-only mode: reject or review_without_hold. mode is not a write argument " +
+				"read-only mode: reject, review_without_hold or review_with_hold. " +
+				"mode is not a write argument " +
 				"for order-size barriers. add_limit and update_limit address only reject " +
 				"order-size barriers; review barriers are read-only for an agent, and MCP " +
 				"deletes no barrier. Read-only - no " +

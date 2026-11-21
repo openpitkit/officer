@@ -20,6 +20,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -90,6 +91,20 @@ func TestOrderReviewSettlement(t *testing.T) {
 						t.Fatalf("settled order = %+v err=%v", detail, err)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestOrderReviewHeldRoundTrip(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(fmt.Sprintf("held=%t", held), func(t *testing.T) {
+			ctx, rs := seedOrderFixtures(t)
+			review := domain.OrderReview{Mode: "hold", Held: held}
+			order := submitReviewOrder(t, ctx, rs, review)
+			detail, err := rs.GetOrder(ctx, order.ExternalID)
+			if err != nil || !reflect.DeepEqual(detail.Review, &review) {
+				t.Fatalf("stored review=%+v want=%+v err=%v", detail.Review, review, err)
 			}
 		})
 	}
@@ -288,16 +303,30 @@ func TestOrderReviewBackupRoundTrip(t *testing.T) {
 	ctx, source, connection := seedTradingFixtures(t)
 	for _, review := range []domain.OrderReview{
 		{Mode: "hold"},
+		{Mode: "hold", Held: true},
 		{Mode: "immediate", Destination: &domain.TradingDestination{
+			Connection: connection.ExternalID, VenueAccount: "paper-account", Route: `{}`,
+		}},
+		{Mode: "immediate", Held: true, Destination: &domain.TradingDestination{
 			Connection: connection.ExternalID, VenueAccount: "paper-account", Route: `{}`,
 		}},
 	} {
 		submitReviewOrder(t, ctx, source, review)
 	}
 	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
-	if err != nil || len(archive.Data.OrderReviews) != 2 {
+	if err != nil || len(archive.Data.OrderReviews) != 4 {
 		t.Fatalf("export reviews=%+v err=%v", archive.Data.OrderReviews, err)
 	}
+	for _, archived := range archive.Data.OrderReviews {
+		want, err := source.GetOrder(ctx, archived.Order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if archived.Held == nil || *archived.Held != want.Review.Held {
+			t.Fatalf("exported held=%v want=%t", archived.Held, want.Review.Held)
+		}
+	}
+	archive = cloneBackupArchive(t, archive)
 	for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 		t.Run(string(mode), func(t *testing.T) {
 			_, target := newRealmStore(t, "review-target")
@@ -317,6 +346,7 @@ func TestOrderReviewBackupRoundTrip(t *testing.T) {
 				}
 			}
 			changed := cloneBackupArchive(t, archive)
+			*changed.Data.OrderReviews[0].Held = !*archive.Data.OrderReviews[0].Held
 			changed.Data.OrderReviews[0].Mode = "immediate"
 			if archive.Data.OrderReviews[0].Mode == "immediate" {
 				changed.Data.OrderReviews[0].Mode = "hold"
@@ -326,11 +356,13 @@ func TestOrderReviewBackupRoundTrip(t *testing.T) {
 			}
 			got, err := target.GetOrder(ctx, changed.Data.OrderReviews[0].Order)
 			wantMode := changed.Data.OrderReviews[0].Mode
+			wantHeld := *changed.Data.OrderReviews[0].Held
 			if mode == backup.RestoreModeInsertMissing {
 				wantMode = archive.Data.OrderReviews[0].Mode
+				wantHeld = *archive.Data.OrderReviews[0].Held
 			}
-			if err != nil || got.Review == nil || got.Review.Mode != wantMode {
-				t.Fatalf("mode after restore=%+v want=%s err=%v", got.Review, wantMode, err)
+			if err != nil || got.Review == nil || got.Review.Mode != wantMode || got.Review.Held != wantHeld {
+				t.Fatalf("review after restore=%+v want mode=%s held=%t err=%v", got.Review, wantMode, wantHeld, err)
 			}
 			cleared := cloneBackupArchive(t, archive)
 			cleared.Data.OrderReviews = nil
@@ -376,7 +408,8 @@ func TestOrderReviewBackupInvalidRollsBack(t *testing.T) {
 			a.Data.OrderReviews[0].Route = "{}"
 		}},
 		{"missing order", func(a *backup.Archive) {
-			a.Data.OrderReviews = append(a.Data.OrderReviews, backup.OrderReview{Order: "target-only-order", Mode: "hold"})
+			held := false
+			a.Data.OrderReviews = append(a.Data.OrderReviews, backup.OrderReview{Order: "target-only-order", Mode: "hold", Held: &held})
 		}},
 		{"unknown mode", func(a *backup.Archive) { a.Data.OrderReviews[0].Mode = "unknown" }},
 	} {
@@ -485,7 +518,12 @@ func TestOrderReviewBackupScope(t *testing.T) {
 func TestOrderReviewDictionarySeedsOpen(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 	order := submitReviewOrder(t, ctx, rs, domain.OrderReview{Mode: "hold"})
-	for _, request := range []domain.AttestationRequestType{domain.AttestationRequestReviewConfirm, domain.AttestationRequestReviewCancel} {
+	requests := []domain.AttestationRequestType{
+		domain.AttestationRequestReviewConfirm,
+		domain.AttestationRequestReviewCancel,
+		domain.AttestationRequestReviewForce,
+	}
+	for _, request := range requests {
 		event, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
 			Order: order.ExternalID, Type: domain.OrderEventPreTradeReview, Source: domain.SourcePanel,
 		})
@@ -502,22 +540,25 @@ func TestOrderReviewDictionarySeedsOpen(t *testing.T) {
 	for _, entry := range []fwstore.AuditEntry{
 		{Action: domain.AuditActionConfirmOrderReview, OrderID: order.ExternalID.String(), Verdict: domain.VerdictAccept, Source: domain.SourcePanel},
 		{Action: domain.AuditActionCancelOrderReview, Source: domain.SourcePanel},
+		{Action: domain.AuditActionForceOrderReview, Source: domain.SourcePanel},
 	} {
 		if err := rs.AppendAudit(ctx, entry); err != nil {
 			t.Fatalf("action %s seed unavailable: %v", entry.Action, err)
 		}
 	}
 	archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
-	if err != nil || len(archive.Data.Audit) != 2 {
+	if err != nil || len(archive.Data.Audit) != 3 {
 		t.Fatalf("audit seeds read-back=%+v err=%v", archive.Data.Audit, err)
 	}
 	detail, err := rs.GetOrder(ctx, order.ExternalID)
-	if err != nil || len(detail.Events) != 4 {
+	if err != nil || len(detail.Events) != 5 {
 		t.Fatalf("event seeds read-back=%+v err=%v", detail.Events, err)
 	}
-	for i, request := range []domain.AttestationRequestType{domain.AttestationRequestReviewConfirm, domain.AttestationRequestReviewCancel} {
-		if detail.Events[i+2].Attestation == nil || detail.Events[i+2].Attestation.RequestType != request {
-			t.Fatalf("request read-back=%+v want=%s", detail.Events[i+2], request)
+	requestOffset := len(detail.Events) - len(requests)
+	for i, request := range requests {
+		event := detail.Events[requestOffset+i]
+		if event.Attestation == nil || event.Attestation.RequestType != request {
+			t.Fatalf("request read-back=%+v want=%s", event, request)
 		}
 	}
 }

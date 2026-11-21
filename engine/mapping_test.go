@@ -850,7 +850,7 @@ func TestSplitOrderSizeLimits_RefusesUnsupportedMode(t *testing.T) {
 	}
 	valid := limit
 	valid.Mode = domain.RuleModeReject
-	for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, "", "unknown"} {
+	for _, mode := range []domain.RuleMode{"", "unknown"} {
 		limit.Mode = mode
 		instances, err := splitOrderSizeLimits([]domain.LimitOrderSize{valid, limit})
 		if err == nil {

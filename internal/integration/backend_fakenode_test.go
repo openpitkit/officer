@@ -903,8 +903,16 @@ func (n *fakeNode) SubmitOrder(
 		if n.orderReviews == nil {
 			n.orderReviews = make(map[domain.ExternalID]domain.OrderReview)
 		}
-		n.orderReviews[order.ExternalID] = domain.OrderReview{Mode: domain.SubmitModeHold}
+		held, err := domain.ReviewMarksHeld(n.submitResult.Reviews)
+		if err != nil {
+			return domain.Order{}, err
+		}
+		n.orderReviews[order.ExternalID] = domain.OrderReview{Mode: domain.SubmitModeHold, Held: held}
 		order.Leaves, order.ReservedQuantity, order.Lock = "0", "0", nil
+		if held {
+			order.Leaves, order.ReservedQuantity = order.AmountValue, order.AmountValue
+			order.Lock = slices.Clone(n.submitResult.Lock)
+		}
 		n.orders[order.ExternalID] = order
 		n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
 		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeReview, domain.OrderEventPayload{})
@@ -988,8 +996,16 @@ func (n *fakeNode) SubmitImmediate(
 			if n.orderReviews == nil {
 				n.orderReviews = make(map[domain.ExternalID]domain.OrderReview)
 			}
-			n.orderReviews[order.ExternalID] = domain.OrderReview{Mode: domain.SubmitModeImmediate}
+			held, err := domain.ReviewMarksHeld(n.immediateResult.Reviews)
+			if err != nil {
+				return domain.Order{}, fwengine.ImmediateResult{}, err
+			}
+			n.orderReviews[order.ExternalID] = domain.OrderReview{Mode: domain.SubmitModeImmediate, Held: held}
 			order.Leaves, order.ReservedQuantity, order.Lock = "0", "0", nil
+			if held {
+				order.Leaves, order.ReservedQuantity = order.AmountValue, order.AmountValue
+				order.Lock = slices.Clone(n.immediateResult.Lock)
+			}
 			n.orders[order.ExternalID] = order
 			n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
 			n.appendEvent(order.ExternalID, domain.OrderEventPreTradeReview, domain.OrderEventPayload{})
@@ -1127,23 +1143,53 @@ func (n *fakeNode) reviewOrder(orderID domain.ExternalID) (domain.Order, domain.
 	return order, review, nil
 }
 
+func (n *fakeNode) ForceOrderReview(
+	ctx context.Context, orderID domain.ExternalID, _ domain.Caller,
+	attestFor func(domain.Order, fwengine.OrderResult) store.EventAttestor,
+) (domain.Order, fwengine.OrderResult, error) {
+	n.recordCall("ForceOrderReview", orderID)
+	return n.decideOrderReview(ctx, orderID, attestFor, true)
+}
+
+func (n *fakeNode) ForceImmediateReview(
+	ctx context.Context, orderID domain.ExternalID, _ domain.Caller,
+	attestFor func(domain.Order, fwengine.ImmediateResult) store.EventAttestor,
+) (domain.Order, fwengine.ImmediateResult, error) {
+	n.recordCall("ForceImmediateReview", orderID)
+	return n.decideImmediateReview(ctx, orderID, attestFor, true)
+}
+
 func (n *fakeNode) ConfirmOrderReview(
 	ctx context.Context, orderID domain.ExternalID, caller domain.Caller,
 	attestFor func(domain.Order, fwengine.OrderResult) store.EventAttestor,
 ) (domain.Order, fwengine.OrderResult, error) {
 	n.recordCall("ConfirmOrderReview", orderID)
+	return n.decideOrderReview(ctx, orderID, attestFor, false)
+}
+
+func (n *fakeNode) decideOrderReview(
+	ctx context.Context, orderID domain.ExternalID,
+	attestFor func(domain.Order, fwengine.OrderResult) store.EventAttestor,
+	force bool,
+) (domain.Order, fwengine.OrderResult, error) {
 	order, review, err := n.reviewOrder(orderID)
 	if err != nil {
 		return domain.Order{}, fwengine.OrderResult{}, err
 	}
-	if review.Mode != domain.SubmitModeHold {
+	if force && (review.Mode != domain.SubmitModeHold || !review.Held) {
+		return domain.Order{}, fwengine.OrderResult{}, fmt.Errorf("fake node: force requires a held hold-mode review: %w", domain.ErrConflict)
+	}
+	if !force && review.Mode != domain.SubmitModeHold {
 		return domain.Order{}, fwengine.OrderResult{}, fmt.Errorf("order review mode %q does not match %q: %w", review.Mode, domain.SubmitModeHold, domain.ErrConflict)
 	}
 	if n.confirmErr != nil {
 		return domain.Order{}, fwengine.OrderResult{}, n.confirmErr
 	}
 	result := fwengine.OrderResult{Verdict: domain.VerdictAccept}
-	if n.submitResult != nil {
+	if force {
+		result.Lock = slices.Clone(order.Lock)
+		result.SettlementLockPrice = string(order.Lock)
+	} else if n.submitResult != nil {
 		result = *n.submitResult
 	}
 	if result.Verdict != domain.VerdictAccept && result.Verdict != domain.VerdictReject {
@@ -1155,7 +1201,11 @@ func (n *fakeNode) ConfirmOrderReview(
 	if result.Verdict == domain.VerdictAccept {
 		order.Status = domain.OrderStatusCommitted
 		order.Lock = slices.Clone(result.Lock)
-		order.Leaves, order.ReservedQuantity = order.AmountValue, order.AmountValue
+		if force {
+			order.Leaves = order.ReservedQuantity
+		} else {
+			order.Leaves, order.ReservedQuantity = order.AmountValue, order.AmountValue
+		}
 		delete(n.orderReviews, orderID)
 		n.appendEvent(orderID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 		n.appendEvent(orderID, domain.OrderEventCommitted, domain.OrderEventPayload{})
@@ -1179,18 +1229,33 @@ func (n *fakeNode) ConfirmImmediateReview(
 	attestFor func(domain.Order, fwengine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, fwengine.ImmediateResult, error) {
 	n.recordCall("ConfirmImmediateReview", orderID)
+	return n.decideImmediateReview(ctx, orderID, attestFor, false)
+}
+
+func (n *fakeNode) decideImmediateReview(
+	ctx context.Context, orderID domain.ExternalID,
+	attestFor func(domain.Order, fwengine.ImmediateResult) store.EventAttestor,
+	force bool,
+) (domain.Order, fwengine.ImmediateResult, error) {
 	order, review, err := n.reviewOrder(orderID)
 	if err != nil {
 		return domain.Order{}, fwengine.ImmediateResult{}, err
 	}
-	if review.Mode != domain.SubmitModeImmediate {
+	if force && (review.Mode != domain.SubmitModeImmediate || !review.Held) {
+		return domain.Order{}, fwengine.ImmediateResult{}, fmt.Errorf("fake node: force requires a held immediate review: %w", domain.ErrConflict)
+	}
+	if !force && review.Mode != domain.SubmitModeImmediate {
 		return domain.Order{}, fwengine.ImmediateResult{}, fmt.Errorf("order review mode %q does not match %q: %w", review.Mode, domain.SubmitModeImmediate, domain.ErrConflict)
 	}
 	if n.confirmErr != nil {
 		return domain.Order{}, fwengine.ImmediateResult{}, n.confirmErr
 	}
 	result := fwengine.ImmediateResult{Verdict: domain.VerdictAccept, TradePrice: order.Price, FillQuantity: order.AmountValue}
-	if n.immediateResult != nil {
+	if force {
+		result.Lock = slices.Clone(order.Lock)
+		result.SettlementLockPrice = string(order.Lock)
+		result.FillQuantity = order.ReservedQuantity
+	} else if n.immediateResult != nil {
 		result = *n.immediateResult
 	}
 	if result.Verdict != domain.VerdictAccept && result.Verdict != domain.VerdictReject {

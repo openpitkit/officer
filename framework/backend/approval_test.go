@@ -130,3 +130,28 @@ func TestBuildImmediateSettlementPayloadSignsWriteSetLeaves(t *testing.T) {
 		t.Fatal("settlement without a write set: want an error")
 	}
 }
+
+func TestBuildReviewPayloadLockEstimate(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		verdict domain.Verdict
+		price   string
+	}{
+		{"held", domain.VerdictReview, "123.45"},
+		{"without_hold", domain.VerdictReview, ""},
+		{"reject", domain.VerdictReject, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := domain.OrderEventPreTradeReview
+			if tc.verdict == domain.VerdictReject {
+				event = domain.OrderEventPreTradeRejected
+			}
+			payload, ok, err := (&Service{}).buildDecisionEventPayload(domain.Order{}, domain.OrderEvent{Type: event}, decisionPayloadInputs{
+				mode: SubmitModeHold, verdict: tc.verdict, settlementLockPrice: tc.price,
+			})
+			if err != nil || !ok || payload.EstimatePrice != tc.price {
+				t.Fatalf("decision lock estimate = %q, %t, %v; want %q", payload.EstimatePrice, ok, err, tc.price)
+			}
+		})
+	}
+}

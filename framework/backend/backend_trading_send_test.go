@@ -50,6 +50,8 @@ type paperSendTestNode struct {
 	orderEvents         []domain.OrderEvent
 	review              *domain.OrderReview
 	reviewConfirms      int
+	reviewForces        int
+	forceVerdict        domain.Verdict
 	cancelErr           error
 	cancels             int
 	audits              []store.AuditEntry
@@ -82,6 +84,16 @@ func (n *paperSendTestNode) SubmitOrderWithAttestation(
 	}
 	if len(n.reviews) > 0 {
 		result = engine.OrderResult{Verdict: domain.VerdictReview, Reviews: n.reviews}
+		held, err := domain.ReviewMarksHeld(n.reviews)
+		if err != nil {
+			return domain.Order{}, engine.OrderResult{}, err
+		}
+		result.Held = held
+		if result.Held {
+			result.SettlementLockPrice = "100"
+			o.Lock = []byte(result.SettlementLockPrice)
+			o.ReservedQuantity = o.AmountValue
+		}
 		eventType = domain.OrderEventPreTradeReview
 		o.Status = domain.OrderStatusAwaitingReview
 	}
@@ -94,7 +106,7 @@ func (n *paperSendTestNode) SubmitOrderWithAttestation(
 	}
 	n.order = &o
 	if result.Verdict == domain.VerdictReview {
-		n.review = &domain.OrderReview{Mode: domain.SubmitModeHold, Destination: destination}
+		n.review = &domain.OrderReview{Mode: domain.SubmitModeHold, Destination: destination, Held: result.Held}
 	}
 	event.Attestation = &att
 	n.orderEvents = append(n.orderEvents, event)

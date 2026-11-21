@@ -673,6 +673,7 @@ const (
 	AuditActionApprovalCancelled  AuditAction = "approval_cancelled"
 	AuditActionConfirmOrderReview AuditAction = "confirm_order_review"
 	AuditActionCancelOrderReview  AuditAction = "cancel_order_review"
+	AuditActionForceOrderReview   AuditAction = "force_order_review"
 
 	// Access control.
 	AuditActionSetAccessMode     AuditAction = "set_access_mode"
@@ -701,7 +702,7 @@ func (a AuditAction) Category() AuditCategory {
 	switch a {
 	case AuditActionSubmitOrder, AuditActionSubmitDropCopy, AuditActionExecutionReport:
 		return AuditCategoryTrading
-	case AuditActionConfirmOrderReview, AuditActionCancelOrderReview:
+	case AuditActionConfirmOrderReview, AuditActionCancelOrderReview, AuditActionForceOrderReview:
 		return AuditCategoryControl
 	default:
 		return AuditCategoryControl
@@ -763,6 +764,7 @@ func AllAuditActions() []AuditAction {
 		AuditActionApprovalCancelled,
 		AuditActionConfirmOrderReview,
 		AuditActionCancelOrderReview,
+		AuditActionForceOrderReview,
 		AuditActionSetAccessMode,
 		AuditActionIssueAccessToken,
 		AuditActionSetPanelPassword,

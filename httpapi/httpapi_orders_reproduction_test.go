@@ -674,6 +674,7 @@ func TestEventReproductionRequestFacets(t *testing.T) {
 		domain.AttestationRequestConfirm:         "confirm",
 		domain.AttestationRequestCancel:          "cancel",
 		domain.AttestationRequestReviewConfirm:   "reviewConfirm",
+		domain.AttestationRequestReviewForce:     "reviewForce",
 		domain.AttestationRequestReviewCancel:    "reviewCancel",
 	}
 	var codes []schema.EnumCodeSeed
@@ -737,6 +738,43 @@ func TestOrderReproduction_ReviewSubmit(t *testing.T) {
 		t.Fatalf("review submit reproduction=%v", submit)
 	}
 	assertRESTReviewMarks(t, submit["reviews"])
+}
+
+func TestOrderReproduction_ReviewForce(t *testing.T) {
+	for _, alg := range []string{fwsigning.AlgEd25519, fwsigning.AlgNone} {
+		t.Run(alg, func(t *testing.T) {
+			id := extID("repro-review-force")
+			payload := reproPayload(id)
+			payload.RequestType = string(domain.AttestationRequestReviewForce)
+			payload.Verdict = domain.VerdictAccept
+			payload.Result = nil
+			token, err := fwsigning.BuildEnvelope(fwsigning.Envelope{Approval: payload})
+			if err != nil {
+				t.Fatal(err)
+			}
+			att := attestationFromToken(t, token)
+			att.Alg, att.KeyID = alg, "recorded-key"
+			detail := reproDetail(id, att)
+			detail.Order.Status = domain.OrderStatusFilled
+			detail.Order.Account, detail.DisplayPrice = "renamed", "150.25"
+			router, err := newRouter(&fakeService{orderDetail: detail})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, reproURL(id), nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("force reproduction status=%d: %s", rec.Code, rec.Body.String())
+			}
+			facets := bodyMap(t, rec.Result())["response"].(map[string]any)
+			decision := facets["reviewForce"].(map[string]any)
+			if len(facets) != 1 || len(decision) != 5 || decision["verdict"] != "accept" ||
+				decision["signedApproval"] != token || decision["keyId"] != att.KeyID ||
+				decision["signed"] != (alg == fwsigning.AlgEd25519) || len(decision["reasons"].([]any)) != 0 {
+				t.Fatalf("reviewForce=%v", facets)
+			}
+		})
+	}
 }
 
 func TestOrderReproduction_ReviewConfirm(t *testing.T) {

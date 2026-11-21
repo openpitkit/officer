@@ -1790,6 +1790,8 @@ func orderSizeInstanceMode(mode domain.RuleMode) (reject.RuleMode, error) {
 		return reject.RuleModeReject, nil
 	case domain.RuleModeReviewWithoutHold:
 		return reject.RuleModeReviewWithoutHold, nil
+	case domain.RuleModeReviewWithHold:
+		return reject.RuleModeReviewWithHold, nil
 	default:
 		return 0, fmt.Errorf("engine: order_size_limit unsupported mode %q", mode)
 	}

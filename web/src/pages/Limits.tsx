@@ -692,6 +692,10 @@ export function Limits() {
     "order_size",
     "review_without_hold",
   );
+  const orderSizeHeldReviewCount = usePolicyCount(
+    "order_size",
+    "review_with_hold",
+  );
   const spotFundsPnlBoundsCount = usePolicyCount("spot_funds_pnl_bounds");
   const spotFundsUnrealizedPnlBoundsCount = usePolicyCount(
     "spot_funds_unrealized_pnl_bounds",
@@ -732,18 +736,24 @@ export function Limits() {
       orderSizeReviewCount.load.state === "ready"
         ? orderSizeReviewCount.load.data.total
         : undefined,
+    review_with_hold:
+      orderSizeHeldReviewCount.load.state === "ready"
+        ? orderSizeHeldReviewCount.load.data.total
+        : undefined,
   };
 
   const reloadPolicyCounts = useCallback(() => {
     rateCount.reload();
     orderSizeRejectCount.reload();
     orderSizeReviewCount.reload();
+    orderSizeHeldReviewCount.reload();
     spotFundsPnlBoundsCount.reload();
     spotFundsUnrealizedPnlBoundsCount.reload();
     spotFundsTotalPnlBoundsCount.reload();
   }, [
     orderSizeRejectCount,
     orderSizeReviewCount,
+    orderSizeHeldReviewCount,
     rateCount,
     spotFundsPnlBoundsCount,
     spotFundsUnrealizedPnlBoundsCount,

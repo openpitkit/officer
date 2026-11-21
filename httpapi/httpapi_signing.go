@@ -18,6 +18,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
 	"go.openpit.dev/officer/framework/backend"
@@ -371,14 +372,21 @@ func handleCancelOrder(svc backend.ControlPlane) http.HandlerFunc {
 	}
 }
 
-func handleConfirmOrderReview(svc backend.ControlPlane) http.HandlerFunc {
+// handleDecideOrderReview handles POST /api/v1/orders/{id}/review/confirm and
+// POST /api/v1/orders/{id}/review/force. The decide function is the backend's
+// confirm or force decision. It writes the shared decision response: the order,
+// its signed decision, and venueSend for an accepted trading order.
+func handleDecideOrderReview(
+	svc backend.ControlPlane,
+	decide func(context.Context, string) (domain.Order, backend.VenueSendResult, error),
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
 		if err != nil {
 			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
-		order, result, err := svc.ConfirmOrderReview(r.Context(), orderID)
+		order, result, err := decide(r.Context(), orderID)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return

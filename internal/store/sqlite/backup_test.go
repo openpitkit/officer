@@ -46,6 +46,60 @@ import (
 	"go.openpit.dev/officer/internal/logtest"
 )
 
+func TestBackupOrderReviewHeldRequired(t *testing.T) {
+	ctx, source := seedOrderFixtures(t)
+	submitReviewOrder(t, ctx, source, domain.OrderReview{Mode: "hold"})
+	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archive.Manifest.FormatVersion != 7 {
+		t.Fatalf("format=%d, want 7", archive.Manifest.FormatVersion)
+	}
+	for _, value := range []string{"missing", "null"} {
+		for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
+			t.Run(value+"/"+string(mode), func(t *testing.T) {
+				invalid := cloneBackupArchive(t, archive)
+				raw, err := json.Marshal(invalid.Data.OrderReviews[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				var row map[string]json.RawMessage
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				if value == "missing" {
+					delete(row, "held")
+				} else {
+					row["held"] = json.RawMessage("null")
+				}
+				raw, err = json.Marshal(row)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decoded backup.OrderReview
+				if err := json.Unmarshal(raw, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				invalid.Data.OrderReviews[0] = decoded
+				_, target := seedOrderFixtures(t)
+				before, err := target.ExportBackup(ctx, backup.Scope{All: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = target.RestoreBackup(ctx, invalid, backup.RestoreOptions{Scope: backup.Scope{All: true}, Mode: mode})
+				if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "missing held") {
+					t.Fatalf("restore error=%v, want missing held ErrInvalid", err)
+				}
+				after, err := target.ExportBackup(ctx, backup.Scope{All: true})
+				if err != nil || !reflect.DeepEqual(before.Data, after.Data) {
+					t.Fatalf("missing held restore changed realm, err=%v", err)
+				}
+			})
+		}
+	}
+}
+
 // newRealmStore opens a fresh migrated store bound to realm and returns both the
 // store and its realm handle.
 func newRealmStore(t *testing.T, realm domain.RealmID) (fwstore.Store, fwstore.RealmStore) {
@@ -5540,7 +5594,7 @@ func TestBackupOrderSizeMode(t *testing.T) {
 }
 
 func TestBackupOrderSizeModeKey(t *testing.T) {
-	for _, archiveMode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+	for _, archiveMode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold, domain.RuleModeReviewWithHold} {
 		for _, restoreMode := range []backup.RestoreMode{
 			backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing, backup.RestoreModeReplaceAll,
 		} {

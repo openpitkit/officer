@@ -3328,7 +3328,7 @@ paths:
             counts the filtered barriers before paging.
           schema:
             type: string
-            enum: [reject, review_without_hold]
+            enum: [reject, review_without_hold, review_with_hold]
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -3413,7 +3413,7 @@ paths:
             an unknown mode returns 422 validation.
           schema:
             type: string
-            enum: [reject, review_without_hold]
+            enum: [reject, review_without_hold, review_with_hold]
             default: reject
       responses:
         "204":
@@ -5043,6 +5043,70 @@ paths:
           $ref: "#/components/responses/SetupRequiredError"
           description: Setup is required or the engine is restarting (engine_restarting).
 
+  /orders/{id}/review/force:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      operationId: forceOrderReview
+      summary: Force a held order waiting for review
+      description: >
+        No request body. Only held waiting orders can be forced, without a
+        pre-trade run. Hold mode records committed and, for a trading order,
+        returns venueSend after sending to the stored destination. Immediate
+        mode records filled. decision.verdict is always accept.
+        MCP callers cannot decide reviews. Every documented error except 500
+        occurs before the decision and leaves the order unchanged. After a 500
+        check GET /orders/{id} for the current state before retrying.
+      tags: [orders]
+      responses:
+        "200":
+          description: >
+            Signed accept decision and optional trading send outcome. The order
+            is the snapshot recorded by the decision. If venueSend.status is
+            refused, the order has since been cancelled. GET /orders/{id}
+            is authoritative for the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmOrderReviewResponse"
+        "400":
+          $ref: "#/components/responses/MalformedRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForeignRequestError"
+          description: >
+            MCP callers, an unbound trading connection or a different venue
+            account are forbidden, as are foreign-host, foreign-origin and
+            wrong-token requests. The order is unchanged.
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+          description: Unknown order or missing trading instrument mapping.
+        "409":
+          $ref: "#/components/responses/OrderReviewConflictError"
+          description: >
+            No verified review approval (approval_required), or not a held
+            waiting order, a disabled trading connection or instrument, a
+            stopped runtime, or an account blocked by its own flag or group
+            (conflict). A blocked order keeps waiting with its hold;
+            lift the block, then force.
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+          description: >
+            The decision may already be recorded. Check GET /orders/{id}
+            for the current state before retrying.
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "503":
+          $ref: "#/components/responses/SetupRequiredError"
+          description: Setup is required or the engine is restarting (engine_restarting).
+
   /orders/{id}/review/cancel:
     parameters:
       - $ref: "#/components/parameters/OrderId"
@@ -5050,8 +5114,8 @@ paths:
       operationId: cancelOrderReview
       summary: Cancel an order waiting for review
       description: >
-        No request body. Cancels the waiting order without holding or sending
-        anything and returns the cancellation attestation. MCP callers cannot
+        No request body. Cancels the waiting order, releases any review hold
+        and returns the cancellation attestation. MCP callers cannot
         decide reviews.
       tags: [orders]
       responses:
@@ -7189,6 +7253,9 @@ components:
         a disabled trading connection or instrument or a stopped runtime also
         returns `conflict` while the order keeps awaiting review. The order is
         unchanged after these 409 refusals; GET /orders/{id} reports its current state.
+        Force also returns `conflict` when the review is not held or the account
+        is blocked by its own flag or its group. A blocked order keeps waiting
+        with its hold; lift the block, then force.
       content:
         application/json:
           schema:
@@ -8889,7 +8956,7 @@ components:
         requestType:
           type: string
           description: The trading request the attestation binds.
-          enum: [submit, execution_report, confirm, cancel, review_confirm, review_cancel]
+          enum: [submit, execution_report, confirm, cancel, review_confirm, review_cancel, review_force]
         mode:
           type: string
           description: Submit mode the attestation was issued for.
@@ -9101,11 +9168,14 @@ components:
 
     OrderReview:
       type: object
-      required: [marks, lastConfirm, destination]
+      required: [held, marks, lastConfirm, destination]
       description: >
         Present only for awaiting_review. Marks come from the pre_trade_review
         envelope. Missing review history or an undecodable envelope is a 500.
       properties:
+        held:
+          type: boolean
+          description: Whether the waiting review holds funds.
         marks:
           type: array
           items:
@@ -9357,7 +9427,7 @@ components:
       properties:
         mode:
           type: string
-          enum: [reject, review_without_hold]
+          enum: [reject, review_without_hold, review_with_hold]
           default: reject
           description: >
             Order-size barrier mode, part of its key. Optional in a request;
@@ -9567,7 +9637,7 @@ components:
           enum: [rate_limit, order_size_limit, position_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch, spot_funds_limit_mode]
         mode:
           type: [string, "null"]
-          enum: [reject, review_without_hold, null]
+          enum: [reject, review_without_hold, review_with_hold, null]
           description: >
             Order-size barrier mode. Null for every other kind, including
             spot_funds_limit_mode, whose enforce/track_only setting remains
@@ -11427,7 +11497,7 @@ components:
       properties:
         requestType:
           type: string
-          enum: [submit, execution_report, confirm, cancel, review_confirm, review_cancel]
+          enum: [submit, execution_report, confirm, cancel, review_confirm, review_cancel, review_force]
         orderId:
           type: string
         eventId:
@@ -11472,8 +11542,8 @@ components:
         attested request. Exactly one facet is populated, matching the request
         type; the envelope is carried verbatim in the response's
         `signedApproval` or `signedAttestation` field.
-        reviewConfirm is the exception: like submitResponse it reproduces the
-        signed decision, and it carries neither order nor venueSend, because
+        reviewConfirm and reviewForce are exceptions: like submitResponse they
+        reproduce the signed decision, carrying neither order nor venueSend, because
         the order and venue outcome are not signed by the decision.
         GET /orders/{id} is authoritative for the current order state.
       properties:
@@ -11488,6 +11558,9 @@ components:
         reviewConfirm:
           $ref: "#/components/schemas/ConfirmOrderReviewResponse/properties/decision"
           description: The signed decision alone, with this event's envelope.
+        reviewForce:
+          $ref: "#/components/schemas/ConfirmOrderReviewResponse/properties/decision"
+          description: The signed force decision alone, with this event's envelope.
         reviewCancel:
           $ref: "#/components/schemas/OrderMutationResponse"
 

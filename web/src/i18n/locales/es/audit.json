@@ -143,6 +143,7 @@
     "confirm_order_review_accepted": "Confirmación de revisión de la orden {{order}}, cuenta {{account}}, {{base}}/{{quote}}, {{side}}: aceptada",
     "confirm_order_review_rejected": "Confirmación de revisión de la orden {{order}}, cuenta {{account}}, {{base}}/{{quote}}, {{side}}: rechazada",
     "cancel_order_review": "Orden {{order}} pendiente de revisión cancelada, cuenta {{account}}, {{base}}/{{quote}}, {{side}}",
+    "force_order_review": "Orden {{order}}, pendiente de revisión, forzada sin controles pre-negociación, cuenta {{account}}, {{base}}/{{quote}}, {{side}}",
     "execution_report": "Informe de ejecución de la orden {{order}}, cuenta {{account}}, {{base}}/{{quote}}: cant. {{qty}}, pendiente {{leavesQty}}, {{status}}, bloqueos: {{blocks}}",
     "execution_report_force_refused": "Informe de ejecución forzado de la orden {{order}} (cuenta {{account}}) rechazado: {{refusal}}",
     "adjustment_accepted": "Ajuste de la cuenta {{account}}, activo {{asset}}, tipo {{adjustmentType}}: aceptado",

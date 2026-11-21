@@ -532,6 +532,9 @@ func (e *openPitEngine) AppliedSpotFundsAccountPnl(
 func (e *openPitEngine) OrderModel(
 	o domain.Order, flags fwengine.ReviewFlags,
 ) (model.Order, error) {
+	if flags.AlreadyHeld && !flags.Confirmed {
+		return model.Order{}, fmt.Errorf("engine: AlreadyHeld requires Confirmed")
+	}
 	accountID, err := e.res.account(o.Account)
 	if err != nil {
 		return model.Order{}, err
@@ -543,6 +546,9 @@ func (e *openPitEngine) OrderModel(
 	if flags.Confirmed {
 		review := order.EnsureReviewView()
 		review.SetConfirmed(true)
+		if flags.AlreadyHeld {
+			review.SetAlreadyHeld(true)
+		}
 	}
 	return order, nil
 }
@@ -939,34 +945,108 @@ func (e *openPitEngine) RejectedOrder(
 func (e *openPitEngine) ReservedOrder(
 	o domain.Order, result asyncengine.OperationResult,
 ) (fwengine.OrderResult, error) {
-	reviews, err := e.reservationReviews(result)
+	reviews, held, err := e.reservationReviews(result)
 	if err != nil {
 		return fwengine.OrderResult{}, err
 	}
 	if len(reviews) != 0 {
+		if held {
+			materialized, err := e.materializeOrderResult(o, result, nil, "reservation")
+			if err != nil {
+				return fwengine.OrderResult{}, err
+			}
+			materialized.Verdict = domain.VerdictReview
+			materialized.Reviews = reviews
+			materialized.Held = true
+			return materialized, nil
+		}
 		return fwengine.OrderResult{Verdict: domain.VerdictReview, Reviews: reviews}, nil
 	}
 	return e.materializeOrderResult(o, result, nil, "reservation")
 }
 
-func (e *openPitEngine) reservationReviews(result asyncengine.OperationResult) ([]domain.ReviewMark, error) {
+func (e *openPitEngine) reservationReviews(result asyncengine.OperationResult) ([]domain.ReviewMark, bool, error) {
 	marks, err := result.Reviews()
 	if err != nil {
-		return nil, fmt.Errorf("engine: read reservation reviews: %w", err)
+		return nil, false, fmt.Errorf("engine: read reservation reviews: %w", err)
 	}
 	reviews, err := reviewMarksFrom(marks, e.res)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if len(reviews) == 0 {
-		return reviews, nil
+	held, err := domain.ReviewMarksHeld(reviews)
+	if err != nil {
+		return nil, false, err
 	}
-	for _, mark := range reviews {
-		if mark.Mode == domain.RuleModeReviewWithoutHold {
-			return reviews, nil
-		}
+	return reviews, held, nil
+}
+
+// ReservedHeldOrder validates the already-held re-run and retains the stored
+// first-run lock for execution reports without any new balance effects.
+func (e *openPitEngine) ReservedHeldOrder(
+	o domain.Order, result asyncengine.OperationResult, held fwengine.HeldReservation,
+) (fwengine.OrderResult, error) {
+	if err := validateHeldRerun(result); err != nil {
+		return fwengine.OrderResult{}, err
 	}
-	return nil, fmt.Errorf("engine: review with hold is not supported")
+	return e.ForcedHeldOrder(o, held)
+}
+
+func (e *openPitEngine) ForcedHeldOrder(
+	o domain.Order, held fwengine.HeldReservation,
+) (fwengine.OrderResult, error) {
+	settlement, err := heldSettlementPrice(o, held)
+	if err != nil {
+		return fwengine.OrderResult{}, err
+	}
+	return fwengine.OrderResult{
+		Verdict: domain.VerdictAccept, Lock: held.Lock, SettlementLockPrice: settlement,
+	}, nil
+}
+
+func heldSettlementPrice(
+	o domain.Order, held fwengine.HeldReservation,
+) (string, error) {
+	if len(held.Lock) == 0 {
+		return "", fmt.Errorf("engine: held reservation lock is empty")
+	}
+	quantity, err := domain.ParseOpenQuantity(held.Quantity)
+	if err != nil {
+		return "", fmt.Errorf("engine: held reservation quantity is invalid: %w", err)
+	}
+	if quantity.IsZero() {
+		return "", fmt.Errorf("engine: held reservation quantity is zero")
+	}
+	return LockSettlementPrice(held.Lock, o)
+}
+
+func validateHeldRerun(result asyncengine.OperationResult) error {
+	marks, err := result.Reviews()
+	if err != nil {
+		return fmt.Errorf("engine: read confirmed already-held reviews: %w", err)
+	}
+	if len(marks) != 0 {
+		return fmt.Errorf("engine: confirmed already-held rerun returned review marks: %+v", marks)
+	}
+	lock, err := result.Lock()
+	if err != nil {
+		return fmt.Errorf("engine: read already-held rerun lock: %w", err)
+	}
+	empty, err := lock.IsEmpty()
+	if err != nil {
+		return fmt.Errorf("engine: inspect already-held rerun lock: %w", err)
+	}
+	if !empty {
+		return fmt.Errorf("engine: already-held rerun returned a non-empty lock: %+v", lock)
+	}
+	adjustments, err := result.AccountAdjustments()
+	if err != nil {
+		return fmt.Errorf("engine: read already-held rerun account adjustments: %w", err)
+	}
+	if len(adjustments) != 0 {
+		return fmt.Errorf("engine: already-held rerun returned account adjustments: %+v", adjustments)
+	}
+	return nil
 }
 
 // AppliedDropCopyOrder captures the operation values and requested block while

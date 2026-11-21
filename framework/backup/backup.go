@@ -505,8 +505,10 @@ type VenueOrder struct {
 
 // OrderReview carries the submit settings of an order waiting for review.
 type OrderReview struct {
-	Order        domain.ExternalID `json:"order"`
-	Mode         string            `json:"mode"`
+	Order domain.ExternalID `json:"order"`
+	Mode  string            `json:"mode"`
+	// Held must be present, including false; nil is an invalid archive row.
+	Held         *bool             `json:"held"`
 	Connection   domain.ExternalID `json:"connection,omitempty"`
 	VenueAccount string            `json:"venueAccount,omitempty"`
 	Route        string            `json:"route,omitempty"`

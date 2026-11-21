@@ -65,7 +65,8 @@ const getLimitsToolDescription = "Return risk barriers and P&L-bound currencies,
 	"secrets, no order-flow control."
 
 const orderSizeLimitModeDescription = "An order-size barrier also carries " +
-	"read-only mode: reject or review_without_hold. mode is not a write argument " +
+	"read-only mode: reject, review_without_hold or review_with_hold. " +
+	"mode is not a write argument " +
 	"for order-size barriers. add_limit and update_limit address only reject " +
 	"order-size barriers; review barriers are read-only for an agent, and MCP " +
 	"deletes no barrier. "
@@ -1001,8 +1002,8 @@ func toCommissionDTOs(in []domain.Commission) []commissionDTO {
 	return out
 }
 
-// toOrderApprovalDTO maps the latest signed pre-trade verdict (submit or
-// review confirm), in history order, onto the MCP approval DTO. It falls back
+// toOrderApprovalDTO maps the latest signed verdict (submit, review confirm or
+// review force), in history order, onto the MCP approval DTO. It falls back
 // to the first attested accept/reject event of any request type, then the
 // first attested event, or nil when no event carries an attestation.
 func toOrderApprovalDTO(detail domain.OrderDetail) *orderApprovalDTO {
@@ -1020,10 +1021,10 @@ func toOrderApprovalDTO(detail domain.OrderDetail) *orderApprovalDTO {
 	}
 }
 
-// latestVerdictAttestation returns the latest signed pre-trade verdict (submit
-// or review confirm), in history order. It falls back to the first attested
-// accept/reject event of any request type, then the first attested event,
-// or nil when no event carries an attestation.
+// latestVerdictAttestation returns the latest signed verdict (submit, review
+// confirm or review force), in history order. It falls back to the first
+// attested accept/reject event of any request type, then the first attested
+// event, or nil when no event carries an attestation.
 func latestVerdictAttestation(detail domain.OrderDetail) *domain.EventAttestation {
 	var first *domain.EventAttestation
 	var firstAcceptReject *domain.EventAttestation
@@ -1043,7 +1044,9 @@ func latestVerdictAttestation(detail domain.OrderDetail) *domain.EventAttestatio
 			}
 			fallthrough
 		case domain.OrderEventPreTradeReview:
-			if att.RequestType == domain.AttestationRequestSubmit || att.RequestType == domain.AttestationRequestReviewConfirm {
+			if att.RequestType == domain.AttestationRequestSubmit ||
+				att.RequestType == domain.AttestationRequestReviewConfirm ||
+				att.RequestType == domain.AttestationRequestReviewForce {
 				lastVerdict = att
 			}
 		}

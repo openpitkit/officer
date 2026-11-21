@@ -221,21 +221,50 @@ func (n *paperSendTestNode) ConfirmOrderReview(
 	ctx context.Context, id domain.ExternalID, _ domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
-	n.reviewConfirms++
-	n.events = append(n.events, "decision")
+	return n.decideReview(ctx, id, attestFor, false)
+}
+
+func (n *paperSendTestNode) ForceOrderReview(
+	ctx context.Context, id domain.ExternalID, _ domain.Caller,
+	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
+) (domain.Order, engine.OrderResult, error) {
+	return n.decideReview(ctx, id, attestFor, true)
+}
+
+func (n *paperSendTestNode) decideReview(
+	ctx context.Context, id domain.ExternalID,
+	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor, force bool,
+) (domain.Order, engine.OrderResult, error) {
+	if force {
+		n.reviewForces++
+		n.events = append(n.events, "force")
+	} else {
+		n.reviewConfirms++
+		n.events = append(n.events, "decision")
+	}
 	if n.order == nil || n.order.ExternalID != id {
 		return domain.Order{}, engine.OrderResult{}, domain.ErrNotFound
 	}
 	if err := domain.RequireOrderAwaitingReview(n.order.Status); err != nil {
 		return domain.Order{}, engine.OrderResult{}, err
 	}
+	if force && (n.review == nil || !n.review.Held || n.review.Mode != domain.SubmitModeHold) {
+		return domain.Order{}, engine.OrderResult{}, domain.ErrConflict
+	}
 	if n.submitErr != nil {
 		return domain.Order{}, engine.OrderResult{}, n.submitErr
 	}
+	if force && n.forceVerdict != "" {
+		return *n.order, engine.OrderResult{Verdict: n.forceVerdict}, nil
+	}
 	order := *n.order
 	result := engine.OrderResult{Verdict: domain.VerdictAccept, SettlementLockPrice: "123.45"}
+	if force {
+		result.Lock = n.order.Lock
+		result.SettlementLockPrice = string(n.order.Lock)
+	}
 	kinds := []domain.OrderEventType{domain.OrderEventPreTradeAccepted, domain.OrderEventCommitted}
-	if n.accepted {
+	if n.accepted || force {
 		order.Status, order.Leaves = domain.OrderStatusCommitted, order.AmountValue
 	} else {
 		result.Verdict = domain.VerdictReject
@@ -258,17 +287,20 @@ func (n *paperSendTestNode) ConfirmOrderReview(
 	}
 	n.order = &order
 	n.orderEvents = append(n.orderEvents, events...)
-	if n.accepted {
+	if n.accepted || force {
 		n.review = nil
 	}
 	return order, result, nil
 }
 
-func newTradingReviewTest(t *testing.T) (*Service, *paperSendTestNode, *paperSendTestRuntime, *paperSendTestSigner, domain.TradingDestination) {
+func newTradingReviewTest(t *testing.T, held ...bool) (*Service, *paperSendTestNode, *paperSendTestRuntime, *paperSendTestSigner, domain.TradingDestination) {
 	t.Helper()
 	s, n, rt, signer := newPaperSendTestService(t)
 	signer.reviewTokens = make(map[string]domain.ApprovalPayload)
 	n.reviews = []domain.ReviewMark{{OrderReject: domain.OrderReject{Code: "order_size_limit", Reason: "review required"}, Mode: domain.RuleModeReviewWithoutHold}}
+	if len(held) > 0 && held[0] {
+		n.reviews[0].Mode = domain.RuleModeReviewWithHold
+	}
 	result, err := s.SendPaperOrder(systemCtx(), paperSendTestOrder(), SendDestination{Connection: "connection-1", Route: `{"market":"AAPL"}`})
 	if err != nil || result.Approval.Verdict != domain.VerdictReview || result.Send != nil {
 		t.Fatalf("prepare waiting trading order: result=%+v err=%v", result, err)
@@ -279,14 +311,102 @@ func newTradingReviewTest(t *testing.T) (*Service, *paperSendTestNode, *paperSen
 	return s, n, rt, signer, destination
 }
 
+func (n *paperSendTestNode) CancelOrderReview(
+	ctx context.Context, id domain.ExternalID, _ domain.Caller,
+	attest store.EventAttestor,
+) (domain.Order, error) {
+	n.cancels++
+	n.events = append(n.events, "review_cancel")
+	order := *n.order
+	order.Status, order.Leaves = domain.OrderStatusCancelled, "0"
+	event := domain.OrderEvent{
+		ExternalID: "paper-review-cancel-event", Order: id,
+		Type: domain.OrderEventCancelled,
+	}
+	att, ok, err := attest(ctx, event)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if !ok {
+		return domain.Order{}, errors.New("missing review cancel attestation")
+	}
+	event.Attestation = &att
+	n.orderEvents = append(n.orderEvents, event)
+	n.order, n.review = &order, nil
+	return order, nil
+}
+
+func TestOrderReviewHeldCrossCheck(t *testing.T) {
+	for _, action := range []string{"confirm", "cancel", "force"} {
+		for _, fault := range []string{"row_held", "row_not_held", "empty_mode", "reject_mode", "unknown_mode"} {
+			t.Run(action+"/"+fault, func(t *testing.T) {
+				s, n, rt, signer, _ := newTradingReviewTest(t, fault == "row_not_held")
+				switch fault {
+				case "row_held", "row_not_held":
+					n.review.Held = !n.review.Held
+				default:
+					mode := domain.RuleMode("")
+					switch fault {
+					case "reject_mode":
+						mode = domain.RuleModeReject
+					case "unknown_mode":
+						mode = "unknown"
+					}
+					for token, payload := range signer.reviewTokens {
+						payload.Reviews = []domain.ReviewMark{{OrderReject: domain.OrderReject{Code: "test_rule"}, Mode: mode}}
+						signer.reviewTokens[token] = payload
+					}
+				}
+				before, review := *n.order, *n.review
+				tokens, events := len(signer.reviewTokens), len(n.orderEvents)
+				var err error
+				switch action {
+				case "confirm":
+					_, _, err = s.ConfirmOrderReview(systemCtx(), before.ExternalID.String())
+				case "cancel":
+					_, _, err = s.CancelOrderReview(systemCtx(), before.ExternalID.String())
+				case "force":
+					_, _, err = s.ForceOrderReview(systemCtx(), before.ExternalID.String())
+				}
+				if !errors.Is(err, domain.ErrApprovalRequired) {
+					t.Fatalf("held cross-check err=%v, want ErrApprovalRequired", err)
+				}
+				if n.reviewConfirms+n.reviewForces+n.cancels != 0 || len(n.events) != 0 || len(rt.preChecks) != 0 || len(rt.sends) != 0 || len(signer.reviewTokens) != tokens || len(n.orderEvents) != events {
+					t.Fatalf("decision reached a side effect: calls=%v confirms=%d forces=%d cancels=%d prechecks=%v sends=%v tokens=%d events=%d", n.events, n.reviewConfirms, n.reviewForces, n.cancels, rt.preChecks, rt.sends, len(signer.reviewTokens), len(n.orderEvents))
+				}
+				if !reflect.DeepEqual(*n.order, before) || n.order.Status != domain.OrderStatusAwaitingReview || !reflect.DeepEqual(n.review, &review) {
+					t.Fatalf("waiting state changed: order=%+v review=%+v", n.order, n.review)
+				}
+			})
+		}
+	}
+}
+
 func TestConfirmOrderReviewTradingAccept(t *testing.T) {
-	s, n, rt, _, destination := newTradingReviewTest(t)
+	testOrderReviewTradingAccept(t, false)
+}
+
+func TestForceOrderReviewTradingAccept(t *testing.T) {
+	testOrderReviewTradingAccept(t, true)
+}
+
+func testOrderReviewTradingAccept(t *testing.T, force bool) {
+	s, n, rt, _, destination := newTradingReviewTest(t, force)
 	n.venue = &domain.VenueOrder{Order: n.order.ExternalID, Connection: destination.Connection, VenueAccount: destination.VenueAccount}
-	order, result, err := s.ConfirmOrderReview(systemCtx(), n.order.ExternalID.String())
+	decide := s.ConfirmOrderReview
+	decisionEvent := "decision"
+	if force {
+		decide, decisionEvent = s.ForceOrderReview, "force"
+	}
+	order, result, err := decide(systemCtx(), n.order.ExternalID.String())
 	if err != nil || order.Status != domain.OrderStatusCommitted || result.Approval.Verdict != domain.VerdictAccept || result.Send == nil || result.Send.Status != "acknowledged" || result.Send.Order == nil {
 		t.Fatalf("confirm order=%+v result=%+v err=%v", order, result, err)
 	}
-	if !reflect.DeepEqual(n.events, []string{"precheck", "decision", "send", "read"}) || n.reviewConfirms != 1 || n.holds != 1 {
+	wantConfirms, wantForces := 1, 0
+	if force {
+		wantConfirms, wantForces = 0, 1
+	}
+	if !reflect.DeepEqual(n.events, []string{"precheck", decisionEvent, "send", "read"}) || n.reviewConfirms != wantConfirms || n.reviewForces != wantForces || n.holds != 1 {
 		t.Fatalf("confirm call sequence=%v decisions=%d submits=%d", n.events, n.reviewConfirms, n.holds)
 	}
 	if !reflect.DeepEqual(rt.preChecks, []domain.TradingDestination{destination}) || !reflect.DeepEqual(rt.sends, []domain.TradingDestination{destination}) || len(rt.drafts) != 1 || rt.drafts[0].Status != domain.OrderStatusAwaitingReview || rt.orderIDs[0] != order.ExternalID {
@@ -307,11 +427,43 @@ func TestConfirmOrderReviewTradingReject(t *testing.T) {
 }
 
 func TestConfirmOrderReviewTradingRefusals(t *testing.T) {
-	for _, fault := range []string{"precheck", "binding_removed", "venue_account_changed", "empty_stored_account", "empty_binding_account", "runtime_missing", "not_waiting"} {
+	testOrderReviewTradingRefusals(t, false)
+}
+
+func TestForceOrderReviewTradingRefusals(t *testing.T) {
+	testOrderReviewTradingRefusals(t, true)
+}
+
+func TestForceOrderReviewTradingUnexpectedVerdict(t *testing.T) {
+	for _, verdict := range []domain.Verdict{domain.VerdictReject, domain.VerdictReview, "unknown"} {
+		t.Run(string(verdict), func(t *testing.T) {
+			s, n, rt, _, _ := newTradingReviewTest(t, true)
+			n.forceVerdict = verdict
+			_, _, err := s.ForceOrderReview(systemCtx(), n.order.ExternalID.String())
+			want := fmt.Sprintf("force order review verdict %q is invalid", verdict)
+			if err == nil || !strings.Contains(err.Error(), want) || n.reviewForces != 1 || len(rt.sends) != 0 {
+				t.Fatalf("unexpected verdict err=%v calls=%d sends=%v", err, n.reviewForces, rt.sends)
+			}
+		})
+	}
+}
+
+func testOrderReviewTradingRefusals(t *testing.T, force bool) {
+	faults := []string{"precheck", "binding_removed", "venue_account_changed", "empty_stored_account", "empty_binding_account", "runtime_missing", "not_waiting"}
+	if force {
+		faults = append(faults, "not_held", "node_conflict")
+	}
+	for _, fault := range faults {
 		t.Run(fault, func(t *testing.T) {
-			s, n, rt, _, _ := newTradingReviewTest(t)
+			s, n, rt, signer, _ := newTradingReviewTest(t, force && fault != "not_held")
 			want := domain.ErrForbidden
+			wantCalls := 0
 			switch fault {
+			case "not_held":
+				want = domain.ErrConflict
+			case "node_conflict":
+				n.submitErr = fmt.Errorf("account blocked: %w", domain.ErrConflict)
+				want, wantCalls = domain.ErrConflict, 1
 			case "precheck":
 				rt.preCheckErr = fmt.Errorf("venue refused: %w", trading.ErrRejected)
 				want = domain.ErrInvalid
@@ -331,14 +483,19 @@ func TestConfirmOrderReviewTradingRefusals(t *testing.T) {
 				want = domain.ErrConflict
 			}
 			before := *n.order
-			_, _, err := s.ConfirmOrderReview(systemCtx(), n.order.ExternalID.String())
-			if !errors.Is(err, want) || n.reviewConfirms != 0 || len(rt.sends) != 0 || !reflect.DeepEqual(*n.order, before) || n.review == nil {
-				t.Fatalf("refusal err=%v want=%v decisions=%d sends=%v order=%+v", err, want, n.reviewConfirms, rt.sends, n.order)
+			tokens := len(signer.reviewTokens)
+			decide := s.ConfirmOrderReview
+			if force {
+				decide = s.ForceOrderReview
+			}
+			_, _, err := decide(systemCtx(), n.order.ExternalID.String())
+			if !errors.Is(err, want) || n.reviewConfirms+n.reviewForces != wantCalls || len(rt.sends) != 0 || !reflect.DeepEqual(*n.order, before) || n.review == nil || len(signer.reviewTokens) != tokens {
+				t.Fatalf("refusal err=%v want=%v confirms=%d forces=%d sends=%v order=%+v", err, want, n.reviewConfirms, n.reviewForces, rt.sends, n.order)
 			}
 			if strings.Contains(fault, "account") && !strings.Contains(err.Error(), "trading venue account differs from the binding") {
 				t.Fatalf("venue mismatch error=%v", err)
 			}
-			if fault == "not_waiting" && len(rt.preChecks) != 0 {
+			if (fault == "not_waiting" || fault == "not_held") && len(rt.preChecks) != 0 {
 				t.Fatal("non-waiting order reached venue")
 			}
 		})
@@ -356,9 +513,21 @@ func TestConfirmOrderReviewTradingEmptyVenueAccount(t *testing.T) {
 }
 
 func TestConfirmOrderReviewTradingNotSent(t *testing.T) {
-	s, n, rt, signer, _ := newTradingReviewTest(t)
+	testOrderReviewTradingNotSent(t, false)
+}
+
+func TestForceOrderReviewTradingNotSent(t *testing.T) {
+	testOrderReviewTradingNotSent(t, true)
+}
+
+func testOrderReviewTradingNotSent(t *testing.T, force bool) {
+	s, n, rt, signer, _ := newTradingReviewTest(t, force)
 	rt.sendErr = fmt.Errorf("%w: unavailable: %w", trading.ErrNotSent, domain.ErrUpstream)
-	order, result, err := s.ConfirmOrderReview(systemCtx(), n.order.ExternalID.String())
+	decide := s.ConfirmOrderReview
+	if force {
+		decide = s.ForceOrderReview
+	}
+	order, result, err := decide(systemCtx(), n.order.ExternalID.String())
 	if err != nil || order.Status != domain.OrderStatusCommitted || result.Send == nil || result.Send.Status != "refused" || n.cancels != 1 || n.order.Status != domain.OrderStatusCancelled || n.order.Leaves != "0" {
 		t.Fatalf("not sent order=%+v result=%+v err=%v cancels=%d stored=%+v", order, result, err, n.cancels, n.order)
 	}

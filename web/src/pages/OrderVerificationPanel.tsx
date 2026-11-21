@@ -79,6 +79,7 @@ const REQUEST_TYPE_KEYS: Record<string, string> = {
   cancel: "orders:requestType.cancel",
   review_confirm: "orders:requestType.reviewConfirm",
   review_cancel: "orders:requestType.reviewCancel",
+  review_force: "orders:requestType.reviewForce",
 };
 
 // The submit modes an attestation carries, by wire value.
@@ -599,12 +600,18 @@ function presentResponseFacet(response: EventReproductionResponse | null): {
       body: { cancel: response.cancel },
     };
   }
-  if (response.reviewConfirm) {
-    return {
-      labelKey: "repro.responseReviewConfirm",
-      signedEnvelope: response.reviewConfirm.signedApproval,
-      body: { reviewConfirm: response.reviewConfirm },
-    };
+  for (const [facet, labelKey] of [
+    ["reviewConfirm", "repro.responseReviewConfirm"],
+    ["reviewForce", "repro.responseReviewForce"],
+  ] as const) {
+    const decision = response[facet];
+    if (decision) {
+      return {
+        labelKey,
+        signedEnvelope: decision.signedApproval,
+        body: { [facet]: decision },
+      };
+    }
   }
   if (response.reviewCancel) {
     return {

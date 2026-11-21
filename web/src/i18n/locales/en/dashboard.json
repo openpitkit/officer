@@ -45,6 +45,7 @@
     "title": "Recent audit",
     "noEntries": "No audit entries",
     "action": {
+      "forceOrderReview": "Order review forced",
       "confirmOrderReview": "Order review confirmed",
       "cancelOrderReview": "Order review cancelled",
       "createAccount": "Create account",

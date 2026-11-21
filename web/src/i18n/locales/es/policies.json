@@ -2,6 +2,7 @@
   "orderSizeMode": {
     "label": "Modo de la barrera",
     "descriptions": {
+      "review_with_hold": "Una orden que supera la barrera espera la revisión de un operador con sus fondos retenidos. La confirmación repite el control pre-negociación sin una segunda retención: si lo supera, la orden continúa; si no, sigue esperando con su retención. La cancelación libera la retención.",
       "reject": "Se rechaza una orden que supera la barrera.",
       "review_without_hold": "Una orden que supera la barrera espera la revisión de un operador; no se reserva ni se envía nada hasta su confirmación."
     }

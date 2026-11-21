@@ -26,6 +26,7 @@ describe("dashboard audit action metadata", () => {
   it.each([
     ["confirm_order_review", "confirmOrderReview"],
     ["cancel_order_review", "cancelOrderReview"],
+    ["force_order_review", "forceOrderReview"],
   ])(
     "names %s through the dashboard catalog in every locale",
     (action, key) => {

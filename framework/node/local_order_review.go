@@ -23,6 +23,7 @@ import (
 
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 
@@ -34,8 +35,8 @@ import (
 type orderReviewChainState struct {
 	order                domain.Order
 	mode                 string
-	accountBlocked       bool
-	accountIdentity      domain.EngineAccountID
+	held                 bool
+	account              domain.Account
 	persistenceCompleted bool
 	err                  error
 }
@@ -59,11 +60,14 @@ func (n *localNode) beginOrderReview(
 	if detail.Review == nil {
 		return fmt.Errorf("order %q awaiting review has no review row", source.ExternalID)
 	}
+	if detail.Review.Held != state.held {
+		return fmt.Errorf("order review held flag changed: %w", domain.ErrConflict)
+	}
 	if err := validatePersistedOrderChainInput(source, detail.Order); err != nil {
 		return err
 	}
 	state.order, state.mode = detail.Order, detail.Review.Mode
-	state.accountBlocked, state.accountIdentity, err = readAccountBlockState(ctx, n.realm, detail.Order.Account)
+	state.account, err = readOrderAccount(ctx, n.realm, detail.Order.Account)
 	return err
 }
 
@@ -71,17 +75,99 @@ func (n *localNode) recordReviewSettlement(
 	ctx context.Context, state *orderReviewChainState,
 	settlement domain.OrderSettlement, attest store.EventAttestor,
 ) error {
+	if err := n.persistReviewSettlement(ctx, state, settlement, attest); err != nil {
+		operation := "record order review decision"
+		if state.persistenceCompleted {
+			operation = "read order review decision"
+		}
+		return n.fatalPostEnginePersistence(operation, state.order.Account, err)
+	}
+	return nil
+}
+
+func (n *localNode) persistReviewSettlement(
+	ctx context.Context, state *orderReviewChainState,
+	settlement domain.OrderSettlement, attest store.EventAttestor,
+) error {
 	settlement.AllowedFrom = []domain.OrderStatus{domain.OrderStatusAwaitingReview}
 	if _, err := recordOrderSettlementWithAttestation(ctx, n.realm, settlement, attest); err != nil {
-		return n.fatalPostEnginePersistence("record order review decision", state.order.Account, err)
+		return err
 	}
 	state.persistenceCompleted = true
 	detail, err := n.realm.GetOrder(ctx, state.order.ExternalID)
 	if err != nil {
-		return n.fatalPostEnginePersistence("read order review decision", state.order.Account, err)
+		return err
 	}
 	state.order = detail.Order
 	return nil
+}
+
+func (n *localNode) beginAccountOrderReview(
+	ctx context.Context, order domain.Order, state *orderReviewChainState,
+	source param.AccountID,
+) error {
+	if err := n.beginOrderReview(ctx, order, state); err != nil {
+		return err
+	}
+	return validateAccountAdministrativeSource(state.account, source)
+}
+
+func (n *localNode) beginForcedOrderReview(
+	ctx context.Context, order domain.Order, state *orderReviewChainState,
+	source param.AccountID, mode string,
+) (engine.HeldReservation, error) {
+	if err := n.beginAccountOrderReview(ctx, order, state, source); err != nil {
+		return engine.HeldReservation{}, err
+	}
+	if !state.held {
+		return engine.HeldReservation{}, fmt.Errorf("order review is not held: %w", domain.ErrConflict)
+	}
+	if state.mode != mode {
+		return engine.HeldReservation{}, fmt.Errorf("order review mode %q does not match %q: %w", state.mode, mode, domain.ErrConflict)
+	}
+	account := state.account
+	var group domain.AccountGroup
+	if account.GroupCode != "" {
+		var ok bool
+		var err error
+		group, ok, err = n.realm.GetGroup(ctx, account.GroupCode)
+		if err != nil {
+			return engine.HeldReservation{}, fmt.Errorf("read force account group %q: %w", account.GroupCode, err)
+		}
+		// Only ok == false means a dangling group code with no group block.
+		if !ok {
+			group = domain.AccountGroup{}
+		}
+	}
+	if block := domain.ResolveAccountBlock(account, group); block.Blocked {
+		return engine.HeldReservation{}, fmt.Errorf("account %q is blocked at %s tier: %w", account.Code, block.Source, domain.ErrConflict)
+	}
+	return storedHeldReservation(state.order)
+}
+
+func acceptedReviewSettlement(
+	state *orderReviewChainState, result engine.OrderResult, caller domain.Caller,
+) (domain.OrderSettlement, error) {
+	settlement, err := orderAcceptedSettlement(state.order.Account, state.order, result, caller)
+	if err != nil {
+		return domain.OrderSettlement{}, err
+	}
+	if state.held {
+		settlement.Leaves, settlement.ReservedQuantity = "", ""
+		settlement.Balances, settlement.Lock, settlement.SetLock = nil, nil, false
+	}
+	settlement.ClearReview = true
+	return settlement, nil
+}
+
+func reviewActionAudit(
+	order domain.Order, identity domain.EngineAccountID,
+	action domain.AuditAction, detail domain.AuditDetailCode,
+) store.AuditEntry {
+	return store.AuditEntry{
+		Action: action, Account: order.Account, AccountIdentity: identity,
+		Detail: submitOrderDetail(order, detail),
+	}
 }
 
 func (n *localNode) recordReviewRejection(
@@ -100,7 +186,7 @@ func (n *localNode) recordReviewRejection(
 		return err
 	}
 	return n.auditSubmittedOrder(ctx, state.order.Account, state.order, result,
-		caller, state.accountIdentity, domain.AuditActionConfirmOrderReview)
+		caller, state.account.EngineAccountID, domain.AuditActionConfirmOrderReview)
 }
 
 func (n *localNode) ConfirmOrderReview(
@@ -116,11 +202,12 @@ func (n *localNode) ConfirmOrderReview(
 		return domain.Order{}, engine.OrderResult{}, err
 	}
 	defer done()
-	source, err := eng.OrderModel(detail.Order, engine.ReviewFlags{Confirmed: true})
+	held := detail.Review != nil && detail.Review.Held
+	source, err := eng.OrderModel(detail.Order, engine.ReviewFlags{Confirmed: true, AlreadyHeld: held})
 	if err != nil {
 		return domain.Order{}, engine.OrderResult{}, fmt.Errorf("confirm order review: %w", err)
 	}
-	state := &orderReviewChainState{}
+	state := &orderReviewChainState{held: held}
 	var result engine.OrderResult
 	var settlement domain.OrderSettlement
 	var attest store.EventAttestor
@@ -142,7 +229,7 @@ func (n *localNode) ConfirmOrderReview(
 				state.err = fmt.Errorf("confirm order review: engine rejection has no reject reason")
 				return state.err
 			}
-			result.Blocks = preTradeLatchedBlocks(state.order, state.accountBlocked, result.Rejects)
+			result.Blocks = preTradeLatchedBlocks(state.order, state.account.Blocked, result.Rejects)
 			if attestFor != nil {
 				attest = attestFor(state.order, result)
 			}
@@ -150,7 +237,15 @@ func (n *localNode) ConfirmOrderReview(
 			return state.err
 		},
 		OnReserved: func(_ context.Context, state *orderReviewChainState, reservation asyncengine.OperationResult) (asyncengine.Decision, error) {
-			result, state.err = eng.ReservedOrder(state.order, reservation)
+			if state.held {
+				var stored engine.HeldReservation
+				stored, state.err = storedHeldReservation(state.order)
+				if state.err == nil {
+					result, state.err = eng.ReservedHeldOrder(state.order, reservation, stored)
+				}
+			} else {
+				result, state.err = eng.ReservedOrder(state.order, reservation)
+			}
 			if state.err != nil {
 				return asyncengine.DecisionRollback, state.err
 			}
@@ -158,11 +253,10 @@ func (n *localNode) ConfirmOrderReview(
 				state.err = fmt.Errorf("confirm order review: engine returned %q under confirmed flag", result.Verdict)
 				return asyncengine.DecisionRollback, state.err
 			}
-			settlement, state.err = orderAcceptedSettlement(state.order.Account, state.order, result, caller)
+			settlement, state.err = acceptedReviewSettlement(state, result, caller)
 			if state.err != nil {
 				return asyncengine.DecisionRollback, state.err
 			}
-			settlement.ClearReview = true
 			if attestFor != nil {
 				attest = attestFor(state.order, result)
 			}
@@ -175,7 +269,7 @@ func (n *localNode) ConfirmOrderReview(
 		return state.err
 	}).Then(func(_ context.Context, state *orderReviewChainState) error {
 		state.err = n.auditSubmittedOrder(ctx, state.order.Account, state.order, result,
-			caller, state.accountIdentity, domain.AuditActionConfirmOrderReview)
+			caller, state.account.EngineAccountID, domain.AuditActionConfirmOrderReview)
 		return state.err
 	}).Finally(func(_ context.Context, state *orderReviewChainState, outcome asyncengine.ChainOutcome) error {
 		state.err = n.accountChainTerminalError("confirm order review", state.order.Account,
@@ -202,15 +296,16 @@ func (n *localNode) ConfirmImmediateReview(
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}
 	defer done()
-	source, err := eng.OrderModel(detail.Order, engine.ReviewFlags{Confirmed: true})
+	held := detail.Review != nil && detail.Review.Held
+	source, err := eng.OrderModel(detail.Order, engine.ReviewFlags{Confirmed: true, AlreadyHeld: held})
 	if err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("confirm immediate review: %w", err)
 	}
-	state := &orderReviewChainState{}
+	state := &orderReviewChainState{held: held}
 	var result engine.ImmediateResult
 	var preparation engine.ImmediatePreparation
 	var attest store.EventAttestor
-	var preTradeFinalized, reportSettled bool
+	var preTradeFinalized bool
 	builder := asyncengine.Chain(source, func(context.Context) (*orderReviewChainState, error) {
 		state.err = n.beginOrderReview(ctx, detail.Order, state)
 		if state.err == nil && state.mode != domain.SubmitModeImmediate {
@@ -228,7 +323,7 @@ func (n *localNode) ConfirmImmediateReview(
 				state.err = fmt.Errorf("confirm immediate review: engine rejection has no reject reason")
 				return state.err
 			}
-			result.Blocks = preTradeLatchedBlocks(state.order, state.accountBlocked, result.Rejects)
+			result.Blocks = preTradeLatchedBlocks(state.order, state.account.Blocked, result.Rejects)
 			if attestFor != nil {
 				attest = attestFor(state.order, result)
 			}
@@ -238,7 +333,15 @@ func (n *localNode) ConfirmImmediateReview(
 			return state.err
 		},
 		OnReserved: func(_ context.Context, state *orderReviewChainState, reservation asyncengine.OperationResult) (asyncengine.Decision, error) {
-			preparation, state.err = eng.PrepareImmediateReservation(state.order, reservation)
+			if state.held {
+				var stored engine.HeldReservation
+				stored, state.err = storedHeldReservation(state.order)
+				if state.err == nil {
+					preparation, state.err = eng.PrepareImmediateHeldReservation(state.order, reservation, stored)
+				}
+			} else {
+				preparation, state.err = eng.PrepareImmediateReservation(state.order, reservation)
+			}
 			if state.err != nil {
 				return asyncengine.DecisionRollback, state.err
 			}
@@ -253,12 +356,36 @@ func (n *localNode) ConfirmImmediateReview(
 		preTradeFinalized = true
 		return nil
 	})
+	settled, err := n.runImmediateReviewReport(ctx, eng, builder, state, &preparation,
+		caller, attestFor, &preTradeFinalized, "confirm immediate review",
+		domain.AuditActionConfirmOrderReview)
+	if err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+	if result.Verdict == domain.VerdictReject {
+		return state.order, result, nil
+	}
+	return state.order, settled, nil
+}
+
+func (n *localNode) runImmediateReviewReport(
+	ctx context.Context, eng engine.Engine,
+	builder *asyncengine.ChainBuilder[*orderReviewChainState],
+	state *orderReviewChainState, preparation *engine.ImmediatePreparation,
+	caller domain.Caller,
+	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
+	preTradeFinalized *bool, operation string, action domain.AuditAction,
+) (engine.ImmediateResult, error) {
+	var result engine.ImmediateResult
+	var attest store.EventAttestor
+	var reportEntered, reportSettled bool
 	builder.ApplyExecutionReport(asyncengine.ExecutionReportHooks[*orderReviewChainState]{
 		Report: func(context.Context, *orderReviewChainState) (model.ExecutionReport, error) {
+			reportEntered = true
 			return preparation.ExecutionReport, nil
 		},
 		OnSettled: func(_ context.Context, state *orderReviewChainState, postTrade pretrade.PostTradeResult) error {
-			result, state.err = eng.SettleImmediate(state.order, preparation, postTrade)
+			result, state.err = eng.SettleImmediate(state.order, *preparation, postTrade)
 			if state.err != nil {
 				return state.err
 			}
@@ -280,19 +407,120 @@ func (n *localNode) ConfirmImmediateReview(
 		return state.err
 	}).Then(func(_ context.Context, state *orderReviewChainState) error {
 		state.err = n.auditImmediateSubmission(ctx, state.order.Account, state.order, result,
-			caller, state.accountIdentity, domain.AuditActionConfirmOrderReview)
+			caller, state.account.EngineAccountID, action)
 		return state.err
 	}).Finally(func(_ context.Context, state *orderReviewChainState, outcome asyncengine.ChainOutcome) error {
-		if preTradeFinalized && !reportSettled && outcome.Err != nil {
+		if (*preTradeFinalized || reportEntered) && !reportSettled && outcome.Err != nil {
 			outcome.Err = immediateReconciliationError(state.order, preparation.ReconciliationState,
 				"the execution report failed and the fill is unsettled", chainRootCause(outcome.Err))
 		}
-		state.err = n.accountChainTerminalError("confirm immediate review", state.order.Account,
-			state.err, preTradeFinalized, state.persistenceCompleted, outcome)
+		state.err = n.accountChainTerminalError(operation, state.order.Account,
+			state.err, *preTradeFinalized || reportEntered, state.persistenceCompleted, outcome)
 		return nil
 	})
 	_, chainErr := runner.Run(ctx, eng.AsyncEngine()).Await(context.Background())
-	if err := accountChainRunError("confirm immediate review", state.err, chainErr); err != nil {
+	if err := accountChainRunError(operation, state.err, chainErr); err != nil {
+		return engine.ImmediateResult{}, err
+	}
+	return result, nil
+}
+
+func (n *localNode) ForceOrderReview(
+	ctx context.Context, order domain.ExternalID, caller domain.Caller,
+	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
+) (domain.Order, engine.OrderResult, error) {
+	ctx = context.WithoutCancel(ctx)
+	detail, err := n.realm.GetOrder(ctx, order)
+	if err != nil {
+		return domain.Order{}, engine.OrderResult{}, fmt.Errorf("get order: %w", err)
+	}
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return domain.Order{}, engine.OrderResult{}, err
+	}
+	defer done()
+	source, err := eng.AccountID(detail.Order.Account)
+	if err != nil {
+		return domain.Order{}, engine.OrderResult{}, err
+	}
+	state := &orderReviewChainState{held: detail.Review != nil && detail.Review.Held}
+	var result engine.OrderResult
+	builder := asyncengine.Chain(source, func(context.Context) (*orderReviewChainState, error) {
+		held, err := n.beginForcedOrderReview(ctx, detail.Order, state, source, domain.SubmitModeHold)
+		if err != nil {
+			state.err = err
+			return state, err
+		}
+		result, state.err = eng.ForcedHeldOrder(state.order, held)
+		return state, state.err
+	})
+	runner := builder.Then(func(_ context.Context, state *orderReviewChainState) error {
+		settlement, err := acceptedReviewSettlement(state, result, caller)
+		if err != nil {
+			state.err = err
+			return err
+		}
+		var attest store.EventAttestor
+		if attestFor != nil {
+			attest = attestFor(state.order, result)
+		}
+		state.err = n.persistReviewSettlement(ctx, state, settlement, attest)
+		if state.err != nil && !state.persistenceCompleted {
+			state.err = fmt.Errorf("record force order review: %w", state.err)
+		}
+		return state.err
+	}).Then(func(_ context.Context, state *orderReviewChainState) error {
+		if err := n.audit(ctx, caller, reviewActionAudit(state.order, state.account.EngineAccountID,
+			domain.AuditActionForceOrderReview, domain.AuditDetailForceOrderReview)); err != nil {
+			state.err = n.fatalPostCommitAudit("audit force order review", state.order.Account, err)
+		}
+		return state.err
+	}).Finally(func(_ context.Context, state *orderReviewChainState, outcome asyncengine.ChainOutcome) error {
+		state.err = n.accountChainTerminalError("force order review", state.order.Account,
+			state.err, state.persistenceCompleted, state.persistenceCompleted, outcome)
+		return nil
+	})
+	_, chainErr := runner.Run(ctx, eng.AsyncEngine()).Await(context.Background())
+	if err := accountChainRunError("force order review", state.err, chainErr); err != nil {
+		return domain.Order{}, engine.OrderResult{}, err
+	}
+	return state.order, result, nil
+}
+
+func (n *localNode) ForceImmediateReview(
+	ctx context.Context, order domain.ExternalID, caller domain.Caller,
+	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
+) (domain.Order, engine.ImmediateResult, error) {
+	ctx = context.WithoutCancel(ctx)
+	detail, err := n.realm.GetOrder(ctx, order)
+	if err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("get order: %w", err)
+	}
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+	defer done()
+	source, err := eng.AccountID(detail.Order.Account)
+	if err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+	state := &orderReviewChainState{held: detail.Review != nil && detail.Review.Held}
+	var preparation engine.ImmediatePreparation
+	builder := asyncengine.Chain(source, func(context.Context) (*orderReviewChainState, error) {
+		held, err := n.beginForcedOrderReview(ctx, detail.Order, state, source, domain.SubmitModeImmediate)
+		if err != nil {
+			state.err = err
+			return state, err
+		}
+		preparation, state.err = eng.PrepareForcedHeldImmediate(state.order, held)
+		return state, state.err
+	})
+	preTradeFinalized := false
+	result, err := n.runImmediateReviewReport(ctx, eng, builder, state, &preparation,
+		caller, attestFor, &preTradeFinalized, "force immediate review",
+		domain.AuditActionForceOrderReview)
+	if err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}
 	return state.order, result, nil
@@ -315,16 +543,33 @@ func (n *localNode) CancelOrderReview(
 	if err != nil {
 		return domain.Order{}, err
 	}
-	state := &orderReviewChainState{}
-	builder := asyncengine.Chain(source, func(context.Context) (*orderReviewChainState, error) {
-		state.err = n.beginOrderReview(ctx, detail.Order, state)
-		if state.err != nil {
-			return nil, state.err
+	state := &orderReviewChainState{held: detail.Review != nil && detail.Review.Held}
+	if state.held {
+		operation := cancelReportOperation{
+			name:        "order review cancellation",
+			allowedFrom: []domain.OrderStatus{domain.OrderStatusAwaitingReview},
+			clearReview: true,
+			prepare: func() (domain.Order, error) {
+				if err := n.beginAccountOrderReview(ctx, detail.Order, state, source); err != nil {
+					return domain.Order{}, err
+				}
+				if _, err := storedHeldReservation(state.order); err != nil {
+					return domain.Order{}, err
+				}
+				return state.order, nil
+			},
+			audit: func(report *executionReportChainState) store.AuditEntry {
+				return reviewActionAudit(report.order, state.account.EngineAccountID,
+					domain.AuditActionCancelOrderReview, domain.AuditDetailCancelOrderReview)
+			},
 		}
-		if err := validateAccountAdministrativeSource(domain.Account{
-			Code: state.order.Account, EngineAccountID: state.accountIdentity,
-		}, source); err != nil {
-			state.err = err
+		cancelled, _, err := n.cancelOrderReport(ctx, eng, source, detail.Order.Account,
+			order, "0", caller, attest, operation)
+		return cancelled, err
+	}
+	builder := asyncengine.Chain(source, func(context.Context) (*orderReviewChainState, error) {
+		state.err = n.beginAccountOrderReview(ctx, detail.Order, state, source)
+		if state.err != nil {
 			return nil, state.err
 		}
 		return state, nil
@@ -342,11 +587,8 @@ func (n *localNode) CancelOrderReview(
 		}
 		state.order.Status = domain.OrderStatusCancelled
 		state.order.Leaves = "0"
-		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action: domain.AuditActionCancelOrderReview, Account: state.order.Account,
-			AccountIdentity: state.accountIdentity,
-			Detail:          submitOrderDetail(state.order, domain.AuditDetailCancelOrderReview),
-		}); err != nil {
+		if err := n.audit(ctx, caller, reviewActionAudit(state.order, state.account.EngineAccountID,
+			domain.AuditActionCancelOrderReview, domain.AuditDetailCancelOrderReview)); err != nil {
 			state.err = n.fatalPostCommitAudit("audit order review cancellation", state.order.Account, err)
 		}
 		return state.err
@@ -356,4 +598,25 @@ func (n *localNode) CancelOrderReview(
 		return domain.Order{}, err
 	}
 	return state.order, nil
+}
+
+func storedHeldReservation(order domain.Order) (engine.HeldReservation, error) {
+	if err := validateHeldQuantity(order.ReservedQuantity); err != nil {
+		return engine.HeldReservation{}, err
+	}
+	if len(order.Lock) == 0 {
+		return engine.HeldReservation{}, fmt.Errorf("held order review has no lock")
+	}
+	return engine.HeldReservation{Lock: order.Lock, Quantity: order.ReservedQuantity}, nil
+}
+
+func validateHeldQuantity(value string) error {
+	quantity, err := domain.ParseOpenQuantity(value)
+	if err != nil {
+		return fmt.Errorf("held order review has no reserved quantity: %w", err)
+	}
+	if quantity.IsZero() {
+		return fmt.Errorf("held order review has no reserved quantity")
+	}
+	return nil
 }

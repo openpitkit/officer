@@ -137,11 +137,12 @@ type AdjustmentResult struct {
 
 // OrderResult is the outcome of one SubmitOrder pre-trade call. On accept Lock
 // holds the SDK-serialized reservation lock captured before commit; on reject
-// Rejects holds the engine rejects. On review only Reviews is populated and
-// the reservation must not be committed.
+// Rejects holds the engine rejects. A held review carries its first-run lock
+// and outcomes, and its live reservation must be committed. A review without
+// hold carries only Reviews and must not be committed.
 type OrderResult struct {
 	// Lock is the non-empty SDK-serialized reservation lock captured before the
-	// reservation was committed, ready to persist verbatim on an accepted order.
+	// reservation was committed, ready to persist verbatim on an accepted or held order.
 	// Display prices are derived later via LockSettlementPrice.
 	Lock []byte
 	// Blocks are account blocks the engine recorded while creating the
@@ -157,10 +158,14 @@ type OrderResult struct {
 	// SettlementLockPrice is the display settlement leg decoded from the engine
 	// lock as a decimal string; empty when no price was locked.
 	SettlementLockPrice string
-	// Verdict is the pre-trade decision; review permits no commit or send.
+	// Verdict is the pre-trade decision; review permits no send.
 	Verdict domain.Verdict
 	// Reviews are non-empty only for VerdictReview.
 	Reviews []domain.ReviewMark
+	// Held is true only for VerdictReview with all marks review_with_hold.
+	// The live reservation must be committed with DecisionCommit and kept while
+	// the order waits for review.
+	Held bool
 }
 
 // BalanceOutcome is one per-asset account-adjustment outcome produced by the
@@ -226,12 +231,20 @@ type ImmediateResult struct {
 // ImmediatePreparation is the caller-owned state derived from a pending
 // reservation or drop-copy operation before it is committed. ExecutionReport
 // must be applied only for accept, after the chain commits that operation.
-// A review preparation carries only its verdict and marks, without a report.
+// A review preparation has no report; a held review also carries the first-run
+// lock and outcomes for the node to persist when committing its reservation.
 type ImmediatePreparation struct {
-	// Verdict is the pre-trade decision. A review carries only review marks.
+	// Verdict is the pre-trade decision. A held review has no execution report.
 	Verdict domain.Verdict
 	// Reviews are non-empty only for VerdictReview.
 	Reviews []domain.ReviewMark
+	// Held is true only for VerdictReview with all marks review_with_hold.
+	// The node commits the live reservation with DecisionCommit while the order waits.
+	Held bool
+	// Lock is the first-run SDK lock, captured verbatim only for a held review.
+	Lock []byte
+	// SettlementLockPrice is decoded from Lock only for a held review.
+	SettlementLockPrice string
 	// ExecutionReport is the SDK report derived while the pending operation can
 	// still be rolled back.
 	ExecutionReport model.ExecutionReport
@@ -252,6 +265,16 @@ type ImmediatePreparation struct {
 type ReviewFlags struct {
 	// Confirmed skips review rules on a confirmed re-run; reject rules still apply.
 	Confirmed bool
+	// AlreadyHeld identifies a confirmed re-run whose first-run reservation is
+	// committed and held. It is valid only with Confirmed.
+	AlreadyHeld bool
+}
+
+// HeldReservation is the committed first-run reservation of a held waiting
+// order: its stored lock and reserved base quantity (the order's opening leaves).
+type HeldReservation struct {
+	Lock     []byte
+	Quantity string
 }
 
 // OrderChainAdapter maps Officer order values to the SDK chain surface and
@@ -266,6 +289,12 @@ type OrderChainAdapter interface {
 	CheckOrderModel(domain.OrderProbe) (model.Order, error)
 	RejectedOrder(domain.Order, []reject.Reject) (OrderResult, error)
 	ReservedOrder(domain.Order, asyncengine.OperationResult) (OrderResult, error)
+	// ReservedHeldOrder validates a confirmed already-held re-run and retains
+	// the committed first-run lock without applying another reservation.
+	ReservedHeldOrder(domain.Order, asyncengine.OperationResult, HeldReservation) (OrderResult, error)
+	// ForcedHeldOrder accepts the stored hold without a pre-trade run.
+	// An empty lock or an empty or zero quantity is an error.
+	ForcedHeldOrder(domain.Order, HeldReservation) (OrderResult, error)
 	AppliedDropCopyOrder(
 		domain.Order, asyncengine.DropCopyResult,
 	) (OrderResult, error)
@@ -273,6 +302,13 @@ type OrderChainAdapter interface {
 	PrepareImmediateReservation(
 		domain.Order, asyncengine.OperationResult,
 	) (ImmediatePreparation, error)
+	// PrepareImmediateHeldReservation prepares a fill from the stored first-run
+	// reservation after validating a confirmed already-held re-run.
+	PrepareImmediateHeldReservation(domain.Order, asyncengine.OperationResult, HeldReservation) (ImmediatePreparation, error)
+	// PrepareForcedHeldImmediate builds a fill using the stored hold and the
+	// order's trade price, without a pre-trade run. An empty lock or an empty
+	// or zero quantity is an error.
+	PrepareForcedHeldImmediate(domain.Order, HeldReservation) (ImmediatePreparation, error)
 	PrepareImmediateDropCopy(
 		domain.Order, asyncengine.DropCopyResult,
 	) (ImmediatePreparation, error)

@@ -692,6 +692,88 @@ func TestOrderReview_RealServiceREST(t *testing.T) {
 	}
 }
 
+func TestOrderReviewForce_RealServiceREST(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("blocked=%t", blocked), func(t *testing.T) {
+			handler, realm, eng, _ := newRealServiceRouterWithEngine(t)
+			ctx := context.Background()
+			seedRealAccountAndAssets(t, realm, "acc-1")
+			if err := realm.SetSetting(ctx, domain.SettingKeyNoESign, "0"); err != nil {
+				t.Fatal(err)
+			}
+			eng.reviews = []domain.ReviewMark{{
+				OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order"},
+				Mode:        domain.RuleModeReviewWithHold,
+			}}
+			request := func(method, path, body string, status int) map[string]any {
+				t.Helper()
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body)))
+				if rec.Code != status {
+					t.Fatalf("%s %s status=%d, want %d: %s", method, path, rec.Code, status, rec.Body.String())
+				}
+				return bodyMap(t, rec.Result())
+			}
+			submit := request(http.MethodPost, "/orders/submit?missingAccount=reject",
+				`{"id":"real-rest-force","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"hold"}`, http.StatusCreated)
+			if submit["verdict"] != "review" {
+				t.Fatalf("submit=%v", submit)
+			}
+			path := "/orders/" + submit["id"].(string)
+			before, err := realm.GetOrder(ctx, "real-rest-force")
+			if err != nil || before.Review == nil || !before.Review.Held ||
+				len(before.Order.Lock) == 0 || before.Order.ReservedQuantity != "1" {
+				t.Fatalf("held review=%+v err=%v", before, err)
+			}
+			eng.reviews = nil
+			eng.rejects = []domain.OrderReject{{Code: "amount_missing", Reason: "pre-trade must not run"}}
+			status := http.StatusOK
+			if blocked {
+				if err := realm.SetAccountBlocked(ctx, "acc-1", true, "operator block"); err != nil {
+					t.Fatal(err)
+				}
+				status = http.StatusConflict
+			}
+			force := request(http.MethodPost, path+"/review/force", "", status)
+			detail := request(http.MethodGet, path, "", http.StatusOK)
+			if blocked {
+				if force["error"].(map[string]any)["code"] != "conflict" ||
+					detail["order"].(map[string]any)["status"] != "awaiting_review" ||
+					detail["review"].(map[string]any)["held"] != true {
+					t.Fatalf("blocked force=%v detail=%v", force, detail)
+				}
+				after, err := realm.GetOrder(ctx, "real-rest-force")
+				if err != nil || !reflect.DeepEqual(before, after) {
+					t.Fatalf("blocked order changed: after=%+v err=%v", after, err)
+				}
+				return
+			}
+			if force["order"].(map[string]any)["status"] != "committed" ||
+				force["decision"].(map[string]any)["verdict"] != "accept" ||
+				detail["order"].(map[string]any)["status"] != "committed" {
+				t.Fatalf("force=%v detail=%v", force, detail)
+			}
+			after, err := realm.GetOrder(ctx, "real-rest-force")
+			if err != nil || !bytes.Equal(after.Order.Lock, before.Order.Lock) ||
+				after.Order.ReservedQuantity != before.Order.ReservedQuantity {
+				t.Fatalf("force changed reservation: after=%+v err=%v", after, err)
+			}
+			for _, raw := range detail["events"].([]any) {
+				event := raw.(map[string]any)
+				if event["type"] == "pre_trade_accepted" {
+					reproduction := request(http.MethodGet,
+						path+"/events/"+event["id"].(string)+"/reproduction", "", http.StatusOK)
+					if event["signed"] != true || reproduction["requestType"] != "review_force" {
+						t.Fatalf("force event=%v", event)
+					}
+					return
+				}
+			}
+			t.Fatal("missing pre_trade_accepted event attested review_force")
+		})
+	}
+}
+
 // newRealServiceRouter builds the full production chain a handler test would
 // otherwise stub: a real SQLite store, a real localNode over an engine fake, a
 // real backend.Service, and the real HTTP router. It returns
@@ -796,11 +878,12 @@ func seedRealAccountAndAssets(t *testing.T, realm store.RealmStore, id domain.Ac
 	}
 }
 
-// realGateEngine is a minimal engine.Engine fake sufficient for the
-// execution-report terminal-gate test: on the force path it returns a valid
-// single-fill persistence write-set so the node
-// completes the settlement. It carries no risk logic; the gate under test is the
-// node's own terminal-order guard, not the engine.
+// realGateEngine is a terminal-gate fake with no risk logic of its own. Its
+// execution-report force path returns a single-fill persistence write-set.
+// Held review marks return the held reservation (lock, settlement price and
+// balance outcomes). Only a hold-mode force returns the real engine's accept.
+// Immediate-mode force and held review reruns are not supported.
+// The terminal-order guard under test belongs to the node.
 type realGateEngine struct {
 	running               bool
 	reviews               []domain.ReviewMark
@@ -982,15 +1065,91 @@ func (e *realGateEngine) RejectedOrder(
 }
 
 func (e *realGateEngine) ReservedOrder(
-	order domain.Order, _ asyncengine.OperationResult,
+	order domain.Order, result asyncengine.OperationResult,
 ) (engine.OrderResult, error) {
 	if len(e.reviews) > 0 {
-		return engine.OrderResult{Verdict: domain.VerdictReview, Reviews: e.reviews}, nil
+		held, err := domain.ReviewMarksHeld(e.reviews)
+		if err != nil {
+			return engine.OrderResult{}, err
+		}
+		out := engine.OrderResult{
+			Verdict: domain.VerdictReview, Reviews: e.reviews, Held: held,
+		}
+		if held {
+			price, err := param.NewPriceFromString(order.Price)
+			if err != nil {
+				return engine.OrderResult{}, err
+			}
+			lock, err := result.Lock()
+			if err != nil {
+				return engine.OrderResult{}, err
+			}
+			if err := lock.PushMany([]pretrade.Entry{{
+				PolicyGroupID: model.DefaultPolicyGroupID, Price: price,
+			}}); err != nil {
+				return engine.OrderResult{}, err
+			}
+			out.Lock, err = lock.MarshalMsgpack()
+			if err != nil {
+				return engine.OrderResult{}, err
+			}
+			out.SettlementLockPrice, err = officerengine.LockSettlementPrice(out.Lock, order)
+			if err != nil {
+				return engine.OrderResult{}, err
+			}
+			if order.Side != domain.OrderSideBuy || order.AmountKind != domain.OrderAmountKindQuantity {
+				return engine.OrderResult{}, errors.New("realGateEngine: held reservation supports quantity buys only")
+			}
+			quantity, err := param.NewQuantityFromString(order.AmountValue)
+			if err != nil {
+				return engine.OrderResult{}, err
+			}
+			volume, err := quantity.CalculateVolume(price)
+			if err != nil {
+				return engine.OrderResult{}, err
+			}
+			// The fixture starts at zero: a buy reserves quote volume and
+			// records the base quantity as incoming, like Spot Funds.
+			out.Outcomes = []engine.BalanceOutcome{
+				{Asset: order.BaseAsset, Outcome: domain.AdjustmentOutcomeAccepted{
+					IncomingDelta: quantity.String(), IncomingResult: quantity.String(),
+				}},
+				{Asset: order.QuoteAsset, Outcome: domain.AdjustmentOutcomeAccepted{
+					HeldDelta: volume.String(), HeldResult: volume.String(),
+				}},
+			}
+		}
+		return out, nil
 	}
 	return engine.OrderResult{
 		Verdict:             domain.VerdictAccept,
 		SettlementLockPrice: order.Price,
 	}, nil
+}
+
+func (*realGateEngine) ReservedHeldOrder(domain.Order, asyncengine.OperationResult, engine.HeldReservation) (engine.OrderResult, error) {
+	return engine.OrderResult{}, errors.New("realGateEngine: held review rerun is not supported")
+}
+
+func (*realGateEngine) PrepareImmediateHeldReservation(domain.Order, asyncengine.OperationResult, engine.HeldReservation) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, errors.New("realGateEngine: held review rerun is not supported")
+}
+
+func (*realGateEngine) ForcedHeldOrder(order domain.Order, held engine.HeldReservation) (engine.OrderResult, error) {
+	if len(held.Lock) == 0 || held.Quantity == "" || held.Quantity == "0" {
+		return engine.OrderResult{}, errors.New("realGateEngine: missing held reservation")
+	}
+	price, err := officerengine.LockSettlementPrice(held.Lock, order)
+	if err != nil {
+		return engine.OrderResult{}, err
+	}
+	return engine.OrderResult{
+		Verdict: domain.VerdictAccept, Lock: held.Lock, SettlementLockPrice: price,
+	}, nil
+}
+
+func (*realGateEngine) PrepareForcedHeldImmediate(domain.Order, engine.HeldReservation) (engine.ImmediatePreparation, error) {
+	return engine.ImmediatePreparation{}, errors.New("realGateEngine: held review force is not supported")
 }
 
 func (e *realGateEngine) AppliedDropCopyOrder(
