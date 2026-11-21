@@ -394,7 +394,7 @@ func TestGetAccount(t *testing.T) {
 		},
 		limits: node.AccountLimits{
 			RateLimits: []domain.LimitRate{
-				{
+				{Mode: domain.RuleModeReject,
 					Scope:     domain.ScopeAccount,
 					Account:   "acc-1",
 					Window:    time.Second,

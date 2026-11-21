@@ -83,7 +83,7 @@ func TestPositionLimitNodeBoundaryOpenOrderChangeAndClear(t *testing.T) {
 	}
 	checkNodePositionLimit(t, n, "25", true)
 	checkNodePositionLimit(t, n, "25.00000001", false)
-	if _, err := n.DeleteLimit(context.Background(), node.LimitTarget{
+	if _, err := n.DeleteLimit(context.Background(), node.LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset,
 	}, caller); err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestPositionLimitNodeBackupRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := n.DeleteLimit(ctx, node.LimitTarget{
+	if _, err := n.DeleteLimit(ctx, node.LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset,
 	}, caller); err != nil {
 		t.Fatal(err)

@@ -31,16 +31,17 @@ import { useSearchParams } from "react-router-dom";
 import type {
   Account,
   Limit,
-  OrderSizeLimitMode,
   PolicyFilter,
   PolicyListFilters,
+  RuleMode,
   SortOrder,
 } from "@/api/types";
 import { barrierCount, useLimitsPage } from "@/api/useLimits";
 import { limitTarget, limitTargetKey } from "@/api/limitTarget";
 import { useSpotFundsLimitMode } from "@/api/spotFundsLimitMode";
 import {
-  isOrderSizeLimitMode,
+  isRuleMode,
+  limitPolicyHasMode,
   ruleModeLabel,
 } from "@/framework/registries/vocabulary";
 import { isInPlacePolicy } from "@/api/spotFundsPnlPolicies";
@@ -168,10 +169,7 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function usePolicyCount(
-  policy: Exclude<PolicyFilter, "all">,
-  mode?: OrderSizeLimitMode,
-) {
+function usePolicyCount(policy: Exclude<PolicyFilter, "all">, mode?: RuleMode) {
   const filters = useMemo<PolicyListFilters>(
     () => ({
       policy,
@@ -226,20 +224,20 @@ function policyRowHref(limit: Limit): string {
   return `/policies?${query.toString()}`;
 }
 
-function requireOrderSizeLimitMode(mode: Limit["mode"]): OrderSizeLimitMode {
-  if (!isOrderSizeLimitMode(mode)) {
-    throw new Error("Missing order-size mode");
+function requireRuleMode(mode: Limit["mode"]): RuleMode {
+  if (!isRuleMode(mode)) {
+    throw new Error("Missing or unknown limit rule mode");
   }
   return mode;
 }
 
-/** The values a row's chips show: order-size and funds limit mode chips read as
+/** The values a row's chips show: rule and funds limit mode chips read as
  *  localized names; every other kind shows its values as stored. */
 function chipValues(limit: Limit, t: TFunction): Record<string, string> {
-  if (limit.policy === "order_size_limit") {
+  if (limitPolicyHasMode(limit.policy)) {
     return {
       ...limit.values,
-      mode: ruleModeLabel(t, requireOrderSizeLimitMode(limit.mode)),
+      mode: ruleModeLabel(t, requireRuleMode(limit.mode)),
     };
   }
   if (limit.policy !== "spot_funds_limit_mode") {
@@ -309,12 +307,9 @@ function DeleteConfirm({
                 scope: target ? scopeLabel(tc, target.scope) : "",
                 account: accountFragment,
                 mode:
-                  target?.policy === "order_size_limit"
+                  target && limitPolicyHasMode(target.policy)
                     ? t("delete.modeFragment", {
-                        mode: ruleModeLabel(
-                          t,
-                          requireOrderSizeLimitMode(target.mode),
-                        ),
+                        mode: ruleModeLabel(t, requireRuleMode(target.mode)),
                       })
                     : "",
                 asset: target?.asset
@@ -721,7 +716,7 @@ export function Limits() {
     spotFundsUnrealizedPnlBoundsCount.load,
     spotFundsTotalPnlBoundsCount.load,
   ]);
-  const orderSizeCounts: Record<OrderSizeLimitMode, number | undefined> = {
+  const orderSizeCounts: Record<RuleMode, number | undefined> = {
     reject:
       orderSizeRejectCount.load.state === "ready"
         ? orderSizeRejectCount.load.data.total

@@ -53,35 +53,29 @@ func TestServerToolSnapshot(t *testing.T) {
 			name: "get_account_state",
 			description: "Return account row and its account-scoped risk barriers, " +
 				"each with the fields add_limit and update_limit take, the rate window as windowMs " +
-				"in milliseconds. An order-size barrier also carries " +
+				"in milliseconds. Rate, order-size, position and P&L-bound barriers carry " +
 				"read-only mode: reject, review_without_hold or review_with_hold. " +
-				"mode is not a write argument " +
-				"for order-size barriers. add_limit and update_limit address only reject " +
-				"order-size barriers; review barriers are read-only for an agent, and MCP " +
-				"deletes no barrier. Read-only - no secrets, no order-flow control.",
+				"add_limit and update_limit address only their reject barriers. MCP deletes no barrier. " +
+				"Read-only - no secrets, no order-flow control.",
 		},
 		{
 			name: "get_limits",
 			description: "Return risk barriers and P&L-bound currencies, optionally " +
 				"filtered by account; each barrier has the fields add_limit and update_limit take, " +
-				"the rate window as windowMs in milliseconds. An order-size barrier also carries " +
-				"read-only mode: reject, review_without_hold or review_with_hold. " +
-				"mode is not a write argument " +
-				"for order-size barriers. add_limit and update_limit address only reject " +
-				"order-size barriers; review barriers are read-only for an agent, and MCP " +
-				"deletes no barrier. Read-only - no " +
-				"secrets, no order-flow control.",
+				"the rate window as windowMs in milliseconds. Rate, order-size, position and " +
+				"P&L-bound barriers carry read-only mode: reject, review_without_hold or " +
+				"review_with_hold. add_limit and update_limit address only their reject barriers. " +
+				"MCP deletes no barrier. Read-only - no secrets, no order-flow control.",
 		},
 		{
 			name: "get_spot_funds_limit_mode",
 			description: "Return the global Spot Funds limit mode and the accounts a Spot Funds " +
-				"P&L bound blocks for want of a currency. mode is enforce, which refuses an " +
-				"order that lacks funds or holdings, or track_only, which does not refuse on " +
-				"funds but records every hold, so balances and positions may go negative; " +
-				"until first set the mode is enforce. stored is whether the spot_funds_limit_mode " +
-				"policy row is stored; false means no row and the default enforce. " +
-				"P&L bounds, rate, order-size and position barriers " +
-				"apply in both modes. accountsWithoutCurrency lists the visible accounts " +
+				"P&L bound blocks for want of a currency. On a shortfall, enforce refuses, " +
+				"review_with_hold requests review with a full hold, review_without_hold requests " +
+				"review without a pending hold, and track_only records the hold even into negative " +
+				"available funds. stored=false means no row and the default enforce. P&L-bound, " +
+				"rate, order-size and position barriers apply in all four modes. " +
+				"accountsWithoutCurrency lists the visible accounts " +
 				"with no effective realized P&L currency that a Spot Funds P&L bound applies " +
 				"to: their P&L halts, so the bound blocks them. Read-only - no secrets, no order-flow control.",
 		},
@@ -162,8 +156,8 @@ func TestServerToolSnapshot(t *testing.T) {
 				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
 				"spot_funds_total_pnl_bounds_kill_switch (total P&L). " +
 				"The other arguments are that kind's fields. A field of another kind is refused with validation. " +
-				"order_size_limit takes caps without mode and addresses only the reject barrier; " +
-				"review barriers are read-only for an agent. " +
+				"Writes to rate, order-size, position and P&L-bound policies address the reject " +
+				"barrier and refuse a mode argument. Review barriers are read-only for an agent. " +
 				"Anything that loosens risk is refused with loosening_refused and changes nothing. " +
 				"A new account_underlying_asset or account_settlement_asset cap " +
 				"must be no higher than the underlying_asset or settlement_asset cap on " +
@@ -185,8 +179,8 @@ func TestServerToolSnapshot(t *testing.T) {
 				"spot_funds_unrealized_pnl_bounds_kill_switch (unrealized P&L) and " +
 				"spot_funds_total_pnl_bounds_kill_switch (total P&L), or spot_funds_limit_mode. " +
 				"The other arguments are that kind's fields. A field of another kind is refused with validation. " +
-				"order_size_limit takes caps without mode and addresses only the reject barrier; " +
-				"review barriers are read-only for an agent. " +
+				"Writes to rate, order-size, position and P&L-bound policies address the reject " +
+				"barrier and refuse a mode argument. Review barriers are read-only for an agent. " +
 				"Anything that loosens risk is refused with loosening_refused and changes nothing. " +
 				"For rate_limit, allow no more orders and keep, on the broker and asset " +
 				"scopes, the same window, on the account and account_asset scopes a " +
@@ -197,18 +191,13 @@ func TestServerToolSnapshot(t *testing.T) {
 				"An account P&L bound must use the account's effective " +
 				"currency: its own, else its group's, else the default group's. A different " +
 				"bound currency or no resolved currency is refused with pnl_bound_currency_mismatch. " +
-				"spot_funds_limit_mode is the " +
-				"Officer policy that decides whether Spot Funds checks funds, on the " +
-				"global scope only, with the one field mode: enforce (Check funds) " +
-				"refuses an order that lacks funds or holdings; track_only (Accounting " +
-				"without blocking) does not refuse on funds but records every hold, so " +
-				"balances and positions may go negative. Until first set the mode is " +
-				"enforce; the switch to track_only is refused with loosening_refused, " +
-				"and the switch to enforce resets no balance. P&L bounds, rate, order-size and " +
-				"position barriers apply in both modes. No barrier can be removed; " +
-				"to switch Spot Funds back to Check funds, set spot_funds_limit_mode " +
-				"with mode enforce. Mutates Officer control-plane config; protected " +
-				"and disabled by default.",
+				"spot_funds_limit_mode is global and takes the one field mode. This tool " +
+				"accepts enforce or track_only and refuses a switch down to track_only with " +
+				"loosening_refused. review_with_hold and review_without_hold are set through " +
+				"REST or the panel; this tool returns validation for either. Switching to enforce " +
+				"resets no balance. P&L-bound, rate, order-size and position barriers apply in " +
+				"all four modes. No barrier can be removed. Mutates Officer control-plane config; " +
+				"protected and disabled by default.",
 		},
 		{
 			name: "create_account",

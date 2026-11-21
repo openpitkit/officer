@@ -220,7 +220,7 @@ func TestSetAccountCurrencyOnControlPlane(t *testing.T) {
 	if _, err := service.CreateAccount(ctx, domain.Account{Code: "desk-2", Currency: "USD"}); err != nil {
 		t.Fatalf("create account desk-2: %v", err)
 	}
-	if err := service.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := service.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "desk-2", Currency: "USD", LowerBound: "-1",
 	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {

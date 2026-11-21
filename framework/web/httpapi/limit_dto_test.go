@@ -65,8 +65,8 @@ func TestPersistedLimitIdentity(t *testing.T) {
 	t.Parallel()
 	t.Run("policy", func(t *testing.T) {
 		rows := []domain.LimitSpotFundsPnlBounds{
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
-			{Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
 		}
 		checkPersistedPair(t, rows, node.AccountLimits{SpotFundsPnlBoundsLimits: rows}, PersistedSpotFundsPnlBoundsLimit)
 	})
@@ -86,29 +86,29 @@ func TestPersistedLimitIdentity(t *testing.T) {
 	})
 	t.Run("account", func(t *testing.T) {
 		rows := []domain.LimitRate{
-			{Scope: domain.ScopeAccount, Account: "desk-alpha", MaxOrders: 10},
-			{Scope: domain.ScopeAccount, Account: "desk-beta", MaxOrders: 10},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "desk-alpha", MaxOrders: 10},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "desk-beta", MaxOrders: 10},
 		}
 		checkPersistedPair(t, rows, node.AccountLimits{RateLimits: rows}, PersistedRateLimit)
 	})
 	t.Run("account_group", func(t *testing.T) {
 		rows := []domain.LimitSpotFundsPnlBounds{
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "group-alpha", Currency: "USD", LowerBound: "-10"},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "group-beta", Currency: "USD", LowerBound: "-10"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "group-alpha", Currency: "USD", LowerBound: "-10"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "group-beta", Currency: "USD", LowerBound: "-10"},
 		}
 		checkPersistedPair(t, rows, node.AccountLimits{SpotFundsPnlBoundsLimits: rows}, PersistedSpotFundsPnlBoundsLimit)
 	})
 	t.Run("asset", func(t *testing.T) {
 		rows := []domain.LimitRate{
-			{Scope: domain.ScopeAsset, Asset: "AAPL", MaxOrders: 10},
-			{Scope: domain.ScopeAsset, Asset: "MSFT", MaxOrders: 10},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "AAPL", MaxOrders: 10},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "MSFT", MaxOrders: 10},
 		}
 		checkPersistedPair(t, rows, node.AccountLimits{RateLimits: rows}, PersistedRateLimit)
 	})
 	t.Run("position_asset", func(t *testing.T) {
 		rows := []domain.LimitPosition{
-			{Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "AAPL", MaxPosition: "10"},
-			{Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "MSFT", MaxPosition: "10"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "AAPL", MaxPosition: "10"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "MSFT", MaxPosition: "10"},
 		}
 		checkPersistedPair(t, rows, node.AccountLimits{PositionLimits: rows}, PersistedPositionLimit)
 	})
@@ -148,8 +148,8 @@ func checkPersistedErrors[Limit domain.KeyedLimit](t *testing.T,
 func TestPersistedLimitErrors(t *testing.T) {
 	t.Parallel()
 	t.Run("rate", func(t *testing.T) {
-		target := domain.LimitRate{Scope: domain.ScopeBroker}
-		corrupt := domain.LimitRate{Scope: "corrupt-rate"}
+		target := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker}
+		corrupt := domain.LimitRate{Mode: domain.RuleModeReject, Scope: "corrupt-rate"}
 		checkPersistedErrors(t, target, corrupt, node.AccountLimits{RateLimits: []domain.LimitRate{corrupt}}, PersistedRateLimit)
 	})
 	t.Run("order_size", func(t *testing.T) {
@@ -158,20 +158,20 @@ func TestPersistedLimitErrors(t *testing.T) {
 		checkPersistedErrors(t, target, corrupt, node.AccountLimits{OrderSizeLimits: []domain.LimitOrderSize{corrupt}}, PersistedOrderSizeLimit)
 	})
 	t.Run("position", func(t *testing.T) {
-		target := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "AAPL"}
-		corrupt := domain.LimitPosition{Scope: "corrupt-position"}
+		target := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "AAPL"}
+		corrupt := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: "corrupt-position"}
 		checkPersistedErrors(t, target, corrupt, node.AccountLimits{PositionLimits: []domain.LimitPosition{corrupt}}, PersistedPositionLimit)
 	})
 	t.Run("pnl", func(t *testing.T) {
-		target := domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal}
-		corrupt := domain.LimitSpotFundsPnlBounds{Axis: "corrupt-axis", Scope: domain.ScopeGlobal}
+		target := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal}
+		corrupt := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: "corrupt-axis", Scope: domain.ScopeGlobal}
 		checkPersistedErrors(t, target, corrupt, node.AccountLimits{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{corrupt}}, PersistedSpotFundsPnlBoundsLimit)
 	})
 }
 
 func TestPersistedLimitNormalizesAccountBeforeKey(t *testing.T) {
 	t.Parallel()
-	stored := domain.LimitRate{Scope: domain.ScopeAccount, Account: "scoped-account", MaxOrders: 10}
+	stored := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "scoped-account", MaxOrders: 10}
 	reader := &persistedLimitReader{
 		features: backend.AccountFeatures{Account: stored.Account},
 		limits:   node.AccountLimits{RateLimits: []domain.LimitRate{stored}},

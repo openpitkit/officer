@@ -542,7 +542,7 @@ func TestMemoryRealmOrderReviewBackupRoundTrip(t *testing.T) {
 func TestMemoryRealmPositionLimitsBackupRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	src := newMemoryStore("position-backup-source.db").realm
-	limit := domain.LimitPosition{
+	limit := domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001",
 	}
 	if _, err := src.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {

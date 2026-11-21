@@ -103,8 +103,9 @@ func newTestSharedMarketDataService(t *testing.T) *sharedMarketDataService {
 func newTestEngine(t *testing.T, reviewModes ...domain.RuleMode) *openPitEngine {
 	t.Helper()
 	snap := fwengine.Snapshot{
-		Accounts: []domain.Account{account(testAccount)},
-		Assets:   []domain.Asset{testAsset(testBase), testAsset(testQuote)},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Accounts:           []domain.Account{account(testAccount)},
+		Assets:             []domain.Asset{testAsset(testBase), testAsset(testQuote)},
 	}
 	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
 	if err != nil {
@@ -149,8 +150,9 @@ func newTestEngine(t *testing.T, reviewModes ...domain.RuleMode) *openPitEngine 
 func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 	t.Helper()
 	snap := fwengine.Snapshot{
-		Accounts: []domain.Account{account(testAccount)},
-		Assets:   []domain.Asset{testAsset(testBase), testAsset(testQuote)},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Accounts:           []domain.Account{account(testAccount)},
+		Assets:             []domain.Asset{testAsset(testBase), testAsset(testQuote)},
 	}
 	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
 	if err != nil {
@@ -688,8 +690,9 @@ func TestSubmitImmediate_DropCopySettlesWhileAccountIsBlocked(t *testing.T) {
 	acct := blockedAccount(testAccount, "account block")
 	acct.Currency = testQuote
 	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{acct},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{acct},
 	})
 	if err != nil {
 		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
@@ -815,8 +818,9 @@ func (s *executionLockSpy) pushError() error {
 func newLockSpyTestEngine(t *testing.T, spy *executionLockSpy) *openPitEngine {
 	t.Helper()
 	snap := fwengine.Snapshot{
-		Accounts: []domain.Account{account(testAccount)},
-		Assets:   []domain.Asset{testAsset(testBase), testAsset(testQuote)},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Accounts:           []domain.Account{account(testAccount)},
+		Assets:             []domain.Asset{testAsset(testBase), testAsset(testQuote)},
 	}
 	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
 	if err != nil {
@@ -1020,8 +1024,9 @@ func TestSubmitImmediate_OpeningFillDoesNotEmitNoopAccountPnl(t *testing.T) {
 	acct.EffectiveCurrency = testQuote
 	acct.Pnl = "7.25"
 	engine, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{acct},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{acct},
 		Balances: []domain.Balance{{
 			Account: domain.AccountID(testAccount), Asset: testQuote,
 			Available: testQuoteFund,
@@ -1113,8 +1118,9 @@ func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
 	engine, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{acct},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{acct},
 		Balances: []domain.Balance{
 			{
 				Account: domain.AccountID(testAccount), Asset: testBase,
@@ -1174,8 +1180,9 @@ func TestOpenPitEngineBuilder_SeedsAccountPnlWithoutPnlBounds(t *testing.T) {
 	acct.EffectiveCurrency = testQuote
 	acct.Pnl = "7.25"
 	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{acct},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{acct},
 	})
 	if err != nil {
 		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
@@ -1187,7 +1194,7 @@ func TestOpenPitEngineBuilder_PersistedPnlKeepsBoundsClear(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
 	acct.Pnl = "5"
-	limits := []domain.LimitSpotFundsPnlBounds{{
+	limits := []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    testAccount,
@@ -1195,6 +1202,7 @@ func TestOpenPitEngineBuilder_PersistedPnlKeepsBoundsClear(t *testing.T) {
 		LowerBound: "-3",
 	}}
 	built, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		SpotFundsLimitMode:       domain.SpotFundsLimitModeEnforce,
 		Assets:                   testAssets(),
 		Accounts:                 []domain.Account{acct},
 		SpotFundsPnlBoundsLimits: limits,
@@ -1314,8 +1322,9 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 	acct.GroupCode = "desk-a"
 	acct.Pnl = "-5"
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{acct},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{acct},
 		Groups: []domain.AccountGroup{{
 			Code:          "desk-a",
 			EngineGroupID: 7,
@@ -1334,20 +1343,20 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 			},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   testQuote,
 				LowerBound: "-1000000",
 			},
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
 				Currency:     testQuote,
 				LowerBound:   "-1000000",
 			},
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    domain.AccountID(testAccount),
@@ -1425,10 +1434,10 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsGlobalBarrierOnline(t *testing.
 	} {
 		t.Run(string(axis), func(t *testing.T) {
 			t.Parallel()
-			e := newSpotFundsLimitModeTestEngine(t, true, domain.LimitSpotFundsPnlBounds{
+			e := newSpotFundsLimitModeTestEngine(t, domain.SpotFundsLimitModeTrackOnly, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis: axis, Scope: domain.ScopeGlobal, Currency: testQuote, LowerBound: "-5",
 			})
-			control := newSpotFundsLimitModeTestEngine(t, true, domain.LimitSpotFundsPnlBounds{
+			control := newSpotFundsLimitModeTestEngine(t, domain.SpotFundsLimitModeTrackOnly, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis: axis, Scope: domain.ScopeGlobal, Currency: testQuote, LowerBound: "-5",
 			})
 			buy := testOrder()
@@ -1542,8 +1551,9 @@ func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 	acct.Currency = testQuote
 	acct.GroupCode = "desk-a"
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{acct},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{acct},
 		Groups: []domain.AccountGroup{{
 			Code:          "desk-a",
 			EngineGroupID: 7,
@@ -1562,13 +1572,13 @@ func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 			},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   testQuote,
 				LowerBound: "-1000000",
 			},
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
@@ -1636,20 +1646,20 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierReportsLivePnlBlock(
 	// Introduce an account-scope barrier. It must observe the -2 already
 	// accrued and return the newly inserted block with its account identity.
 	limits := fwengine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeGlobal,
 			Currency:   testQuote,
 			LowerBound: "-1000000",
 		},
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			Currency:     testQuote,
 			LowerBound:   "-1000000",
 		},
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    domain.AccountID(testAccount),
@@ -1717,8 +1727,9 @@ func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T
 	acct.Currency = testQuote
 	acct.GroupCode = "desk-a"
 	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{acct},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{acct},
 		Groups: []domain.AccountGroup{{
 			Code: "desk-a", EngineGroupID: 7,
 			Blocked: true, BlockReason: "group block",

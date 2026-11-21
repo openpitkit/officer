@@ -31,6 +31,8 @@ func TestParseSpotFundsLimitModeAccepted(t *testing.T) {
 
 	for _, want := range []domain.SpotFundsLimitMode{
 		domain.SpotFundsLimitModeEnforce,
+		domain.SpotFundsLimitModeReviewWithHold,
+		domain.SpotFundsLimitModeReviewWithoutHold,
 		domain.SpotFundsLimitModeTrackOnly,
 	} {
 		t.Run(string(want), func(t *testing.T) {
@@ -64,6 +66,8 @@ func TestParseSpotFundsLimitModeRefused(t *testing.T) {
 		{"unknown", "relaxed", "unsupported_value", []string{
 			`"relaxed"`,
 			string(domain.SpotFundsLimitModeEnforce),
+			string(domain.SpotFundsLimitModeReviewWithHold),
+			string(domain.SpotFundsLimitModeReviewWithoutHold),
 			string(domain.SpotFundsLimitModeTrackOnly),
 		}},
 		{"wrong case", "ENFORCE", "unsupported_value", []string{`"ENFORCE"`}},
@@ -101,26 +105,34 @@ func TestParseSpotFundsLimitModeRefused(t *testing.T) {
 func TestSpotFundsLimitModeNoLooserThan(t *testing.T) {
 	t.Parallel()
 
-	enforce := domain.SpotFundsLimitModeEnforce
-	trackOnly := domain.SpotFundsLimitModeTrackOnly
-
-	err := trackOnly.NoLooserThan(enforce)
-	if !errors.Is(err, domain.ErrLoosening) {
-		t.Fatalf("track_only.NoLooserThan(enforce) = %v, want ErrLoosening", err)
+	modes := []struct {
+		mode domain.SpotFundsLimitMode
+		rank int
+	}{
+		{domain.SpotFundsLimitModeEnforce, 2},
+		{domain.SpotFundsLimitModeReviewWithHold, 1},
+		{domain.SpotFundsLimitModeReviewWithoutHold, 1},
+		{domain.SpotFundsLimitModeTrackOnly, 0},
 	}
-	for _, want := range []string{string(enforce), string(trackOnly)} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("loosening error %q does not name %q", err, want)
-		}
-	}
-
-	for _, tc := range []struct{ next, prev domain.SpotFundsLimitMode }{
-		{enforce, trackOnly},
-		{enforce, enforce},
-		{trackOnly, trackOnly},
-	} {
-		if err := tc.next.NoLooserThan(tc.prev); err != nil {
-			t.Fatalf("%s.NoLooserThan(%s) = %v, want nil", tc.next, tc.prev, err)
+	for _, prev := range modes {
+		for _, next := range modes {
+			t.Run(string(prev.mode)+"/"+string(next.mode), func(t *testing.T) {
+				err := next.mode.NoLooserThan(prev.mode)
+				if next.rank >= prev.rank {
+					if err != nil {
+						t.Fatalf("NoLooserThan = %v, want nil", err)
+					}
+					return
+				}
+				if !errors.Is(err, domain.ErrLoosening) {
+					t.Fatalf("NoLooserThan = %v, want ErrLoosening", err)
+				}
+				for _, mode := range []domain.SpotFundsLimitMode{next.mode, prev.mode} {
+					if !strings.Contains(err.Error(), string(mode)) {
+						t.Fatalf("error %q does not name %q", err, mode)
+					}
+				}
+			})
 		}
 	}
 }

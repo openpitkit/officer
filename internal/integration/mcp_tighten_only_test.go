@@ -358,7 +358,7 @@ func TestUpdateLimitPositionRefusesLooseningOnControlPlane(t *testing.T) {
 		t.Fatal(err)
 	}
 	position := positionLimitDriver(t, service, src)
-	stored := domain.LimitPosition{
+	stored := domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "5.0000000000000000001",
 	}
 	position.accepts("add_limit", map[string]any{

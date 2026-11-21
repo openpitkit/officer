@@ -73,7 +73,8 @@ type LimitKey struct {
 // Policy returns the barrier policy, including the P&L axis where applicable.
 func (k LimitKey) Policy() string { return k.policy }
 
-// Mode returns the order-size mode, or an empty mode for other policies.
+// Mode returns the rule mode for policies identified by LimitPolicyHasMode,
+// or an empty mode for other policies.
 func (k LimitKey) Mode() RuleMode { return k.mode }
 
 // Scope returns the barrier's scope axis.
@@ -88,8 +89,12 @@ func (k LimitKey) AccountGroup() string { return k.accountGroup }
 // Asset returns the asset axis, or an empty string when absent.
 func (k LimitKey) Asset() string { return k.asset }
 
-func limitPolicyHasMode(policy string) bool {
-	return policy == PolicyOrderSizeLimit
+// LimitPolicyHasMode reports whether the policy's barrier identity includes a rule mode.
+func LimitPolicyHasMode(policy string) bool {
+	return policy == PolicyOrderSizeLimit || policy == PolicyRateLimit || policy == PolicyPositionLimit ||
+		policy == PolicySpotFundsPnlBoundsKillSwitch ||
+		policy == PolicySpotFundsUnrealizedPnlBoundsKillSwitch ||
+		policy == PolicySpotFundsTotalPnlBoundsKillSwitch
 }
 
 // NewLimitKey validates a barrier's identity, checking mode before scope and
@@ -98,12 +103,12 @@ func NewLimitKey(
 	policy string, mode RuleMode, scope LimitScope, account AccountID,
 	accountGroup string, asset string,
 ) (LimitKey, error) {
-	if limitPolicyHasMode(policy) {
-		if err := ValidateOrderSizeMode(mode); err != nil {
+	if LimitPolicyHasMode(policy) {
+		if err := ValidateRuleMode(mode); err != nil {
 			return LimitKey{}, err
 		}
 	} else if mode != "" {
-		return LimitKey{}, NewValidationError("/mode", "unsupported_value", "mode is only valid for order-size limits")
+		return LimitKey{}, NewValidationError("/mode", "unsupported_value", "policy does not support a rule mode")
 	}
 	if err := ValidateLimitScopeAndAxes(
 		policy, scope, account, asset, accountGroup,

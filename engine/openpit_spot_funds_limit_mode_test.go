@@ -22,6 +22,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -30,10 +31,9 @@ import (
 
 // newSpotFundsLimitModeTestEngine builds a real engine whose one account
 // carries the quote asset as its currency and holds no balance at all, with
-// the Spot Funds policy in TrackOnly when trackOnly and the given P&L-bounds
-// barriers.
+// the Spot Funds policy in the given mode and the given P&L-bounds barriers.
 func newSpotFundsLimitModeTestEngine(
-	t *testing.T, trackOnly bool, bounds ...domain.LimitSpotFundsPnlBounds,
+	t *testing.T, mode domain.SpotFundsLimitMode, bounds ...domain.LimitSpotFundsPnlBounds,
 ) *openPitEngine {
 	t.Helper()
 	acct := account(testAccount)
@@ -42,7 +42,7 @@ func newSpotFundsLimitModeTestEngine(
 		Assets:                   testAssets(),
 		Accounts:                 []domain.Account{acct},
 		SpotFundsPnlBoundsLimits: bounds,
-		SpotFundsTrackOnly:       trackOnly,
+		SpotFundsLimitMode:       mode,
 	})
 	if err != nil {
 		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
@@ -89,15 +89,72 @@ func requireTrackedFromZero(t *testing.T, result fwengine.OrderResult, err error
 
 func TestSpotFundsLimitMode_EnforceRefusesOrderFromZero(t *testing.T) {
 	t.Parallel()
-	e := newSpotFundsLimitModeTestEngine(t, false)
+	e := newSpotFundsLimitModeTestEngine(t, domain.SpotFundsLimitModeEnforce)
 
 	result, err := materializeOrderResult(e, testOrder())
 	requireInsufficientFunds(t, result, err)
 }
 
+func TestSpotFundsLimitMode_AllModesBuildAndLive(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode    domain.SpotFundsLimitMode
+		verdict domain.Verdict
+		review  domain.RuleMode
+	}{
+		{domain.SpotFundsLimitModeEnforce, domain.VerdictReject, ""},
+		{domain.SpotFundsLimitModeReviewWithHold, domain.VerdictReview, domain.RuleModeReviewWithHold},
+		{domain.SpotFundsLimitModeReviewWithoutHold, domain.VerdictReview, domain.RuleModeReviewWithoutHold},
+		{domain.SpotFundsLimitModeTrackOnly, domain.VerdictAccept, ""},
+	} {
+		for _, live := range []bool{false, true} {
+			path := "build"
+			if live {
+				path = "live"
+			}
+			t.Run(string(tc.mode)+"/"+path, func(t *testing.T) {
+				initial := tc.mode
+				if live {
+					initial = domain.SpotFundsLimitModeEnforce
+				}
+				e := newSpotFundsLimitModeTestEngine(t, initial)
+				before := e.async
+				if live {
+					if err := e.SetSpotFundsLimitMode(context.Background(), tc.mode); err != nil {
+						t.Fatal(err)
+					}
+				}
+				assertCountingLimitOrder(t, e, testOrder(), tc.verdict, tc.review, nameSpotFunds, domain.RejectCodeInsufficientFunds)
+				if e.async != before {
+					t.Fatal("live change replaced engine")
+				}
+			})
+		}
+	}
+}
+
+func TestSpotFundsLimitMode_InvalidBuildAndLive(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.SpotFundsLimitMode{"", "unknown"} {
+		t.Run(string(mode), func(t *testing.T) {
+			_, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{SpotFundsLimitMode: mode})
+			if err == nil || !strings.Contains(err.Error(), "unsupported spot funds limit mode") {
+				t.Fatalf("build mode %q = %v, want explicit mode error", mode, err)
+			}
+			e := newSpotFundsLimitModeTestEngine(t, domain.SpotFundsLimitModeEnforce)
+			if err := e.SetSpotFundsLimitMode(context.Background(), mode); err == nil ||
+				!strings.Contains(err.Error(), "unsupported spot funds limit mode") {
+				t.Fatalf("live mode %q = %v, want explicit mode error", mode, err)
+			}
+			out, err := materializeOrderResult(e, testOrder())
+			requireInsufficientFunds(t, out, err)
+		})
+	}
+}
+
 func TestSpotFundsLimitMode_TrackOnlyBuildAcceptsOrderFromZero(t *testing.T) {
 	t.Parallel()
-	e := newSpotFundsLimitModeTestEngine(t, true)
+	e := newSpotFundsLimitModeTestEngine(t, domain.SpotFundsLimitModeTrackOnly)
 
 	result, err := materializeOrderResult(e, testOrder())
 	requireTrackedFromZero(t, result, err)
@@ -105,27 +162,27 @@ func TestSpotFundsLimitMode_TrackOnlyBuildAcceptsOrderFromZero(t *testing.T) {
 
 func TestSpotFundsLimitMode_SetLiveSwitchesBothWays(t *testing.T) {
 	t.Parallel()
-	e := newSpotFundsLimitModeTestEngine(t, false)
+	e := newSpotFundsLimitModeTestEngine(t, domain.SpotFundsLimitModeEnforce)
 	ctx := context.Background()
 	asyncBefore := e.async
 
 	result, err := materializeOrderResult(e, testOrder())
 	requireInsufficientFunds(t, result, err)
 
-	if err := e.SetSpotFundsTrackOnly(ctx, true); err != nil {
-		t.Fatalf("SetSpotFundsTrackOnly(true): %v", err)
+	if err := e.SetSpotFundsLimitMode(ctx, domain.SpotFundsLimitModeTrackOnly); err != nil {
+		t.Fatalf("SetSpotFundsLimitMode(track_only): %v", err)
 	}
 	result, err = materializeOrderResult(e, testOrder())
 	requireTrackedFromZero(t, result, err)
 
-	if err := e.SetSpotFundsTrackOnly(ctx, false); err != nil {
-		t.Fatalf("SetSpotFundsTrackOnly(false): %v", err)
+	if err := e.SetSpotFundsLimitMode(ctx, domain.SpotFundsLimitModeEnforce); err != nil {
+		t.Fatalf("SetSpotFundsLimitMode(enforce): %v", err)
 	}
 	result, err = materializeOrderResult(e, testOrder())
 	requireInsufficientFunds(t, result, err)
 
 	if e.async != asyncBefore {
-		t.Fatal("SetSpotFundsTrackOnly replaced the engine handle, want a live change")
+		t.Fatal("SetSpotFundsLimitMode replaced the engine handle, want a live change")
 	}
 }
 
@@ -135,7 +192,7 @@ func TestSpotFundsLimitMode_SetLiveSwitchesBothWays(t *testing.T) {
 // TrackOnly refuses nothing on funds.
 func TestSpotFundsLimitMode_TrackOnlyKeepsPnlBarrier(t *testing.T) {
 	t.Parallel()
-	e := newSpotFundsLimitModeTestEngine(t, true, domain.LimitSpotFundsPnlBounds{
+	e := newSpotFundsLimitModeTestEngine(t, domain.SpotFundsLimitModeTrackOnly, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    domain.AccountID(testAccount),

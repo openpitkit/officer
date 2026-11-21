@@ -21,8 +21,8 @@
 
 import type {
   AdjustmentType,
-  OrderSizeLimitMode,
   ReviewMarkMode,
+  RuleMode,
   SpotFundsLimitMode,
 } from "../framework/registries/vocabulary";
 
@@ -240,6 +240,7 @@ export interface GroupListFilters extends PageRequest, SortSpec {
 
 /** Typed wire shape for a rate-limit barrier. */
 export interface RateLimit {
+  mode: RuleMode;
   scope: string;
   account: string;
   asset: string;
@@ -249,7 +250,7 @@ export interface RateLimit {
 
 /** Typed wire shape for an order-size barrier. */
 export interface OrderSizeLimit {
-  mode: OrderSizeLimitMode;
+  mode: RuleMode;
   scope: string;
   account: string;
   asset: string;
@@ -259,6 +260,7 @@ export interface OrderSizeLimit {
 
 /** Typed wire shape for a self-computed SpotFunds P&L-bounds barrier. */
 export interface SpotFundsPnlBoundsLimit {
+  mode: RuleMode;
   scope: string;
   account: string;
   accountGroup: string;
@@ -269,6 +271,7 @@ export interface SpotFundsPnlBoundsLimit {
 
 /** Stored position ceiling for one account and asset, as an exact decimal. */
 export interface PositionLimit {
+  mode: RuleMode;
   scope: string;
   account: string;
   asset: string;
@@ -289,7 +292,7 @@ export interface AccountLimits {
 /** All axes identifying a barrier; absent string axes are empty and mode is
  *  null for policies without a mode axis. */
 export interface LimitTarget {
-  mode: OrderSizeLimitMode | null;
+  mode: RuleMode | null;
   policy: string;
   scope: string;
   account: string;
@@ -355,7 +358,7 @@ export interface PolicyValues {
 /** One policy row from the unified, paged GET /limits list (the policyDTO wire
  *  shape). The `kind` selects which member of `values` is populated. */
 export interface Policy {
-  mode: OrderSizeLimitMode | null;
+  mode: RuleMode | null;
   kind: PolicyKind;
   scope: string;
   account: string;
@@ -377,7 +380,7 @@ export type PolicyFilter =
 
 /** Filter options accepted by the unified, paged GET /limits list. */
 export interface PolicyListFilters extends PageRequest, SortSpec {
-  mode?: OrderSizeLimitMode;
+  mode?: RuleMode;
   account?: string;
   accountGroup?: string;
   asset?: string;
@@ -456,8 +459,8 @@ export type { AdjustmentType };
 /** The funds-check mode; declared with SPOT_FUNDS_LIMIT_MODES, its one source. */
 export type { SpotFundsLimitMode };
 
-/** The barrier mode, declared with ORDER_SIZE_LIMIT_MODES, its one source. */
-export type { OrderSizeLimitMode };
+/** The barrier mode, declared with RULE_MODES, its one source. */
+export type { RuleMode };
 
 /** The request body captured on an adjustment record. */
 export interface AdjustmentRequest {

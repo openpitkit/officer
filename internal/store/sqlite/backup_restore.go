@@ -465,9 +465,9 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		}
 		accountID, assetID := ids.account, ids.asset
 		applied, err := rt.putLimit(ctx, key, ids,
-			`INSERT INTO limit_rate (scope, account_id, asset_id, max_orders, window)
-			 VALUES (?, ?, ?, ?, ?)`,
-			[]any{l.Scope, accountID, assetID, int64(l.MaxOrders), l.Window.String()},
+			`INSERT INTO limit_rate (scope, account_id, asset_id, max_orders, window, mode)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			[]any{l.Scope, accountID, assetID, int64(l.MaxOrders), l.Window.String(), l.Mode},
 		)
 		if err != nil {
 			return err
@@ -521,8 +521,8 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		}
 		accountID, assetID := ids.account, ids.asset
 		applied, err := rt.putLimit(ctx, key, ids,
-			`INSERT INTO limit_position (scope, account_id, asset_id, max_position) VALUES (?, ?, ?, ?)`,
-			[]any{l.Scope, accountID, assetID, l.MaxPosition},
+			`INSERT INTO limit_position (scope, account_id, asset_id, max_position, mode) VALUES (?, ?, ?, ?, ?)`,
+			[]any{l.Scope, accountID, assetID, l.MaxPosition, l.Mode},
 		)
 		if err != nil {
 			return err
@@ -559,11 +559,11 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 			key,
 			ids,
 			`INSERT INTO limit_spot_funds_pnl_bound
-				 (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				 (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound, mode)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			[]any{
 				l.Axis, l.Scope, ids.account, ids.group, currencyID,
-				nullableString(l.LowerBound), nullableString(l.UpperBound),
+				nullableString(l.LowerBound), nullableString(l.UpperBound), l.Mode,
 			},
 		)
 		if err != nil {

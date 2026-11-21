@@ -92,6 +92,241 @@ func TestDeleteOrderSizeLimitDefaultsToReject(t *testing.T) {
 	}
 }
 
+func TestCountingLimitRESTModes(t *testing.T) {
+	for _, policy := range []string{"rate", "position", "spot-funds-pnl-bounds", "spot-funds-unrealized-pnl-bounds", "spot-funds-total-pnl-bounds"} {
+		for _, mode := range []string{"absent", "", "reject", "review_with_hold", "review_without_hold", "unknown"} {
+			t.Run(policy+"/"+mode, func(t *testing.T) {
+				svc := newTestPolicyService(t)
+				router, err := newRouter(svc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body := map[string]any{"scope": "broker", "windowMs": 1000, "maxOrders": 10}
+				field := "rateLimit"
+				if policy == "position" {
+					field = "positionLimit"
+					body = map[string]any{"scope": "account_asset", "account": "acc-1", "asset": "AAPL", "maxPosition": "10"}
+					if rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/assets", `{"code":"AAPL"}`); rec.Code != http.StatusCreated {
+						t.Fatalf("create asset: %d %s", rec.Code, rec.Body)
+					}
+					if rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/accounts", `{"code":"acc-1"}`); rec.Code != http.StatusCreated {
+						t.Fatalf("create account: %d %s", rec.Code, rec.Body)
+					}
+				}
+				if strings.HasPrefix(policy, "spot-funds-") {
+					field = "spotFundsPnlBoundsLimit"
+					switch policy {
+					case "spot-funds-unrealized-pnl-bounds":
+						field = "spotFundsUnrealizedPnlBoundsLimit"
+					case "spot-funds-total-pnl-bounds":
+						field = "spotFundsTotalPnlBoundsLimit"
+					}
+					body = map[string]any{"scope": "global", "currency": "USD", "lowerBound": "-10"}
+					if rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/assets", `{"code":"USD"}`); rec.Code != http.StatusCreated {
+						t.Fatalf("create currency: %d %s", rec.Code, rec.Body)
+					}
+				}
+				if mode != "absent" {
+					body["mode"] = mode
+				}
+				raw, err := json.Marshal(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/limits/"+policy+"?missingAccount=reject", string(raw))
+				if mode == "unknown" {
+					if rec.Code != http.StatusUnprocessableEntity {
+						t.Fatalf("unknown mode = %d: %s", rec.Code, rec.Body)
+					}
+					problem := bodyMap(t, rec.Result())["errors"].([]any)[0].(map[string]any)
+					if problem["code"] != "validation" || problem["pointer"] != "/mode" {
+						t.Fatalf("mode problem = %v", problem)
+					}
+					return
+				}
+				wantMode := mode
+				if mode == "absent" || mode == "" {
+					wantMode = "reject"
+				}
+				if rec.Code != http.StatusCreated {
+					t.Fatalf("POST = %d: %s", rec.Code, rec.Body)
+				}
+				if got := bodyMap(t, rec.Result())[field].(map[string]any)["mode"]; got != wantMode {
+					t.Fatalf("mode = %v, want %s", got, wantMode)
+				}
+				duplicate := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/limits/"+policy+"?missingAccount=reject", string(raw))
+				if duplicate.Code != http.StatusConflict {
+					t.Fatalf("duplicate POST = %d: %s", duplicate.Code, duplicate.Body)
+				}
+			})
+		}
+	}
+}
+
+func TestCountingLimitRESTWriteAnswersOwnMode(t *testing.T) {
+	for _, tc := range []struct {
+		path, field, body, threshold string
+		reject, review               any
+	}{
+		{"rate", "rateLimit", `{"scope":"broker","windowMs":1000,"maxOrders":%v,"mode":%q}`, "maxOrders", float64(10), float64(5)},
+		{"position", "positionLimit", `{"scope":"account_asset","account":"acc-1","asset":"USD","maxPosition":%q,"mode":%q}`, "maxPosition", "10", "5"},
+		{"spot-funds-pnl-bounds", "spotFundsPnlBoundsLimit", `{"scope":"global","currency":"USD","lowerBound":%q,"mode":%q}`, "lowerBound", "-10", "-5"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			router, err := newRouter(newTestPolicyService(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/assets", `{"code":"USD"}`); rec.Code != http.StatusCreated {
+				t.Fatalf("create asset: %d %s", rec.Code, rec.Body)
+			}
+			if rec := callTestPolicy(t, router, "/api/v1", http.MethodPost, "/accounts", `{"code":"acc-1"}`); rec.Code != http.StatusCreated {
+				t.Fatalf("create account: %d %s", rec.Code, rec.Body)
+			}
+			path := "/limits/" + tc.path + "?missingAccount=reject"
+			for _, write := range []struct {
+				method, mode string
+				status       int
+				threshold    any
+			}{
+				{http.MethodPost, "reject", http.StatusCreated, tc.reject},
+				{http.MethodPost, "review_with_hold", http.StatusCreated, tc.review},
+				{http.MethodPut, "review_with_hold", http.StatusOK, tc.review},
+				{http.MethodPut, "reject", http.StatusOK, tc.reject},
+			} {
+				body := fmt.Sprintf(tc.body, write.threshold, write.mode)
+				rec := callTestPolicy(t, router, "/api/v1", write.method, path, body)
+				if rec.Code != write.status {
+					t.Fatalf("%s %s = %d, want %d: %s", write.method, write.mode, rec.Code, write.status, rec.Body)
+				}
+				barrier, _ := bodyMap(t, rec.Result())[tc.field].(map[string]any)
+				if barrier["mode"] != write.mode || barrier[tc.threshold] != write.threshold {
+					t.Fatalf("%s %s returned %v, want %s=%v", write.method, write.mode, barrier, tc.threshold, write.threshold)
+				}
+			}
+		})
+	}
+}
+
+func TestCountingLimitRESTFilterAndDelete(t *testing.T) {
+	for _, policy := range []string{domain.PolicyRateLimit, domain.PolicyPositionLimit,
+		domain.PolicySpotFundsPnlBoundsKillSwitch, domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch} {
+		for _, queryMode := range []string{"", "reject", "review_with_hold", "review_without_hold", "unknown"} {
+			t.Run(policy+"/"+queryMode, func(t *testing.T) {
+				router, realm := newRealServiceRouter(t)
+				if _, err := realm.CreateAsset(t.Context(), domain.Asset{Code: "AAPL"}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := realm.CreateAccount(t.Context(), domain.Account{Code: "acc-1"}); err != nil {
+					t.Fatal(err)
+				}
+				for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+					var err error
+					switch policy {
+					case domain.PolicyRateLimit:
+						err = realm.PutRateLimit(t.Context(), domain.LimitRate{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", Window: time.Second, MaxOrders: 10})
+					case domain.PolicyPositionLimit:
+						err = realm.PutPositionLimit(t.Context(), domain.LimitPosition{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10"})
+					default:
+						axis, ok := domain.SpotFundsPnlAxisOf(policy)
+						if !ok {
+							t.Fatal("missing P&L axis")
+						}
+						err = realm.PutSpotFundsPnlBoundsLimit(t.Context(), domain.LimitSpotFundsPnlBounds{Mode: mode, Axis: axis, Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-10"})
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				shortPolicy := "rate"
+				if policy == domain.PolicyPositionLimit {
+					shortPolicy = "position"
+				} else if axis, ok := domain.SpotFundsPnlAxisOf(policy); ok {
+					shortPolicy = "spot_funds_" + string(axis) + "_pnl_bounds"
+					if axis == domain.SpotFundsPnlAxisRealized {
+						shortPolicy = "spot_funds_pnl_bounds"
+					}
+				}
+				if queryMode != "" && queryMode != "unknown" {
+					rec := callTestPolicy(t, router, "/api/v1", http.MethodGet, "/limits?policy="+shortPolicy+"&mode="+queryMode, "")
+					if rec.Code != http.StatusOK {
+						t.Fatalf("GET = %d: %s", rec.Code, rec.Body)
+					}
+					body := bodyMap(t, rec.Result())
+					rows := body["policies"].([]any)
+					if len(rows) != 1 || body["total"] != float64(1) || rows[0].(map[string]any)["mode"] != queryMode {
+						t.Fatalf("mode-filtered list = %v", body)
+					}
+				}
+				deleteRouter, err := newRouter(&orderSizeDeleteService{fakeService: &fakeService{}, realm: realm})
+				if err != nil {
+					t.Fatal(err)
+				}
+				query := "/limits?policy=" + policy + "&scope=account_asset&account=acc-1&asset=AAPL"
+				if _, ok := domain.SpotFundsPnlAxisOf(policy); ok {
+					query = "/limits?policy=" + policy + "&scope=global"
+				}
+				if queryMode != "" {
+					query += "&mode=" + queryMode
+				}
+				rec := callTestPolicy(t, deleteRouter, "/api/v1", http.MethodDelete, query, "")
+				wantMode := domain.RuleMode(queryMode)
+				if wantMode == "" {
+					wantMode = domain.RuleModeReject
+				}
+				if queryMode == "unknown" {
+					if rec.Code != http.StatusUnprocessableEntity {
+						t.Fatalf("invalid delete = %d: %s", rec.Code, rec.Body)
+					}
+				} else if rec.Code != http.StatusNoContent {
+					t.Fatalf("DELETE = %d: %s", rec.Code, rec.Body)
+				}
+				var remaining []domain.KeyedLimit
+				switch policy {
+				case domain.PolicyRateLimit:
+					limits, err := realm.ListRateLimits(t.Context(), "")
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, limit := range limits {
+						remaining = append(remaining, limit)
+					}
+				case domain.PolicyPositionLimit:
+					limits, err := realm.ListPositionLimits(t.Context(), "")
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, limit := range limits {
+						remaining = append(remaining, limit)
+					}
+				default:
+					limits, err := realm.ListSpotFundsPnlBoundsLimits(t.Context(), "")
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, limit := range limits {
+						remaining = append(remaining, limit)
+					}
+				}
+				wantCount := 2
+				if queryMode == "unknown" {
+					wantCount = 3
+				}
+				if len(remaining) != wantCount {
+					t.Fatalf("remaining = %v", remaining)
+				}
+				for _, limit := range remaining {
+					key, err := limit.Key()
+					if err != nil || key.Mode() == wantMode {
+						t.Fatalf("remaining key = %v, %v", key, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestGetSpotFundsLimitMode(t *testing.T) {
 	trackOnly := domain.SpotFundsLimitModeState{Mode: domain.SpotFundsLimitModeTrackOnly, Stored: true}
 	for _, tc := range []struct {
@@ -192,6 +427,32 @@ func TestPutSpotFundsLimitMode(t *testing.T) {
 			const wantBody = `{"spotFundsLimitMode":{"scope":"global","mode":"track_only"}}`
 			if got := strings.TrimSpace(rec.Body.String()); got != wantBody {
 				t.Fatalf("body = %s, want %s", got, wantBody)
+			}
+		})
+	}
+}
+
+// TestSpotFundsLimitModeRESTReviewRoundTrip proves both review modes survive PUT and GET.
+func TestSpotFundsLimitModeRESTReviewRoundTrip(t *testing.T) {
+	router, _ := newRealServiceRouter(t)
+	const path = "/limits/spot-funds-limit-mode"
+	for _, mode := range []string{"review_with_hold", "review_without_hold"} {
+		t.Run(mode, func(t *testing.T) {
+			rec := callTestPolicy(t, router, "/api/v1", http.MethodPut, path, fmt.Sprintf(`{"scope":"global","mode":%q}`, mode))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("PUT = %d: %s", rec.Code, rec.Body)
+			}
+			stored, _ := bodyMap(t, rec.Result())["spotFundsLimitMode"].(map[string]any)
+			if stored["mode"] != mode || stored["scope"] != "global" {
+				t.Fatalf("PUT returned %v, want global %s", stored, mode)
+			}
+			rec = callTestPolicy(t, router, "/api/v1", http.MethodGet, path, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET = %d: %s", rec.Code, rec.Body)
+			}
+			state := bodyMap(t, rec.Result())
+			if state["mode"] != mode || state["stored"] != true {
+				t.Fatalf("GET returned %v, want stored %s", state, mode)
 			}
 		})
 	}
@@ -406,7 +667,7 @@ func TestListLimitsSpotFundsPnlBoundsValues(t *testing.T) {
 				Kind:         store.PolicyKindSpotFundsPnlBounds,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
-				SpotFundsPnlBounds: &domain.LimitSpotFundsPnlBounds{
+				SpotFundsPnlBounds: &domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:         domain.SpotFundsPnlAxisRealized,
 					Scope:        domain.ScopeAccountGroup,
 					AccountGroup: "desk-a",
@@ -742,7 +1003,7 @@ func TestPutRateLimit(t *testing.T) {
 	svc := &fakeService{
 		limits: node.AccountLimits{
 			RateLimits: []domain.LimitRate{
-				{
+				{Mode: domain.RuleModeReject,
 					Scope:     domain.ScopeAccountAsset,
 					Account:   "acc-1",
 					Asset:     "AAPL",
@@ -917,7 +1178,7 @@ func TestListLimitsModeValidation(t *testing.T) {
 	for _, query := range []string{
 		"mode=review_without_hold",
 		"policy=all&mode=review_without_hold",
-		"policy=rate&mode=review_without_hold",
+		"policy=rate&mode=unknown",
 		"policy=spot_funds_limit_mode&mode=reject",
 		"policy=order_size&mode=unknown",
 	} {
@@ -986,12 +1247,12 @@ func TestListLimitsModeFilter(t *testing.T) {
 func TestPutPositionLimit(t *testing.T) {
 	for _, value := range []string{"0", "123.000000000000000001"} {
 		t.Run(value, func(t *testing.T) {
-			limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: value}
+			limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: value}
 			stored := limit
 			stored.MaxPosition = "321.000000000000000002"
 			svc := &fakeService{limits: node.AccountLimits{PositionLimits: []domain.LimitPosition{
-				{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "BTC", MaxPosition: "1"},
-				{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "ETH", MaxPosition: "2"},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "BTC", MaxPosition: "1"},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "ETH", MaxPosition: "2"},
 				stored,
 			}}}
 			r, err := newRouter(svc)
@@ -1009,7 +1270,7 @@ func TestPutPositionLimit(t *testing.T) {
 			}
 			m := bodyMap(t, rec.Result())
 			position, ok := m["positionLimit"].(map[string]any)
-			if !ok || len(m) != 1 || len(position) != 4 || position["scope"] != "account_asset" || position["account"] != "acc-1" || position["asset"] != "BTC" || position["maxPosition"] != stored.MaxPosition {
+			if !ok || len(m) != 1 || len(position) != 5 || position["mode"] != "reject" || position["scope"] != "account_asset" || position["account"] != "acc-1" || position["asset"] != "BTC" || position["maxPosition"] != stored.MaxPosition {
 				t.Fatalf("unexpected persisted positionLimit: %v", m)
 			}
 		})
@@ -1019,7 +1280,7 @@ func TestPutPositionLimit(t *testing.T) {
 func TestPutPositionLimit_ValidationError(t *testing.T) {
 	for _, value := range []string{"-1", "not-a-decimal"} {
 		t.Run(value, func(t *testing.T) {
-			limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: value}
+			limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: value}
 			svc := &fakeService{putLimErr: limit.Validate()}
 			r, err := newRouter(svc)
 			if err != nil {
@@ -1074,7 +1335,7 @@ func TestPutPositionLimitReadBackError(t *testing.T) {
 func TestListLimitsPositionValues(t *testing.T) {
 	for _, policy := range []string{"position", "all"} {
 		t.Run(policy, func(t *testing.T) {
-			limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "123.000000000000000001"}
+			limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "123.000000000000000001"}
 			svc := &fakeService{policyRows: []store.PolicyListRow{{Kind: store.PolicyKindPosition, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset, Position: &limit}}}
 			r, err := newRouter(svc)
 			if err != nil {
@@ -1111,7 +1372,7 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 	svc := &fakeService{
 		limits: node.AccountLimits{
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-				{
+				{Mode: domain.RuleModeReject,
 					Axis:         domain.SpotFundsPnlAxisRealized,
 					Scope:        domain.ScopeAccountGroup,
 					AccountGroup: "desk-a",
@@ -1170,7 +1431,7 @@ func TestPutSpotFundsPnlBoundsLimit_Account(t *testing.T) {
 	svc := &fakeService{
 		limits: node.AccountLimits{
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-				{
+				{Mode: domain.RuleModeReject,
 					Axis:       domain.SpotFundsPnlAxisRealized,
 					Scope:      domain.ScopeAccount,
 					Account:    "acc-1",
@@ -1525,7 +1786,7 @@ func TestDeletePositionLimit(t *testing.T) {
 			if rec.Code != tc.status {
 				t.Fatalf("want %d, got %d body=%s", tc.status, rec.Code, rec.Body)
 			}
-			want := node.LimitTarget{Policy: domain.PolicyPositionLimit, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC"}
+			want := node.LimitTarget{Mode: domain.RuleModeReject, Policy: domain.PolicyPositionLimit, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC"}
 			if svc.deleteLimitTarget != want {
 				t.Fatalf("delete target = %+v, want %+v", svc.deleteLimitTarget, want)
 			}
@@ -1574,15 +1835,15 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 	// with the camelCase wire keys the contract requires.
 	limits := node.AccountLimits{
 		RateLimits: []domain.LimitRate{
-			{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
 				Window: time.Second, MaxOrders: 100},
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
 			{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "500", MaxNotional: "50000"},
 		},
-		PositionLimits: []domain.LimitPosition{{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "1.000000000000000001"}},
+		PositionLimits: []domain.LimitPosition{{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "1.000000000000000001"}},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-1",
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-1",
 				Currency: "USD", LowerBound: "-1000", UpperBound: "5000"},
 		},
 		SpotFundsLimitModes: []domain.LimitSpotFundsLimitMode{
@@ -1625,7 +1886,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 		t.Fatalf("want 1 position limit, got %v", m["positionLimits"])
 	}
 	position := positions[0].(map[string]any)
-	if len(position) != 4 || position["scope"] != "account_asset" || position["account"] != "acc-1" || position["asset"] != "BTC" || position["maxPosition"] != "1.000000000000000001" {
+	if len(position) != 5 || position["mode"] != "reject" || position["scope"] != "account_asset" || position["account"] != "acc-1" || position["asset"] != "BTC" || position["maxPosition"] != "1.000000000000000001" {
 		t.Fatalf("unexpected position limit: %v", position)
 	}
 	spotFundsPnls, _ := m["spotFundsPnlBoundsLimits"].([]any)

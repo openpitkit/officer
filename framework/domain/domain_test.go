@@ -845,7 +845,7 @@ func TestAssetEngineIDIsNotSerialized(t *testing.T) {
 func TestSpotFundsPnlBoundsAxisIsSerialized(t *testing.T) {
 	t.Parallel()
 
-	limit := domain.LimitSpotFundsPnlBounds{
+	limit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisUnrealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -855,7 +855,7 @@ func TestSpotFundsPnlBoundsAxisIsSerialized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal LimitSpotFundsPnlBounds: %v", err)
 	}
-	const want = `{"Axis":"unrealized","Scope":"global","Account":"",` +
+	const want = `{"Mode":"reject","Axis":"unrealized","Scope":"global","Account":"",` +
 		`"AccountGroup":"","Currency":"USD","LowerBound":"-1000",` +
 		`"UpperBound":""}`
 	if string(payload) != want {
@@ -1419,23 +1419,23 @@ func TestLimitRate_Validate(t *testing.T) {
 		name  string
 		limit domain.LimitRate
 	}{
-		{"broker", domain.LimitRate{
+		{"broker", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second}},
-		{"asset", domain.LimitRate{
+		{"asset", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAsset, Asset: "AAPL", MaxOrders: 1, Window: 24 * time.Hour}},
-		{"account", domain.LimitRate{
+		{"account", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccount, Account: "acc-1",
 			MaxOrders: 1_000_000_000, Window: 500 * time.Millisecond}},
-		{"account_asset", domain.LimitRate{
+		{"account_asset", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "MSFT",
 			MaxOrders: 50, Window: time.Minute}},
 		// Officer enforces axis presence only; the asset/account format is parsed
 		// and rejected downstream by the engine barrier build, so an interior-space
 		// or over-length asset passes Officer's scope/axes check.
-		{"asset whitespace", domain.LimitRate{
+		{"asset whitespace", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAsset, Asset: "B T C",
 			MaxOrders: 10, Window: time.Second}},
-		{"asset over 32", domain.LimitRate{
+		{"asset over 32", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAsset, Asset: strings.Repeat("X", 33),
 			MaxOrders: 10, Window: time.Second}},
 	}
@@ -1452,25 +1452,25 @@ func TestLimitRate_Validate(t *testing.T) {
 		name  string
 		limit domain.LimitRate
 	}{
-		{"max_orders zero", domain.LimitRate{
+		{"max_orders zero", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxOrders: 0, Window: time.Second}},
-		{"max_orders over 1e9", domain.LimitRate{
+		{"max_orders over 1e9", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxOrders: 1_000_000_001, Window: time.Second}},
-		{"window zero", domain.LimitRate{
+		{"window zero", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxOrders: 10, Window: 0}},
-		{"window negative", domain.LimitRate{
+		{"window negative", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxOrders: 10, Window: -time.Second}},
-		{"window over 24h", domain.LimitRate{
+		{"window over 24h", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxOrders: 10, Window: 25 * time.Hour}},
-		{"scope account_asset missing asset", domain.LimitRate{
+		{"scope account_asset missing asset", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: "acc-1",
 			MaxOrders: 10, Window: time.Second}},
-		{"scope broker with account", domain.LimitRate{
+		{"scope broker with account", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, Account: "acc-1",
 			MaxOrders: 10, Window: time.Second}},
-		{"scope asset missing asset", domain.LimitRate{
+		{"scope asset missing asset", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAsset, MaxOrders: 10, Window: time.Second}},
-		{"account missing for account scope", domain.LimitRate{
+		{"account missing for account scope", domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccount, MaxOrders: 10, Window: time.Second}},
 	}
 	for _, tc := range bad {
@@ -1598,7 +1598,7 @@ func TestLimitOrderSize_ValidateMode(t *testing.T) {
 
 func TestLimitPositionValidate(t *testing.T) {
 	t.Parallel()
-	base := domain.LimitPosition{
+	base := domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "100",
 	}
 	for _, value := range []string{"100", "10.00000001", "0", "0.1234567890123456789012345678"} {
@@ -1728,20 +1728,20 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 		name  string
 		limit domain.LimitSpotFundsPnlBounds
 	}{
-		{"global", domain.LimitSpotFundsPnlBounds{
+		{"global", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeGlobal,
 			Currency:   "USD",
 			LowerBound: "-1000",
 		}},
-		{"account_group", domain.LimitSpotFundsPnlBounds{
+		{"account_group", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			Currency:     "USD",
 			UpperBound:   "500",
 		}},
-		{"account", domain.LimitSpotFundsPnlBounds{
+		{"account", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
@@ -1763,13 +1763,13 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 		name  string
 		limit domain.LimitSpotFundsPnlBounds
 	}{
-		{"missing group", domain.LimitSpotFundsPnlBounds{
+		{"missing group", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccountGroup,
 			Currency:   "USD",
 			LowerBound: "-1",
 		}},
-		{"account group on account rejected", domain.LimitSpotFundsPnlBounds{
+		{"account group on account rejected", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccount,
 			Account:      "acc-1",
@@ -1777,30 +1777,30 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 			Currency:     "USD",
 			LowerBound:   "-1",
 		}},
-		{"neither bound", domain.LimitSpotFundsPnlBounds{
+		{"neither bound", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:     domain.SpotFundsPnlAxisRealized,
 			Scope:    domain.ScopeGlobal,
 			Currency: "USD",
 		}},
-		{"lower greater than upper", domain.LimitSpotFundsPnlBounds{
+		{"lower greater than upper", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeGlobal,
 			Currency:   "USD",
 			LowerBound: "10",
 			UpperBound: "1",
 		}},
-		{"global missing currency", domain.LimitSpotFundsPnlBounds{
+		{"global missing currency", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeGlobal,
 			LowerBound: "-1",
 		}},
-		{"account group missing currency", domain.LimitSpotFundsPnlBounds{
+		{"account group missing currency", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			LowerBound:   "-1",
 		}},
-		{"account missing currency", domain.LimitSpotFundsPnlBounds{
+		{"account missing currency", domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
@@ -1820,7 +1820,7 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 func TestLimitSpotFundsPnlBounds_EitherOrValidationUsesRequestRoot(t *testing.T) {
 	t.Parallel()
 
-	err := (domain.LimitSpotFundsPnlBounds{
+	err := (domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD",
 	}).Validate()
@@ -1834,7 +1834,7 @@ func TestLimitSpotFundsPnlBounds_EitherOrValidationUsesRequestRoot(t *testing.T)
 		t.Fatalf("neither bound: constraint = %q, want empty", got)
 	}
 
-	err = (domain.LimitSpotFundsPnlBounds{
+	err = (domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -1870,7 +1870,7 @@ func TestLimitSpotFundsPnlBounds_ValidateRefusesHugeExponent(t *testing.T) {
 			t.Parallel()
 			var err error
 			requireWithinASecond(t, "Validate", func() {
-				err = (domain.LimitSpotFundsPnlBounds{
+				err = (domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeGlobal, Currency: "USD",
 					LowerBound: tc.lower, UpperBound: tc.upper,
@@ -1931,7 +1931,7 @@ func TestLimitSpotFundsPnlBounds_ValidateTakesEngineWritingsOnly(t *testing.T) {
 		} {
 			t.Run(bound.name+"="+tc.value, func(t *testing.T) {
 				t.Parallel()
-				err := (domain.LimitSpotFundsPnlBounds{
+				err := (domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeGlobal, Currency: "USD",
 					LowerBound: bound.lower, UpperBound: bound.upper,

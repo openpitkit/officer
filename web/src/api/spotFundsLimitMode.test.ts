@@ -18,7 +18,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { fetchSpotFundsLimitMode } from "@/api/spotFundsLimitMode";
-import type { SpotFundsLimitMode } from "@/api/types";
 import { createApiClient } from "@/framework";
 import { jsonResponse } from "@/test/apiClient";
 
@@ -39,7 +38,7 @@ function clientAnswering(body: unknown) {
 }
 
 describe("fetchSpotFundsLimitMode", () => {
-  it.each<SpotFundsLimitMode>(["enforce", "track_only"])(
+  it.each(["enforce", "review_with_hold", "review_without_hold", "track_only"])(
     "decodes %s and the account list from the configured base URL",
     async (mode) => {
       const answer = { ...state, mode };

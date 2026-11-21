@@ -51,7 +51,7 @@
     "pnlRequires": "{{policy}} требует lower_bound или upper_bound",
     "pnlBoundOrder": "lower_bound должен быть <= upper_bound",
     "modeRequired": "выберите режим лимита средств",
-    "orderSizeModeInvalid": "выберите режим размера ордера"
+    "ruleModeInvalid": "выберите режим барьера"
   },
   "password": {
     "mismatch": "Пароли не совпадают."

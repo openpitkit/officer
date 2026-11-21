@@ -141,10 +141,12 @@ import {
 } from "../../api/spotFundsPnlPolicies";
 import {
   ADJUSTMENT_TYPES,
-  isOrderSizeLimitMode,
   isReviewMarkMode,
+  isRuleMode,
   isSpotFundsLimitMode,
-  type OrderSizeLimitMode,
+  limitPolicyHasMode,
+  SPOT_FUNDS_LIMIT_MODES,
+  type RuleMode,
   type SpotFundsLimitMode,
 } from "../registries/vocabulary";
 import { isRfc3339Time } from "./rfc3339";
@@ -871,6 +873,7 @@ function normalizeLimit(v: unknown): Limit {
 function normalizeRateLimit(v: unknown): RateLimit {
   const o = isObject(v) ? v : {};
   return {
+    mode: requireRuleMode(o),
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     asset: asString(pick(o, "asset", "Asset")),
@@ -882,7 +885,7 @@ function normalizeRateLimit(v: unknown): RateLimit {
 function normalizeOrderSizeLimit(v: unknown): OrderSizeLimit {
   const o = isObject(v) ? v : {};
   return {
-    mode: requireOrderSizeLimitMode(o),
+    mode: requireRuleMode(o),
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     asset: asString(pick(o, "asset", "Asset")),
@@ -898,6 +901,7 @@ function normalizeOrderSizeLimit(v: unknown): OrderSizeLimit {
 function normalizeSpotFundsPnlBoundsLimit(v: unknown): SpotFundsPnlBoundsLimit {
   const o = isObject(v) ? v : {};
   return {
+    mode: requireRuleMode(o),
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
@@ -920,6 +924,7 @@ function normalizePositionLimit(v: unknown): PositionLimit {
     );
   }
   return {
+    mode: requireRuleMode(v),
     scope: requireStringField(v, "Position limit scope", "scope"),
     account: requireStringField(v, "Position limit account", "account"),
     asset: requireStringField(v, "Position limit asset", "asset"),
@@ -970,7 +975,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
   return [
     ...v.rateLimits.map((limit) => ({
       policy: "rate_limit",
-      mode: null,
+      mode: limit.mode,
       scope: limit.scope,
       account: limit.account,
       accountGroup: "",
@@ -994,7 +999,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
     })),
     ...v.positionLimits.map((limit) => ({
       policy: "position_limit",
-      mode: null,
+      mode: limit.mode,
       scope: limit.scope,
       account: limit.account,
       accountGroup: "",
@@ -1004,7 +1009,7 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
     ...SPOT_FUNDS_PNL_POLICY_IDS.flatMap((policy) =>
       v[SPOT_FUNDS_PNL_POLICIES[policy].listKey].map((limit) => ({
         policy,
-        mode: null,
+        mode: limit.mode,
         scope: limit.scope,
         account: limit.account,
         accountGroup: limit.accountGroup,
@@ -1054,24 +1059,21 @@ function requireSpotFundsLimitMode(obj: Json): SpotFundsLimitMode {
   return mode;
 }
 
-/** A missing or unknown order-size mode means a malformed response. */
-function requireOrderSizeLimitMode(obj: Json): OrderSizeLimitMode {
+/** A missing or unknown rule mode means a malformed response. */
+function requireRuleMode(obj: Json): RuleMode {
   const mode = pick(obj, "mode", "Mode");
-  if (!isOrderSizeLimitMode(mode)) {
+  if (!isRuleMode(mode)) {
     throw new ApiError(
-      "Order-size limit mode field in the API response is missing or unknown",
+      "Limit rule mode field in the API response is missing or unknown",
       "internal",
     );
   }
   return mode;
 }
 
-/** A response needs a known order-size mode; other policies must carry null. */
-function requireLimitMode(
-  obj: Json,
-  policy: string,
-): OrderSizeLimitMode | null {
-  if (policy === "order_size_limit") return requireOrderSizeLimitMode(obj);
+/** The rule-mode axis is null for policies whose key does not include it. */
+function requireLimitMode(obj: Json, policy: string): RuleMode | null {
+  if (limitPolicyHasMode(policy)) return requireRuleMode(obj);
   if (pick(obj, "mode", "Mode") !== null) {
     throw new ApiError(
       `Limit mode field for ${policy} in the API response must be null`,
@@ -1267,7 +1269,7 @@ function limitSpotFundsMode(limit: Limit): SpotFundsLimitMode {
   const mode = limit.values.mode;
   if (!isSpotFundsLimitMode(mode)) {
     throw new ApiError(
-      'Spot Funds limit mode must be "enforce" or "track_only"',
+      `Spot Funds limit mode must be one of: ${SPOT_FUNDS_LIMIT_MODES.join(", ")}`,
       "validation",
       400,
     );
@@ -1280,6 +1282,13 @@ function limitEndpointBody(
   limit: Limit,
   missingAccount: MissingAccountPolicy,
 ): { path: string; body: unknown } {
+  if (limitPolicyHasMode(limit.policy) && !isRuleMode(limit.mode)) {
+    throw new ApiError(
+      "Limit rule mode is missing or unknown",
+      "validation",
+      400,
+    );
+  }
   // Only an account-carrying scope names an account the backend could need to
   // create or reject; a broker/asset/group scope must not send the parameter
   // at all, since the backend ignores it there.
@@ -1294,6 +1303,7 @@ function limitEndpointBody(
         scope: limit.scope,
         account: limit.account,
         accountGroup: limit.accountGroup,
+        mode: limit.mode,
         currency: limit.values.currency,
         lowerBound: limit.values.lower_bound ?? "",
         upperBound: limit.values.upper_bound ?? "",
@@ -1317,16 +1327,10 @@ function limitEndpointBody(
           asset: limit.asset,
           windowMs: limitWindowMs(limit),
           maxOrders: limitMaxOrders(limit),
+          mode: limit.mode,
         },
       };
     case "order_size_limit":
-      if (!isOrderSizeLimitMode(limit.mode)) {
-        throw new ApiError(
-          "Order-size limit mode is missing or unknown",
-          "validation",
-          400,
-        );
-      }
       return {
         path: `${client.baseUrl}/limits/order-size${query}`,
         body: {
@@ -1346,6 +1350,7 @@ function limitEndpointBody(
           account: limit.account,
           asset: limit.asset,
           maxPosition: limit.values.max_position,
+          mode: limit.mode,
         },
       };
     default:
@@ -5041,10 +5046,10 @@ async function deleteLimit(
     policy: target.policy,
     scope: target.scope,
   });
-  if (target.policy === "order_size_limit") {
-    if (!isOrderSizeLimitMode(target.mode)) {
+  if (limitPolicyHasMode(target.policy)) {
+    if (!isRuleMode(target.mode)) {
       throw new ApiError(
-        "Order-size limit delete target mode is missing or unknown",
+        "Limit delete target rule mode is missing or unknown",
         "validation",
       );
     }

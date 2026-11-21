@@ -45,6 +45,7 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -340,7 +341,7 @@ func testResolver(codes ...string) idResolver {
 func rateLimit(
 	scope domain.LimitScope, acct, asset string, maxOrders uint64, window time.Duration,
 ) domain.LimitRate {
-	return domain.LimitRate{
+	return domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     scope,
 		Account:   domain.AccountID(acct),
 		Asset:     asset,
@@ -753,25 +754,41 @@ func TestOrderSizeAxes_RejectsDuplicateCapForSDKKey(t *testing.T) {
 func TestRateLimitAxes_AllAxes(t *testing.T) {
 	t.Parallel()
 	res := testResolver("acc-1")
-	limits := []domain.LimitRate{
-		rateLimit(domain.ScopeBroker, "", "", 1000, time.Minute),
-		rateLimit(domain.ScopeAsset, "", "USD", 500, time.Minute),
-		rateLimit(domain.ScopeAccount, "acc-1", "", 200, time.Minute),
-		rateLimit(domain.ScopeAccountAsset, "acc-1", "USD", 100, time.Minute),
-	}
-	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits, res)
-	if err != nil {
-		t.Fatalf("rateLimitAxes: %v", err)
-	}
-	if len(broker) != 1 {
-		t.Fatalf("want broker barrier")
-	}
-	if assets == nil || accounts == nil || accountAssets == nil {
-		t.Fatalf("axes must be non-nil so Configure touches each axis")
-	}
-	if len(assets) != 1 || len(accounts) != 1 || len(accountAssets) != 1 {
-		t.Fatalf("axis counts wrong: %d %d %d",
-			len(assets), len(accounts), len(accountAssets))
+	for _, tc := range []struct {
+		mode    domain.RuleMode
+		sdkMode reject.RuleMode
+	}{
+		{domain.RuleModeReject, reject.RuleModeReject},
+		{domain.RuleModeReviewWithHold, reject.RuleModeReviewWithHold},
+		{domain.RuleModeReviewWithoutHold, reject.RuleModeReviewWithoutHold},
+	} {
+		limits := []domain.LimitRate{
+			rateLimit(domain.ScopeBroker, "", "", 1000, time.Minute),
+			rateLimit(domain.ScopeAsset, "", "USD", 500, time.Minute),
+			rateLimit(domain.ScopeAccount, "acc-1", "", 200, time.Minute),
+			rateLimit(domain.ScopeAccountAsset, "acc-1", "USD", 100, time.Minute),
+		}
+		for i := range limits {
+			limits[i].Mode = tc.mode
+		}
+		broker, assets, accounts, accountAssets, err := rateLimitAxes(limits, res)
+		if err != nil {
+			t.Fatalf("rateLimitAxes: %v", err)
+		}
+		if len(broker) != 1 {
+			t.Fatalf("want broker barrier")
+		}
+		if assets == nil || accounts == nil || accountAssets == nil {
+			t.Fatalf("axes must be non-nil so Configure touches each axis")
+		}
+		if len(assets) != 1 || len(accounts) != 1 || len(accountAssets) != 1 {
+			t.Fatalf("axis counts wrong: %d %d %d",
+				len(assets), len(accounts), len(accountAssets))
+		}
+		if broker[0].Mode != tc.sdkMode || assets[0].Mode != tc.sdkMode ||
+			accounts[0].Mode != tc.sdkMode || accountAssets[0].Mode != tc.sdkMode {
+			t.Fatalf("mode %s not mapped on every rate axis: %+v %+v %+v %+v", tc.mode, broker, assets, accounts, accountAssets)
+		}
 	}
 }
 
@@ -796,18 +813,51 @@ func TestOrderSizeAxes_EmptyAxesNonNil(t *testing.T) {
 }
 
 // TestRateLimitAxes_SecondBrokerBarrierIsError checks the mapper itself refuses
-// a second broker barrier: Officer stores at most one broker barrier.
+// a second broker barrier of one mode: Officer stores at most one per mode.
 func TestRateLimitAxes_SecondBrokerBarrierIsError(t *testing.T) {
 	t.Parallel()
-	_, _, _, _, err := rateLimitAxes([]domain.LimitRate{
-		rateLimit(domain.ScopeBroker, "", "", 1000, time.Minute),
-		rateLimit(domain.ScopeBroker, "", "", 10, time.Minute),
-	}, testResolver())
-	if err == nil {
-		t.Fatal("want error for a second broker barrier, got nil")
+	for _, mode := range []domain.RuleMode{
+		domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold,
+	} {
+		first := rateLimit(domain.ScopeBroker, "", "", 1000, time.Minute)
+		first.Mode = mode
+		second := first
+		second.MaxOrders = 10
+		_, _, _, _, err := rateLimitAxes([]domain.LimitRate{
+			first, second,
+		}, testResolver())
+		if err == nil {
+			t.Fatal("want error for a second broker barrier, got nil")
+		}
+		if !strings.Contains(err.Error(), "more than one broker barrier") {
+			t.Fatalf("error = %v, want more than one broker barrier", err)
+		}
+		if !strings.Contains(err.Error(), string(mode)) {
+			t.Fatalf("duplicate error does not identify mode %s: %v", mode, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "more than one broker barrier") {
-		t.Fatalf("error = %v, want more than one broker barrier", err)
+}
+
+func TestRateLimitAxes_BrokerModesCoexist(t *testing.T) {
+	t.Parallel()
+	var limits []domain.LimitRate
+	for _, mode := range []domain.RuleMode{
+		domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold,
+	} {
+		limit := rateLimit(domain.ScopeBroker, "", "", 10, time.Minute)
+		limit.Mode = mode
+		limits = append(limits, limit)
+	}
+	broker, _, _, _, err := rateLimitAxes(limits, testResolver())
+	if err != nil || len(broker) != 3 {
+		t.Fatalf("broker modes = %+v, %v", broker, err)
+	}
+	for i, mode := range []reject.RuleMode{
+		reject.RuleModeReject, reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold,
+	} {
+		if broker[i].Mode != mode {
+			t.Fatalf("broker[%d].Mode = %v, want %v", i, broker[i].Mode, mode)
+		}
 	}
 }
 
@@ -856,7 +906,7 @@ func TestSplitOrderSizeLimits_RefusesUnsupportedMode(t *testing.T) {
 		if err == nil {
 			t.Fatalf("mode %q split; want explicit unsupported-mode error", mode)
 		}
-		for _, want := range []string{fmt.Sprintf("%q", mode), string(limit.Scope), limit.Account.String(), limit.Asset} {
+		for _, want := range []string{"engine: order_size_limit:", fmt.Sprintf("%q", mode), string(limit.Scope), limit.Account.String(), limit.Asset} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error %q does not name %q", err, want)
 			}
@@ -867,23 +917,122 @@ func TestSplitOrderSizeLimits_RefusesUnsupportedMode(t *testing.T) {
 	}
 }
 
+func TestSpotFundsLimitModeMapping(t *testing.T) {
+	for _, tc := range []struct {
+		mode domain.SpotFundsLimitMode
+		want policies.SpotFundsLimitMode
+	}{
+		{domain.SpotFundsLimitModeEnforce, policies.SpotFundsLimitModeEnforce},
+		{domain.SpotFundsLimitModeReviewWithHold, policies.SpotFundsLimitModeReviewWithHold},
+		{domain.SpotFundsLimitModeReviewWithoutHold, policies.SpotFundsLimitModeReviewWithoutHold},
+		{domain.SpotFundsLimitModeTrackOnly, policies.SpotFundsLimitModeTrackOnly},
+	} {
+		got, err := spotFundsLimitMode(tc.mode)
+		if err != nil || got != tc.want {
+			t.Fatalf("map %q = %v, %v; want %v", tc.mode, got, err, tc.want)
+		}
+	}
+	for _, mode := range []domain.SpotFundsLimitMode{"", "unknown"} {
+		if _, err := spotFundsLimitMode(mode); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q", mode)) {
+			t.Fatalf("map %q = %v, want explicit error naming mode", mode, err)
+		}
+	}
+}
+
 // TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError checks the mapper itself
-// refuses a second global barrier: Officer stores at most one per axis.
+// refuses a second global barrier of one mode: Officer stores at most one per axis and mode.
 func TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError(t *testing.T) {
 	t.Parallel()
-	_, _, _, err := spotFundsPnlBoundsAxes(
-		domain.SpotFundsPnlAxisRealized,
-		[]domain.LimitSpotFundsPnlBounds{
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000"},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
-		},
-		testResolver(),
-	)
-	if err == nil {
-		t.Fatal("want error for a second global barrier, got nil")
+	for _, axis := range []domain.SpotFundsPnlAxis{
+		domain.SpotFundsPnlAxisRealized, domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal,
+	} {
+		for _, mode := range []domain.RuleMode{
+			domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold,
+		} {
+			_, _, _, err := spotFundsPnlBoundsAxes(
+				axis,
+				[]domain.LimitSpotFundsPnlBounds{
+					{Mode: mode, Axis: axis, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000"},
+					{Mode: mode, Axis: axis, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+				},
+				testResolver(),
+			)
+			if err == nil {
+				t.Fatal("want error for a second global barrier, got nil")
+			}
+			if !strings.Contains(err.Error(), "more than one global barrier") {
+				t.Fatalf("error = %v, want more than one global barrier", err)
+			}
+			if !strings.Contains(err.Error(), string(mode)) || !strings.Contains(err.Error(), axis.Policy()) {
+				t.Fatalf("duplicate error does not identify axis %s and mode %s: %v", axis, mode, err)
+			}
+		}
 	}
-	if !strings.Contains(err.Error(), "more than one global barrier") {
-		t.Fatalf("error = %v, want more than one global barrier", err)
+}
+
+func TestSpotFundsPnlBoundsAxes_AllModesAndAxes(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver([]domain.Account{account("acc-1")},
+		[]domain.AccountGroup{{Code: "desk-a", EngineGroupID: 7}}, testAssets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var limits []domain.LimitSpotFundsPnlBounds
+	for _, axis := range []domain.SpotFundsPnlAxis{
+		domain.SpotFundsPnlAxisRealized, domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal,
+	} {
+		for _, mode := range []domain.RuleMode{
+			domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold,
+		} {
+			for _, scope := range []domain.LimitScope{domain.ScopeGlobal, domain.ScopeAccountGroup, domain.ScopeAccount} {
+				limit := domain.LimitSpotFundsPnlBounds{
+					Axis: axis, Mode: mode, Scope: scope, Currency: "USD", LowerBound: "-100",
+				}
+				if scope == domain.ScopeAccount {
+					limit.Account = "acc-1"
+				}
+				if scope == domain.ScopeAccountGroup {
+					limit.AccountGroup = "desk-a"
+				}
+				limits = append(limits, limit)
+			}
+		}
+	}
+	for _, axis := range []domain.SpotFundsPnlAxis{
+		domain.SpotFundsPnlAxisRealized, domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal,
+	} {
+		global, groups, accounts, err := spotFundsPnlBoundsAxes(axis, limits, res)
+		if err != nil || len(global) != 3 || len(groups) != 3 || len(accounts) != 3 {
+			t.Fatalf("axis %s barriers = %+v %+v %+v, %v", axis, global, groups, accounts, err)
+		}
+		for i, mode := range []reject.RuleMode{
+			reject.RuleModeReject, reject.RuleModeReviewWithHold, reject.RuleModeReviewWithoutHold,
+		} {
+			if global[i].Mode != mode || groups[i].Barrier.Mode != mode || accounts[i].Barrier.Mode != mode {
+				t.Fatalf("axis %s mode %v not mapped on all scopes: %+v %+v %+v", axis, mode, global, groups, accounts)
+			}
+		}
+	}
+}
+
+func TestCountingLimitMappings_RejectUnknownModes(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.RuleMode{"", "unknown"} {
+		rate := rateLimit(domain.ScopeBroker, "", "", 10, time.Minute)
+		rate.Mode = mode
+		_, _, _, _, rateErr := rateLimitAxes([]domain.LimitRate{rate}, testResolver())
+		_, _, _, pnlErr := spotFundsPnlBoundsAxes(domain.SpotFundsPnlAxisRealized,
+			[]domain.LimitSpotFundsPnlBounds{{Mode: mode, Axis: domain.SpotFundsPnlAxisRealized,
+				Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"}}, testResolver())
+		position := positionLimit("acc-1", "AAPL", "10")
+		position.Mode = mode
+		_, positionErr := positionLimitValues([]domain.LimitPosition{position}, testResolver("acc-1"))
+		for _, err := range []error{rateErr, pnlErr, positionErr} {
+			if err == nil || !strings.Contains(err.Error(), "unsupported rule mode") ||
+				!strings.Contains(err.Error(), fmt.Sprintf("%q", mode)) {
+				t.Fatalf("mode %q: error = %v, want explicit ruleMode error", mode, err)
+			}
+		}
 	}
 }
 
@@ -900,20 +1049,20 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 	global, groups, accounts, err := spotFundsPnlBoundsAxes(
 		domain.SpotFundsPnlAxisRealized,
 		[]domain.LimitSpotFundsPnlBounds{
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   "USD",
 				LowerBound: "-1000",
 			},
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
 				Currency:     "EUR",
 				UpperBound:   "500",
 			},
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    "acc-1",
@@ -962,10 +1111,11 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:          testAssets(),
-		Accounts:        []domain.Account{account("acc-1")},
-		RateLimits:      []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
-		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
+		RateLimits:         []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
+		OrderSizeLimits:    []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
 	}
 	res, err := newIDResolver(snap.Accounts, snap.Groups, snap.Assets)
 	if err != nil {
@@ -1807,7 +1957,8 @@ func TestApplyCurrenciesCallsAccountAndGroupTiers(t *testing.T) {
 		t.Fatalf("group id: %v", err)
 	}
 	snap := fwengine.Snapshot{
-		Assets: testAssets(),
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
 		Accounts: []domain.Account{
 			{
 				Code:            "acc-1",
@@ -1889,9 +2040,10 @@ func (h *fakeCurrencyAccounts) SetCurrency(
 func TestOpenPitEngineBuilder_SeedsFromSnapshot(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:     testAssets(),
-		Accounts:   []domain.Account{blockedAccount("acc-1", "risk"), account("acc-2")},
-		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{blockedAccount("acc-1", "risk"), account("acc-2")},
+		RateLimits:         []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
 	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
@@ -1928,9 +2080,10 @@ func TestOpenPitEngineBuilder_SeedsFromSnapshot(t *testing.T) {
 func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1")},
-		Balances: []domain.Balance{fundedBalance("acc-1", "USD", "10000")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
+		Balances:           []domain.Balance{fundedBalance("acc-1", "USD", "10000")},
 		RateLimits: []domain.LimitRate{
 			rateLimit(domain.ScopeBroker, "", "", 100, time.Minute),
 			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Minute),
@@ -1968,8 +2121,9 @@ func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:          testAssets(),
-		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		OrderSizeLimits:    []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
 	}
 	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
@@ -1992,7 +2146,8 @@ func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets: testAssets(),
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
 		OrderSizeLimits: []domain.LimitOrderSize{
 			orderSize(domain.ScopeBroker, "", "", "10", ""),
 			orderSize(domain.ScopeUnderlyingAsset, "", "USD", "5", ""),
@@ -2025,8 +2180,9 @@ func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
 		OrderSizeLimits: []domain.LimitOrderSize{orderSize(
 			domain.ScopeUnderlyingAsset, "", "USD", "5", "",
 		)},
@@ -2052,7 +2208,8 @@ func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets: testAssets(),
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
 		RateLimits: []domain.LimitRate{
 			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
 		},
@@ -2077,7 +2234,8 @@ func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets: testAssets(),
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
 		RateLimits: []domain.LimitRate{
 			rateLimit(domain.ScopeAsset, "", "USD", 100, time.Second),
 		},
@@ -2099,8 +2257,9 @@ func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:     testAssets(),
-		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		RateLimits:         []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
 	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
@@ -2129,9 +2288,10 @@ func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1")},
-		Balances: []domain.Balance{fundedBalance("acc-1", "USD", "10000")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
+		Balances:           []domain.Balance{fundedBalance("acc-1", "USD", "10000")},
 		RateLimits: []domain.LimitRate{
 			rateLimit(domain.ScopeBroker, "", "", 1, time.Minute),
 			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Minute),
@@ -2267,7 +2427,7 @@ func TestSpotFundsPnlBoundsAxes_UnsupportedScope(t *testing.T) {
 	_, _, _, err := spotFundsPnlBoundsAxes(
 		domain.SpotFundsPnlAxisRealized,
 		[]domain.LimitSpotFundsPnlBounds{
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAsset,
 				Currency:   "USD",
@@ -2350,8 +2510,9 @@ func unblockAccountOnLane(ctx context.Context, eng fwengine.Engine, account doma
 func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -2378,8 +2539,9 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 func TestEngine_CheckOrderUnknownAssetIsInvalid(t *testing.T) {
 	t.Parallel()
 	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Accounts: []domain.Account{account("acc-1")},
-		Assets:   []domain.Asset{testAsset("AAPL"), testAsset("USD")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Accounts:           []domain.Account{account("acc-1")},
+		Assets:             []domain.Asset{testAsset("AAPL"), testAsset("USD")},
 	})
 	if err != nil {
 		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
@@ -2396,8 +2558,9 @@ func TestEngine_CheckOrderUnknownAssetIsInvalid(t *testing.T) {
 func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -2480,8 +2643,9 @@ func TestEngine_CheckOrderMultiplePricesUsesDryRunIdentifier(t *testing.T) {
 func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 	t.Parallel()
 	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
 	})
 	if err != nil {
 		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
@@ -2510,8 +2674,9 @@ func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 func TestEngine_InsufficientFundsRejectNamesAssetCode(t *testing.T) {
 	t.Parallel()
 	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
 	})
 	if err != nil {
 		t.Fatalf("NewOpenPitEngineBuildFunc: %v", err)
@@ -2592,8 +2757,9 @@ func TestIDResolver_AssetCodesIn(t *testing.T) {
 func TestEngine_CheckOrderStandingBlockIsRejectOnly(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{blockedAccount("acc-1", "risk")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{blockedAccount("acc-1", "risk")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -2638,6 +2804,7 @@ func TestEngine_RestoredBlockTextIsNotRewrittenAgain(t *testing.T) {
 	blocked.BlockReason = "account pnl kill switch triggered"
 	blocked.BlockDetails = details
 	eng, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
 		Assets: append(
 			testAssets(),
 			domain.Asset{Code: "99", EngineAssetID: 8},
@@ -2669,13 +2836,14 @@ func TestOpenPitEngineBuilder_RestoresTypedAccountBlockCause(t *testing.T) {
 	blocked.BlockCode = domain.RejectCodePnlKillSwitchTriggered
 	blocked.BlockDetails = "account pnl -501 is below lower bound -500"
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{blocked},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{blocked},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
-		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
@@ -2711,8 +2879,9 @@ func TestOpenPitEngineBuilder_RejectsUnknownPersistedAccountBlockCode(t *testing
 	blocked.BlockPolicy = "SpotFundsPolicy"
 	blocked.BlockCode = "future_unknown_code"
 	_, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{blocked},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{blocked},
 	})
 	if err == nil || !strings.Contains(err.Error(), `account "acc-1"`) ||
 		!strings.Contains(err.Error(), `code "future_unknown_code"`) {
@@ -2726,8 +2895,9 @@ func TestOpenPitEngineBuilder_RejectsUnknownPersistedAccountBlockCode(t *testing
 func TestEngine_CheckOrderKeepsShortRejectText(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{blockedAccount("acc-1", "-5%")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{blockedAccount("acc-1", "-5%")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -2792,9 +2962,10 @@ func TestAccountBlockFrom_OnlyTranscribesLatchedBlock(t *testing.T) {
 func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:     testAssets(),
-		Accounts:   []domain.Account{account("acc-1")},
-		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 1, time.Minute)},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
+		RateLimits:         []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 1, time.Minute)},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -2845,8 +3016,9 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 func TestEngine_CheckOrderMatchesSubmitOrderSizeVerdict(t *testing.T) {
 	t.Parallel()
 	snap := fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),

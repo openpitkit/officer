@@ -241,9 +241,10 @@ type Source interface {
 	// visible accounts a P&L bound blocks for want of a currency.
 	SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error)
 	// PutSpotFundsLimitMode sets the Spot Funds limit-mode meta-policy
-	// (domain.PolicySpotFundsLimitMode, global only) live. A tighten-only
-	// caller (an agent) is refused the switch from enforce to track_only with
-	// domain.ErrLoosening.
+	// (domain.PolicySpotFundsLimitMode, global only) live. In order of
+	// strictness it supports enforce, the equally ranked review_with_hold
+	// and review_without_hold, then track_only. The core refuses a
+	// tighten-only switch to a lower rank with domain.ErrLoosening.
 	PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error
 	// ListAudit returns the most recent n audit rows.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)

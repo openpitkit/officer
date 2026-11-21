@@ -58,7 +58,7 @@ SELECT 'rate_limit' AS kind, lr.scope AS scope,
        NULL AS max_quantity, NULL AS max_notional,
        NULL AS max_position,
 	       NULL AS lower_bound, NULL AS upper_bound,
-       NULL AS mode,
+       lr.mode AS mode,
        'rate_limit:' || lr.id AS stable_id
 FROM limit_rate lr
 LEFT JOIN account a   ON a.id   = lr.account_id
@@ -82,7 +82,7 @@ SELECT 'position_limit' AS kind, lp.scope AS scope,
        ast.code AS asset_code, NULL AS currency_code,
        NULL AS max_orders, NULL AS window,
        NULL AS max_quantity, NULL AS max_notional, lp.max_position AS max_position,
-       NULL AS lower_bound, NULL AS upper_bound, NULL AS mode,
+       NULL AS lower_bound, NULL AS upper_bound, lp.mode AS mode,
        'position_limit:' || lp.id AS stable_id
 FROM limit_position lp
 JOIN account a ON a.id = lp.account_id
@@ -100,7 +100,7 @@ SELECT CASE lsfpb.axis
        NULL AS max_quantity, NULL AS max_notional,
        NULL AS max_position,
 	       lsfpb.lower_bound AS lower_bound, lsfpb.upper_bound AS upper_bound,
-       NULL AS mode,
+       lsfpb.mode AS mode,
        'spot_funds_pnl_bounds_kill_switch:' || lsfpb.id AS stable_id
 FROM limit_spot_funds_pnl_bound lsfpb
 LEFT JOIN account       a  ON a.id  = lsfpb.account_id
@@ -213,8 +213,13 @@ func policyListWhere(filter fwstore.PolicyListFilter) (string, []any, error) {
 		args = append(args, string(*filter.Kind))
 	}
 	if filter.Mode != "" {
-		clauses = append(clauses, "kind = 'order_size_limit' AND mode = ?")
-		args = append(args, filter.Mode)
+		if filter.Kind != nil && !domain.LimitPolicyHasMode(string(*filter.Kind)) {
+			return "", nil, domain.NewValidationError("/mode", "unsupported_value", "policy does not support a rule mode")
+		}
+		// The global funds-control setting projects its own, unrelated enum
+		// into the union's mode column; it is never a rule-mode match.
+		clauses = append(clauses, "kind <> ? AND mode = ?")
+		args = append(args, domain.PolicySpotFundsLimitMode, filter.Mode)
 	}
 	if len(clauses) == 0 {
 		return "", args, nil
@@ -298,6 +303,7 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 			)
 		}
 		row.Rate = &domain.LimitRate{
+			Mode:      domain.RuleMode(mode.String),
 			Scope:     scope,
 			Account:   account,
 			Asset:     assetCode.String,
@@ -315,6 +321,7 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 		}
 	case fwstore.PolicyKindPosition:
 		row.Position = &domain.LimitPosition{
+			Mode:  domain.RuleMode(mode.String),
 			Scope: scope, Account: account, Asset: assetCode.String,
 			MaxPosition: maxPosition.String,
 		}
@@ -324,11 +331,11 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 		axis, ok := domain.SpotFundsPnlAxisOf(kind)
 		if !ok {
 			return fwstore.PolicyListRow{}, fmt.Errorf(
-				"store: policy kind %q has no spot funds pnl axis: %w",
-				kind, domain.ErrInvalid,
+				"store: policy kind %q has no spot funds pnl axis", kind,
 			)
 		}
 		row.SpotFundsPnlBounds = &domain.LimitSpotFundsPnlBounds{
+			Mode:         domain.RuleMode(mode.String),
 			Axis:         axis,
 			Scope:        scope,
 			Account:      account,
@@ -353,7 +360,7 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 		}
 	default:
 		return fwstore.PolicyListRow{}, fmt.Errorf(
-			"store: unknown policy kind %q: %w", kind, domain.ErrInvalid,
+			"store: unknown policy kind %q", kind,
 		)
 	}
 	return row, nil
@@ -368,7 +375,7 @@ func (r *realmStore) ListRateLimits(
 	ctx context.Context, account domain.AccountID,
 ) (value []domain.LimitRate, resultErr error) {
 	q := `
-SELECT lr.scope, a.code, ast.code, lr.max_orders, lr.window
+SELECT lr.scope, a.code, ast.code, lr.max_orders, lr.window, lr.mode
 FROM limit_rate lr
 LEFT JOIN account a   ON a.id   = lr.account_id
 LEFT JOIN asset   ast ON ast.id = lr.asset_id`
@@ -377,7 +384,7 @@ LEFT JOIN asset   ast ON ast.id = lr.asset_id`
 		q += ` WHERE a.code = ?`
 		args = append(args, account.String())
 	}
-	q += ` ORDER BY lr.scope, a.code, ast.code`
+	q += ` ORDER BY lr.scope, a.code, ast.code, lr.mode`
 
 	db, err := r.db()
 	if err != nil {
@@ -438,11 +445,11 @@ func (r *realmStore) PutRateLimit(ctx context.Context, limit domain.LimitRate) e
 			_, err := exec.ExecContext(
 				ctx,
 				`INSERT INTO limit_rate
-				 (scope, account_id, asset_id, max_orders, window)
-				 VALUES (?, ?, ?, ?, ?)`,
+				 (scope, account_id, asset_id, max_orders, window, mode)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
 				limit.Scope, accountID, assetID,
 				int64(limit.MaxOrders),
-				limit.Window.String(),
+				limit.Window.String(), limit.Mode,
 			)
 			return err
 		},
@@ -484,8 +491,9 @@ func scanRateLimit(rows *sql.Rows) (domain.LimitRate, error) {
 		accountCode, assetCode sql.NullString
 		maxOrders              int64
 		windowStr              string
+		mode                   domain.RuleMode
 	)
-	if err := rows.Scan(&scope, &accountCode, &assetCode, &maxOrders, &windowStr); err != nil {
+	if err := rows.Scan(&scope, &accountCode, &assetCode, &maxOrders, &windowStr, &mode); err != nil {
 		return domain.LimitRate{}, fmt.Errorf("store: scan rate limit: %w", err)
 	}
 	window, err := time.ParseDuration(windowStr)
@@ -495,6 +503,7 @@ func scanRateLimit(rows *sql.Rows) (domain.LimitRate, error) {
 		)
 	}
 	return domain.LimitRate{
+		Mode:      mode,
 		Scope:     scope,
 		Account:   domain.AccountID(accountCode.String),
 		Asset:     assetCode.String,
@@ -613,7 +622,7 @@ func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 func (r *realmStore) ListPositionLimits(
 	ctx context.Context, account domain.AccountID,
 ) (value []domain.LimitPosition, resultErr error) {
-	q := `SELECT lp.scope, a.code, ast.code, lp.max_position
+	q := `SELECT lp.scope, a.code, ast.code, lp.max_position, lp.mode
 FROM limit_position lp
 JOIN account a ON a.id = lp.account_id
 JOIN asset ast ON ast.id = lp.asset_id`
@@ -622,7 +631,7 @@ JOIN asset ast ON ast.id = lp.asset_id`
 		q += ` WHERE a.code = ?`
 		args = append(args, account.String())
 	}
-	q += ` ORDER BY a.code, ast.code`
+	q += ` ORDER BY a.code, ast.code, lp.mode`
 	db, err := r.db()
 	if err != nil {
 		return nil, err
@@ -635,7 +644,7 @@ JOIN asset ast ON ast.id = lp.asset_id`
 	result := make([]domain.LimitPosition, 0)
 	for rows.Next() {
 		var limit domain.LimitPosition
-		if err := rows.Scan(&limit.Scope, &limit.Account, &limit.Asset, &limit.MaxPosition); err != nil {
+		if err := rows.Scan(&limit.Scope, &limit.Account, &limit.Asset, &limit.MaxPosition, &limit.Mode); err != nil {
 			return nil, fmt.Errorf("store: scan position limit: %w", err)
 		}
 		result = append(result, limit)
@@ -673,9 +682,9 @@ func (r *realmStore) PutPositionLimit(ctx context.Context, limit domain.LimitPos
 			_, err := exec.ExecContext(
 				ctx,
 				`INSERT INTO limit_position
-				 (scope, account_id, asset_id, max_position)
-				 VALUES (?, ?, ?, ?)`,
-				limit.Scope, accountID, assetID, limit.MaxPosition,
+				 (scope, account_id, asset_id, max_position, mode)
+				 VALUES (?, ?, ?, ?, ?)`,
+				limit.Scope, accountID, assetID, limit.MaxPosition, limit.Mode,
 			)
 			return err
 		},
@@ -692,7 +701,7 @@ func (r *realmStore) ListSpotFundsPnlBoundsLimits(
 ) (value []domain.LimitSpotFundsPnlBounds, resultErr error) {
 	q := `
 	SELECT lsfpb.axis, lsfpb.scope, a.code, g.code, c.code,
-	       lsfpb.lower_bound, lsfpb.upper_bound
+	       lsfpb.lower_bound, lsfpb.upper_bound, lsfpb.mode
 FROM limit_spot_funds_pnl_bound lsfpb
 LEFT JOIN account       a  ON a.id  = lsfpb.account_id
 LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id
@@ -702,7 +711,7 @@ JOIN asset               c  ON c.id  = lsfpb.currency_asset_id`
 		q += ` WHERE a.code = ?`
 		args = append(args, account.String())
 	}
-	q += ` ORDER BY lsfpb.axis, lsfpb.scope, a.code, g.code`
+	q += ` ORDER BY lsfpb.axis, lsfpb.scope, a.code, g.code, lsfpb.mode`
 
 	db, err := r.db()
 	if err != nil {
@@ -765,11 +774,11 @@ func (r *realmStore) PutSpotFundsPnlBoundsLimit(
 			_, err := exec.ExecContext(
 				ctx,
 				`INSERT INTO limit_spot_funds_pnl_bound
-					 (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound)
-					 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					 (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound, mode)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 				limit.Axis, limit.Scope, accountID, groupID, currencyID,
 				nullableString(limit.LowerBound),
-				nullableString(limit.UpperBound),
+				nullableString(limit.UpperBound), limit.Mode,
 			)
 			return err
 		},
@@ -785,17 +794,19 @@ func scanSpotFundsPnlBoundsLimit(
 		accountCode, accountGroupCode sql.NullString
 		currencyCode                  string
 		lowerBound, upperBound        sql.NullString
+		mode                          domain.RuleMode
 	)
 	if err := rows.Scan(
 		&axis, &scope, &accountCode, &accountGroupCode,
 		&currencyCode,
-		&lowerBound, &upperBound,
+		&lowerBound, &upperBound, &mode,
 	); err != nil {
 		return domain.LimitSpotFundsPnlBounds{}, fmt.Errorf(
 			"store: scan spot funds pnl bounds limit: %w", err,
 		)
 	}
 	return domain.LimitSpotFundsPnlBounds{
+		Mode:         mode,
 		Axis:         axis,
 		Scope:        scope,
 		Account:      domain.AccountID(accountCode.String),
@@ -817,24 +828,31 @@ type limitKeyPredicate struct {
 	args                        []any
 }
 
+type limitKeyShape uint8
+
+const (
+	limitKeyShapeInvalid limitKeyShape = iota
+	limitKeyShapeAsset
+	limitKeyShapePnlAxis
+)
+
 type limitTable struct {
 	name, noun string
-	hasMode    bool
-	hasPnlAxis bool
+	keyShape   limitKeyShape
 }
 
 func limitTableForPolicy(policy string) (limitTable, error) {
 	switch policy {
 	case domain.PolicyRateLimit:
-		return limitTable{name: "limit_rate", noun: "rate limit"}, nil
+		return limitTable{name: "limit_rate", noun: "rate limit", keyShape: limitKeyShapeAsset}, nil
 	case domain.PolicyOrderSizeLimit:
-		return limitTable{name: "limit_order_size", noun: "order size limit", hasMode: true}, nil
+		return limitTable{name: "limit_order_size", noun: "order size limit", keyShape: limitKeyShapeAsset}, nil
 	case domain.PolicyPositionLimit:
-		return limitTable{name: "limit_position", noun: "position limit"}, nil
+		return limitTable{name: "limit_position", noun: "position limit", keyShape: limitKeyShapeAsset}, nil
 	case domain.PolicySpotFundsPnlBoundsKillSwitch,
 		domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
-		return limitTable{name: "limit_spot_funds_pnl_bound", noun: "spot funds pnl bounds limit", hasPnlAxis: true}, nil
+		return limitTable{name: "limit_spot_funds_pnl_bound", noun: "spot funds pnl bounds limit", keyShape: limitKeyShapePnlAxis}, nil
 	}
 	return limitTable{}, fmt.Errorf("store: policy %q has no limit barrier table: %w", policy, domain.ErrInvalid)
 }
@@ -846,28 +864,39 @@ func limitKeyWhere(key domain.LimitKey, ids limitKeyIDs) (limitKeyPredicate, err
 	if err != nil {
 		return limitKeyPredicate{}, err
 	}
+	pnlAxis, err := table.pnlAxisKeyed()
+	if err != nil {
+		return limitKeyPredicate{}, err
+	}
 	predicate := limitKeyPredicate{
 		table: table.name, noun: table.noun, subject: string(key.Scope()),
 	}
-	if table.hasPnlAxis {
+	if pnlAxis {
 		axis, ok := domain.SpotFundsPnlAxisOf(key.Policy())
 		if !ok {
-			return limitKeyPredicate{}, fmt.Errorf("store: policy %q has no spot funds pnl axis: %w", key.Policy(), domain.ErrInvalid)
+			return limitKeyPredicate{}, fmt.Errorf("store: policy %q has no spot funds pnl axis", key.Policy())
 		}
-		predicate.where = `axis = ? AND scope = ? AND account_id IS ? AND account_group_id IS ?`
-		predicate.args = []any{axis, key.Scope(), ids.account, ids.group}
+		predicate.where = `axis = ? AND scope = ? AND account_id IS ? AND account_group_id IS ? AND mode = ?`
+		predicate.args = []any{axis, key.Scope(), ids.account, ids.group, key.Mode()}
 		return predicate, nil
 	}
-	predicate.where = `scope = ? AND account_id IS ? AND asset_id IS ?`
-	predicate.args = []any{key.Scope(), ids.account, ids.asset}
-	if table.hasMode {
-		predicate.where += ` AND mode = ?`
-		predicate.args = append(predicate.args, key.Mode())
-	}
+	predicate.where = `scope = ? AND account_id IS ? AND asset_id IS ? AND mode = ?`
+	predicate.args = []any{key.Scope(), ids.account, ids.asset, key.Mode()}
 	if key.Policy() == domain.PolicyPositionLimit {
 		predicate.subject = key.Account().String() + ":" + key.Asset()
 	}
 	return predicate, nil
+}
+
+func (table limitTable) pnlAxisKeyed() (bool, error) {
+	switch table.keyShape {
+	case limitKeyShapeAsset:
+		return false, nil
+	case limitKeyShapePnlAxis:
+		return true, nil
+	default:
+		return false, fmt.Errorf("store: table %q has invalid limit key shape %d", table.name, table.keyShape)
+	}
 }
 
 // putLimitRow upserts one limit row in table using DELETE-then-INSERT inside a

@@ -63,7 +63,7 @@ func TestCurrencyChangeReasonsPreserveEveryBlockingFact(t *testing.T) {
 	if err := rs.SetAccountPnl(ctx, "acc-1", "-4.5", domain.PnlHaltReason("missing_account_currency")); err != nil {
 		t.Fatal(err)
 	}
-	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal,
 		Currency: "USD", LowerBound: "-100.000000000000000001",
 	}); err != nil {
@@ -116,6 +116,33 @@ func TestCurrencyChangeReasonsPreserveEveryBlockingFact(t *testing.T) {
 		if index < 0 || got[0].Reasons[index].Value != "-4.500000000000000001" {
 			t.Fatalf("healthy %s reasons = %+v", kind, got[0].Reasons)
 		}
+	}
+}
+
+func TestCurrencyChangeReasonsDistinguishPnlModes(t *testing.T) {
+	for _, axis := range domain.SpotFundsPnlAxes {
+		t.Run(string(axis), func(t *testing.T) {
+			ctx, rs := seedBalanceFixtures(t)
+			for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+				if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+					Mode: mode, Axis: axis, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := rs.ListAccountsBlockingCurrencyChange(ctx, []domain.AccountID{"acc-1"})
+			if err != nil || len(got) != 1 || len(got[0].Reasons) != 2 {
+				t.Fatalf("blockers = %+v, err = %v", got, err)
+			}
+			first, second := got[0].Reasons[0], got[0].Reasons[1]
+			if first.Mode != domain.RuleModeReject || second.Mode != domain.RuleModeReviewWithoutHold || first.Axis != string(axis) || first.Kind != "pnl_limit" {
+				t.Fatalf("reasons = %+v", got[0].Reasons)
+			}
+			second.Mode = first.Mode
+			if first != second {
+				t.Fatalf("reasons differ beyond mode: %+v %+v", first, second)
+			}
+		})
 	}
 }
 
@@ -508,14 +535,14 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 	}{
 		{
 			name: "account PnL bounds",
-			limit: domain.LimitSpotFundsPnlBounds{
+			limit: domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-10",
 			},
 		},
 		{
 			name: "group PnL bounds",
-			limit: domain.LimitSpotFundsPnlBounds{
+			limit: domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency:   "USD",
@@ -532,7 +559,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 		},
 		{
 			name: "global PnL bounds",
-			limit: domain.LimitSpotFundsPnlBounds{
+			limit: domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 			},
@@ -569,7 +596,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("UpsertBalance: %v", err)
 		}
-		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 		}); err != nil {
@@ -614,7 +641,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 
 	t.Run("rate and order size limits are not denominated", func(t *testing.T) {
 		ctx, rs := seedBalanceFixtures(t)
-		if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccount, Account: "acc-1",
 			MaxOrders: 2, Window: time.Second,
 		}); err != nil {

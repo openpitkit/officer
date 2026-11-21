@@ -161,7 +161,7 @@ func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 		}
 		reason := domain.CurrencyChangeReason{
 			Kind: "pnl_limit", Scope: limit.Scope, Group: limit.AccountGroup,
-			Axis: string(limit.Axis), Currency: limit.Currency,
+			Axis: string(limit.Axis), Mode: limit.Mode, Currency: limit.Currency,
 			LowerBound: limit.LowerBound, UpperBound: limit.UpperBound,
 		}
 		switch limit.Scope {

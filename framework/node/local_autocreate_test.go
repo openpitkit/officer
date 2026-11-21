@@ -45,7 +45,7 @@ func rateLimit(
 	max uint64,
 	window time.Duration,
 ) domain.LimitRate {
-	return domain.LimitRate{
+	return domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: scope, Account: account, Asset: asset,
 		MaxOrders: max, Window: window,
 	}

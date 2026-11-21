@@ -84,20 +84,23 @@ describe("SpotFundsCurrencyWarning", () => {
     expect(screen.queryByText(warningTitle)).not.toBeInTheDocument();
   });
 
-  it("links every affected account by exact code while accounts are shown", () => {
-    renderWarning("track_only", ["desk-a", "desk &/b"]);
+  it.each(["review_with_hold", "review_without_hold", "track_only"] as const)(
+    "shows the warning in %s and links each affected account by exact code",
+    (mode) => {
+      renderWarning(mode, ["desk-a", "desk &/b"]);
 
-    expect(screen.getByText(warningTitle)).toBeInTheDocument();
-    expect(screen.getAllByRole("link")).toHaveLength(2);
-    expect(screen.getByRole("link", { name: "desk-a" })).toHaveAttribute(
-      "href",
-      "/accounts?code=desk-a&codeMatch=exact",
-    );
-    expect(screen.getByRole("link", { name: "desk &/b" })).toHaveAttribute(
-      "href",
-      "/accounts?code=desk%20%26%2Fb&codeMatch=exact",
-    );
-  });
+      expect(screen.getByText(warningTitle)).toBeInTheDocument();
+      expect(screen.getAllByRole("link")).toHaveLength(2);
+      expect(screen.getByRole("link", { name: "desk-a" })).toHaveAttribute(
+        "href",
+        "/accounts?code=desk-a&codeMatch=exact",
+      );
+      expect(screen.getByRole("link", { name: "desk &/b" })).toHaveAttribute(
+        "href",
+        "/accounts?code=desk%20%26%2Fb&codeMatch=exact",
+      );
+    },
+  );
 
   it("links to the account page while accounts are hidden", () => {
     setAccountScope({

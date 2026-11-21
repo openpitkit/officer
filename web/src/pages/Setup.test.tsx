@@ -697,46 +697,43 @@ describe("Setup", () => {
       expect(screen.getByText("Change later: Policies")).toBeInTheDocument();
     });
 
-    it("stores the picked mode on Continue, then the encryption step", async () => {
-      const user = userEvent.setup();
-      const reload = mockFundsMode("enforce", false);
-      const { putLimit } = renderSetup({ step: "accounts" });
+    it.each([
+      ["enforce", "Check funds"],
+      ["review_without_hold", "Review without hold"],
+      ["review_with_hold", "Review with hold"],
+      ["track_only", "Accounting without blocking"],
+    ] as const)(
+      "stores %s on Continue, then the encryption step",
+      async (mode, name) => {
+        const user = userEvent.setup();
+        const reload = mockFundsMode("enforce", false);
+        const { putLimit } = renderSetup({ step: "accounts" });
 
-      await openFunds(user);
-      await user.click(
-        screen.getByRole("radio", { name: /^Accounting without blocking/ }),
-      );
-      await user.click(next());
+        await openFunds(user);
+        const choices = screen.getAllByRole("radio");
+        expect(choices.map((choice) => choice.getAttribute("value"))).toEqual([
+          "enforce",
+          "review_without_hold",
+          "review_with_hold",
+          "track_only",
+        ]);
+        await user.click(screen.getByRole("radio", { name }));
+        await user.click(next());
 
-      await heading(TITLES.encryption);
-      expect(putLimit).toHaveBeenCalledTimes(1);
-      expect(putLimit).toHaveBeenCalledWith(
-        { ...LIMIT, mode: null, values: { mode: "track_only" } },
-        "reject",
-      );
-      expect(reload).toHaveBeenCalledTimes(1);
-      expect(putSetupProgress).toHaveBeenCalledTimes(1);
-      expect(putSetupProgress).toHaveBeenCalledWith(
-        expect.anything(),
-        "encryption",
-      );
-    });
-
-    it("stores Check funds when it is picked over no stored row", async () => {
-      const user = userEvent.setup();
-      mockFundsMode("enforce", false);
-      const { putLimit } = renderSetup({ step: "accounts" });
-
-      await openFunds(user);
-      await user.click(screen.getByRole("radio", { name: /^Check funds/ }));
-      await user.click(next());
-
-      await heading(TITLES.encryption);
-      expect(putLimit).toHaveBeenCalledWith(
-        { ...LIMIT, mode: null, values: { mode: "enforce" } },
-        "reject",
-      );
-    });
+        await heading(TITLES.encryption);
+        expect(putLimit).toHaveBeenCalledTimes(1);
+        expect(putLimit).toHaveBeenCalledWith(
+          { ...LIMIT, mode: null, values: { mode } },
+          "reject",
+        );
+        expect(reload).toHaveBeenCalledTimes(1);
+        expect(putSetupProgress).toHaveBeenCalledTimes(1);
+        expect(putSetupProgress).toHaveBeenCalledWith(
+          expect.anything(),
+          "encryption",
+        );
+      },
+    );
 
     it("stays when the save fails and shows the error", async () => {
       const user = userEvent.setup();
@@ -759,22 +756,28 @@ describe("Setup", () => {
       expect(putSetupProgress).not.toHaveBeenCalled();
     });
 
-    it("shows the stored mode and moves on without storing it again", async () => {
-      const user = userEvent.setup();
-      mockFundsMode("track_only", true);
-      const { putLimit } = renderSetup({ step: "accounts" });
+    it.each([
+      ["review_with_hold", "Review with hold", "Review with hold"],
+      ["review_without_hold", "Review without hold", "Review without hold"],
+      ["track_only", "Accounting without blocking", "Off"],
+    ] as const)(
+      "shows stored %s in the rails and cards without writing it again",
+      async (mode, name, railLabel) => {
+        const user = userEvent.setup();
+        mockFundsMode(mode, true);
+        const { putLimit } = renderSetup({ step: "accounts" });
 
-      await openFunds(user);
-      expect(
-        screen.getByRole("radio", { name: /^Accounting without blocking/ }),
-      ).toBeChecked();
-      // The rail answers the step's question: the funds check is off.
-      expect(railStep("Funds check")).toHaveTextContent(/Off$/);
-      await user.click(next());
+        await openFunds(user);
+        expect(screen.getByRole("radio", { name })).toBeChecked();
+        expect(railStep("Funds check")).toHaveTextContent(
+          new RegExp(`${railLabel}$`),
+        );
+        await user.click(next());
 
-      await heading(TITLES.encryption);
-      expect(putLimit).not.toHaveBeenCalled();
-    });
+        await heading(TITLES.encryption);
+        expect(putLimit).not.toHaveBeenCalled();
+      },
+    );
 
     it("stores the other mode picked over a stored one", async () => {
       const user = userEvent.setup();

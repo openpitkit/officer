@@ -74,6 +74,8 @@ func (w LimitWrite) Validate() error {
 // carries no decimal value, so its value columns are a plain count and a Go
 // duration.
 type LimitRate struct {
+	// Mode is the barrier's action; the zero value is not a valid mode.
+	Mode RuleMode
 	// Scope is the axis combination this barrier applies to.
 	Scope LimitScope
 	// Account is the account axis; empty unless Scope carries it.
@@ -89,7 +91,7 @@ type LimitRate struct {
 
 // Key returns the barrier's identity without validating its payload.
 func (l LimitRate) Key() (LimitKey, error) {
-	return NewLimitKey(PolicyRateLimit, "", l.Scope, l.Account, "", l.Asset)
+	return NewLimitKey(PolicyRateLimit, l.Mode, l.Scope, l.Account, "", l.Asset)
 }
 
 // LimitOrderSize is the typed order-size barrier: a per-order ceiling on
@@ -122,6 +124,8 @@ func (l LimitOrderSize) Key() (LimitKey, error) {
 // LimitPosition bounds the long and short position magnitude for one account
 // and asset. The engine computes the projected position and enforces the bound.
 type LimitPosition struct {
+	// Mode is the barrier's action; the zero value is not a valid mode.
+	Mode RuleMode
 	// Scope is always ScopeAccountAsset.
 	Scope LimitScope
 	// Account is the required account axis.
@@ -135,7 +139,7 @@ type LimitPosition struct {
 
 // Key returns the barrier's identity without validating its payload.
 func (l LimitPosition) Key() (LimitKey, error) {
-	return NewLimitKey(PolicyPositionLimit, "", l.Scope, l.Account, "", l.Asset)
+	return NewLimitKey(PolicyPositionLimit, l.Mode, l.Scope, l.Account, "", l.Asset)
 }
 
 // LimitSpotFundsPnlBounds configures a currency-valued SpotFunds P&L barrier.
@@ -143,6 +147,8 @@ func (l LimitPosition) Key() (LimitKey, error) {
 // account-group or global barrier. Bounds are never FX-converted; Officer
 // passes the currency through unchanged.
 type LimitSpotFundsPnlBounds struct {
+	// Mode is the barrier's action; the zero value is not a valid mode.
+	Mode RuleMode
 	// Axis is the account P&L measure the bounds apply to. Each axis is a
 	// policy of its own (SpotFundsPnlAxis.Policy) with its own cascade. A
 	// backup archive files barriers in one list per axis and clears the axis
@@ -170,7 +176,7 @@ func (l LimitSpotFundsPnlBounds) Key() (LimitKey, error) {
 	if policy == "" {
 		return LimitKey{}, fmt.Errorf("unknown spot funds pnl axis %q: %w", l.Axis, ErrInvalid)
 	}
-	return NewLimitKey(policy, "", l.Scope, l.Account, l.AccountGroup, "")
+	return NewLimitKey(policy, l.Mode, l.Scope, l.Account, l.AccountGroup, "")
 }
 
 // SpotFundsPnlAxis is the account P&L measure a Spot Funds P&L bound limits.
@@ -290,16 +296,16 @@ func (l LimitRate) Validate() error {
 	return nil
 }
 
-// ValidateOrderSizeMode accepts reject, review_without_hold and review_with_hold.
+// ValidateRuleMode accepts reject, review_without_hold and review_with_hold.
 // Empty or unsupported modes return a validation error on /mode.
-func ValidateOrderSizeMode(mode RuleMode) error {
+func ValidateRuleMode(mode RuleMode) error {
 	switch mode {
 	case RuleModeReject, RuleModeReviewWithoutHold, RuleModeReviewWithHold:
 		return nil
 	case "":
 		return invalidField("/mode", "required", fmt.Errorf("mode is required: %w", ErrInvalid))
 	default:
-		return invalidField("/mode", "unsupported_value", fmt.Errorf("unsupported order_size_limit mode %q: %w", mode, ErrInvalid))
+		return invalidField("/mode", "unsupported_value", fmt.Errorf("unsupported rule mode %q: %w", mode, ErrInvalid))
 	}
 }
 
@@ -681,15 +687,25 @@ func (l LimitSpotFundsPnlBounds) NoLooserThan(ref LimitSpotFundsPnlBounds) error
 
 // SpotFundsLimitMode is the global mode of the Spot Funds policy, one setting
 // for the whole realm. Enforce refuses an order whose hold exceeds the
-// available funds. TrackOnly records the hold even into negative available and
-// refuses nothing on funds, while every other policy check and the Spot Funds
-// P&L barrier stay in force.
+// available funds. ReviewWithHold and ReviewWithoutHold request review on a
+// shortfall, with or without a hold while review is pending. TrackOnly records
+// the hold even into negative available and refuses nothing on funds, while
+// every other policy check and the Spot Funds P&L barrier stay in force.
 type SpotFundsLimitMode string
 
 const (
 	// SpotFundsLimitModeEnforce refuses an order whose hold exceeds the
 	// available funds. It is the documented default and the SDK's zero value.
 	SpotFundsLimitModeEnforce SpotFundsLimitMode = "enforce"
+	// SpotFundsLimitModeReviewWithHold requests review on a funds shortfall
+	// while holding the full amount, letting available funds go negative.
+	// A confirmed order keeps its funds held even into negative available.
+	SpotFundsLimitModeReviewWithHold SpotFundsLimitMode = "review_with_hold"
+	// SpotFundsLimitModeReviewWithoutHold requests review on a funds shortfall
+	// without holding funds while the order waits for review.
+	// Confirmed orders and drop-copy use TrackOnly without a review mark.
+	// Overflow remains a reject.
+	SpotFundsLimitModeReviewWithoutHold SpotFundsLimitMode = "review_without_hold"
 	// SpotFundsLimitModeTrackOnly records every hold, letting available go
 	// negative, and refuses nothing on funds.
 	SpotFundsLimitModeTrackOnly SpotFundsLimitMode = "track_only"
@@ -699,7 +715,8 @@ const (
 // empty or is not a recognised SpotFundsLimitMode value.
 func ValidateSpotFundsLimitMode(mode SpotFundsLimitMode) error {
 	switch mode {
-	case SpotFundsLimitModeEnforce, SpotFundsLimitModeTrackOnly:
+	case SpotFundsLimitModeEnforce, SpotFundsLimitModeReviewWithHold,
+		SpotFundsLimitModeReviewWithoutHold, SpotFundsLimitModeTrackOnly:
 		return nil
 	case "":
 		return invalidField("/mode", "required", fmt.Errorf("mode is required: %w", ErrInvalid))
@@ -707,8 +724,9 @@ func ValidateSpotFundsLimitMode(mode SpotFundsLimitMode) error {
 		return invalidField(
 			"/mode", "unsupported_value",
 			fmt.Errorf(
-				"mode %q must be %q or %q: %w",
-				string(mode), SpotFundsLimitModeEnforce, SpotFundsLimitModeTrackOnly, ErrInvalid,
+				"mode %q must be %q, %q, %q or %q: %w",
+				string(mode), SpotFundsLimitModeEnforce, SpotFundsLimitModeReviewWithHold,
+				SpotFundsLimitModeReviewWithoutHold, SpotFundsLimitModeTrackOnly, ErrInvalid,
 			),
 		)
 	}
@@ -725,11 +743,11 @@ func ParseSpotFundsLimitMode(value string) (SpotFundsLimitMode, error) {
 }
 
 // NoLooserThan returns nil when the Spot Funds limit mode m is at least as
-// strict as prev, the mode it would replace: TrackOnly refuses nothing on
-// funds that Enforce refuses, so only Enforce to TrackOnly loosens, and that
-// returns an error wrapping ErrLoosening that names both modes. Either side
-// that is not a valid SpotFundsLimitMode returns an error wrapping ErrInvalid
-// that names the side and describes the validation failure. The caller maps
+// strict as prev, the mode it would replace: Enforce > ReviewWithHold =
+// ReviewWithoutHold > TrackOnly. A lower rank returns an error wrapping
+// ErrLoosening that names both modes. Either side that is not a valid
+// SpotFundsLimitMode returns an error wrapping ErrInvalid that names the side
+// and describes the validation failure. The caller maps
 // an absent setting to SpotFundsLimitModeEnforce before calling.
 func (m SpotFundsLimitMode) NoLooserThan(prev SpotFundsLimitMode) error {
 	for _, side := range []struct {
@@ -740,9 +758,10 @@ func (m SpotFundsLimitMode) NoLooserThan(prev SpotFundsLimitMode) error {
 			return fmt.Errorf("%s: %w", side.name, err)
 		}
 	}
-	if prev == SpotFundsLimitModeEnforce && m == SpotFundsLimitModeTrackOnly {
+	if (prev == SpotFundsLimitModeEnforce && m != SpotFundsLimitModeEnforce) ||
+		(prev != SpotFundsLimitModeTrackOnly && m == SpotFundsLimitModeTrackOnly) {
 		return fmt.Errorf(
-			"mode %s stops refusing on funds what the current %s refuses: %w",
+			"mode %s is looser than the current %s: %w",
 			m, prev, ErrLoosening,
 		)
 	}

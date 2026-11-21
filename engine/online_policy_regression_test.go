@@ -65,19 +65,19 @@ func TestLocalNode_BrokerBarrierRemovalKeepsNativeEngineAndSink(t *testing.T) {
 		Principal: domain.PrincipalOperator,
 	}
 
-	if sink, err := n.PutRateLimit(ctx, domain.LimitRate{
+	if sink, err := n.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil || sink == nil {
 		t.Fatalf("PutRateLimit first barrier = (sink %T, %v), want one SDK-required rebuild", sink, err)
 	}
-	if sink, err := n.PutRateLimit(ctx, domain.LimitRate{
+	if sink, err := n.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAsset, Asset: "USD", MaxOrders: 50, Window: time.Second,
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil || sink != nil {
 		t.Fatalf("PutRateLimit asset = (sink %T, %v), want online success", sink, err)
 	}
 	sinkBefore := n.CurrentMarketDataSink()
 	buildsBefore := builds
-	if sink, err := n.DeleteLimit(ctx, node.LimitTarget{
+	if sink, err := n.DeleteLimit(ctx, node.LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker,
 	}, caller); err != nil || sink != nil {
 		t.Fatalf("DeleteLimit rate broker = (sink %T, %v), want online success", sink, err)

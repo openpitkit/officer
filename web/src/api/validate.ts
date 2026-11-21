@@ -31,8 +31,9 @@ import {
   type Scope,
 } from "@/api/vocabulary";
 import {
-  isOrderSizeLimitMode,
+  isRuleMode,
   isSpotFundsLimitMode,
+  limitPolicyHasMode,
 } from "@/framework/registries/vocabulary";
 
 const MAX_ACCOUNT_LEN = 64;
@@ -283,9 +284,9 @@ export function validateLimit(limit: Limit): FieldError | null {
     return { key: "limit.unknownPolicy", values: { policy: limit.policy } };
   }
   const policy: Policy = limit.policy;
-  if (policy === "order_size_limit") {
-    if (!isOrderSizeLimitMode(limit.mode)) {
-      return { key: "limit.orderSizeModeInvalid" };
+  if (limitPolicyHasMode(policy)) {
+    if (!isRuleMode(limit.mode)) {
+      return { key: "limit.ruleModeInvalid" };
     }
   } else if (limit.mode !== null) {
     return { key: "limit.policyNoMode", values: { policy } };

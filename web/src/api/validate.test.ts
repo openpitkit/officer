@@ -19,7 +19,10 @@ import { describe, expect, it } from "vitest";
 
 import { validateLimit } from "@/api/validate";
 import type { Limit } from "@/api/types";
-import { ORDER_SIZE_LIMIT_MODES } from "@/framework/registries/vocabulary";
+import {
+  RULE_MODES,
+  SPOT_FUNDS_LIMIT_MODES,
+} from "@/framework/registries/vocabulary";
 
 describe("validateLimit barrier mode", () => {
   const barrier: Limit = {
@@ -32,7 +35,7 @@ describe("validateLimit barrier mode", () => {
     values: { max_quantity: "10" },
   };
 
-  it.each(ORDER_SIZE_LIMIT_MODES)("accepts order-size mode %s", (mode) => {
+  it.each(RULE_MODES)("accepts order-size mode %s", (mode) => {
     expect(validateLimit({ ...barrier, mode })).toBeNull();
   });
 
@@ -40,46 +43,31 @@ describe("validateLimit barrier mode", () => {
     "rejects invalid order-size mode %s",
     (mode) => {
       expect(validateLimit({ ...barrier, mode } as Limit)).toEqual({
-        key: "limit.orderSizeModeInvalid",
+        key: "limit.ruleModeInvalid",
       });
     },
   );
 
-  it.each([undefined, "reject", "review_without_hold", "review_with_hold"])(
-    "rejects non-null mode %s on another policy",
+  it.each([undefined, null, "unknown"])(
+    "rejects missing or invalid rate mode %s",
     (mode) => {
-      const policy = "rate_limit";
       expect(
         validateLimit({
           ...barrier,
-          policy,
+          policy: "rate_limit",
           mode,
           values: { window: "1s", max_orders: "1" },
         } as Limit),
-      ).toEqual({
-        key: "limit.policyNoMode",
-        values: { policy },
-      });
+      ).toEqual({ key: "limit.ruleModeInvalid" });
     },
   );
-
-  it("accepts null mode on another policy", () => {
-    expect(
-      validateLimit({
-        ...barrier,
-        policy: "rate_limit",
-        mode: null,
-        values: { window: "1s", max_orders: "1" },
-      }),
-    ).toBeNull();
-  });
 });
 
 describe("validateLimit", () => {
   const positionLimit = (values: Record<string, string>) =>
     validateLimit({
       policy: "position_limit",
-      mode: null,
+      mode: "reject",
       scope: "account_asset",
       account: "acc-1",
       accountGroup: "",
@@ -204,7 +192,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "account_group",
         account: "",
         accountGroup: "desk-a",
@@ -218,7 +206,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -232,7 +220,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -249,7 +237,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -269,7 +257,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy,
-        mode: null,
+        mode: "reject",
         scope: "account",
         account: "ACC-1",
         accountGroup: "",
@@ -280,7 +268,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy,
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -291,7 +279,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy,
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -305,7 +293,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -317,7 +305,7 @@ describe("validateLimit", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -342,8 +330,15 @@ describe("validateLimit for the funds limit mode", () => {
     ...overrides,
   });
 
-  it.each(["enforce", "track_only"])("accepts the %s mode", (mode) => {
+  it.each(SPOT_FUNDS_LIMIT_MODES)("accepts the %s mode", (mode) => {
     expect(validateLimit(modeLimit({ values: { mode } }))).toBeNull();
+  });
+
+  it.each(RULE_MODES)("rejects %s as a rule mode on the global row", (mode) => {
+    expect(validateLimit(modeLimit({ mode }))).toEqual({
+      key: "limit.policyNoMode",
+      values: { policy: "spot_funds_limit_mode" },
+    });
   });
 
   it("requires a mode", () => {

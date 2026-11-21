@@ -62,7 +62,7 @@
   "policy": {
     "rate_limit": {
       "label": "Límite de frecuencia",
-      "description": "Cuenta los intentos de envío de órdenes dentro de una ventana de tiempo y rechaza las ráfagas que superan el tope. Los intentos rechazados también cuentan, por lo que los reintentos no pueden eludirlo."
+      "description": "Cuenta los intentos de envío de órdenes dentro de una ventana de tiempo. Si se supera el tope, el modo de rechazo rechaza la orden y los modos de revisión la dejan pendiente de revisión por el operador. Los intentos rechazados también cuentan, por lo que los reintentos no pueden eludir el límite."
     },
     "order_size_limit": {
       "label": "Límite de tamaño de orden",
@@ -78,15 +78,15 @@
     },
     "spot_funds_unrealized_pnl_bounds_kill_switch": {
       "label": "Interruptor de emergencia por pérdidas y ganancias no realizadas",
-      "description": "Utiliza las pérdidas y ganancias (P&L) no realizadas de las posiciones de la cuenta que calcula el motor en la moneda de la cuenta, al precio de mercado actual. Cuando el P&L sale de sus límites, se rechaza la siguiente orden y se bloquea la cuenta."
+      "description": "Utiliza las pérdidas y ganancias (P&L) no realizadas de las posiciones de la cuenta que calcula el motor en la moneda de la cuenta, al precio de mercado actual. Cuando el P&L sale de sus límites, el modo de rechazo rechaza la siguiente orden y bloquea la cuenta. Los modos de revisión dejan la orden pendiente de revisión por el operador sin bloquear la cuenta."
     },
     "spot_funds_total_pnl_bounds_kill_switch": {
       "label": "Interruptor de emergencia por pérdidas y ganancias totales",
-      "description": "Utiliza las pérdidas y ganancias (P&L) totales que calcula el motor en la moneda de la cuenta: el P&L realizado más el P&L no realizado de las posiciones de la cuenta al precio de mercado actual. Cuando el P&L sale de sus límites, se rechaza la siguiente orden y se bloquea la cuenta."
+      "description": "Utiliza las pérdidas y ganancias (P&L) totales que calcula el motor en la moneda de la cuenta: el P&L realizado más el P&L no realizado de las posiciones de la cuenta al precio de mercado actual. Cuando el P&L sale de sus límites, el modo de rechazo rechaza la siguiente orden y bloquea la cuenta. Los modos de revisión dejan la orden pendiente de revisión por el operador sin bloquear la cuenta."
     },
     "spot_funds_limit_mode": {
       "label": "Modo de límite de fondos",
-      "description": "Decide para todas las cuentas si Officer comprueba los fondos antes de una orden. Si no hay ninguna fila guardada, el modo es «Comprobar fondos»."
+      "description": "Define cómo gestiona Officer las órdenes con fondos insuficientes en todas las cuentas. Si no hay ninguna fila guardada, el modo es «Comprobar fondos»."
     }
   },
   "policyField": {

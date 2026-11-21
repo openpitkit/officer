@@ -31,6 +31,193 @@ import (
 	fwstore "go.openpit.dev/officer/framework/store"
 )
 
+func TestCountingLimitModeStorage(t *testing.T) {
+	for _, tc := range []struct {
+		policy string
+		scope  domain.LimitScope
+	}{
+		{domain.PolicyRateLimit, domain.ScopeAccountAsset},
+		{domain.PolicyPositionLimit, domain.ScopeAccountAsset},
+		{domain.PolicySpotFundsPnlBoundsKillSwitch, domain.ScopeGlobal},
+		{domain.PolicySpotFundsPnlBoundsKillSwitch, domain.ScopeAccountGroup},
+		{domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch, domain.ScopeGlobal},
+		{domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch, domain.ScopeAccountGroup},
+		{domain.PolicySpotFundsTotalPnlBoundsKillSwitch, domain.ScopeGlobal},
+		{domain.PolicySpotFundsTotalPnlBoundsKillSwitch, domain.ScopeAccountGroup},
+		{domain.PolicySpotFundsPnlBoundsKillSwitch, domain.ScopeAccount},
+		{domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch, domain.ScopeAccount},
+		{domain.PolicySpotFundsTotalPnlBoundsKillSwitch, domain.ScopeAccount},
+	} {
+		policy := tc.policy
+		t.Run(policy+"/"+string(tc.scope), func(t *testing.T) {
+			ctx, rs := seedLimitFixtures(t)
+			if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+				t.Fatal(err)
+			}
+			modes := []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold}
+			want := make([]domain.KeyedLimit, 0, len(modes))
+			for _, mode := range modes {
+				var limit domain.KeyedLimit = domain.LimitRate{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxOrders: 10, Window: time.Second}
+				if policy == domain.PolicyPositionLimit {
+					limit = domain.LimitPosition{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10"}
+				} else if axis, ok := domain.SpotFundsPnlAxisOf(policy); ok {
+					bound := domain.LimitSpotFundsPnlBounds{Mode: mode, Axis: axis, Scope: tc.scope, Currency: "USD", LowerBound: "-10"}
+					switch tc.scope {
+					case domain.ScopeAccountGroup:
+						bound.AccountGroup = "desk"
+					case domain.ScopeAccount:
+						bound.Account = "acc-1"
+					}
+					limit = bound
+				}
+				putSQLKeyLimit(t, ctx, rs, limit)
+				want = append(want, limit)
+			}
+			requireSQLKeyLimits(t, ctx, rs, want...)
+			switch policy {
+			case domain.PolicyRateLimit:
+				changed := want[1].(domain.LimitRate)
+				changed.MaxOrders = 5
+				want[1] = changed
+			case domain.PolicyPositionLimit:
+				changed := want[1].(domain.LimitPosition)
+				changed.MaxPosition = "5"
+				want[1] = changed
+			default:
+				changed := want[1].(domain.LimitSpotFundsPnlBounds)
+				changed.LowerBound = "-5"
+				want[1] = changed
+			}
+			putSQLKeyLimit(t, ctx, rs, want[1])
+			requireSQLKeyLimits(t, ctx, rs, want...)
+			kind := fwstore.PolicyKind(policy)
+			for _, mode := range modes {
+				page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{Kind: &kind, Mode: mode})
+				if err != nil || page.Total != 1 || len(page.Rows) != 1 {
+					t.Fatalf("list %s: %+v, %v", mode, page, err)
+				}
+				var limit domain.KeyedLimit = page.Rows[0].Rate
+				if policy == domain.PolicyPositionLimit {
+					limit = page.Rows[0].Position
+				} else if _, ok := domain.SpotFundsPnlAxisOf(policy); ok {
+					limit = page.Rows[0].SpotFundsPnlBounds
+				}
+				key, err := limit.Key()
+				if err != nil || key.Mode() != mode {
+					t.Fatalf("listed key=%v error=%v, want %s", key, err, mode)
+				}
+			}
+			scope := backup.Scope{Sections: []backup.Section{backup.SectionRiskLimits}, Accounts: backup.EntitySelector{All: true}}
+			archive, err := rs.ExportBackup(ctx, scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := want[1].Key()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := rs.DeleteLimit(ctx, key); err != nil {
+				t.Fatal(err)
+			}
+			requireSQLKeyLimits(t, ctx, rs, want[0], want[2])
+			if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{Scope: scope, Mode: backup.RestoreModeReplaceAll}); err != nil {
+				t.Fatal(err)
+			}
+			requireSQLKeyLimits(t, ctx, rs, want...)
+			switch policy {
+			case domain.PolicyRateLimit:
+				archive.Data.RateLimits = append(archive.Data.RateLimits[:1:1], archive.Data.RateLimits[2:]...)
+			case domain.PolicyPositionLimit:
+				archive.Data.PositionLimits = append(archive.Data.PositionLimits[:1:1], archive.Data.PositionLimits[2:]...)
+			default:
+				bounds := archive.Data.SpotFundsPnlBounds()
+				bounds = append(bounds[:1:1], bounds[2:]...)
+				if err := archive.Data.SetSpotFundsPnlBounds(bounds); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Stored ordering is reject, review_with_hold, review_without_hold.
+			if _, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{Scope: scope, Mode: backup.RestoreModeReplaceAll}); err != nil {
+				t.Fatal(err)
+			}
+			requireSQLKeyLimits(t, ctx, rs, want[0], want[2])
+		})
+	}
+}
+
+func TestScanPolicyRowUnknownKindIsInternalError(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+	db, err := rs.(*realmStore).db()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT 'unknown', 'global', NULL, NULL, NULL, NULL,
+		NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := rows.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if !rows.Next() {
+		t.Fatalf("no row: %v", rows.Err())
+	}
+	if _, err := scanPolicyRow(rows); err == nil || errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), `unknown policy kind "unknown"`) {
+		t.Fatalf("scan error = %v, want internal error naming kind", err)
+	}
+}
+
+func TestSQLLimitTableRejectsInvalidKeyShape(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shape limitKeyShape
+	}{
+		{"zero", limitKeyShapeInvalid},
+		{"unknown", limitKeyShape(255)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := limitTable{name: "limit_rate", noun: "rate limit", keyShape: tc.shape}
+			t.Run("where", func(t *testing.T) {
+				_, err := table.pnlAxisKeyed()
+				if err == nil || errors.Is(err, domain.ErrInvalid) {
+					t.Fatalf("pnlAxisKeyed error = %v, want internal error", err)
+				}
+				if !strings.Contains(err.Error(), table.name) {
+					t.Fatalf("pnlAxisKeyed error = %v, want table", err)
+				}
+			})
+			t.Run("prune", func(t *testing.T) {
+				query, err := table.pruneQuery()
+				if err == nil || errors.Is(err, domain.ErrInvalid) {
+					t.Fatalf("pruneQuery error = %v, want internal error", err)
+				}
+				if !strings.Contains(err.Error(), table.name) {
+					t.Fatalf("pruneQuery error = %v, want table", err)
+				}
+				if query != "" {
+					t.Fatalf("pruneQuery = %q, want empty query", query)
+				}
+			})
+		})
+	}
+}
+
+func TestSQLLimitTableRejectsGenericPnlPrune(t *testing.T) {
+	table := limitTable{name: "limit_spot_funds_pnl_bound", keyShape: limitKeyShapePnlAxis}
+	query, err := table.pruneQuery()
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("pruneQuery error = %v, want internal error", err)
+	}
+	if !strings.Contains(err.Error(), table.name) {
+		t.Fatalf("pruneQuery error = %v, want table", err)
+	}
+	if query != "" {
+		t.Fatalf("pruneQuery = %q, want empty query", query)
+	}
+}
+
 func requireSQLKeyPrune(t *testing.T, ctx context.Context, rs fwstore.RealmStore, data backup.Data, want []domain.KeyedLimit) {
 	t.Helper()
 	db, err := rs.(*realmStore).db()
@@ -101,7 +288,7 @@ func TestSQLLimitKeyArchiveValidationOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		archive.Data.RateLimits = []domain.LimitRate{{Scope: domain.ScopeAccount, MaxOrders: 1, Window: time.Second}}
+		archive.Data.RateLimits = []domain.LimitRate{{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, MaxOrders: 1, Window: time.Second}}
 		var messages []string
 		for _, mode := range []backup.RestoreMode{backup.RestoreModeOverwrite, backup.RestoreModeReplaceAll} {
 			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{Scope: scope, Mode: mode})
@@ -125,7 +312,7 @@ func TestSQLLimitKeyArchiveValidationOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 		archive.Data.Groups = []backup.AccountGroup{{Code: "bad", Title: strings.Repeat("x", 257)}}
-		archive.Data.RateLimits = []domain.LimitRate{{Scope: domain.ScopeAccount, MaxOrders: 1, Window: time.Second}}
+		archive.Data.RateLimits = []domain.LimitRate{{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, MaxOrders: 1, Window: time.Second}}
 		_, err = rs.RestoreBackup(ctx, archive, backup.RestoreOptions{Scope: scope, Mode: backup.RestoreModeReplaceAll})
 		if !errors.Is(err, domain.ErrInvalid) || !strings.HasPrefix(err.Error(), `store: restore group "bad":`) {
 			t.Fatalf("archive error = %v, want group error before limit error", err)
@@ -190,20 +377,20 @@ func TestSQLLimitKeyAxes(t *testing.T) {
 			domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeUnderlyingAsset, Asset: "USD", MaxQuantity: "20"},
 		}},
 		{"pnl_account", [2]domain.KeyedLimit{
-			domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-10"},
-			domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-2", Currency: "USD", LowerBound: "-20"},
+			domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-10"},
+			domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "acc-2", Currency: "USD", LowerBound: "-20"},
 		}},
 		{"position_account", [2]domain.KeyedLimit{
-			domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10"},
-			domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "20"},
+			domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10"},
+			domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "20"},
 		}},
 		{"position_asset", [2]domain.KeyedLimit{
-			domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10"},
-			domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "20"},
+			domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10"},
+			domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "20"},
 		}},
 		{"policy", [2]domain.KeyedLimit{
-			domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
-			domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-20"},
+			domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+			domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-20"},
 		}},
 		{"mode", [2]domain.KeyedLimit{
 			domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "10"},
@@ -214,16 +401,16 @@ func TestSQLLimitKeyAxes(t *testing.T) {
 			domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeSettlementAsset, Asset: "AAPL", MaxNotional: "20"},
 		}},
 		{"account", [2]domain.KeyedLimit{
-			domain.LimitRate{Scope: domain.ScopeAccount, Account: "acc-1", MaxOrders: 10, Window: time.Second},
-			domain.LimitRate{Scope: domain.ScopeAccount, Account: "acc-2", MaxOrders: 20, Window: time.Second},
+			domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "acc-1", MaxOrders: 10, Window: time.Second},
+			domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "acc-2", MaxOrders: 20, Window: time.Second},
 		}},
 		{"account_group", [2]domain.KeyedLimit{
-			domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "first", Currency: "USD", LowerBound: "-10"},
-			domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "second", Currency: "USD", LowerBound: "-20"},
+			domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "first", Currency: "USD", LowerBound: "-10"},
+			domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "second", Currency: "USD", LowerBound: "-20"},
 		}},
 		{"asset", [2]domain.KeyedLimit{
-			domain.LimitRate{Scope: domain.ScopeAsset, Asset: "AAPL", MaxOrders: 10, Window: time.Second},
-			domain.LimitRate{Scope: domain.ScopeAsset, Asset: "USD", MaxOrders: 20, Window: time.Second},
+			domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "AAPL", MaxOrders: 10, Window: time.Second},
+			domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "USD", MaxOrders: 20, Window: time.Second},
 		}},
 	} {
 		t.Run(tc.axis, func(t *testing.T) {
@@ -346,7 +533,7 @@ func insertSQLKeyLimit(t *testing.T, ctx context.Context, rs fwstore.RealmStore,
 	case domain.LimitPosition:
 		_, err = db.ExecContext(ctx, `INSERT INTO limit_position (scope, account_id, asset_id, max_position) VALUES (?, (SELECT id FROM account WHERE code = ?), (SELECT id FROM asset WHERE code = ?), ?)`, limit.Scope, limit.Account, limit.Asset, limit.MaxPosition)
 	case domain.LimitSpotFundsPnlBounds:
-		_, err = db.ExecContext(ctx, `INSERT INTO limit_spot_funds_pnl_bound (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound) VALUES (?, ?, (SELECT id FROM account WHERE code = ?), (SELECT id FROM account_group WHERE code = ?), (SELECT id FROM asset WHERE code = ?), ?, ?)`, limit.Axis, limit.Scope, limit.Account, limit.AccountGroup, limit.Currency, nullableString(limit.LowerBound), nullableString(limit.UpperBound))
+		_, err = db.ExecContext(ctx, `INSERT INTO limit_spot_funds_pnl_bound (axis, scope, account_id, account_group_id, currency_asset_id, lower_bound, upper_bound, mode) VALUES (?, ?, (SELECT id FROM account WHERE code = ?), (SELECT id FROM account_group WHERE code = ?), (SELECT id FROM asset WHERE code = ?), ?, ?, ?)`, limit.Axis, limit.Scope, limit.Account, limit.AccountGroup, limit.Currency, nullableString(limit.LowerBound), nullableString(limit.UpperBound), limit.Mode)
 	default:
 		t.Fatalf("unsupported barrier %T", limit)
 	}
@@ -405,7 +592,7 @@ func mustSQLLimitKey(t *testing.T, policy string, mode domain.RuleMode, scope do
 func TestSQLLimitKeyRejectsBeforeStorage(t *testing.T) {
 	ctx := context.Background()
 	s, rs := newTestStore(t)
-	limit := domain.LimitRate{Scope: domain.ScopeBroker, MaxOrders: 10, Window: time.Second}
+	limit := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 10, Window: time.Second}
 	putSQLKeyLimit(t, ctx, rs, limit)
 	foreign := mustSQLLimitKey(t, domain.PolicySpotFundsLimitMode, "", domain.ScopeGlobal, "", "", "")
 	for _, key := range []domain.LimitKey{{}, foreign} {

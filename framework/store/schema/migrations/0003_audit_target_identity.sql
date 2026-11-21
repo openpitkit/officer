@@ -28,6 +28,20 @@ DROP INDEX uq_limit_order_size;
 CREATE UNIQUE INDEX uq_limit_order_size
     ON limit_order_size (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0), mode);
 
+-- Released rate barriers reject; new writes carry their mode explicitly.
+ALTER TABLE limit_rate ADD COLUMN mode TEXT NOT NULL DEFAULT 'reject'
+    CHECK (mode IN ('reject', 'review_without_hold', 'review_with_hold'));
+DROP INDEX uq_limit_rate;
+CREATE UNIQUE INDEX uq_limit_rate
+    ON limit_rate (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0), mode);
+
+-- Released P&L barriers reject; new writes carry their mode explicitly.
+ALTER TABLE limit_spot_funds_pnl_bound ADD COLUMN mode TEXT NOT NULL DEFAULT 'reject'
+    CHECK (mode IN ('reject', 'review_without_hold', 'review_with_hold'));
+DROP INDEX uq_limit_spot_funds_pnl_bounds;
+CREATE UNIQUE INDEX uq_limit_spot_funds_pnl_bounds
+    ON limit_spot_funds_pnl_bound (axis, scope, COALESCE(account_id, 0), COALESCE(account_group_id, 0), mode);
+
 -- Position ceilings have exactly one scope: an account and an asset.
 -- The scope column lets the shared limit-table code apply unchanged.
 CREATE TABLE limit_position (
@@ -35,12 +49,14 @@ CREATE TABLE limit_position (
     scope        TEXT NOT NULL CHECK (scope = 'account_asset'),
     account_id   INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
     asset_id     INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
-    max_position TEXT NOT NULL
+    max_position TEXT NOT NULL,
+    mode         TEXT NOT NULL DEFAULT 'reject'
+                 CHECK (mode IN ('reject', 'review_without_hold', 'review_with_hold'))
 );
 
 CREATE INDEX idx_limit_position_account ON limit_position (account_id);
 CREATE INDEX idx_limit_position_asset ON limit_position (asset_id);
-CREATE UNIQUE INDEX uq_limit_position ON limit_position (scope, account_id, asset_id);
+CREATE UNIQUE INDEX uq_limit_position ON limit_position (scope, account_id, asset_id, mode);
 
 -- One row per job, including its recurrence and progress. Task arguments and
 -- schedule definition live in spec; mutable progress has one scalar authority.

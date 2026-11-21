@@ -18,11 +18,239 @@
 package engine
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwengine "go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/reject"
 )
+
+func pnlModeSnapshot(pnl string) fwengine.Snapshot {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.EffectiveCurrency = testQuote
+	acct.GroupCode = "desk-a"
+	acct.Pnl = pnl
+	return fwengine.Snapshot{
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(), Accounts: []domain.Account{acct},
+		Groups:   []domain.AccountGroup{{Code: "desk-a", EngineGroupID: 7, Currency: testQuote}},
+		Balances: []domain.Balance{fundedBalance(testAccount, testQuote, "1000000")},
+	}
+}
+
+func pnlModeLimit(mode domain.RuleMode, scope domain.LimitScope, lower string) domain.LimitSpotFundsPnlBounds {
+	limit := domain.LimitSpotFundsPnlBounds{
+		Mode: mode, Axis: domain.SpotFundsPnlAxisRealized, Scope: scope,
+		Currency: testQuote, LowerBound: lower,
+	}
+	if scope == domain.ScopeAccountGroup {
+		limit.AccountGroup = "desk-a"
+	}
+	if scope == domain.ScopeAccount {
+		limit.Account = testAccount
+	}
+	return limit
+}
+
+func TestSpotFundsPnlBounds_RuleModes(t *testing.T) {
+	t.Parallel()
+	for _, axis := range []domain.SpotFundsPnlAxis{domain.SpotFundsPnlAxisRealized, domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal} {
+		for _, mode := range []domain.RuleMode{
+			domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold,
+		} {
+			for _, runtime := range []bool{false, true} {
+				path := "build"
+				if runtime {
+					path = "runtime"
+				}
+				t.Run(string(axis)+"/"+string(mode)+"/"+path, func(t *testing.T) {
+					limits := []domain.LimitSpotFundsPnlBounds{pnlModeLimit(mode, domain.ScopeGlobal, "-3")}
+					limits[0].Axis = axis
+					if axis == domain.SpotFundsPnlAxisUnrealized {
+						limits[0].LowerBound = ""
+						limits[0].UpperBound = "-3"
+					}
+					snap := pnlModeSnapshot("-5")
+					if !runtime {
+						snap.SpotFundsPnlBoundsLimits = limits
+					}
+					eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer eng.Stop()
+					if runtime {
+						if _, err := eng.ConfigurePolicy(context.Background(), axis.Policy(),
+							fwengine.LimitSet{SpotFundsPnlBoundsLimits: limits}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					want := domain.VerdictReview
+					if mode == domain.RuleModeReject {
+						want = domain.VerdictReject
+						if err := unblockAccountOnLane(context.Background(), eng, testAccount); err != nil {
+							t.Fatal(err)
+						}
+					}
+					order := testOrder()
+					order.AmountValue = "1"
+					assertCountingLimitOrder(t, eng, order, want, mode, nameSpotFunds, domain.RejectCodePnlKillSwitchTriggered)
+					if want == domain.VerdictReview {
+						requirePnlAccountUnblocked(t, eng)
+					}
+				})
+			}
+		}
+	}
+}
+
+func requirePnlAccountUnblocked(t *testing.T, eng fwengine.Engine) {
+	t.Helper()
+	order, err := eng.OrderModel(testOrder(), fwengine.ReviewFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fwengine.RunExclusive(context.Background(), eng.AsyncEngine(), func(driver asyncengine.Driver) error {
+		request, rejects, err := driver.StartPreTrade(order)
+		if request != nil {
+			request.Close()
+		}
+		if err != nil {
+			return err
+		}
+		for _, rejection := range rejects {
+			if rejection.Code == reject.CodeAccountBlocked {
+				return fmt.Errorf("review P&L bound latched account block: %+v", rejection)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSpotFundsPnlBounds_SameScopeModesCoexist(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+		for _, scope := range []domain.LimitScope{domain.ScopeGlobal, domain.ScopeAccountGroup, domain.ScopeAccount} {
+			for _, runtime := range []bool{false, true} {
+				for _, pnl := range []string{"-5", "-15"} {
+					path := "build"
+					if runtime {
+						path = "runtime"
+					}
+					t.Run(string(mode)+"/"+string(scope)+"/"+path+"/"+pnl, func(t *testing.T) {
+						limits := []domain.LimitSpotFundsPnlBounds{
+							pnlModeLimit(domain.RuleModeReject, scope, "-10"), pnlModeLimit(mode, scope, "-3"),
+						}
+						snap := pnlModeSnapshot(pnl)
+						if !runtime {
+							snap.SpotFundsPnlBoundsLimits = limits
+						}
+						eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer eng.Stop()
+						if runtime {
+							if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicySpotFundsPnlBoundsKillSwitch,
+								fwengine.LimitSet{SpotFundsPnlBoundsLimits: limits}); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if len(eng.(*openPitEngine).registered) != 1 {
+							t.Fatalf("instances = %+v, want one SpotFunds", eng.(*openPitEngine).registered)
+						}
+						want := domain.VerdictReview
+						if pnl == "-15" {
+							want = domain.VerdictReject
+						}
+						invalid := append(append([]domain.LimitSpotFundsPnlBounds{}, limits...), limits[1])
+						if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicySpotFundsPnlBoundsKillSwitch,
+							fwengine.LimitSet{SpotFundsPnlBoundsLimits: invalid}); err == nil {
+							t.Fatal("duplicate mode accepted")
+						}
+						if want == domain.VerdictReject {
+							if err := unblockAccountOnLane(context.Background(), eng, testAccount); err != nil {
+								t.Fatal(err)
+							}
+						}
+						order := testOrder()
+						order.AmountValue = "1"
+						assertCountingLimitOrder(t, eng, order, want, mode, nameSpotFunds, domain.RejectCodePnlKillSwitchTriggered)
+						if want == domain.VerdictReview {
+							requirePnlAccountUnblocked(t, eng)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestSpotFundsPnlBounds_ReviewAccountDoesNotShadowRejectCascade(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+		for _, scope := range []domain.LimitScope{domain.ScopeGlobal, domain.ScopeAccountGroup} {
+			for _, runtime := range []bool{false, true} {
+				path := "build"
+				if runtime {
+					path = "runtime"
+				}
+				t.Run(string(mode)+"/"+string(scope)+"/"+path, func(t *testing.T) {
+					reviewLimit := pnlModeLimit(mode, domain.ScopeAccount, "-100")
+					limits := []domain.LimitSpotFundsPnlBounds{pnlModeLimit(domain.RuleModeReject, scope, "-10"), reviewLimit}
+					snap := pnlModeSnapshot("-15")
+					if !runtime {
+						snap.SpotFundsPnlBoundsLimits = limits
+					}
+					engine, err := newTestOpenPitEngineBuildFunc(t)(snap)
+					if err != nil {
+						t.Fatal(err)
+					}
+					eng := engine.(*openPitEngine)
+					defer eng.Stop()
+					if runtime {
+						if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicySpotFundsPnlBoundsKillSwitch,
+							fwengine.LimitSet{SpotFundsPnlBoundsLimits: limits}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := unblockAccountOnLane(context.Background(), eng, testAccount); err != nil {
+						t.Fatal(err)
+					}
+					order := testOrder()
+					order.AmountValue = "1"
+					assertCountingLimitOrder(t, eng, order, domain.VerdictReject, mode, nameSpotFunds, domain.RejectCodePnlKillSwitchTriggered)
+					// With both bounds breached, reject still wins.
+					if _, err := setTestAccountPnlState(context.Background(), eng, "-150", ""); err != nil {
+						t.Fatal(err)
+					}
+					if err := unblockAccountOnLane(context.Background(), eng, testAccount); err != nil {
+						t.Fatal(err)
+					}
+					assertCountingLimitOrder(t, eng, order, domain.VerdictReject, mode, nameSpotFunds, domain.RejectCodePnlKillSwitchTriggered)
+					// Clearing reject exposes the account's review mark without changing its mode.
+					if err := unblockAccountOnLane(context.Background(), eng, testAccount); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicySpotFundsPnlBoundsKillSwitch,
+						fwengine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{reviewLimit}}); err != nil {
+						t.Fatal(err)
+					}
+					assertCountingLimitOrder(t, eng, order, domain.VerdictReview, mode, nameSpotFunds, domain.RejectCodePnlKillSwitchTriggered)
+					requirePnlAccountUnblocked(t, eng)
+				})
+			}
+		}
+	}
+}
 
 // FuzzPnlBoundValidateMatchesEngineParse holds, for every writing
 // domain.ParseEngineDecimal accepts, that a global Spot Funds P&L-bounds
@@ -58,7 +286,7 @@ func FuzzPnlBoundValidateMatchesEngineParse(f *testing.F) {
 			{"lower", writing, ""},
 			{"upper", "", writing},
 		} {
-			validateErr := (domain.LimitSpotFundsPnlBounds{
+			validateErr := (domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeGlobal, Currency: "USD",
 				LowerBound: bound.lower, UpperBound: bound.upper,

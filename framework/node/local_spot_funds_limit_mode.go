@@ -136,12 +136,11 @@ func (n *localNode) applySpotFundsLimitMode(
 	if err != nil {
 		return err
 	}
-	trackOnly := next == domain.SpotFundsLimitModeTrackOnly
 	err = n.realm.SetSetting(ctx, key, string(next))
 	if err != nil {
 		return err
 	}
-	if err := n.currentEngine().SetSpotFundsTrackOnly(ctx, trackOnly); err != nil {
+	if err := n.currentEngine().SetSpotFundsLimitMode(ctx, next); err != nil {
 		restoreCtx := context.WithoutCancel(ctx)
 		var revertErr error
 		if hadPrev {

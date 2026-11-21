@@ -33,10 +33,12 @@
   },
   "funds": {
     "title": "Verificar os fundos antes de uma ordem?",
-    "lead": "O Officer recusa uma ordem que precisa de mais fundos do que a conta possui, ou a deixa passar e mantém a contabilidade. Todas as políticas que você definir se aplicam nos dois modos. O modo pode ser alterado depois na página Políticas.",
+    "lead": "O Officer pode recusar uma ordem com fundos insuficientes, encaminhá-la para revisão por um operador ou deixá-la passar e manter a contabilidade. Todas as demais políticas que você definir se aplicam em todos os modos. O modo pode ser alterado depois na página Políticas.",
     "chooseFirst": "Escolha um modo para continuar.",
     "rail": {
       "enforce": "Ativada",
+      "review_with_hold": "Revisão com retenção",
+      "review_without_hold": "Revisão sem retenção",
       "track_only": "Desativada"
     }
   },

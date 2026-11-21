@@ -49,8 +49,9 @@ func TestOpenAPIOrderSizeModesContract(t *testing.T) {
 	for _, tc := range []struct{ name, body, declaration string }{
 		{"optional request mode", schemas["OrderSizeLimit"], "required: [scope, asset, maxQuantity, maxNotional]"},
 		{"order-size mode property", schemas["OrderSizeLimit"], "mode:"},
-		{"order-size modes", schemas["OrderSizeLimit"], "enum: [reject, review_without_hold, review_with_hold]"},
-		{"order-size default", schemas["OrderSizeLimit"], "default: reject"},
+		{"order-size mode schema", schemas["OrderSizeLimit"], `"#/components/schemas/LimitBarrierMode"`},
+		{"barrier modes", schemas["LimitBarrierMode"], `enum: [reject, review_without_hold, review_with_hold, ""]`},
+		{"barrier mode default", schemas["LimitBarrierMode"], "default: reject"},
 		{"write request schema", requests["OrderSizeLimitWrite"], `"#/components/schemas/OrderSizeLimit"`},
 		{"required list mode", schemas["Policy"], "required: [kind, mode, scope, account, accountGroup, asset, values]"},
 		{"nullable list mode", schemas["Policy"], `type: [string, "null"]`},

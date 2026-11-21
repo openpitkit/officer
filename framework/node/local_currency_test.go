@@ -256,7 +256,7 @@ func TestLocalNode_UpdateAssetRenameKeepsEngineStateWithOrdersAndMarketData(t *t
 	}); err != nil {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
-	if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: accountID,
 		Currency: quoteAsset, LowerBound: "-1",
@@ -866,7 +866,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		}
 		if err := st.PutSpotFundsPnlBoundsLimit(
 			ctx,
-			domain.LimitSpotFundsPnlBounds{
+			domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccount, Account: "acc-1", Currency: "EUR", LowerBound: "-10",
 			},
@@ -909,7 +909,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		}
 		if err := st.PutSpotFundsPnlBoundsLimit(
 			ctx,
-			domain.LimitSpotFundsPnlBounds{
+			domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency:   "EUR",
@@ -943,7 +943,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 	}{
 		{
 			name: "group scope on default change",
-			limit: domain.LimitSpotFundsPnlBounds{
+			limit: domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency:   "USD",
@@ -952,7 +952,7 @@ func TestLocalNode_CurrencyChangeBlocksSpotFundsPnlBounds(t *testing.T) {
 		},
 		{
 			name: "global scope on default change",
-			limit: domain.LimitSpotFundsPnlBounds{
+			limit: domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeGlobal, Currency: "USD", UpperBound: "10",
 			},
@@ -1013,7 +1013,7 @@ func TestLocalNode_CurrencyChangeBalanceDominatesCurrencyValuedLimit(t *testing.
 	}); err != nil {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
-	if err := st.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := st.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "EUR", LowerBound: "-10",
 	}); err != nil {

@@ -20,18 +20,265 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
+
+func assertCountingLimitOrder(
+	t *testing.T, eng fwengine.Engine, order domain.Order, want domain.Verdict,
+	mode domain.RuleMode, policy, code string,
+) {
+	t.Helper()
+	out, err := materializeOrderResult(eng, order)
+	if err != nil || out.Verdict != want {
+		t.Fatalf("order result = %+v, %v; want %s", out, err, want)
+	}
+	switch want {
+	case domain.VerdictReview:
+		if len(out.Reviews) != 1 || out.Reviews[0].Mode != mode ||
+			out.Reviews[0].Policy != policy || out.Reviews[0].Code != code {
+			t.Fatalf("review marks = %+v, want one %s %s %s mark", out.Reviews, policy, mode, code)
+		}
+	case domain.VerdictReject:
+		if !hasRejectCode(out.Rejects, code) {
+			t.Fatalf("rejects = %+v, want %s", out.Rejects, code)
+		}
+	case domain.VerdictAccept:
+		if len(out.Reviews) != 0 || len(out.Rejects) != 0 {
+			t.Fatalf("accepted order carries marks: %+v", out)
+		}
+	}
+}
+
+func TestClassifyConfigureError(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		kind configure.ErrorKind
+	}{
+		{name: "validation", kind: configure.ErrorKindValidation},
+		{name: "unknown", kind: configure.ErrorKindUnknown},
+		{name: "type_mismatch", kind: configure.ErrorKindTypeMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sdkErr := &configure.Error{Kind: tc.kind, Message: "SDK refused the threshold"}
+			original := fmt.Errorf("engine: configure rate_limit: %w", sdkErr)
+			got := classifyConfigureError(original)
+			if tc.kind != configure.ErrorKindValidation {
+				if got != original || errors.Is(got, domain.ErrInvalid) {
+					t.Fatalf("classifyConfigureError = %v, want original error unchanged", got)
+				}
+				return
+			}
+			if !errors.Is(got, domain.ErrInvalid) || !errors.Is(got, original) {
+				t.Fatalf("classifyConfigureError = %v, want both the original error and ErrInvalid", got)
+			}
+			var preserved *configure.Error
+			if !errors.As(got, &preserved) || preserved != sdkErr {
+				t.Fatalf("classifyConfigureError = %v, want the same SDK error", got)
+			}
+			want := original.Error() + ": " + domain.ErrInvalid.Error()
+			if got.Error() != want {
+				t.Fatalf("error message = %q, want %q", got.Error(), want)
+			}
+		})
+	}
+	for _, err := range []error{
+		nil, errors.New("SDK refused the threshold"), domain.ErrNotImplemented, context.Canceled,
+	} {
+		if got := classifyConfigureError(err); got != err {
+			t.Errorf("classifyConfigureError(%v) = %v, want unchanged", err, got)
+		}
+	}
+}
+
+func TestConfigurePolicy_RateSDKValidation(t *testing.T) {
+	t.Parallel()
+	limit := rateLimit(domain.ScopeBroker, "", "", 1, time.Hour)
+	snap := orderSizeInstanceSnapshot()
+	snap.RateLimits = []domain.LimitRate{limit}
+	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Stop()
+
+	limit.Window = 0
+	_, err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit,
+		fwengine.LimitSet{RateLimits: []domain.LimitRate{limit}})
+	requireSDKConfigureValidation(t, err, "rate limit window must be positive")
+
+	order := domain.Order{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "1"}
+	assertCountingLimitOrder(t, eng, order, domain.VerdictAccept, limit.Mode, nameRateLimit, "rate_limit_exceeded")
+	assertCountingLimitOrder(t, eng, order, domain.VerdictReject, limit.Mode, nameRateLimit, "rate_limit_exceeded")
+}
+
+func TestConfigurePolicy_SpotFundsPnlBoundsSDKValidation(t *testing.T) {
+	t.Parallel()
+	for _, axis := range []domain.SpotFundsPnlAxis{
+		domain.SpotFundsPnlAxisRealized, domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal,
+	} {
+		t.Run(string(axis), func(t *testing.T) {
+			limit := pnlModeLimit(domain.RuleModeReviewWithoutHold, domain.ScopeAccount, "-3")
+			limit.Axis = axis
+			if axis == domain.SpotFundsPnlAxisUnrealized {
+				limit.LowerBound = ""
+				limit.UpperBound = "-3"
+			}
+			snap := pnlModeSnapshot("-5")
+			snap.SpotFundsPnlBoundsLimits = []domain.LimitSpotFundsPnlBounds{limit}
+			eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer eng.Stop()
+
+			refused := limit
+			refused.Mode = domain.RuleModeReject
+			_, err = eng.ConfigurePolicy(context.Background(), axis.Policy(),
+				fwengine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{refused, refused}})
+			requireSDKConfigureValidation(t, err, "duplicate account P&L barrier")
+
+			order := testOrder()
+			order.AmountValue = "1"
+			assertCountingLimitOrder(t, eng, order, domain.VerdictReview, limit.Mode, nameSpotFunds, domain.RejectCodePnlKillSwitchTriggered)
+		})
+	}
+}
+
+func requireSDKConfigureValidation(t *testing.T, err error, message string) {
+	t.Helper()
+	var sdkErr *configure.Error
+	if !errors.As(err, &sdkErr) || sdkErr.Kind != configure.ErrorKindValidation {
+		t.Fatalf("ConfigurePolicy error = %v, want SDK validation error", err)
+	}
+	if !strings.Contains(sdkErr.Message, message) || !strings.Contains(err.Error(), sdkErr.Message) {
+		t.Fatalf("ConfigurePolicy error = %v, SDK message = %q, want SDK text containing %q", err, sdkErr.Message, message)
+	}
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ConfigurePolicy error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRateLimit_RuleModes(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.RuleMode{
+		domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold,
+	} {
+		for _, runtime := range []bool{false, true} {
+			path := "build"
+			if runtime {
+				path = "runtime"
+			}
+			t.Run(string(mode)+"/"+path, func(t *testing.T) {
+				limit := rateLimit(domain.ScopeBroker, "", "", 1, time.Hour)
+				limit.Mode = mode
+				snap := orderSizeInstanceSnapshot()
+				snap.RateLimits = []domain.LimitRate{limit}
+				if runtime {
+					snap.RateLimits = []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Hour)}
+				}
+				eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer eng.Stop()
+				if runtime {
+					if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit,
+						fwengine.LimitSet{RateLimits: []domain.LimitRate{limit}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				order := domain.Order{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+					Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "1"}
+				assertCountingLimitOrder(t, eng, order, domain.VerdictAccept, mode, nameRateLimit, "rate_limit_exceeded")
+				want := domain.VerdictReview
+				if mode == domain.RuleModeReject {
+					want = domain.VerdictReject
+				}
+				assertCountingLimitOrder(t, eng, order, want, mode, nameRateLimit, "rate_limit_exceeded")
+			})
+		}
+	}
+}
+
+func TestRateLimit_ModesCoexist(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []struct {
+		scope   domain.LimitScope
+		account string
+		asset   string
+	}{
+		{domain.ScopeBroker, "", ""},
+		{domain.ScopeAsset, "", "USD"},
+		{domain.ScopeAccount, "acc-1", ""},
+		{domain.ScopeAccountAsset, "acc-1", "USD"},
+	} {
+		for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+			for _, runtime := range []bool{false, true} {
+				path := "build"
+				if runtime {
+					path = "runtime"
+				}
+				t.Run(string(scope.scope)+"/"+string(mode)+"/"+path, func(t *testing.T) {
+					rejectLimit := rateLimit(scope.scope, scope.account, scope.asset, 3, time.Hour)
+					reviewLimit := rateLimit(scope.scope, scope.account, scope.asset, 1, time.Hour)
+					reviewLimit.Mode = mode
+					limits := []domain.LimitRate{rejectLimit, reviewLimit}
+					snap := orderSizeInstanceSnapshot()
+					snap.RateLimits = limits
+					if runtime {
+						snap.RateLimits = []domain.LimitRate{rejectLimit}
+					}
+					eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer eng.Stop()
+					if runtime {
+						if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit,
+							fwengine.LimitSet{RateLimits: limits}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					adapter := eng.(*openPitEngine)
+					if len(adapter.registered) != 2 {
+						t.Fatalf("instances = %+v, want SpotFunds and one RateLimit", adapter.registered)
+					}
+					order := domain.Order{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+						Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "1"}
+					assertCountingLimitOrder(t, eng, order, domain.VerdictAccept, mode, nameRateLimit, "rate_limit_exceeded")
+					assertCountingLimitOrder(t, eng, order, domain.VerdictReview, mode, nameRateLimit, "rate_limit_exceeded")
+					limits[0].MaxOrders = 1
+					if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit,
+						fwengine.LimitSet{RateLimits: limits}); err != nil {
+						t.Fatal(err)
+					}
+					assertCountingLimitOrder(t, eng, order, domain.VerdictReject, mode, nameRateLimit, "rate_limit_exceeded")
+					invalid := append(append([]domain.LimitRate{}, limits...), limits[1])
+					if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit,
+						fwengine.LimitSet{RateLimits: invalid}); err == nil {
+						t.Fatal("duplicate mode accepted")
+					}
+					assertCountingLimitOrder(t, eng, order, domain.VerdictReject, mode, nameRateLimit, "rate_limit_exceeded")
+				})
+			}
+		}
+	}
+}
 
 type reviewOperationResult struct {
 	t      *testing.T

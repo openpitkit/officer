@@ -52,14 +52,27 @@ func TestLocalNode_PositionLimitCRUD(t *testing.T) {
 		builds++
 		return newFakeEngine(), nil
 	}
-	first := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100.00000001"}
+	first := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100.00000001"}
 	replacement := first
 	replacement.MaxPosition = "90"
+	review := first
+	review.Mode = domain.RuleModeReviewWithHold
 	other := first
 	other.Account, other.Asset = "other", "USD"
-	for _, limit := range []domain.LimitPosition{first, replacement, other} {
+	wantSets := [][]domain.LimitPosition{{first}, {replacement}, {replacement, review}, {replacement, review, other}}
+	for i, limit := range []domain.LimitPosition{first, replacement, review, other} {
 		if sink, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil || sink != nil {
 			t.Fatalf("PutPositionLimit = %T, %v, want online configure", sink, err)
+		}
+		if builds != 0 || n.currentEngine() != eng || len(eng.configureCalls) != i+1 {
+			t.Fatalf("position put: builds=%d configure calls=%+v", builds, eng.configureCalls)
+		}
+		call := eng.configureCalls[i]
+		listed, err := n.ListLimits(ctx, "")
+		if err != nil || call.policy != domain.PolicyPositionLimit ||
+			!samePositionLimits(call.limits.PositionLimits, wantSets[i]) ||
+			!samePositionLimits(listed.PositionLimits, wantSets[i]) {
+			t.Fatalf("position put configured %+v, listed %+v, %v; want %+v", call, listed, err, wantSets[i])
 		}
 		rows, err := st.ListAudit(ctx, 1)
 		if err != nil || len(rows) != 1 || rows[0].Action != domain.AuditActionSetLimit ||
@@ -69,34 +82,29 @@ func TestLocalNode_PositionLimitCRUD(t *testing.T) {
 			t.Fatalf("position set audit = %+v, %v", rows, err)
 		}
 	}
-	wantSets := [][]domain.LimitPosition{{first}, {replacement}, {replacement, other}}
-	if len(eng.configureCalls) != len(wantSets) {
-		t.Fatalf("configure calls = %+v", eng.configureCalls)
-	}
-	for i, want := range wantSets {
-		call := eng.configureCalls[i]
-		if call.policy != domain.PolicyPositionLimit || !samePositionLimits(call.limits.PositionLimits, want) {
-			t.Fatalf("configure[%d] = %+v, want complete set %+v", i, call, want)
-		}
-	}
 	listed, err := n.ListLimits(ctx, "acc")
-	if err != nil || !samePositionLimits(listed.PositionLimits, []domain.LimitPosition{replacement}) {
+	if err != nil || !samePositionLimits(listed.PositionLimits, []domain.LimitPosition{replacement, review}) {
 		t.Fatalf("ListLimits = %+v, %v", listed, err)
 	}
-	for i, limit := range []domain.LimitPosition{replacement, other} {
-		target := LimitTarget{Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset}
+	deleteSets := [][]domain.LimitPosition{{review, other}, {other}, nil}
+	for i, limit := range []domain.LimitPosition{replacement, review, other} {
+		target := LimitTarget{Mode: limit.Mode, Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset}
 		if _, err := n.DeleteLimit(ctx, target, testCaller); err != nil {
 			t.Fatal(err)
 		}
-		want := []domain.LimitPosition{other}
-		if i == 1 {
-			want = nil
+		if builds != 0 || n.currentEngine() != eng || len(eng.configureCalls) != len(wantSets)+i+1 {
+			t.Fatalf("position delete: builds=%d configure calls=%+v", builds, eng.configureCalls)
 		}
+		want := deleteSets[i]
 		call := eng.configureCalls[len(eng.configureCalls)-1]
 		stored, err := st.ListPositionLimits(ctx, "")
 		if err != nil || call.policy != domain.PolicyPositionLimit ||
 			!samePositionLimits(call.limits.PositionLimits, want) || !samePositionLimits(stored, want) {
 			t.Fatalf("delete configured %+v, stored %+v, %v; want %+v", call, stored, err, want)
+		}
+		listed, err := n.ListLimits(ctx, "")
+		if err != nil || !samePositionLimits(listed.PositionLimits, want) {
+			t.Fatalf("delete listed %+v, %v; want %+v", listed, err, want)
 		}
 		rows, err := st.ListAudit(ctx, 1)
 		key, keyErr := target.Key()
@@ -122,7 +130,7 @@ func TestLocalNode_PositionLimitMissingAccount(t *testing.T) {
 			eng := newFakeEngine()
 			eng.enforceResolver = true
 			n, st := newTestNode(t, eng)
-			limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "fresh", Asset: "AAPL", MaxPosition: "0"}
+			limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "fresh", Asset: "AAPL", MaxPosition: "0"}
 			_, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, missing, testCaller)
 			if missing == domain.MissingAccountReject {
 				if !errors.Is(err, domain.ErrAccountMissing) {
@@ -157,7 +165,7 @@ func TestLocalNode_PositionLimitTightensOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	createCurrencyAssets(t, n.realm, "AAPL")
-	limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100"}
+	limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100"}
 	for _, maximum := range []string{"100", "50", "0"} {
 		limit.MaxPosition = maximum
 		if _, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountReject, agentCaller); err != nil {
@@ -169,7 +177,7 @@ func TestLocalNode_PositionLimitTightensOnly(t *testing.T) {
 	limit.MaxPosition = "0.00000001"
 	_, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountReject, agentCaller)
 	requireLoosening(t, "raise position limit", err)
-	_, err = n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset}, agentCaller)
+	_, err = n.DeleteLimit(ctx, LimitTarget{Mode: domain.RuleModeReject, Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset}, agentCaller)
 	requireLoosening(t, "delete position limit", err)
 	unchanged()
 	stored, err := n.ListLimits(ctx, "acc")
@@ -187,6 +195,7 @@ func TestLocalNode_PositionLimitConfigureFailureRebuilds(t *testing.T) {
 	}{
 		{name: "partial", cause: errors.New("SDK configure failed")},
 		{name: "not_implemented", cause: domain.ErrNotImplemented},
+		{name: "validation", cause: domain.ErrInvalid},
 	} {
 		t.Run(failure.name, func(t *testing.T) {
 			t.Parallel()
@@ -196,7 +205,7 @@ func TestLocalNode_PositionLimitConfigureFailureRebuilds(t *testing.T) {
 					ctx := context.Background()
 					eng := newFakeEngine()
 					n, probe := newRebuildProbeNode(t, eng)
-					limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100"}
+					limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100"}
 					var want []domain.LimitPosition
 					if operation != "create" {
 						if _, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
@@ -204,17 +213,18 @@ func TestLocalNode_PositionLimitConfigureFailureRebuilds(t *testing.T) {
 						}
 						want = []domain.LimitPosition{limit}
 					}
-					eng.configureErr = fmt.Errorf("partial position configure failed: %w", failure.cause)
+					configureErr := errors.New("partial position configure failed")
+					eng.configureErr = fmt.Errorf("%w: %w", configureErr, failure.cause)
 					before := probe.builds
 					var err error
 					if operation == "delete" {
-						_, err = n.DeleteLimit(ctx, LimitTarget{Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset}, testCaller)
+						_, err = n.DeleteLimit(ctx, LimitTarget{Mode: domain.RuleModeReject, Policy: domain.PolicyPositionLimit, Scope: limit.Scope, Account: limit.Account, Asset: limit.Asset}, testCaller)
 					} else {
 						limit.MaxPosition = "200"
 						_, err = n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 					}
-					if !errors.Is(err, failure.cause) {
-						t.Fatalf("configure error = %v, want wrapping %v", err, failure.cause)
+					if !errors.Is(err, failure.cause) || !errors.Is(err, configureErr) {
+						t.Fatalf("configure error = %v, want wrapping %v and %v", err, configureErr, failure.cause)
 					}
 					if probe.builds != before+1 {
 						t.Fatalf("rebuilds = %d, want exactly one from the reverted store", probe.builds-before)
@@ -240,7 +250,7 @@ func TestLocalNode_PositionLimitRebuildFailureFatals(t *testing.T) {
 	n.build = func(engine.Snapshot) (engine.Engine, error) { return nil, rebuildErr }
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
-	_, err := n.PutPositionLimit(ctx, domain.LimitPosition{
+	_, err := n.PutPositionLimit(ctx, domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, configureErr) || !errors.Is(err, rebuildErr) ||

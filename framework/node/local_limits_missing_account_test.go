@@ -210,7 +210,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitCreatesNamedAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	limit := domain.LimitSpotFundsPnlBounds{
+	limit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    "fresh",
@@ -270,7 +270,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitRejectsMissingAccount(t *testing.T)
 				}
 			}
 
-			_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    "fresh",

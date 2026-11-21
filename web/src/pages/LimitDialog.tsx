@@ -23,7 +23,7 @@ import {
   isInPlacePolicy,
   isSpotFundsPnlPolicy,
 } from "@/api/spotFundsPnlPolicies";
-import type { Account, Limit, OrderSizeLimitMode } from "@/api/types";
+import type { Account, Limit, RuleMode } from "@/api/types";
 import { barrierCount } from "@/api/useLimits";
 import { validateLimit } from "@/api/validate";
 import {
@@ -48,8 +48,9 @@ import {
   type MissingAccountPolicy,
 } from "@/framework";
 import {
-  ORDER_SIZE_LIMIT_MODES,
+  RULE_MODES,
   isSpotFundsLimitMode,
+  limitPolicyHasMode,
   ruleModeLabel,
 } from "@/framework/registries/vocabulary";
 import { ChoiceCards } from "@/components/ChoiceCards";
@@ -238,7 +239,7 @@ function DurationPicker({
 // ---------------------------------------------------------------------------
 
 interface FormState {
-  mode: OrderSizeLimitMode | null;
+  mode: RuleMode | null;
   policy: Policy;
   scope: Scope;
   account: string;
@@ -249,7 +250,7 @@ interface FormState {
 
 function emptyForm(initialAccount = ""): FormState {
   return {
-    mode: null,
+    mode: "reject",
     policy: "rate_limit",
     scope: "broker",
     account: initialAccount,
@@ -310,7 +311,7 @@ function errMessage(err: unknown): string {
  * only the values are editable; otherwise all fields are editable. Validation
  * mirrors the cross-layer contract before the request is sent. Value fields are
  * labeled with human words from the policy catalog.
- * The order-size mode is also locked on edit because it is part of the key.
+ * The rule mode is also locked on edit because it is part of the key.
  */
 export function LimitDialog({
   open,
@@ -331,7 +332,7 @@ export function LimitDialog({
   accountSuggestions?: string[];
   accountGroupSuggestions?: string[];
   policyCounts?: Partial<Record<Policy, number>>;
-  orderSizeCounts: Record<OrderSizeLimitMode, number | undefined>;
+  orderSizeCounts: Record<RuleMode, number | undefined>;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
@@ -540,7 +541,7 @@ export function LimitDialog({
     setForm((prev) => ({
       ...prev,
       policy,
-      mode: policy === "order_size_limit" ? "reject" : null,
+      mode: limitPolicyHasMode(policy) ? "reject" : null,
       scope: offeredScopes(policy)[0] ?? "",
       values: {},
     }));
@@ -768,15 +769,15 @@ export function LimitDialog({
                   </div>
                 )}
 
-                {form.policy === "order_size_limit" && (
+                {limitPolicyHasMode(form.policy) && (
                   <div className="flex flex-col gap-y-1.5">
-                    <Label>{t("orderSizeMode.label")}</Label>
+                    <Label>{t("ruleMode.label")}</Label>
                     <ChoiceCards
-                      label={t("orderSizeMode.label")}
-                      options={ORDER_SIZE_LIMIT_MODES.map((mode) => ({
+                      label={t("ruleMode.label")}
+                      options={RULE_MODES.map((mode) => ({
                         value: mode,
                         title: ruleModeLabel(t, mode),
-                        description: t(`orderSizeMode.descriptions.${mode}`),
+                        description: t(`ruleMode.descriptions.${mode}`),
                         icon:
                           mode === "reject"
                             ? ShieldX

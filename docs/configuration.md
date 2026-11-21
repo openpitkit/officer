@@ -36,7 +36,8 @@ To create a local configuration without the setup wizard, run from the checkout:
 The supplied JSON chooses one default account, `enforce` funds checks, disabled
 encryption and signing, and `open` access without a password. Supplying the
 configuration confirms those choices; there is no separate acknowledgment field.
-`accountMode` also accepts `multi`, and `fundsLimitMode` accepts `track_only`.
+`accountMode` also accepts `multi`. `fundsLimitMode` accepts `enforce`,
+`review_with_hold`, `review_without_hold`, and `track_only`.
 `encryption` accepts `enabled` when a master key is supplied separately; disabled
 encryption refuses a configured key. Every field is required; unknown fields,
 invalid values and extra JSON values fail startup before database creation.

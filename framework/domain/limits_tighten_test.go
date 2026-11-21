@@ -35,7 +35,7 @@ var loosening = domain.ErrLoosening.Error()
 // rate builds a rate barrier of maxOrders over window, placed at no scope
 // yet (see atScope).
 func rate(maxOrders uint64, window time.Duration) domain.LimitRate {
-	return domain.LimitRate{MaxOrders: maxOrders, Window: window}
+	return domain.LimitRate{Mode: domain.RuleModeReject, MaxOrders: maxOrders, Window: window}
 }
 
 // atScope places the rate barrier limit at scope, naming the account acc and
@@ -73,7 +73,7 @@ func orderSize(quantity, notional string) domain.LimitOrderSize {
 // pnlBounds builds a global Spot Funds P&L-bounds barrier; an empty bound is
 // unset.
 func pnlBounds(currency, lower, upper string) domain.LimitSpotFundsPnlBounds {
-	return domain.LimitSpotFundsPnlBounds{
+	return domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: currency,
 		LowerBound: lower, UpperBound: upper,
@@ -266,13 +266,13 @@ func TestLimitPositionNoLooserThan(t *testing.T) {
 		{"removed", "", "10", "max_position unset while the current is 10: " + loosening},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			limit := domain.LimitPosition{MaxPosition: tc.value}
-			requireTightening(t, limit.NoLooserThan(domain.LimitPosition{MaxPosition: tc.ref}), tc.want)
+			limit := domain.LimitPosition{Mode: domain.RuleModeReject, MaxPosition: tc.value}
+			requireTightening(t, limit.NoLooserThan(domain.LimitPosition{Mode: domain.RuleModeReject, MaxPosition: tc.ref}), tc.want)
 		})
 	}
 	for _, values := range [][2]string{{"bad", "10"}, {"10", "bad"}} {
-		if err := (domain.LimitPosition{MaxPosition: values[0]}).NoLooserThan(
-			domain.LimitPosition{MaxPosition: values[1]},
+		if err := (domain.LimitPosition{Mode: domain.RuleModeReject, MaxPosition: values[0]}).NoLooserThan(
+			domain.LimitPosition{Mode: domain.RuleModeReject, MaxPosition: values[1]},
 		); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("NoLooserThan(%q, %q) = %v, want ErrInvalid", values[0], values[1], err)
 		}
@@ -284,7 +284,7 @@ func FuzzLimitPositionNoLooserThan(f *testing.F) {
 	f.Add("100", "1")
 	f.Add("0.1234567890123456789012345678", "0.0000000000000000000000000001")
 	f.Fuzz(func(t *testing.T, value, rawStep string) {
-		ref := domain.LimitPosition{
+		ref := domain.LimitPosition{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: value,
 		}
 		if ref.Validate() != nil {

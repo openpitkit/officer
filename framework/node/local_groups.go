@@ -674,20 +674,14 @@ func (n *localNode) groupProtection(
 	if group.Blocked {
 		return fmt.Errorf("group %q is blocked: %w", group.Code, domain.ErrLoosening)
 	}
-	for _, axis := range domain.SpotFundsPnlAxes {
-		key, err := domain.NewLimitKey(axis.Policy(), "", domain.ScopeAccountGroup, "", group.Code, "")
-		if err != nil {
-			return fmt.Errorf(
-				"read spot funds pnl-bounds limits for group %q: %w", group.Code, err,
-			)
-		}
-		_, bound, err := n.readSpotFundsPnlBoundsBarrier(ctx, key)
-		if err != nil {
-			return fmt.Errorf(
-				"read spot funds pnl-bounds limits for group %q: %w", group.Code, err,
-			)
-		}
-		if bound {
+	limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		return fmt.Errorf(
+			"read spot funds pnl-bounds limits for group %q: %w", group.Code, err,
+		)
+	}
+	for _, limit := range limits {
+		if isGroupSpotFundsPnlBoundsLimit(limit, group.Code) {
 			return fmt.Errorf(
 				"group %q carries a group-scoped Spot Funds P&L bound: %w",
 				group.Code, domain.ErrLoosening,

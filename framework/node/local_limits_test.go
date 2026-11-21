@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +95,7 @@ func TestLocalNode_PnlBoundAccountCurrency(t *testing.T) {
 				}
 				probe := &pnlBoundReadProbeRealm{RealmStore: st}
 				n.realm = probe
-				bound := domain.LimitSpotFundsPnlBounds{
+				bound := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis: axis, Scope: domain.ScopeAccount, Account: "acc",
 					Currency: tc.bound, LowerBound: "-100",
 				}
@@ -148,7 +149,7 @@ func TestLocalNode_PnlBoundOtherScopesIgnoreAccountCurrency(t *testing.T) {
 				if _, err := st.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
 					t.Fatal(err)
 				}
-				bound := domain.LimitSpotFundsPnlBounds{
+				bound := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis: domain.SpotFundsPnlAxisRealized, Scope: scope, Currency: currency, LowerBound: "-100",
 				}
 				if scope == domain.ScopeAccountGroup {
@@ -482,10 +483,11 @@ func TestLocalNode_PutRateLimitEngineFailureRestoresPrevious(t *testing.T) {
 		t.Fatalf("PutRateLimit first: %v", err)
 	}
 
-	current.failConfigure = true
+	configureErr := errors.New("engine: configure rate_limit: SDK rejected the rate limit")
+	current.configureErr = fmt.Errorf("%w: %w", configureErr, domain.ErrInvalid)
 	second := rateLimit(domain.ScopeBroker, "", "", 5, 2*time.Second)
-	if _, err := n.PutRateLimit(ctx, second, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err == nil {
-		t.Fatalf("PutRateLimit second: want error")
+	if _, err := n.PutRateLimit(ctx, second, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); !errors.Is(err, domain.ErrInvalid) || !errors.Is(err, configureErr) {
+		t.Fatalf("PutRateLimit second = %v, want the SDK validation error wrapping ErrInvalid", err)
 	}
 
 	stored, err := st.ListRateLimits(ctx, "")
@@ -512,7 +514,7 @@ func TestLocalNode_DeleteLimitAppliesAndAudits(t *testing.T) {
 	}
 
 	preparePolicyLifecycleBuild(n)
-	target := LimitTarget{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker}
+	target := LimitTarget{Mode: domain.RuleModeReject, Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker}
 	if _, err := n.DeleteLimit(ctx, target, testCaller); err != nil {
 		t.Fatalf("DeleteLimit: %v", err)
 	}
@@ -539,28 +541,89 @@ func TestLocalNode_DeleteLastLimitRebuildsFromStore(t *testing.T) {
 	t.Parallel()
 	old := newFakeEngine()
 	n, st := newTestNode(t, old)
-	current, _ := preparePolicyLifecycleBuild(n)
+	builds := 0
+	var current *fakeEngine
+	var rebuilt engine.Snapshot
+	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+		builds++
+		current = newFakeEngine()
+		return fakeBuild(current, &rebuilt)(snapshot)
+	}
 	ctx := context.Background()
-
-	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
-		t.Fatalf("PutRateLimit: %v", err)
+	assertLimits := func(got []domain.LimitRate, want ...domain.LimitRate) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("rate barriers = %+v, want %+v", got, want)
+		}
+		for _, limit := range want {
+			if !slices.Contains(got, limit) {
+				t.Fatalf("rate barriers = %+v, want %+v", got, want)
+			}
+		}
+	}
+	assertListed := func(want ...domain.LimitRate) {
+		t.Helper()
+		listed, err := n.ListLimits(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertLimits(listed.RateLimits, want...)
 	}
 
-	next := newFakeEngine()
-	var rebuilt engine.Snapshot
-	n.build = fakeBuild(next, &rebuilt)
-	target := LimitTarget{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker}
+	first := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)
+	second := first
+	second.Mode = domain.RuleModeReviewWithHold
+	if _, err := n.PutRateLimit(ctx, first, domain.LimitWriteAdd, domain.MissingAccountCreate, testCaller); err != nil {
+		t.Fatalf("PutRateLimit: %v", err)
+	}
+	if builds != 1 || n.currentEngine() != current || len(current.configureCalls) != 0 {
+		t.Fatalf("first barrier: builds=%d configure calls=%+v", builds, current.configureCalls)
+	}
+	assertLimits(rebuilt.RateLimits, first)
+	assertListed(first)
+	if _, err := n.PutRateLimit(ctx, second, domain.LimitWriteAdd, domain.MissingAccountCreate, testCaller); err != nil {
+		t.Fatalf("PutRateLimit review: %v", err)
+	}
+	if builds != 1 || n.currentEngine() != current || len(current.configureCalls) != 1 {
+		t.Fatalf("new mode: builds=%d configure calls=%+v", builds, current.configureCalls)
+	}
+	call := current.configureCalls[0]
+	if call.policy != domain.PolicyRateLimit {
+		t.Fatalf("configured policy = %q, want rate_limit", call.policy)
+	}
+	assertLimits(call.limits.RateLimits, first, second)
+	assertListed(first, second)
+
+	target := LimitTarget{Mode: domain.RuleModeReject, Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker}
 	sink, err := n.DeleteLimit(ctx, target, testCaller)
 	if err != nil {
 		t.Fatalf("DeleteLimit: %v", err)
 	}
+	if sink != nil || builds != 1 || n.currentEngine() != current || len(current.configureCalls) != 2 {
+		t.Fatalf("delete reject: sink=%T builds=%d configure calls=%+v", sink, builds, current.configureCalls)
+	}
+	call = current.configureCalls[1]
+	if call.policy != domain.PolicyRateLimit {
+		t.Fatalf("configured policy = %q, want rate_limit", call.policy)
+	}
+	assertLimits(call.limits.RateLimits, second)
+	assertListed(second)
+	previous := current
+	target.Mode = second.Mode
+	sink, err = n.DeleteLimit(ctx, target, testCaller)
+	if err != nil {
+		t.Fatalf("DeleteLimit review: %v", err)
+	}
 	if sink == nil {
 		t.Fatal("DeleteLimit returned nil sink after rebuild")
 	}
-	if current.running {
+	if builds != 2 || n.currentEngine() != current || len(current.configureCalls) != 0 {
+		t.Fatalf("last barrier: builds=%d configure calls=%+v", builds, current.configureCalls)
+	}
+	if previous.running {
 		t.Fatal("old engine still running after rebuild")
 	}
-	if !next.running {
+	if !current.running {
 		t.Fatal("replacement engine is not running after rebuild")
 	}
 	if len(rebuilt.RateLimits) != 0 {
@@ -573,6 +636,7 @@ func TestLocalNode_DeleteLastLimitRebuildsFromStore(t *testing.T) {
 	if len(stored) != 0 {
 		t.Fatalf("stored limits = %+v, want none", stored)
 	}
+	assertListed()
 }
 
 func TestLocalNode_PutAccountAssetRateLimit(t *testing.T) {
@@ -667,7 +731,7 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) 
 	ctx := context.Background()
 	setLiveConfigureProbe(t, n, eng)
 
-	limit := domain.LimitSpotFundsPnlBounds{
+	limit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -725,7 +789,7 @@ func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
 		Account: "acc-1", Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
 		Code: "pnl_bound_breached", Reason: "later SDK cause",
 	}}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
@@ -774,7 +838,7 @@ func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterConfigure(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "acc-1",
 		Currency:   "USD",
@@ -841,16 +905,17 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore(t *testing.
 	}
 	buildsBefore := probe.builds
 
-	eng.failConfigure = true
-	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	configureErr := errors.New("engine: configure pnl bounds: SDK rejected the bounds")
+	eng.configureErr = fmt.Errorf("%w: %w", configureErr, domain.ErrInvalid)
+	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,
 		Currency:   "USD",
 		LowerBound: "-100",
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller)
-	if err == nil {
-		t.Fatal("PutSpotFundsPnlBoundsLimit succeeded, want the engine failure")
+	if !errors.Is(err, domain.ErrInvalid) || !errors.Is(err, configureErr) {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit = %v, want the SDK validation error wrapping ErrInvalid", err)
 	}
 	if probe.builds != buildsBefore+1 {
 		t.Fatalf("rebuilds = %d, want exactly one from the reverted store",
@@ -896,7 +961,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 
-	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,
@@ -924,7 +989,7 @@ func TestLocalNode_NotImplementedSpotFundsConfigureDoesNotRebuild(t *testing.T) 
 	buildsBefore := probe.builds
 
 	eng.configureErr = fmt.Errorf("configure spot funds: %w", domain.ErrNotImplemented)
-	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -962,7 +1027,7 @@ func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -1023,7 +1088,7 @@ func TestLocalNode_PolicyConfigurationBlockReasonIsRestorable(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -1054,7 +1119,7 @@ func TestLocalNode_DeleteLastSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *test
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
-	limit := domain.LimitSpotFundsPnlBounds{
+	limit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -1065,7 +1130,7 @@ func TestLocalNode_DeleteLastSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *test
 	}
 	setLiveConfigureProbe(t, n, eng)
 
-	target := LimitTarget{
+	target := LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
 		Scope:  limit.Scope,
 	}
@@ -1105,7 +1170,7 @@ func TestLocalNode_DeleteSpotFundsPnlBoundsLimitNotImplementedRevertsWithoutRebu
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 
-	limit := domain.LimitSpotFundsPnlBounds{
+	limit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -1117,7 +1182,7 @@ func TestLocalNode_DeleteSpotFundsPnlBoundsLimitNotImplementedRevertsWithoutRebu
 	setLiveConfigureProbe(t, n, eng)
 	eng.configureErr = fmt.Errorf("configure spot funds: %w", domain.ErrNotImplemented)
 
-	target := LimitTarget{
+	target := LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
 		Scope:  limit.Scope,
 	}

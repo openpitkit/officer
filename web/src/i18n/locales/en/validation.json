@@ -51,7 +51,7 @@
     "pnlRequires": "{{policy}} requires lower_bound or upper_bound",
     "pnlBoundOrder": "lower_bound must be <= upper_bound",
     "modeRequired": "choose a funds limit mode",
-    "orderSizeModeInvalid": "choose an order-size mode"
+    "ruleModeInvalid": "choose a barrier mode"
   },
   "password": {
     "mismatch": "The passwords do not match."

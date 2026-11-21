@@ -402,7 +402,7 @@ func (n *localNode) loadSnapshot(
 		SpotFundsPnlBoundsLimits: spotFundsPnlBoundsLimits,
 		Groups:                   groups,
 		Balances:                 balances,
-		SpotFundsTrackOnly:       spotFundsLimitMode == domain.SpotFundsLimitModeTrackOnly,
+		SpotFundsLimitMode:       spotFundsLimitMode,
 	}
 	barriers := len(rateLimits) + len(orderSizeLimits) + len(positionLimits) + len(spotFundsPnlBoundsLimits)
 	counts := domain.NewAuditDetail(domain.AuditDetailHydrate, domain.AuditDetailParams{
@@ -749,8 +749,8 @@ func (n *localNode) RestoreBackup(
 	}
 
 	if beforeMode != afterMode && !plan.rebuild {
-		if err := n.currentEngine().SetSpotFundsTrackOnly(
-			durableCtx, afterMode == domain.SpotFundsLimitModeTrackOnly,
+		if err := n.currentEngine().SetSpotFundsLimitMode(
+			durableCtx, afterMode,
 		); err != nil {
 			return backup.RestoreSummary{}, n.currentMarketDataSink(),
 				failAfterCommit(
@@ -768,8 +768,8 @@ func (n *localNode) RestoreBackup(
 		}),
 	}); err != nil {
 		if !runtimeScope && beforeMode != afterMode {
-			if rollbackErr := n.currentEngine().SetSpotFundsTrackOnly(
-				durableCtx, beforeMode == domain.SpotFundsLimitModeTrackOnly,
+			if rollbackErr := n.currentEngine().SetSpotFundsLimitMode(
+				durableCtx, beforeMode,
 			); rollbackErr != nil {
 				return backup.RestoreSummary{}, n.currentMarketDataSink(),
 					n.fatalReconciliation(

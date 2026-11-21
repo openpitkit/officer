@@ -228,7 +228,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
-	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    "acc-1",
@@ -239,11 +239,11 @@ func seedRealm(t *testing.T, ctx context.Context, rs fwstore.RealmStore) domain.
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisUnrealized,
 			Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-100",
 		},
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisTotal,
 			Scope: domain.ScopeGlobal, Currency: "USD", UpperBound: "900",
 		},
@@ -2660,8 +2660,8 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 		{
 			name: "rate",
 			data: backup.Data{RateLimits: []domain.LimitRate{
-				{Scope: domain.ScopeBroker, MaxOrders: 1, Window: time.Second},
-				{Scope: domain.ScopeAccount, Account: "acc-1", Window: time.Minute},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 1, Window: time.Second},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "acc-1", Window: time.Minute},
 			}},
 			want: []string{"rate_limit", `scope "account"`, `account "acc-1"`},
 		},
@@ -2680,8 +2680,8 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 		{
 			name: "spot-funds-pnl-bounds",
 			data: backup.Data{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-				{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
-				{
+				{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+				{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
 					LowerBound: "-1",
@@ -3164,7 +3164,7 @@ func TestBackupRestoreRejectsInvalidSpotFundsLimitModeAndRollsBack(t *testing.T)
 
 func TestBackupRestoreValidSpotFundsLimitModeAndOtherSettings(t *testing.T) {
 	t.Parallel()
-	for _, value := range []string{"enforce", "track_only"} {
+	for _, value := range []string{"enforce", "review_with_hold", "review_without_hold", "track_only"} {
 		t.Run(value, func(t *testing.T) {
 			ctx := context.Background()
 			_, realm := newTestStore(t)
@@ -3560,7 +3560,7 @@ func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 	}); err != nil {
 		t.Fatalf("dst CreateAccount(acc-1): %v", err)
 	}
-	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:         domain.SpotFundsPnlAxisRealized,
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-a",
@@ -3569,7 +3569,7 @@ func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 	}); err != nil {
 		t.Fatalf("dst PutSpotFundsPnlBoundsLimit(desk-a): %v", err)
 	}
-	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:         domain.SpotFundsPnlAxisRealized,
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-b",
@@ -3764,8 +3764,8 @@ func TestBackupPositionLimitsRoundTrip(t *testing.T) {
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
 	want := []domain.LimitPosition{
-		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
-		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
 	}
 	for _, limit := range want {
 		if err := src.PutPositionLimit(ctx, limit); err != nil {
@@ -3812,9 +3812,9 @@ func TestBackupPositionLimitsRestoreModesAndSelectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, limit := range []domain.LimitPosition{
-		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
-		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
-		{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "100"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "100"},
 	} {
 		if err := src.PutPositionLimit(ctx, limit); err != nil {
 			t.Fatal(err)
@@ -3856,9 +3856,9 @@ func TestBackupPositionLimitsRestoreModesAndSelectors(t *testing.T) {
 				}
 			}
 			for _, limit := range []domain.LimitPosition{
-				{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "999"},
-				{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "EXTRA", MaxPosition: "7"},
-				{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "8"},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "999"},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "EXTRA", MaxPosition: "7"},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "8"},
 			} {
 				if err := dst.PutPositionLimit(ctx, limit); err != nil {
 					t.Fatal(err)
@@ -3868,16 +3868,16 @@ func TestBackupPositionLimitsRestoreModesAndSelectors(t *testing.T) {
 				t.Fatalf("RestoreBackup: %v", err)
 			}
 			want := []domain.LimitPosition{
-				{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: tc.existing},
+				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: tc.existing},
 			}
 			if tc.keepExtra {
-				want = append(want, domain.LimitPosition{
+				want = append(want, domain.LimitPosition{Mode: domain.RuleModeReject,
 					Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "EXTRA", MaxPosition: "7",
 				})
 			}
 			want = append(want,
-				domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
-				domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "8"},
+				domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
+				domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "8"},
 			)
 			got, err := dst.ListPositionLimits(ctx, "")
 			if err != nil || !reflect.DeepEqual(got, want) {
@@ -3894,9 +3894,9 @@ func TestBackupPositionLimitsRejectInvalidAndUnknownAxes(t *testing.T) {
 		limit domain.LimitPosition
 		want  string
 	}{
-		{"invalid value", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "-1"}, "position_limit"},
-		{"unknown account", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "missing", Asset: "AAPL", MaxPosition: "1"}, "missing"},
-		{"unknown asset", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "missing", MaxPosition: "1"}, "missing"},
+		{"invalid value", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "-1"}, "position_limit"},
+		{"unknown account", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "missing", Asset: "AAPL", MaxPosition: "1"}, "missing"},
+		{"unknown asset", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "missing", MaxPosition: "1"}, "missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, rs := newRealmStore(t, domain.DefaultRealm)
@@ -3905,7 +3905,7 @@ func TestBackupPositionLimitsRejectInvalidAndUnknownAxes(t *testing.T) {
 			archive := backup.NewArchive(time.Now().UTC(), "test",
 				backup.RealmLabel{Code: string(domain.DefaultRealm)}, backup.Scope{All: true},
 				backup.Data{PositionLimits: []domain.LimitPosition{
-					{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
+					{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "0"},
 					tc.limit,
 				}}, backup.CredentialFormPlaintext,
 			)

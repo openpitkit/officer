@@ -50,22 +50,22 @@ func TestSnapshotWithoutAccountKeepsUnrelatedAndGroupRuntimeState(t *testing.T) 
 			{Account: "retained", Asset: "USD"},
 		},
 		RateLimits: []domain.LimitRate{
-			{Scope: domain.ScopeBroker, MaxOrders: 10, Window: time.Minute},
-			{Scope: domain.ScopeAccount, Account: "deleted", MaxOrders: 1, Window: time.Minute},
-			{Scope: domain.ScopeAccount, Account: "retained", MaxOrders: 2, Window: time.Minute},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 10, Window: time.Minute},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "deleted", MaxOrders: 1, Window: time.Minute},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "retained", MaxOrders: 2, Window: time.Minute},
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
 			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "deleted", Asset: "USD", MaxQuantity: "1"},
 			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "retained", Asset: "USD", MaxQuantity: "2"},
 		},
 		PositionLimits: []domain.LimitPosition{
-			{Scope: domain.ScopeAccountAsset, Account: "deleted", Asset: "USD", MaxPosition: "100"},
-			{Scope: domain.ScopeAccountAsset, Account: "retained", Asset: "USD", MaxPosition: "100"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "deleted", Asset: "USD", MaxPosition: "100"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "retained", Asset: "USD", MaxPosition: "100"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "deleted", Currency: "USD", LowerBound: "-1"},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "retained", Currency: "USD", LowerBound: "-2"},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-3"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "deleted", Currency: "USD", LowerBound: "-1"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "retained", Currency: "USD", LowerBound: "-2"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-3"},
 		},
 	}, "deleted")
 

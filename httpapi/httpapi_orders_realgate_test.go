@@ -1247,7 +1247,7 @@ func (e *realGateEngine) ConfigurePolicy(
 	return engine.PolicyConfigurationResult{}, nil
 }
 
-func (e *realGateEngine) SetSpotFundsTrackOnly(context.Context, bool) error {
+func (*realGateEngine) SetSpotFundsLimitMode(context.Context, domain.SpotFundsLimitMode) error {
 	return nil
 }
 func (*realGateEngine) SpotFundsAccountPnlAssignment(

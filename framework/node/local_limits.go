@@ -520,10 +520,10 @@ func (n *localNode) guardTightenOnlyOrderSize(
 }
 
 // guardTightenOnlySpotFundsPnlBounds refuses a tighten-only caller's Spot
-// Funds P&L bound that is looser than the bound it takes over from: the bound
-// it replaces, prev when hadPrev; else, for an account_group bound, the global
-// bound, whose currency it must share and which it must not loosen - on
-// purpose a stricter contract than the per-member cascade; else, for an
+// Funds P&L bound that is looser than the bound of its mode it takes over from:
+// the bound it replaces, prev when hadPrev; else, for an account_group bound,
+// the global bound, whose currency it must share and which it must not loosen -
+// on purpose a stricter contract than the per-member cascade; else, for an
 // account bound, the bound the cascade resolves for the account now (see
 // resolvedSpotFundsPnlBounds). A new global bound only adds a tier. It returns
 // nil for a caller that is not tighten-only.
@@ -549,13 +549,13 @@ func (n *localNode) guardTightenOnlySpotFundsPnlBounds(
 	case domain.ScopeGlobal:
 		return nil
 	case domain.ScopeAccountGroup:
-		key, keyErr := domain.NewLimitKey(limit.Axis.Policy(), "", domain.ScopeGlobal, "", "", "")
+		key, keyErr := domain.NewLimitKey(limit.Axis.Policy(), limit.Mode, domain.ScopeGlobal, "", "", "")
 		if keyErr != nil {
 			return keyErr
 		}
 		ref, ok, err = n.readSpotFundsPnlBoundsBarrier(ctx, key)
 	case domain.ScopeAccount:
-		ref, ok, err = n.resolvedSpotFundsPnlBounds(ctx, limit.Axis, groupCode, currency)
+		ref, ok, err = n.resolvedSpotFundsPnlBounds(ctx, limit.Axis, limit.Mode, groupCode, currency)
 	default:
 		return fmt.Errorf(
 			"scope %q not allowed for policy %q: %w",
@@ -598,19 +598,19 @@ func (n *localNode) spotFundsPnlAccountCurrency(
 	return groupCode, currency, nil
 }
 
-// resolvedSpotFundsPnlBounds returns the Spot Funds P&L bound of axis the
-// engine's cascade applies while the account has no bound of its own: its
+// resolvedSpotFundsPnlBounds returns the Spot Funds P&L bound of axis and mode
+// the engine's cascade applies while the account has no bound of its own: its
 // group's bound when that bound matches the resolved, non-empty account
 // currency, else the global bound on the same currency test. The bool is
 // false when no bound applies.
 func (n *localNode) resolvedSpotFundsPnlBounds(
-	ctx context.Context, axis domain.SpotFundsPnlAxis, groupCode, currency string,
+	ctx context.Context, axis domain.SpotFundsPnlAxis, mode domain.RuleMode, groupCode, currency string,
 ) (domain.LimitSpotFundsPnlBounds, bool, error) {
 	applies := func(bound domain.LimitSpotFundsPnlBounds) bool {
 		return bound.Currency == currency
 	}
 	if groupCode != "" {
-		key, err := domain.NewLimitKey(axis.Policy(), "", domain.ScopeAccountGroup, "", groupCode, "")
+		key, err := domain.NewLimitKey(axis.Policy(), mode, domain.ScopeAccountGroup, "", groupCode, "")
 		if err != nil {
 			return domain.LimitSpotFundsPnlBounds{}, false, err
 		}
@@ -622,7 +622,7 @@ func (n *localNode) resolvedSpotFundsPnlBounds(
 			return bound, true, nil
 		}
 	}
-	key, err := domain.NewLimitKey(axis.Policy(), "", domain.ScopeGlobal, "", "", "")
+	key, err := domain.NewLimitKey(axis.Policy(), mode, domain.ScopeGlobal, "", "", "")
 	if err != nil {
 		return domain.LimitSpotFundsPnlBounds{}, false, err
 	}

@@ -104,10 +104,44 @@
     ],
     "positionLimits": [
       {
+        "Mode": "reject",
         "Scope": "account_asset",
         "Account": "acc-1",
         "Asset": "AAPL",
         "MaxPosition": "10.00000001"
+      }
+    ],
+    "spotFundsPnlBoundsLimits": [
+      {
+        "Mode": "reject",
+        "Scope": "global",
+        "Account": "",
+        "AccountGroup": "",
+        "Currency": "USD",
+        "LowerBound": "-100",
+        "UpperBound": ""
+      }
+    ],
+    "spotFundsUnrealizedPnlBoundsLimits": [
+      {
+        "Mode": "review_with_hold",
+        "Scope": "account_group",
+        "Account": "",
+        "AccountGroup": "grp-1",
+        "Currency": "USD",
+        "LowerBound": "-200",
+        "UpperBound": ""
+      }
+    ],
+    "spotFundsTotalPnlBoundsLimits": [
+      {
+        "Mode": "review_without_hold",
+        "Scope": "account",
+        "Account": "acc-1",
+        "AccountGroup": "",
+        "Currency": "USD",
+        "LowerBound": "-300",
+        "UpperBound": ""
       }
     ],
     "adjustments": [

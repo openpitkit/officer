@@ -326,6 +326,18 @@ func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
 	if _, err := store.currentDB().ExecContext(ctx, `INSERT INTO limit_order_size (scope, max_quantity) VALUES ('broker', '10')`); err != nil {
 		t.Fatalf("insert released row without mode: %v", err)
 	}
+	if _, err := store.currentDB().ExecContext(ctx, `INSERT INTO limit_rate (scope, max_orders, window) VALUES ('broker', 10, '1s')`); err != nil {
+		t.Fatalf("insert released rate row without mode: %v", err)
+	}
+	if _, err := store.currentDB().ExecContext(ctx, `INSERT INTO asset (code) VALUES ('USD')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, axis := range domain.SpotFundsPnlAxes {
+		if _, err := store.currentDB().ExecContext(ctx, `INSERT INTO limit_spot_funds_pnl_bound
+			(axis, scope, currency_asset_id, lower_bound) VALUES (?, 'global', (SELECT id FROM asset WHERE code = 'USD'), '-10')`, axis); err != nil {
+			t.Fatalf("insert released %s row without mode: %v", axis, err)
+		}
+	}
 	if err := migration.Apply(ctx, store.currentDB(), source, migration.Config{}, store.dialect); err != nil {
 		t.Fatalf("apply 0003: %v", err)
 	}
@@ -335,6 +347,20 @@ func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
 	}
 	if mode != domain.RuleModeReject {
 		t.Fatalf("migrated mode = %q, want reject", mode)
+	}
+	if err := store.currentDB().QueryRowContext(ctx, `SELECT mode FROM limit_rate WHERE scope = 'broker'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != domain.RuleModeReject {
+		t.Fatalf("migrated rate mode = %q, want reject", mode)
+	}
+	for _, axis := range domain.SpotFundsPnlAxes {
+		if err := store.currentDB().QueryRowContext(ctx, `SELECT mode FROM limit_spot_funds_pnl_bound WHERE axis = ? AND scope = 'global'`, axis).Scan(&mode); err != nil {
+			t.Fatal(err)
+		}
+		if mode != domain.RuleModeReject {
+			t.Fatalf("migrated %s mode = %q, want reject", axis, mode)
+		}
 	}
 }
 

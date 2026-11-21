@@ -21,7 +21,10 @@ import { invalid, isRecord } from "@/api/decode";
 import type { SpotFundsLimitMode } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useApiClient, type ApiClient } from "@/framework";
-import { isSpotFundsLimitMode } from "@/framework/registries/vocabulary";
+import {
+  isSpotFundsLimitMode,
+  SPOT_FUNDS_LIMIT_MODES,
+} from "@/framework/registries/vocabulary";
 
 /** The effective mode and currency gaps reported by the server. */
 export interface SpotFundsLimitModeState {
@@ -37,7 +40,11 @@ const RESPONSE = "Spot Funds limit mode";
 
 function decodeMode(value: unknown): SpotFundsLimitMode {
   if (!isSpotFundsLimitMode(value)) {
-    throw invalid(RESPONSE, "mode", 'must be "enforce" or "track_only"');
+    throw invalid(
+      RESPONSE,
+      "mode",
+      `must be one of: ${SPOT_FUNDS_LIMIT_MODES.join(", ")}`,
+    );
   }
   return value;
 }

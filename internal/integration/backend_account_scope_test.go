@@ -370,7 +370,7 @@ func accountScopeSites() []scopeSite {
 		{
 			name: "PutRateLimit",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				return svc.PutRateLimit(ctx, domain.LimitRate{
+				return svc.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 					Scope: domain.ScopeAccount, Account: req.account,
 					Window: time.Second, MaxOrders: 10,
 				}, domain.LimitWriteReplace, req.policy)
@@ -393,7 +393,7 @@ func accountScopeSites() []scopeSite {
 		{
 			name: "PutSpotFundsPnlBoundsLimit/account",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccount, Account: req.account,
 					Currency: "USD", LowerBound: "-1",
@@ -405,7 +405,7 @@ func accountScopeSites() []scopeSite {
 		{
 			name: "PutSpotFundsPnlBoundsLimit/account_group",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccountGroup, AccountGroup: scopeClientGroup,
 					Currency: "USD", LowerBound: "-1",
@@ -417,7 +417,7 @@ func accountScopeSites() []scopeSite {
 		{
 			name: "DeleteLimit/account",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				return svc.DeleteLimit(ctx, node.LimitTarget{
+				return svc.DeleteLimit(ctx, node.LimitTarget{Mode: domain.RuleModeReject,
 					Policy: domain.PolicyRateLimit, Scope: domain.ScopeAccount,
 					Account: req.account,
 				})
@@ -428,7 +428,7 @@ func accountScopeSites() []scopeSite {
 		{
 			name: "DeleteLimit/account_group",
 			run: func(ctx context.Context, svc *backend.Service, _ scopeRequest) error {
-				return svc.DeleteLimit(ctx, node.LimitTarget{
+				return svc.DeleteLimit(ctx, node.LimitTarget{Mode: domain.RuleModeReject,
 					Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
 					Scope:  domain.ScopeAccountGroup, AccountGroup: scopeClientGroup,
 				})
@@ -841,7 +841,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 		{
 			name: "PutRateLimit/broker",
 			run: func(ctx context.Context, svc *backend.Service) error {
-				return svc.PutRateLimit(ctx, domain.LimitRate{
+				return svc.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 					Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 10,
 				}, domain.LimitWriteReplace, "")
 			},
@@ -860,7 +860,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 		{
 			name: "PutSpotFundsPnlBoundsLimit/global",
 			run: func(ctx context.Context, svc *backend.Service) error {
-				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1",
 				}, domain.LimitWriteReplace, "")
@@ -870,7 +870,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 		{
 			name: "DeleteLimit/asset",
 			run: func(ctx context.Context, svc *backend.Service) error {
-				return svc.DeleteLimit(ctx, node.LimitTarget{
+				return svc.DeleteLimit(ctx, node.LimitTarget{Mode: domain.RuleModeReject,
 					Policy: domain.PolicyRateLimit, Scope: domain.ScopeAsset,
 					Asset: "AAPL",
 				})
@@ -1553,9 +1553,9 @@ func TestService_AccountScopeNarrowsLimits(t *testing.T) {
 	t.Parallel()
 	limits := node.AccountLimits{
 		RateLimits: []domain.LimitRate{
-			{Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
-			{Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
-			{Scope: domain.ScopeBroker},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker},
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
 			{
@@ -1566,15 +1566,15 @@ func TestService_AccountScopeNarrowsLimits(t *testing.T) {
 			{Mode: domain.RuleModeReject, Scope: domain.ScopeSettlementAsset, Asset: "USD"},
 		},
 		PositionLimits: []domain.LimitPosition{
-			{Scope: domain.ScopeAccountAsset, Account: scopeHiddenAccount, Asset: "BTC", MaxPosition: "2"},
-			{Scope: domain.ScopeAccountAsset, Account: scopeResolvedAccount, Asset: "BTC", MaxPosition: "1"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: scopeHiddenAccount, Asset: "BTC", MaxPosition: "2"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: scopeResolvedAccount, Asset: "BTC", MaxPosition: "1"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal},
 		},
 	}
 	narrowed := node.AccountLimits{
@@ -1674,16 +1674,16 @@ func TestService_AccountScopeNarrowsOverview(t *testing.T) {
 	t.Parallel()
 	limits := node.AccountLimits{
 		RateLimits: []domain.LimitRate{
-			{Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
-			{Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: scopeResolvedAccount},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: scopeHiddenAccount},
 		},
 		PositionLimits: []domain.LimitPosition{
-			{Scope: domain.ScopeAccountAsset, Account: scopeResolvedAccount, Asset: "BTC", MaxPosition: "1"},
-			{Scope: domain.ScopeAccountAsset, Account: scopeHiddenAccount, Asset: "BTC", MaxPosition: "2"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: scopeResolvedAccount, Asset: "BTC", MaxPosition: "1"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: scopeHiddenAccount, Asset: "BTC", MaxPosition: "2"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeVisibleGroup},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: scopeHiddenGroup},
 		},
 	}
 	for _, tc := range []struct {

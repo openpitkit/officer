@@ -72,7 +72,7 @@ type AccountLimits struct {
 type LimitTarget struct {
 	// Policy is the policy the barrier belongs to (e.g. domain.PolicyRateLimit).
 	Policy string
-	// Mode identifies an order_size_limit barrier; empty for every other policy.
+	// Mode identifies a barrier of every policy for which domain.LimitPolicyHasMode is true.
 	Mode domain.RuleMode
 	// Scope is the axis combination the barrier applies to.
 	Scope domain.LimitScope
@@ -321,7 +321,8 @@ type Node interface {
 	// SetSpotFundsLimitMode persists the global mode of the Spot Funds
 	// limit-mode meta-policy (domain.PolicySpotFundsLimitMode), applies it to
 	// the live engine, and audits it as a set_limit. A tighten-only caller
-	// cannot switch from Enforce to TrackOnly.
+	// cannot switch to a less strict mode. Enforce is stricter than either
+	// review mode, and both review modes are stricter than TrackOnly.
 	SetSpotFundsLimitMode(
 		ctx context.Context, mode domain.SpotFundsLimitMode, caller domain.Caller,
 	) error

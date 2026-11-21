@@ -860,35 +860,48 @@ describe("WelcomeQuickStart while accounts are hidden", () => {
     );
   });
 
-  it("refuses the starter barriers when the demo target has a reject barrier", async () => {
-    const user = userEvent.setup();
-    fetchPoliciesPageMock.mockResolvedValue({
-      items: [
-        {
-          policy: "order_size_limit",
-          mode: "reject",
-          scope: "account_underlying_asset",
-          account: "main",
-          accountGroup: "",
-          asset: "BTC",
-          values: { max_quantity: "5" },
-        },
-      ],
-      total: 1,
-    });
-    renderQuickStart();
+  it.each([
+    {
+      policy: "order_size_limit",
+      scope: "account_underlying_asset",
+      asset: "BTC",
+      values: { max_quantity: "5" },
+    },
+    {
+      policy: "rate_limit",
+      scope: "account",
+      asset: "",
+      values: { max_orders: "10", window: "1m" },
+    },
+  ])(
+    "recognizes a saved $policy reject barrier as a starter barrier",
+    async (barrier) => {
+      const user = userEvent.setup();
+      fetchPoliciesPageMock.mockResolvedValue({
+        items: [
+          {
+            ...barrier,
+            mode: "reject",
+            account: "main",
+            accountGroup: "",
+          },
+        ],
+        total: 1,
+      });
+      renderQuickStart();
 
-    await user.click(
-      screen.getByRole("button", { name: /Add starter policy barriers/i }),
-    );
+      await user.click(
+        screen.getByRole("button", { name: /Add starter policy barriers/i }),
+      );
 
-    expect(
-      await screen.findByText(
-        "Add starter policy barriers failed: The account main already has a starter barrier. The demo writes only into an account without them.",
-      ),
-    ).toBeInTheDocument();
-    expect(putLimitMock).not.toHaveBeenCalled();
-  });
+      expect(
+        await screen.findByText(
+          "Add starter policy barriers failed: The account main already has a starter barrier. The demo writes only into an account without them.",
+        ),
+      ).toBeInTheDocument();
+      expect(putLimitMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses the starter barriers when not every barrier could be read", async () => {
     const user = userEvent.setup();

@@ -2446,8 +2446,9 @@ describe("limits client", () => {
     ["order_size_limit", undefined],
     ["order_size_limit", "unknown"],
     ["order_size_limit", null],
-    ["rate_limit", "reject"],
-    ["spot_funds_limit_mode", "review_without_hold"],
+    ["rate_limit", undefined],
+    ["rate_limit", "unknown"],
+    ["spot_funds_pnl_bounds_kill_switch", null],
     ["position_limit", undefined],
   ])("rejects policy %s with invalid top-level mode %s", async (kind, mode) => {
     vi.mocked(fetch).mockResolvedValue(
@@ -2536,38 +2537,39 @@ describe("limits client", () => {
     },
   );
 
-  it("deletes the review barrier with its mode and another policy without mode", async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
-    const target = {
-      policy: "order_size_limit",
-      mode: "review_without_hold" as const,
-      scope: "broker",
-      account: "",
-      accountGroup: "",
-      asset: "",
-    };
-    await api().deleteLimit(target);
-    let url = new URL(
-      String(vi.mocked(fetch).mock.lastCall![0]),
-      "http://test",
-    );
-    expect(url.searchParams.get("mode")).toBe("review_without_hold");
-    await api().deleteLimit({ ...target, policy: "rate_limit", mode: null });
-    url = new URL(String(vi.mocked(fetch).mock.lastCall![0]), "http://test");
-    expect(url.searchParams.has("mode")).toBe(false);
-    const calls = vi.mocked(fetch).mock.calls.length;
-    await expect(api().deleteLimit({ ...target, mode: null })).rejects.toThrow(
-      /mode/,
-    );
-    expect(fetch).toHaveBeenCalledTimes(calls);
-  });
+  it.each(["order_size_limit", "rate_limit"])(
+    "deletes a %s review barrier by its exact mode and refuses a missing mode",
+    async (policy) => {
+      vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+      const target = {
+        policy,
+        mode: "review_without_hold" as const,
+        scope: "broker",
+        account: "",
+        accountGroup: "",
+        asset: "",
+      };
+      await api().deleteLimit(target);
+      const url = new URL(
+        String(vi.mocked(fetch).mock.lastCall![0]),
+        "http://test",
+      );
+      expect(url.searchParams.get("policy")).toBe(policy);
+      expect(url.searchParams.get("mode")).toBe("review_without_hold");
+      const calls = vi.mocked(fetch).mock.calls.length;
+      await expect(
+        api().deleteLimit({ ...target, mode: null }),
+      ).rejects.toThrow(/mode/);
+      expect(fetch).toHaveBeenCalledTimes(calls);
+    },
+  );
 
   it.each<[keyof LimitTarget, LimitTarget, LimitTarget]>([
     [
       "policy",
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -2575,7 +2577,7 @@ describe("limits client", () => {
       },
       {
         policy: "spot_funds_unrealized_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -2624,7 +2626,7 @@ describe("limits client", () => {
       "account",
       {
         policy: "rate_limit",
-        mode: null,
+        mode: "reject",
         scope: "account",
         account: "desk-alpha",
         accountGroup: "",
@@ -2632,7 +2634,7 @@ describe("limits client", () => {
       },
       {
         policy: "rate_limit",
-        mode: null,
+        mode: "reject",
         scope: "account",
         account: "desk-beta",
         accountGroup: "",
@@ -2643,7 +2645,7 @@ describe("limits client", () => {
       "accountGroup",
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "account_group",
         account: "",
         accountGroup: "group-alpha",
@@ -2651,7 +2653,7 @@ describe("limits client", () => {
       },
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "account_group",
         account: "",
         accountGroup: "group-beta",
@@ -2662,7 +2664,7 @@ describe("limits client", () => {
       "asset",
       {
         policy: "rate_limit",
-        mode: null,
+        mode: "reject",
         scope: "asset",
         account: "",
         accountGroup: "",
@@ -2670,7 +2672,7 @@ describe("limits client", () => {
       },
       {
         policy: "rate_limit",
-        mode: null,
+        mode: "reject",
         scope: "asset",
         account: "",
         accountGroup: "",
@@ -2697,6 +2699,7 @@ describe("limits client", () => {
       "maxPosition",
       {
         positionLimit: {
+          mode: "reject",
           scope: "account_asset",
           account: "desk-alpha",
           asset: "AAPL",
@@ -2712,7 +2715,7 @@ describe("limits client", () => {
       const result = putLimit(
         {
           policy: "position_limit",
-          mode: null,
+          mode: "reject",
           scope: "account_asset",
           account: "desk-alpha",
           accountGroup: "",
@@ -2741,7 +2744,7 @@ describe("limits client", () => {
           policies: [
             {
               kind: "position_limit",
-              mode: null,
+              mode: "reject",
               scope: "account_asset",
               account: "desk-alpha",
               asset: "AAPL",
@@ -2776,10 +2779,11 @@ describe("limits client", () => {
     });
   });
 
-  it("upserts a position ceiling with the exact string and reads the stored barrier", async () => {
+  it("upserts a position ceiling with the exact string and review mode", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         positionLimit: {
+          mode: "review_with_hold",
           scope: "account_asset",
           account: "desk-alpha",
           asset: "AAPL",
@@ -2791,7 +2795,7 @@ describe("limits client", () => {
     const limit = await putLimit(
       {
         policy: "position_limit",
-        mode: null,
+        mode: "review_with_hold",
         scope: "account_asset",
         account: "desk-alpha",
         accountGroup: "",
@@ -2810,12 +2814,13 @@ describe("limits client", () => {
           account: "desk-alpha",
           asset: "AAPL",
           maxPosition: "+10.000000010",
+          mode: "review_with_hold",
         }),
       }),
     );
     expect(limit).toEqual({
       policy: "position_limit",
-      mode: null,
+      mode: "review_with_hold",
       scope: "account_asset",
       account: "desk-alpha",
       accountGroup: "",
@@ -2824,13 +2829,13 @@ describe("limits client", () => {
     });
   });
 
-  it("reads a position policy row and serializes its filter and sort", async () => {
+  it("reads a position review row and serializes its policy, mode and sort filters", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         policies: [
           {
             kind: "position_limit",
-            mode: null,
+            mode: "review_with_hold",
             scope: "account_asset",
             account: "desk-alpha",
             asset: "AAPL",
@@ -2843,6 +2848,7 @@ describe("limits client", () => {
     const { fetchPoliciesPage } = api();
     const page = await fetchPoliciesPage({
       policy: "position",
+      mode: "review_with_hold",
       sort: "maxPosition",
       order: "desc",
     });
@@ -2852,13 +2858,14 @@ describe("limits client", () => {
     );
     expect(Object.fromEntries(url.searchParams.entries())).toEqual({
       policy: "position",
+      mode: "review_with_hold",
       sort: "maxPosition",
       order: "desc",
     });
     expect(page.items).toEqual([
       {
         policy: "position_limit",
-        mode: null,
+        mode: "review_with_hold",
         scope: "account_asset",
         account: "desk-alpha",
         accountGroup: "",
@@ -2868,17 +2875,37 @@ describe("limits client", () => {
     ]);
   });
 
-  it("reads positionLimits from account state", async () => {
+  it("keeps review modes on typed rate, position and P&L rows from account state", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         account: { code: "desk-alpha" },
         limits: {
+          rateLimits: [
+            {
+              mode: "review_without_hold",
+              scope: "account",
+              account: "desk-alpha",
+              asset: "",
+              maxOrders: 20,
+              windowMs: 60000,
+            },
+          ],
           positionLimits: [
             {
+              mode: "review_with_hold",
               scope: "account_asset",
               account: "desk-alpha",
               asset: "AAPL",
               maxPosition: "0",
+            },
+          ],
+          spotFundsPnlBoundsLimits: [
+            {
+              mode: "review_without_hold",
+              scope: "account",
+              account: "desk-alpha",
+              currency: "USD",
+              lowerBound: "-1000",
             },
           ],
         },
@@ -2887,31 +2914,41 @@ describe("limits client", () => {
     const { fetchAccountState } = api();
     const state = await fetchAccountState("desk-alpha");
     expect(state.limits).toEqual([
+      expect.objectContaining({
+        policy: "rate_limit",
+        mode: "review_without_hold",
+        values: { max_orders: "20", window: "1m" },
+      }),
       {
         policy: "position_limit",
-        mode: null,
+        mode: "review_with_hold",
         scope: "account_asset",
         account: "desk-alpha",
         accountGroup: "",
         asset: "AAPL",
         values: { max_position: "0" },
       },
+      expect.objectContaining({
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: "review_without_hold",
+        values: { currency: "USD", lower_bound: "-1000", upper_bound: "" },
+      }),
     ]);
   });
 
-  it("deletes a position limit through the generic pair endpoint", async () => {
+  it("deletes a position review barrier through the generic endpoint", async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
     const { deleteLimit } = api();
     await deleteLimit({
       policy: "position_limit",
-      mode: null,
+      mode: "review_with_hold",
       scope: "account_asset",
       account: "desk-alpha",
       accountGroup: "",
       asset: "AAPL",
     });
     expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/limits?policy=position_limit&scope=account_asset&account=desk-alpha&asset=AAPL",
+      "/app/api/v1/limits?policy=position_limit&scope=account_asset&mode=review_with_hold&account=desk-alpha&asset=AAPL",
       expect.objectContaining({ method: "DELETE" }),
     );
   });
@@ -2948,13 +2985,13 @@ describe("limits client", () => {
     );
   });
 
-  it("flattens typed limit-list responses for the dashboard view", async () => {
+  it("flattens typed limit-list responses with rate and P&L review modes", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         policies: [
           {
             kind: "rate_limit",
-            mode: null,
+            mode: "review_with_hold",
             scope: "account",
             account: "desk-alpha",
             asset: "",
@@ -2970,7 +3007,7 @@ describe("limits client", () => {
           },
           {
             kind: "spot_funds_pnl_bounds_kill_switch",
-            mode: null,
+            mode: "review_with_hold",
             scope: "account_group",
             account: "",
             accountGroup: "desk-alpha",
@@ -2985,7 +3022,7 @@ describe("limits client", () => {
           },
           {
             kind: "spot_funds_unrealized_pnl_bounds_kill_switch",
-            mode: null,
+            mode: "reject",
             scope: "account",
             account: "desk-alpha",
             asset: "",
@@ -2999,7 +3036,7 @@ describe("limits client", () => {
           },
           {
             kind: "spot_funds_total_pnl_bounds_kill_switch",
-            mode: null,
+            mode: "reject",
             scope: "global",
             account: "",
             asset: "",
@@ -3026,7 +3063,7 @@ describe("limits client", () => {
     expect(limits).toEqual([
       {
         policy: "rate_limit",
-        mode: null,
+        mode: "review_with_hold",
         scope: "account",
         account: "desk-alpha",
         accountGroup: "",
@@ -3044,7 +3081,7 @@ describe("limits client", () => {
       },
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "review_with_hold",
         scope: "account_group",
         account: "",
         accountGroup: "desk-alpha",
@@ -3053,7 +3090,7 @@ describe("limits client", () => {
       },
       {
         policy: "spot_funds_unrealized_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "account",
         account: "desk-alpha",
         accountGroup: "",
@@ -3062,7 +3099,7 @@ describe("limits client", () => {
       },
       {
         policy: "spot_funds_total_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "global",
         account: "",
         accountGroup: "",
@@ -3076,7 +3113,7 @@ describe("limits client", () => {
     ["addLimit", "POST", 201],
     ["putLimit", "PUT", 200],
   ] as const)(
-    "writes rate limits through %s (%s, %i)",
+    "writes rate limits with a review mode through %s (%s, %i)",
     async (operation, method, status) => {
       const stored = {
         scope: "account",
@@ -3084,6 +3121,7 @@ describe("limits client", () => {
         asset: "",
         windowMs: 60000,
         maxOrders: 20,
+        mode: "review_with_hold",
       };
       vi.mocked(fetch).mockResolvedValueOnce(
         jsonResponse({ rateLimit: stored }, status),
@@ -3092,7 +3130,7 @@ describe("limits client", () => {
       const limit = await api()[operation](
         {
           policy: "rate_limit",
-          mode: null,
+          mode: "review_with_hold",
           scope: "account",
           account: "desk-alpha",
           accountGroup: "",
@@ -3108,7 +3146,7 @@ describe("limits client", () => {
       );
       expect(limit).toEqual({
         policy: "rate_limit",
-        mode: null,
+        mode: "review_with_hold",
         scope: "account",
         account: "desk-alpha",
         accountGroup: "",
@@ -3140,7 +3178,7 @@ describe("limits client", () => {
       client.addLimit(
         {
           policy: "rate_limit",
-          mode: null,
+          mode: "reject",
           scope: "account",
           account: "desk-alpha",
           accountGroup: "",
@@ -3165,6 +3203,7 @@ describe("limits client", () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         rateLimit: {
+          mode: "reject",
           scope: "account",
           account: "desk-alpha",
           asset: "",
@@ -3178,7 +3217,7 @@ describe("limits client", () => {
     await putLimit(
       {
         policy: "rate_limit",
-        mode: null,
+        mode: "reject",
         scope: "account",
         account: "desk-alpha",
         accountGroup: "",
@@ -3241,6 +3280,7 @@ describe("limits client", () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         spotFundsPnlBoundsLimit: {
+          mode: "reject",
           scope: "account_group",
           account: "",
           accountGroup: "desk-alpha",
@@ -3255,7 +3295,7 @@ describe("limits client", () => {
     await putLimit(
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "reject",
         scope: "account_group",
         account: "",
         accountGroup: "desk-alpha",
@@ -3278,7 +3318,7 @@ describe("limits client", () => {
       putLimit(
         {
           policy: "rate_limit",
-          mode: null,
+          mode: "reject",
           scope: "account",
           account: "desk-alpha",
           accountGroup: "",
@@ -3293,10 +3333,11 @@ describe("limits client", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("upserts self-computed PnL limits through the typed endpoint", async () => {
+  it("upserts a self-computed P&L limit with a review mode", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         spotFundsPnlBoundsLimit: {
+          mode: "review_with_hold",
           scope: "account",
           account: "desk-alpha",
           currency: "USD",
@@ -3310,7 +3351,7 @@ describe("limits client", () => {
     const limit = await putLimit(
       {
         policy: "spot_funds_pnl_bounds_kill_switch",
-        mode: null,
+        mode: "review_with_hold",
         scope: "account",
         account: "desk-alpha",
         accountGroup: "",
@@ -3332,6 +3373,7 @@ describe("limits client", () => {
           scope: "account",
           account: "desk-alpha",
           accountGroup: "",
+          mode: "review_with_hold",
           currency: "USD",
           lowerBound: "-1000",
           upperBound: "500",
@@ -3341,6 +3383,7 @@ describe("limits client", () => {
     expect(limit).toEqual(
       expect.objectContaining({
         policy: "spot_funds_pnl_bounds_kill_switch",
+        mode: "review_with_hold",
         account: "desk-alpha",
         values: {
           currency: "USD",
@@ -3368,6 +3411,7 @@ describe("limits client", () => {
       vi.mocked(fetch).mockResolvedValue(
         jsonResponse({
           [putKey]: {
+            mode: "reject",
             scope: "account",
             account: "desk-alpha",
             accountGroup: "",
@@ -3382,7 +3426,7 @@ describe("limits client", () => {
       const limit = await putLimit(
         {
           policy,
-          mode: null,
+          mode: "reject",
           scope: "account",
           account: "desk-alpha",
           accountGroup: "",
@@ -3406,13 +3450,13 @@ describe("limits client", () => {
     },
   );
 
-  it("deletes self-computed PnL limits with the account-group axis", async () => {
+  it("deletes a self-computed P&L review barrier with the account-group axis", async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
 
     const { deleteLimit } = api();
     await deleteLimit({
       policy: "spot_funds_pnl_bounds_kill_switch",
-      mode: null,
+      mode: "review_with_hold",
       scope: "account_group",
       account: "",
       accountGroup: "desk-alpha",
@@ -3427,6 +3471,7 @@ describe("limits client", () => {
     expect(Object.fromEntries(calledUrl.searchParams.entries())).toEqual({
       policy: "spot_funds_pnl_bounds_kill_switch",
       scope: "account_group",
+      mode: "review_with_hold",
       accountGroup: "desk-alpha",
     });
   });
@@ -3481,6 +3526,11 @@ describe("limits client", () => {
     });
 
     it.each([
+      [
+        "a non-null rule mode",
+        { ...modePolicy, mode: "review_without_hold" },
+        "Limit mode field for spot_funds_limit_mode in the API response must be null",
+      ],
       [
         "a missing value",
         { ...modePolicy, values: {} },
@@ -3591,7 +3641,7 @@ describe("limits client", () => {
           "reject",
         ),
       ).rejects.toThrow(
-        'Spot Funds limit mode must be "enforce" or "track_only"',
+        "Spot Funds limit mode must be one of: enforce, review_without_hold, review_with_hold, track_only",
       );
       expect(fetch).not.toHaveBeenCalled();
     });

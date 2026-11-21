@@ -89,6 +89,10 @@ func pnlBoundV1Fixture(t *testing.T) string {
 		CREATE UNIQUE INDEX uq_limit_order_size ON limit_order_size
 			(scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
 		ALTER TABLE limit_order_size DROP COLUMN mode;
+		DROP INDEX uq_limit_rate;
+		CREATE UNIQUE INDEX uq_limit_rate ON limit_rate
+			(scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
+		ALTER TABLE limit_rate DROP COLUMN mode;
 		DROP TABLE limit_position;
 		DROP TABLE alert_delivery;
 		DROP TABLE alert_read_state;
@@ -178,6 +182,9 @@ func TestPnlBoundAxisMigrationKeepsV1BoundsRealized(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, limit := range limits {
+		if limit.Mode != domain.RuleModeReject {
+			t.Errorf("migrated bound %+v mode = %q, want reject", limit, limit.Mode)
+		}
 		if limit.Axis != domain.SpotFundsPnlAxisRealized {
 			t.Errorf("migrated bound %+v axis = %q, want realized", limit, limit.Axis)
 		}

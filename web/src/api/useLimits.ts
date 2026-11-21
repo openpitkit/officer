@@ -19,9 +19,9 @@ import { useCallback, useMemo } from "react";
 
 import type {
   Limit,
-  OrderSizeLimitMode,
   PagedResult,
   PolicyListFilters,
+  RuleMode,
 } from "@/api/types";
 import type { Policy } from "@/api/vocabulary";
 import { usePolling, type PollingResult } from "@/api/usePolling";
@@ -31,7 +31,7 @@ import { useOfficerApi } from "@/framework";
 export function barrierCount(
   target: Pick<Limit, "policy" | "mode">,
   policyCounts: Partial<Record<Policy, number>>,
-  orderSizeCounts: Record<OrderSizeLimitMode, number | undefined>,
+  orderSizeCounts: Record<RuleMode, number | undefined>,
 ): number | undefined {
   if (target.policy === "order_size_limit") {
     return target.mode === null ? undefined : orderSizeCounts[target.mode];

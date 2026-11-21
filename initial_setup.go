@@ -33,7 +33,8 @@ import (
 )
 
 // InitialSetup describes explicit first-run decisions for unattended local
-// setup. AccountMode is single or multi; FundsLimitMode is enforce or track_only;
+// setup. AccountMode is single or multi; FundsLimitMode is enforce,
+// review_with_hold, review_without_hold or track_only;
 // Encryption is enabled or disabled and must match the startup master key.
 // Signing must be disabled and Access open. Supplying these decisions confirms
 // open access and, when selected, unencrypted storage.

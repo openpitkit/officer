@@ -110,10 +110,18 @@ The first time, the panel opens the first-run setup at
 check, encryption, approval signing, access, connecting your AI agent, and
 done.
 
-The funds check step decides whether Officer refuses an order that needs more
-funds than the account holds - Check funds - or lets it pass and keeps the
-accounting - Accounting without blocking. The setup does not finish until one
-is chosen; the mode can be changed later on the Policies page.
+The funds check step decides what Officer does when an order needs more funds
+than the account holds. **Check funds** refuses the order. Both review modes
+make the order wait for review. The operator - you or whoever handles orders
+in the panel - can confirm or cancel a waiting order on the Orders page.
+**Review with hold** sets aside the full amount while the order waits, even if
+the available balance goes negative. The hold stays in place after confirmation.
+**Review without hold** leaves the funds available while the order waits. After
+confirmation, Officer deducts the amount needed for the order from the
+available balance, which can go negative.
+**Accounting without blocking** lets the order pass the funds check and keeps
+track of the balance, which can go negative. The setup does not finish until
+you choose a mode. You can change it later on the Policies page.
 
 The access step decides how software on this computer gets in. With an access
 token - a secret that software must show - the REST API and MCP, described

@@ -230,7 +230,7 @@ func TestLocalNodeHeldReviewCancelAfterRejectedConfirm(t *testing.T) {
 			n, _ := newLocalNodeAt(t, path, engine.NewOpenPitEngineBuildFunc())
 			order := seedHeldReviewNode(t, n, false)
 			ctx, caller := systemCtx(), auth.SystemCaller()
-			if _, err := n.PutRateLimit(ctx, domain.LimitRate{
+			if _, err := n.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 				Scope: domain.ScopeAccount, Account: order.Account,
 				MaxOrders: 1, Window: time.Hour,
 			}, domain.LimitWriteAdd, domain.MissingAccountReject, caller); err != nil {
@@ -277,7 +277,7 @@ func TestLocalNodeHeldReviewCancelAfterRejectedConfirm(t *testing.T) {
 			if !rejected {
 				t.Fatal("held cancel lost pre_trade_rejected event")
 			}
-			if _, err := n.DeleteLimit(ctx, node.LimitTarget{
+			if _, err := n.DeleteLimit(ctx, node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy: domain.PolicyRateLimit, Scope: domain.ScopeAccount,
 				Account: order.Account,
 			}, caller); err != nil {
@@ -318,7 +318,7 @@ func TestLocalNodeHeldReviewForce(t *testing.T) {
 						order.AmountKind, order.AmountValue = domain.OrderAmountKindVolume, "500"
 					}
 					ctx, caller := systemCtx(), auth.SystemCaller()
-					if _, err := n.PutRateLimit(ctx, domain.LimitRate{
+					if _, err := n.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 						Scope: domain.ScopeAccount, Account: order.Account,
 						MaxOrders: 1, Window: time.Hour,
 					}, domain.LimitWriteAdd, domain.MissingAccountReject, caller); err != nil {

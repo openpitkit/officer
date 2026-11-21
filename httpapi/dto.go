@@ -243,6 +243,7 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 	}
 	switch {
 	case row.Rate != nil:
+		dto.Mode = &row.Rate.Mode
 		dto.Values.Rate = &policyRateValuesDTO{
 			WindowMs:  row.Rate.Window.Milliseconds(),
 			MaxOrders: row.Rate.MaxOrders,
@@ -254,10 +255,12 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 			MaxNotional: row.OrderSize.MaxNotional,
 		}
 	case row.Position != nil:
+		dto.Mode = &row.Position.Mode
 		dto.Values.Position = &policyPositionValuesDTO{
 			MaxPosition: row.Position.MaxPosition,
 		}
 	case row.SpotFundsPnlBounds != nil:
+		dto.Mode = &row.SpotFundsPnlBounds.Mode
 		dto.Values.SpotFundsPnlBounds = &policyPnlBoundsValuesDTO{
 			Currency:   row.SpotFundsPnlBounds.Currency,
 			LowerBound: row.SpotFundsPnlBounds.LowerBound,

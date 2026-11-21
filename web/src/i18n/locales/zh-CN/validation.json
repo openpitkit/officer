@@ -51,7 +51,7 @@
     "pnlRequires": "{{policy}} 需要指定 lower_bound 或 upper_bound",
     "pnlBoundOrder": "lower_bound 必须 <= upper_bound",
     "modeRequired": "请选择资金限额模式",
-    "orderSizeModeInvalid": "请选择订单规模模式"
+    "ruleModeInvalid": "请选择屏障模式"
   },
   "password": {
     "mismatch": "两次输入的密码不一致。"

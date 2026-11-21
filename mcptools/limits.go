@@ -36,12 +36,11 @@ const getSpotFundsLimitModeToolName = "get_spot_funds_limit_mode"
 
 const getSpotFundsLimitModeToolDescription = "Return the global Spot Funds limit mode " +
 	"and the accounts a Spot Funds P&L bound blocks for want of a currency. " +
-	"mode is enforce, which refuses an order that lacks funds or holdings, or " +
-	"track_only, which does not refuse on funds but records every hold, so " +
-	"balances and positions may go negative; until first set the mode is enforce. " +
-	"stored is whether the spot_funds_limit_mode policy row is stored; false " +
-	"means no row and the default enforce. " +
-	"P&L bounds, rate, order-size and position barriers apply in both modes. " +
+	"On a shortfall, enforce refuses, review_with_hold requests review with a full hold, " +
+	"review_without_hold requests review without a pending hold, and track_only " +
+	"records the hold even into negative available funds. stored=false means no row " +
+	"and the default enforce. P&L-bound, rate, order-size and position barriers " +
+	"apply in all four modes. " +
 	"accountsWithoutCurrency lists the visible accounts with no effective " +
 	"realized P&L currency that a Spot Funds P&L bound applies to: their P&L " +
 	"halts, so the bound blocks them. Read-only - no secrets, no order-flow control."
@@ -65,7 +64,8 @@ func getSpotFundsLimitModeHandler(
 }
 
 // The limit tools accept the flat fields of the corresponding REST body,
-// except order-size mode: they address only reject order-size barriers.
+// except rule mode: for policies identified by domain.LimitPolicyHasMode,
+// they address only reject barriers.
 // They pass the fields to the core with the explicit write intent. The core
 // validates the values and missing-account policy and enforces tighten-only
 // writes.
@@ -80,8 +80,8 @@ const keyedLimitPoliciesDescription = "rate_limit, order_size_limit, position_li
 
 const limitPolicyFieldsDescription = "The other arguments are that " +
 	"kind's fields. A field of another kind is refused with validation. " +
-	"order_size_limit takes caps without mode and addresses only the reject barrier; " +
-	"review barriers are read-only for an agent. "
+	"Writes to rate, order-size, position and P&L-bound policies address the reject " +
+	"barrier and refuse a mode argument. Review barriers are read-only for an agent. "
 
 const limitAccountCurrencyDescription = "An account P&L bound must use the account's effective " +
 	"currency: its own, else its group's, else the default group's. A different " +
@@ -115,21 +115,17 @@ const updateLimitToolDescription = "Change the risk barrier stored at the given 
 	"For a P&L-bound kill switch, keep the same currency and every current bound. " +
 	"The lower bound can only stay the same or rise, and the upper bound can only stay the same or fall. " +
 	limitAccountCurrencyDescription +
-	"spot_funds_limit_mode is the Officer " +
-	"policy that decides whether Spot Funds checks funds, on the global scope " +
-	"only, with the one field mode: enforce (Check funds) refuses an order " +
-	"that lacks funds or holdings; track_only (Accounting without blocking) " +
-	"does not refuse on funds but records every hold, so balances and " +
-	"positions may go negative. Until first set the mode is enforce; the " +
-	"switch to track_only is refused with loosening_refused, and the switch " +
-	"to enforce resets no balance. P&L bounds, rate, order-size and position barriers " +
-	"apply in both modes. No barrier can be removed; to switch Spot Funds back " +
-	"to Check funds, set spot_funds_limit_mode with mode enforce. Mutates " +
+	"spot_funds_limit_mode is global and takes the one field mode. This tool " +
+	"accepts enforce or track_only and refuses a switch down to track_only with " +
+	"loosening_refused. review_with_hold and review_without_hold are set through " +
+	"REST or the panel; this tool returns validation for either. Switching to enforce " +
+	"resets no balance. P&L-bound, rate, order-size and position barriers apply in " +
+	"all four modes. No barrier can be removed. Mutates " +
 	"Officer control-plane config; protected and disabled by default."
 
 // limitWriteInput is the REST body of the named policy's write, flattened next
-// to the policy, with REST's missingAccount query value, except order-size
-// mode: order-size writes accept no mode and address only reject barriers.
+// to the policy, with REST's missingAccount query value, except rule mode:
+// policies identified by domain.LimitPolicyHasMode address only reject barriers.
 type limitWriteInput struct {
 	Policy         string `json:"policy" jsonschema:"Barrier kind: rate_limit, order_size_limit, position_limit, spot_funds_pnl_bounds_kill_switch, spot_funds_unrealized_pnl_bounds_kill_switch, spot_funds_total_pnl_bounds_kill_switch or spot_funds_limit_mode"`
 	Scope          string `json:"scope" jsonschema:"Barrier scope: broker, asset, account or account_asset for rate_limit; broker, underlying_asset, settlement_asset, account_underlying_asset or account_settlement_asset for order_size_limit; account_asset for position_limit; global, account_group or account for the P&L-bound kill switches; global for spot_funds_limit_mode"`
@@ -144,7 +140,7 @@ type limitWriteInput struct {
 	Currency       string `json:"currency,omitempty" jsonschema:"P&L-bound kill switches: code of an existing asset that denominates both bounds"`
 	LowerBound     string `json:"lowerBound,omitempty" jsonschema:"P&L-bound kill switches: lower P&L bound as an exact decimal string in plain notation, without an exponent"`
 	UpperBound     string `json:"upperBound,omitempty" jsonschema:"P&L-bound kill switches: upper P&L bound, written as lowerBound is; at least one bound is set"`
-	Mode           string `json:"mode,omitempty" jsonschema:"spot_funds_limit_mode: enforce (Check funds) or track_only (Accounting without blocking); the switch from enforce to track_only is refused with loosening_refused"`
+	Mode           string `json:"mode,omitempty" jsonschema:"spot_funds_limit_mode only: enforce or track_only. A switch down to track_only returns loosening_refused. Set review_with_hold or review_without_hold through REST or the panel"`
 	MissingAccount string `json:"missingAccount,omitempty" jsonschema:"Needed when account is named: create or reject. For a missing account, add_limit refuses create with loosening_refused, and reject refuses the unknown account with account_missing unless another refusal comes first. update_limit returns not_found for an absent barrier before handling this option. Ignored when no account is named"`
 	// keys are the argument names the call sent, as it spelled them.
 	keys []string
@@ -391,6 +387,13 @@ func putSpotFundsPnlBoundsLimit(
 func putSpotFundsLimitMode(
 	ctx context.Context, src frameworkmcp.Source, in limitWriteInput, _ domain.LimitWrite,
 ) (httpx.PutLimitResultDTO, error) {
+	if in.Mode == string(domain.SpotFundsLimitModeReviewWithHold) ||
+		in.Mode == string(domain.SpotFundsLimitModeReviewWithoutHold) {
+		return httpx.PutLimitResultDTO{}, domain.NewValidationError(
+			"/mode", "unsupported_value",
+			"review values of the fund-control setting are set through REST or the panel",
+		)
+	}
 	limit := httpx.FromSpotFundsLimitModeLimitDTO(httpx.SpotFundsLimitModeLimitDTO{
 		Scope: in.Scope, Mode: in.Mode,
 	})

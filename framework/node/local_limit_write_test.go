@@ -42,7 +42,7 @@ func TestCheckLimitWriteErrorText(t *testing.T) {
 	t.Parallel()
 	keyFor := func(scope domain.LimitScope, account domain.AccountID) domain.LimitKey {
 		t.Helper()
-		key, err := domain.NewLimitKey(domain.PolicyRateLimit, "", scope, account, "", "")
+		key, err := domain.NewLimitKey(domain.PolicyRateLimit, domain.RuleModeReject, scope, account, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,12 +56,12 @@ func TestCheckLimitWriteErrorText(t *testing.T) {
 		{
 			name:     "broker",
 			limitKey: keyFor(domain.ScopeBroker, ""),
-			key:      "rate_limit at broker",
+			key:      `rate_limit at broker mode "reject"`,
 		},
 		{
 			name:     "account",
 			limitKey: keyFor(domain.ScopeAccount, "acc-1"),
-			key:      `rate_limit at account "acc-1"`,
+			key:      `rate_limit at account mode "reject" "acc-1"`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,8 +109,8 @@ func limitWriteCases() []limitWriteCase {
 		{
 			name: "position",
 			values: [2]AccountLimits{
-				{PositionLimits: []domain.LimitPosition{{Scope: domain.ScopeAccountAsset, Account: "intent-account", Asset: "INTENT", MaxPosition: "10"}}},
-				{PositionLimits: []domain.LimitPosition{{Scope: domain.ScopeAccountAsset, Account: "intent-account", Asset: "INTENT", MaxPosition: "20"}}},
+				{PositionLimits: []domain.LimitPosition{{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "intent-account", Asset: "INTENT", MaxPosition: "10"}}},
+				{PositionLimits: []domain.LimitPosition{{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "intent-account", Asset: "INTENT", MaxPosition: "20"}}},
 			},
 			put: func(ctx context.Context, n Node, value AccountLimits, write domain.LimitWrite, caller domain.Caller) (marketdata.Sink, error) {
 				return n.PutPositionLimit(ctx, value.PositionLimits[0], write, domain.MissingAccountCreate, caller)
@@ -125,8 +125,8 @@ func limitWriteCases() []limitWriteCase {
 		cases = append(cases, limitWriteCase{
 			name: "pnl-" + string(axis),
 			values: [2]AccountLimits{
-				{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Axis: axis, Scope: domain.ScopeAccount, Account: "intent-account", Currency: "USD", LowerBound: "-10"}}},
-				{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Axis: axis, Scope: domain.ScopeAccount, Account: "intent-account", Currency: "USD", LowerBound: "-20"}}},
+				{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject, Axis: axis, Scope: domain.ScopeAccount, Account: "intent-account", Currency: "USD", LowerBound: "-10"}}},
+				{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject, Axis: axis, Scope: domain.ScopeAccount, Account: "intent-account", Currency: "USD", LowerBound: "-20"}}},
 			},
 			put: func(ctx context.Context, n Node, value AccountLimits, write domain.LimitWrite, caller domain.Caller) (marketdata.Sink, error) {
 				return n.PutSpotFundsPnlBoundsLimit(ctx, value.SpotFundsPnlBoundsLimits[0], write, domain.MissingAccountCreate, caller)

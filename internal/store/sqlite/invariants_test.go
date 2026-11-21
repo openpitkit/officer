@@ -568,7 +568,7 @@ func TestLimitPolicyUnique_AllLimitTables(t *testing.T) {
 	// --- limit_rate ---
 
 	// Broker-scope row (both axes NULL in storage).
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeBroker,
 		MaxOrders: 100,
 		Window:    time.Minute,
@@ -577,7 +577,7 @@ func TestLimitPolicyUnique_AllLimitTables(t *testing.T) {
 	}
 	// A second PutRateLimit with the same broker composite must be an upsert,
 	// not a duplicate row - the list must return exactly one row.
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeBroker,
 		MaxOrders: 200,
 		Window:    2 * time.Minute,
@@ -600,7 +600,7 @@ VALUES (?, NULL, NULL, ?, ?)`, domain.ScopeBroker, 300, int64(time.Minute/time.M
 	}
 
 	// Account-scoped row for acc-1 (asset axis NULL).
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeAccount,
 		Account:   "acc-1",
 		MaxOrders: 10,
@@ -609,7 +609,7 @@ VALUES (?, NULL, NULL, ?, ?)`, domain.ScopeBroker, 300, int64(time.Minute/time.M
 		t.Fatalf("PutRateLimit(account): %v", err)
 	}
 	// Second put: must update, not insert.
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeAccount,
 		Account:   "acc-1",
 		MaxOrders: 20,
@@ -661,7 +661,7 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 
 	// --- limit_spot_funds_pnl_bound ---
 
-	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "USD",
@@ -669,7 +669,7 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit(global): %v", err)
 	}
-	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeGlobal,
 		Currency:   "EUR",
@@ -734,7 +734,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	groupLimit := domain.LimitSpotFundsPnlBounds{
+	groupLimit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:         domain.SpotFundsPnlAxisRealized,
 		Scope:        domain.ScopeAccountGroup,
 		AccountGroup: "desk-a",
@@ -744,7 +744,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, groupLimit); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit(group): %v", err)
 	}
-	accountLimit := domain.LimitSpotFundsPnlBounds{
+	accountLimit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    "acc-1",
@@ -794,7 +794,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 	}
 
 	if err := rs.DeleteLimit(
-		ctx, mustSQLLimitKey(t, domain.PolicySpotFundsPnlBoundsKillSwitch, "", domain.ScopeAccount, "acc-1", "", ""),
+		ctx, mustSQLLimitKey(t, domain.PolicySpotFundsPnlBoundsKillSwitch, domain.RuleModeReject, domain.ScopeAccount, "acc-1", "", ""),
 	); err != nil {
 		t.Fatalf("DeleteLimit: %v", err)
 	}

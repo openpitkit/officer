@@ -27,9 +27,9 @@ import { accountScope } from "@/lib/accountScope";
 
 /**
  * Warns that P&L bounds block accounts that have no currency while the funds
- * limit mode is track_only. It renders nothing while loading, while the mode
- * is enforce and while no visible account lacks a currency; a failed poll
- * stays visible instead of hiding the warning.
+ * limit mode allows orders with a funds shortfall to proceed. It renders
+ * nothing while loading, in enforce mode or when every visible account
+ * has a currency. A failed poll stays visible.
  */
 export function SpotFundsCurrencyWarning({
   poll: { load, reload },
@@ -55,7 +55,7 @@ export function SpotFundsCurrencyWarning({
   return (
     <>
       <StaleState load={load} reload={reload} />
-      {mode === "track_only" && accountsWithoutCurrency.length > 0 && (
+      {mode !== "enforce" && accountsWithoutCurrency.length > 0 && (
         <Notice
           tone="warn"
           icon={AlertTriangle}

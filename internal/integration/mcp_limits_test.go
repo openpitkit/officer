@@ -238,7 +238,7 @@ func TestUpdateLimitRateOnControlPlane(t *testing.T) {
 	service, src := controlPlaneTools(t)
 	rate := rateLimitDriver(t, service, src)
 
-	first := domain.LimitRate{Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10}
+	first := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10}
 	rate.accepts("add_limit", map[string]any{
 		"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 10,
 	}, "rate_limit broker added", first)
@@ -252,7 +252,7 @@ func TestUpdateLimitRateOnControlPlane(t *testing.T) {
 	if got, want := listed.RateLimits, []httpx.RateLimitDTO{httpx.ToRateLimitDTO(first)}; !slices.Equal(got, want) {
 		t.Fatalf("get_limits after duplicate add = %+v, want %+v", got, want)
 	}
-	stricter := domain.LimitRate{Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 5}
+	stricter := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 5}
 	rate.accepts("update_limit", map[string]any{
 		"policy": "rate_limit", "scope": "broker", "windowMs": 60000, "maxOrders": 5,
 	}, "rate_limit broker set", stricter)
@@ -284,6 +284,57 @@ func TestUpdateLimitRateOnControlPlane(t *testing.T) {
 		"spotFundsTotalPnlBoundsLimits":      []any{},
 		"spotFundsLimitModes":                []httpx.SpotFundsLimitModeLimitDTO{httpx.ToSpotFundsLimitModeLimitDTO(domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce})},
 	}})
+}
+
+// TestMCPGetLimitsCountingRuleModes verifies that get_limits lists reject and
+// review-with-hold rows for rate, position, and P&L limits.
+func TestMCPGetLimitsCountingRuleModes(t *testing.T) {
+	t.Parallel()
+	service, src := controlPlaneTools(t)
+	ctx := systemCtx()
+	if _, err := service.CreateAccount(ctx, domain.Account{Code: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithHold} {
+		if err := service.PutRateLimit(ctx, domain.LimitRate{
+			Mode: mode, Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10,
+		}, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.PutPositionLimit(ctx, domain.LimitPosition{
+			Mode: mode, Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "USD", MaxPosition: "10",
+		}, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			Mode: mode, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10",
+		}, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limits := getStoredLimitsThroughMCP(t, src)
+	var rateModes, positionModes, pnlModes []string
+	for _, limit := range limits.RateLimits {
+		rateModes = append(rateModes, limit.Mode)
+	}
+	for _, limit := range limits.PositionLimits {
+		positionModes = append(positionModes, limit.Mode)
+	}
+	for _, limit := range limits.SpotFundsPnlBoundsLimits {
+		pnlModes = append(pnlModes, limit.Mode)
+	}
+	for _, tc := range []struct {
+		name  string
+		modes []string
+	}{{"rate", rateModes}, {"position", positionModes}, {"P&L", pnlModes}} {
+		slices.Sort(tc.modes)
+		if !slices.Equal(tc.modes, []string{"reject", "review_with_hold"}) {
+			t.Errorf("get_limits %s modes = %v, want reject and review_with_hold", tc.name, tc.modes)
+		}
+	}
 }
 
 func TestUpdateLimitRefusesAbsentKey(t *testing.T) {
@@ -413,7 +464,7 @@ func TestUpdateLimitPositionOnControlPlane(t *testing.T) {
 		{"update_limit", "set", "5.0000000000000000001"},
 		{"update_limit", "set", "0"},
 	} {
-		stored := domain.LimitPosition{
+		stored := domain.LimitPosition{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: step.ceiling,
 		}
 		position.accepts(step.tool, map[string]any{
@@ -431,7 +482,7 @@ func TestUpdateLimitPositionOnControlPlane(t *testing.T) {
 			t.Fatalf("get_account_state position limits = %+v (error %t)", state.StructuredContent.Limits.PositionLimits, state.IsError)
 		}
 	}
-	zero := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "0"}
+	zero := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "0"}
 	for _, ceiling := range []string{"-1", "not-a-decimal", ""} {
 		position.refuses("update_limit", map[string]any{
 			"policy": "position_limit", "scope": "account_asset", "account": "desk", "asset": "ETH",
@@ -449,7 +500,7 @@ func TestPositionLimitReadSummaries(t *testing.T) {
 	if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: "ETH"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PutPositionLimit(systemCtx(), domain.LimitPosition{
+	if err := service.PutPositionLimit(systemCtx(), domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "1",
 	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 		t.Fatal(err)
@@ -512,7 +563,7 @@ func TestUpdateLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 	}
 	const text = "spot_funds_pnl_bounds_kill_switch global set"
 
-	first := domain.LimitSpotFundsPnlBounds{
+	first := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100", UpperBound: "100",
 	}
@@ -522,7 +573,7 @@ func TestUpdateLimitSpotFundsPnlBoundsOnControlPlane(t *testing.T) {
 	if got, want := listed.SpotFundsPnlBoundsLimits, []httpx.SpotFundsPnlBoundsLimitDTO{httpx.ToSpotFundsPnlBoundsLimitDTO(first)}; !slices.Equal(got, want) {
 		t.Fatalf("get_limits after duplicate add = %+v, want %+v", got, want)
 	}
-	stricter := domain.LimitSpotFundsPnlBounds{
+	stricter := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-50", UpperBound: "100",
 	}
@@ -572,7 +623,7 @@ func TestUpdateLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 			if _, err := service.CreateAccount(systemCtx(), domain.Account{Code: "acc-1", Currency: "USD"}); err != nil {
 				t.Fatalf("create account: %v", err)
 			}
-			realized := domain.LimitSpotFundsPnlBounds{
+			realized := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10", UpperBound: "10",
 			}
@@ -598,11 +649,11 @@ func TestUpdateLimitUnrealizedAndTotalPnlBoundsOnControlPlane(t *testing.T) {
 			}
 			// Looser than the realized bound at the same address.
 			bounds.accepts("add_limit", in("global", "USD", "-100", "100"), policy+" global added",
-				domain.LimitSpotFundsPnlBounds{
+				domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis: axis, Scope: domain.ScopeGlobal,
 					Currency: "USD", LowerBound: "-100", UpperBound: "100",
 				})
-			stricter := domain.LimitSpotFundsPnlBounds{
+			stricter := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis: axis, Scope: domain.ScopeGlobal,
 				Currency: "USD", LowerBound: "-50", UpperBound: "100",
 			}
@@ -746,7 +797,7 @@ func TestLimitWritesDisabledChangeNothing(t *testing.T) {
 	if err := service.SetMcpAccess(ctx, "add_limit", true); err != nil {
 		t.Fatalf("switch on add_limit: %v", err)
 	}
-	stored := domain.LimitRate{Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10}
+	stored := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10}
 	rate.accepts("add_limit", broker(10), "rate_limit broker added", stored)
 	disabled("update_limit", broker(5), stored)
 	if err := service.SetMcpAccess(ctx, "add_limit", false); err != nil {
@@ -827,15 +878,16 @@ func TestGetSpotFundsLimitModeOnControlPlane(t *testing.T) {
 	service, src := controlPlaneTools(t)
 	for _, mode := range []domain.SpotFundsLimitMode{
 		domain.SpotFundsLimitModeEnforce, domain.SpotFundsLimitModeTrackOnly,
+		domain.SpotFundsLimitModeReviewWithHold, domain.SpotFundsLimitModeReviewWithoutHold,
 	} {
-		if mode == domain.SpotFundsLimitModeTrackOnly {
+		if mode != domain.SpotFundsLimitModeEnforce {
 			putSpotFundsLimitMode(t, service, mode)
 		}
 		wire := callToolOK(t, src, "get_spot_funds_limit_mode", map[string]any{})
 		// The fresh service stores no row; the operator's change stores one.
 		assertResultBody(t, wire, map[string]any{
 			"mode":                    string(mode),
-			"stored":                  mode == domain.SpotFundsLimitModeTrackOnly,
+			"stored":                  mode != domain.SpotFundsLimitModeEnforce,
 			"accountsWithoutCurrency": []string{},
 		})
 	}
@@ -901,9 +953,16 @@ func TestUpdateLimitSpotFundsLimitModeRefusesInvalidOnControlPlane(t *testing.T)
 	t.Parallel()
 	service, src := controlPlaneTools(t)
 	mode := spotFundsLimitModeDriver(t, service, src)
+	for _, review := range []string{"review_with_hold", "review_without_hold"} {
+		res := callTool[map[string]any](t, src, "update_limit", spotFundsLimitModeIn(review))
+		if text := textContent(res.Content); !res.IsError || !strings.HasPrefix(text, "validation: ") ||
+			!strings.Contains(text, "review values of the fund-control setting are set through REST or the panel") {
+			t.Fatalf("mode %s: %q, error=%t; want explicit review refusal", review, text, res.IsError)
+		}
+	}
 	unsupported := callTool[map[string]any](t, src, "update_limit", spotFundsLimitModeIn("unsupported"))
 	requireToolError(t, unsupported.IsError)
-	if text := textContent(unsupported.Content); text != `validation: mode "unsupported" must be "enforce" or "track_only": invalid` {
+	if text := textContent(unsupported.Content); text != `validation: mode "unsupported" must be "enforce", "review_with_hold", "review_without_hold" or "track_only": invalid` {
 		t.Fatalf("unsupported mode = %q, want core validation naming the mode", text)
 	}
 	absent := spotFundsLimitModeIn("")
@@ -1040,7 +1099,7 @@ func TestAddLimitWithOneAccount(t *testing.T) {
 	}
 	rateLimitDriver(t, service, src).accepts("add_limit", map[string]any{
 		"policy": "rate_limit", "scope": "account", "windowMs": 1000, "maxOrders": 5,
-	}, "rate_limit account added", domain.LimitRate{
+	}, "rate_limit account added", domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
 		Window: time.Second, MaxOrders: 5,
 	})
@@ -1053,10 +1112,10 @@ func TestAddLimitWithOneAccount(t *testing.T) {
 	})
 	positionLimitDriver(t, service, src).accepts("add_limit", map[string]any{
 		"policy": "position_limit", "scope": "account_asset", "asset": "USD", "maxPosition": "0",
-	}, "position_limit account_asset added", domain.LimitPosition{
+	}, "position_limit account_asset added", domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account, Asset: "USD", MaxPosition: "0",
 	})
-	rest := httpx.DescribeErr(service.PutSpotFundsPnlBoundsLimit(restCtx, domain.LimitSpotFundsPnlBounds{
+	rest := httpx.DescribeErr(service.PutSpotFundsPnlBoundsLimit(restCtx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, Currency: "USD", LowerBound: "-1",
 	}, domain.LimitWriteReplace, ""))
@@ -1086,7 +1145,7 @@ func TestLimitWritesMissingAccountWithOneAccount(t *testing.T) {
 	t.Parallel()
 	service, src := oneAccountControlPlaneTools(t)
 	rate := rateLimitDriver(t, service, src)
-	stored := domain.LimitRate{
+	stored := domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
 		Window: time.Second, MaxOrders: 5,
 	}
@@ -1103,7 +1162,7 @@ func TestLimitWritesMissingAccountWithOneAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	position := positionLimitDriver(t, service, src)
-	positionStored := domain.LimitPosition{
+	positionStored := domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account, Asset: "ETH", MaxPosition: "1",
 	}
 	position.accepts("add_limit", map[string]any{

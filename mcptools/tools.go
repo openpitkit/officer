@@ -54,22 +54,19 @@ const getAccountStateToolName = "get_account_state"
 const getAccountStateToolDescription = "Return account row and its " +
 	"account-scoped risk barriers, each with the fields add_limit and update_limit " +
 	"take, the rate window as windowMs in milliseconds. " +
-	orderSizeLimitModeDescription + "Read-only - no secrets, no " +
+	limitRuleModeDescription + "Read-only - no secrets, no " +
 	"order-flow control."
 
 const getLimitsToolName = "get_limits"
 const getLimitsToolDescription = "Return risk barriers and P&L-bound currencies, " +
 	"optionally filtered by account; each barrier has the fields add_limit and " +
 	"update_limit take, the rate window as windowMs in milliseconds. " +
-	orderSizeLimitModeDescription + "Read-only - no " +
+	limitRuleModeDescription + "Read-only - no " +
 	"secrets, no order-flow control."
 
-const orderSizeLimitModeDescription = "An order-size barrier also carries " +
-	"read-only mode: reject, review_without_hold or review_with_hold. " +
-	"mode is not a write argument " +
-	"for order-size barriers. add_limit and update_limit address only reject " +
-	"order-size barriers; review barriers are read-only for an agent, and MCP " +
-	"deletes no barrier. "
+const limitRuleModeDescription = "Rate, order-size, position and P&L-bound barriers " +
+	"carry read-only mode: reject, review_without_hold or review_with_hold. " +
+	"add_limit and update_limit address only their reject barriers. MCP deletes no barrier. "
 
 const getOrderToolName = "get_order"
 const getOrderToolDescription = "Return one order addressed by its id: " +

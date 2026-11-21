@@ -302,7 +302,7 @@ func seedAssetPnlBound(t *testing.T, n *localNode, asset string) {
 	t.Helper()
 	if err := n.realm.PutSpotFundsPnlBoundsLimit(
 		context.Background(),
-		domain.LimitSpotFundsPnlBounds{
+		domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeGlobal, Currency: asset, LowerBound: "-1",
 		},
@@ -325,20 +325,20 @@ func TestSnapshotWithoutAssetDropsCascadedRuntimeRows(t *testing.T) {
 			{Account: "account", Asset: "USD"},
 		},
 		RateLimits: []domain.LimitRate{
-			{Scope: domain.ScopeAsset, Asset: "AAPL"},
-			{Scope: domain.ScopeAsset, Asset: "USD"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "AAPL"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "USD"},
 		},
 		OrderSizeLimits: []domain.LimitOrderSize{
 			{Mode: domain.RuleModeReject, Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "1"},
 			{Mode: domain.RuleModeReject, Scope: domain.ScopeSettlementAsset, Asset: "USD", MaxNotional: "1"},
 		},
 		PositionLimits: []domain.LimitPosition{
-			{Scope: domain.ScopeAccountAsset, Account: "account", Asset: "AAPL", MaxPosition: "100"},
-			{Scope: domain.ScopeAccountAsset, Account: "account", Asset: "USD", MaxPosition: "100"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "account", Asset: "AAPL", MaxPosition: "100"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "account", Asset: "USD", MaxPosition: "100"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-1"},
-			{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-1"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
 		},
 	}, "AAPL")
 
@@ -371,7 +371,7 @@ func TestDeleteAssetForceRebuildsWithoutCascadedRuntimeRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
-	if err := n.realm.PutRateLimit(ctx, domain.LimitRate{
+	if err := n.realm.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAsset, Asset: asset, MaxOrders: 1, Window: time.Minute,
 	}); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)

@@ -39,22 +39,22 @@ func TestLimitKeySites(t *testing.T) {
 		{
 			axis: "position_account",
 			pair: [2]domain.KeyedLimit{
-				domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "first", Asset: "AAPL", MaxPosition: "10"},
-				domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "second", Asset: "AAPL", MaxPosition: "20"},
+				domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "first", Asset: "AAPL", MaxPosition: "10"},
+				domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "second", Asset: "AAPL", MaxPosition: "20"},
 			},
 		},
 		{
 			axis: "position_asset",
 			pair: [2]domain.KeyedLimit{
-				domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "first", Asset: "AAPL", MaxPosition: "10"},
-				domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "first", Asset: "EUR", MaxPosition: "20"},
+				domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "first", Asset: "AAPL", MaxPosition: "10"},
+				domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "first", Asset: "EUR", MaxPosition: "20"},
 			},
 		},
 		{
 			axis: "policy",
 			pair: [2]domain.KeyedLimit{
-				domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
-				domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+				domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+				domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
 			},
 		},
 		{
@@ -74,22 +74,22 @@ func TestLimitKeySites(t *testing.T) {
 		{
 			axis: "account",
 			pair: [2]domain.KeyedLimit{
-				domain.LimitRate{Scope: domain.ScopeAccount, Account: "first", Window: time.Second, MaxOrders: 10},
-				domain.LimitRate{Scope: domain.ScopeAccount, Account: "second", Window: time.Second, MaxOrders: 10},
+				domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "first", Window: time.Second, MaxOrders: 10},
+				domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "second", Window: time.Second, MaxOrders: 10},
 			},
 		},
 		{
 			axis: "account_group",
 			pair: [2]domain.KeyedLimit{
-				domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "first", Currency: "USD", LowerBound: "-10"},
-				domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "second", Currency: "USD", LowerBound: "-10"},
+				domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "first", Currency: "USD", LowerBound: "-10"},
+				domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "second", Currency: "USD", LowerBound: "-10"},
 			},
 		},
 		{
 			axis: "asset",
 			pair: [2]domain.KeyedLimit{
-				domain.LimitRate{Scope: domain.ScopeAsset, Asset: "AAPL", Window: time.Second, MaxOrders: 10},
-				domain.LimitRate{Scope: domain.ScopeAsset, Asset: "EUR", Window: time.Second, MaxOrders: 10},
+				domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "AAPL", Window: time.Second, MaxOrders: 10},
+				domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "EUR", Window: time.Second, MaxOrders: 10},
 			},
 		},
 	} {
@@ -405,8 +405,8 @@ func requireKeySiteAudit(t *testing.T, n *localNode, before int, action domain.A
 }
 
 func TestStoredLimitKeyCorruption(t *testing.T) {
-	badRate := domain.LimitRate{Scope: "bogus", MaxOrders: 1, Window: time.Second}
-	valid := domain.LimitRate{Scope: domain.ScopeBroker, MaxOrders: 2, Window: time.Second}
+	badRate := domain.LimitRate{Mode: domain.RuleModeReject, Scope: "bogus", MaxOrders: 1, Window: time.Second}
+	valid := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 2, Window: time.Second}
 	key, err := valid.Key()
 	if err != nil {
 		t.Fatal(err)

@@ -223,6 +223,15 @@ func policyRowKey(row store.PolicyListRow) string {
 	if row.OrderSize != nil {
 		mode = row.OrderSize.Mode
 	}
+	if row.Rate != nil {
+		mode = row.Rate.Mode
+	}
+	if row.Position != nil {
+		mode = row.Position.Mode
+	}
+	if row.SpotFundsPnlBounds != nil {
+		mode = row.SpotFundsPnlBounds.Mode
+	}
 	return string(row.Kind) + "\x00" + string(row.Scope) + "\x00" +
 		string(row.Account) + "\x00" + row.AccountGroup + "\x00" + row.Asset + "\x00" + string(mode)
 }

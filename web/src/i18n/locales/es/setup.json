@@ -33,10 +33,12 @@
   },
   "funds": {
     "title": "¿Comprobar los fondos antes de una orden?",
-    "lead": "Officer rechaza una orden que necesita más fondos de los que tiene la cuenta, o la deja pasar y mantiene la contabilidad. Todas las políticas que defina se aplican en ambos modos. El modo puede cambiarse más tarde en la página Políticas.",
+    "lead": "Officer puede rechazar una orden con fondos insuficientes, enviarla a revisión de un operador o dejarla pasar y mantener la contabilidad. Todas las demás políticas que defina se aplican en todos los modos. El modo puede cambiarse más tarde en la página Políticas.",
     "chooseFirst": "Elija un modo para continuar.",
     "rail": {
       "enforce": "Activada",
+      "review_with_hold": "Revisión con retención",
+      "review_without_hold": "Revisión sin retención",
       "track_only": "Desactivada"
     }
   },

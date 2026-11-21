@@ -209,30 +209,30 @@ func (r *realmStore) ListAccountsBlockingCurrencyChange(
     CROSS JOIN balance_fields f
 ), reasons AS (
     SELECT account, kind, asset, value, '' AS order_id, '' AS status,
-           '' AS scope, '' AS group_code, '' AS axis, '' AS currency,
+           '' AS scope, '' AS group_code, '' AS axis, '' AS mode, '' AS currency,
            '' AS lower_bound, '' AS upper_bound
     FROM balance_values
     WHERE value IS NOT NULL AND value <> '' AND (
         kind = 'balance_pnl_halt' OR value COLLATE DECIMAL <> '0'
     )
     UNION ALL
-    SELECT code, 'account_pnl', '', pnl, '', '', '', '', '', '', '', ''
+    SELECT code, 'account_pnl', '', pnl, '', '', '', '', '', '', '', '', ''
     FROM candidates
     WHERE pnl IS NOT NULL AND pnl <> '' AND pnl COLLATE DECIMAL <> '0'
     UNION ALL
     SELECT code, 'account_pnl_halt', '', pnl_halt_reason,
-           '', '', '', '', '', '', '', ''
+           '', '', '', '', '', '', '', '', ''
     FROM candidates WHERE pnl_halt_reason <> ''
     UNION ALL
     SELECT a.code, 'active_order', '', '', o.external_id, s.code,
-           '', '', '', '', '', ''
+           '', '', '', '', '', '', ''
     FROM candidates a
     JOIN order_record o ON o.account_id = a.id
     JOIN order_status s ON s.id = o.status_id
     WHERE o.status_id IN (` + activeStatusPlaceholders + `)
     UNION ALL
     SELECT a.code, 'pnl_limit', '', '', '', '', l.scope,
-           COALESCE(g.code, ''), l.axis, c.code,
+           COALESCE(g.code, ''), l.axis, l.mode, c.code,
            COALESCE(l.lower_bound, ''), COALESCE(l.upper_bound, '')
     FROM candidates a
     JOIN limit_spot_funds_pnl_bound l ON (
@@ -244,7 +244,7 @@ func (r *realmStore) ListAccountsBlockingCurrencyChange(
     WHERE l.lower_bound <> '' OR l.upper_bound <> ''
 )
 SELECT * FROM reasons
-ORDER BY account, kind, asset, order_id, scope, group_code, axis`
+ORDER BY account, kind, asset, order_id, scope, group_code, axis, mode`
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list currency change blockers: %w", err)
@@ -256,7 +256,7 @@ ORDER BY account, kind, asset, order_id, scope, group_code, axis`
 		if err := rows.Scan(
 			&reason.Account, &reason.Kind, &reason.Asset, &reason.Value,
 			&reason.Order, &reason.Status, &reason.Scope, &reason.Group,
-			&reason.Axis, &reason.Currency, &reason.LowerBound, &reason.UpperBound,
+			&reason.Axis, &reason.Mode, &reason.Currency, &reason.LowerBound, &reason.UpperBound,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan currency change blocker: %w", err)
 		}

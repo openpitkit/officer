@@ -1,10 +1,10 @@
 {
-  "orderSizeMode": {
+  "ruleMode": {
     "label": "Modo da barreira",
     "descriptions": {
-      "review_with_hold": "Uma ordem acima da barreira aguarda a revisão de um operador com seus fundos retidos. A confirmação repete o controle pré-negociação sem uma segunda retenção: se aprovada, a ordem prossegue; caso contrário, continua aguardando com sua retenção. O cancelamento libera a retenção.",
-      "reject": "Uma ordem acima da barreira é rejeitada.",
-      "review_without_hold": "Uma ordem acima da barreira aguarda a revisão de um operador; nada é reservado ou enviado até sua confirmação."
+      "review_with_hold": "Uma ordem bloqueada por esta barreira aguarda a revisão de um operador com seus fundos retidos. A confirmação repete o controle pré-negociação sem uma segunda retenção. A ordem prossegue se passar pelo controle e continua aguardando com os fundos retidos se não passar. O cancelamento libera os fundos.",
+      "reject": "Uma ordem bloqueada por esta barreira é rejeitada.",
+      "review_without_hold": "Uma ordem bloqueada por esta barreira aguarda a revisão de um operador. Até a confirmação, os fundos não são retidos e a ordem não é enviada."
     }
   },
   "spotFundsMode": {
@@ -12,6 +12,14 @@
       "enforce": {
         "title": "Verificar fundos",
         "description": "Uma ordem que exige mais fundos do que a conta possui é rejeitada. Ao voltar para este modo, os saldos são mantidos como estão, inclusive os negativos, e as ordens que exigem fundos contra eles são rejeitadas."
+      },
+      "review_with_hold": {
+        "title": "Revisão com retenção",
+        "description": "Uma ordem com fundos insuficientes aguarda a revisão de um operador. O valor integral fica retido durante a espera, de modo que os fundos disponíveis podem ficar negativos. A retenção é mantida após a confirmação."
+      },
+      "review_without_hold": {
+        "title": "Revisão sem retenção",
+        "description": "Uma ordem com fundos insuficientes aguarda a revisão de um operador sem retenção de fundos. Após a confirmação, a ordem é contabilizada mesmo que os fundos disponíveis fiquem negativos."
       },
       "track_only": {
         "title": "Contabilidade sem bloqueios",

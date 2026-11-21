@@ -138,8 +138,8 @@ func TestLocalNode_SetSettingRefusesSpotFundsLimitModeKey(t *testing.T) {
 	if rows := setSettingAuditRows(t, ctx, realm); len(rows) != 0 {
 		t.Fatalf("set_setting audit after refused write = %+v, want none", rows)
 	}
-	if len(eng.spotFundsTrackOnlyCalls) != 0 {
-		t.Fatalf("engine limit-mode calls after refused write = %v, want none", eng.spotFundsTrackOnlyCalls)
+	if len(eng.spotFundsLimitModeCalls) != 0 {
+		t.Fatalf("engine limit-mode calls after refused write = %v, want none", eng.spotFundsLimitModeCalls)
 	}
 }
 

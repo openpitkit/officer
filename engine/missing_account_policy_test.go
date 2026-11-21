@@ -191,7 +191,7 @@ func TestPutRateLimit_CreatedAccountBarrierIsEnforced(t *testing.T) {
 	n, caller := newMissingAccountNode(t)
 	const account = domain.AccountID("rl-acc")
 
-	if _, err := n.PutRateLimit(ctx, domain.LimitRate{
+	if _, err := n.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeAccount,
 		Account:   account,
 		MaxOrders: 1,
@@ -239,7 +239,7 @@ func TestPutSpotFundsPnlBoundsLimit_CreatedAccountBarrierIsEnforced(t *testing.T
 	if err := n.SetDefaultGroupCurrency(ctx, "USDT", caller); err != nil {
 		t.Fatalf("SetDefaultGroupCurrency: %v", err)
 	}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,
@@ -303,7 +303,7 @@ func TestPutSpotFundsPnlBoundsLimit_UnrealizedAndTotalBlockOnNextOrder(t *testin
 			if err := n.SetDefaultGroupCurrency(ctx, "USDT", caller); err != nil {
 				t.Fatalf("SetDefaultGroupCurrency: %v", err)
 			}
-			if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:       axis,
 				Scope:      domain.ScopeAccount,
 				Account:    account,
@@ -381,7 +381,7 @@ func TestPutSpotFundsPnlBoundsLimit_RestartWithinBoundStaysUnblocked(t *testing.
 	for _, axis := range []domain.SpotFundsPnlAxis{
 		domain.SpotFundsPnlAxisUnrealized, domain.SpotFundsPnlAxisTotal,
 	} {
-		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis: axis, Scope: domain.ScopeAccount, Account: account,
 			Currency: "USDT", LowerBound: "-1000",
 		}, domain.LimitWriteReplace, domain.MissingAccountCreate, caller); err != nil {
@@ -415,7 +415,7 @@ func TestPutSpotFundsPnlBoundsLimit_RealizedBlocksAtPreTrade(t *testing.T) {
 	if err := n.SetDefaultGroupCurrency(ctx, "USDT", caller); err != nil {
 		t.Fatalf("SetDefaultGroupCurrency: %v", err)
 	}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,
@@ -509,7 +509,7 @@ func TestPutSpotFundsPnlBoundsLimit_RejectLeavesNoAccount(t *testing.T) {
 	n, caller := newMissingAccountNode(t)
 	const account = domain.AccountID("never-created")
 
-	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    account,

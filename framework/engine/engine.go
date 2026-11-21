@@ -51,7 +51,8 @@ import (
 // process start: accounts (and their stored engine ids and blocked state), the
 // account groups, the persisted balances, the complete set of risk barriers
 // across the typed limit tables, and the global Spot Funds limit mode, read
-// from domain.SettingKeySpotFundsLimitMode, where an absent key means Enforce.
+// by the node from domain.SettingKeySpotFundsLimitMode. The node resolves an
+// absent key to Enforce; an empty or unknown snapshot mode is invalid.
 // The build function returned by NewOpenPitEngineBuildFunc consumes it for
 // each engine build. A Snapshot is plain data with no native handles, so the
 // store layer can assemble it without cgo.
@@ -85,10 +86,9 @@ type Snapshot struct {
 	// Balances are the persisted per-(account, asset) holdings to seed into the
 	// spot-funds policy as absolute adjustments.
 	Balances []domain.Balance
-	// SpotFundsTrackOnly runs the Spot Funds policy in the TrackOnly limit mode
-	// (domain.SpotFundsLimitModeTrackOnly). False is Enforce, the SDK's zero
-	// value.
-	SpotFundsTrackOnly bool
+	// SpotFundsLimitMode is the explicit global Spot Funds fund-control mode.
+	// Empty and unknown values are errors.
+	SpotFundsLimitMode domain.SpotFundsLimitMode
 }
 
 // LimitSet is the complete typed barrier set for one policy, the carrier
@@ -581,10 +581,10 @@ type Engine interface {
 		ctx context.Context, policy string, limits LimitSet,
 	) (PolicyConfigurationResult, error)
 
-	// SetSpotFundsTrackOnly sets the global Spot Funds limit mode on the live
-	// engine handle: true is TrackOnly, false is Enforce. It changes no balance
-	// and no other policy.
-	SetSpotFundsTrackOnly(ctx context.Context, trackOnly bool) error
+	// SetSpotFundsLimitMode sets the global Spot Funds fund-control mode on the
+	// live engine handle. Empty and unknown modes are errors. It changes no
+	// balance and no other policy.
+	SetSpotFundsLimitMode(ctx context.Context, mode domain.SpotFundsLimitMode) error
 
 	// MarketDataSink returns the quote sink backed by the engine's market-data
 	// service. The connector manager drains normalized quotes into it; the sink

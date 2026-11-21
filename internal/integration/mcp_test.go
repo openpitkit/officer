@@ -414,7 +414,7 @@ func TestGetAccountStateHappyPath(t *testing.T) {
 		},
 		limits: node.AccountLimits{
 			RateLimits: []domain.LimitRate{
-				{
+				{Mode: domain.RuleModeReject,
 					Scope:     domain.ScopeAccount,
 					Account:   "acc-1",
 					MaxOrders: 100,
@@ -655,6 +655,7 @@ func TestGetLimitsHappyPath(t *testing.T) {
 			RateLimits: []domain.LimitRate{
 				{
 					Scope:     domain.ScopeAsset,
+					Mode:      domain.RuleModeReject,
 					Asset:     "AAPL",
 					MaxOrders: 10,
 					Window:    time.Minute,
@@ -685,7 +686,7 @@ func TestGetLimitsHappyPath(t *testing.T) {
 func TestGetLimitsWithAccount(t *testing.T) {
 	src := &fakeSource{limits: node.AccountLimits{
 		RateLimits: []domain.LimitRate{
-			{
+			{Mode: domain.RuleModeReject,
 				Scope:     domain.ScopeAccount,
 				Account:   "acc-1",
 				MaxOrders: 5,
@@ -706,7 +707,7 @@ func TestGetLimitsWithAccount(t *testing.T) {
 func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
 	src := &fakeSource{limits: node.AccountLimits{
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    "acc-spot",

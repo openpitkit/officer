@@ -36,12 +36,13 @@ func (r *memoryRealm) ListPolicyRows(
 	}
 	wantKind := func(kind store.PolicyKind) bool {
 		return (filter.Kind == nil || *filter.Kind == kind) &&
-			(filter.Mode == "" || kind == store.PolicyKindOrderSize)
+			(filter.Mode == "" || domain.LimitPolicyHasMode(string(kind)))
 	}
 	out := make([]store.PolicyListRow, 0)
 	if wantKind(store.PolicyKindRate) {
 		for _, limit := range r.rateLimits {
-			if !restrictionMatches(filter.Restriction, limit.Account) ||
+			if (filter.Mode != "" && limit.Mode != filter.Mode) ||
+				!restrictionMatches(filter.Restriction, limit.Account) ||
 				!textMatches(filter.Account, string(limit.Account)) ||
 				!textMatches(filter.Asset, limit.Asset) {
 				continue
@@ -76,7 +77,8 @@ func (r *memoryRealm) ListPolicyRows(
 	}
 	if wantKind(store.PolicyKindPosition) {
 		for _, limit := range r.positionLimits {
-			if (filter.Scope != "" && filter.Scope != limit.Scope) ||
+			if (filter.Mode != "" && limit.Mode != filter.Mode) ||
+				(filter.Scope != "" && filter.Scope != limit.Scope) ||
 				!restrictionMatches(filter.Restriction, limit.Account) ||
 				!textMatches(filter.Account, string(limit.Account)) ||
 				!textMatches(filter.AccountGroup, "") ||
@@ -92,7 +94,8 @@ func (r *memoryRealm) ListPolicyRows(
 	}
 	if wantKind(store.PolicyKindSpotFundsPnlBounds) {
 		for _, limit := range r.spotFundsPnlBoundsLimits {
-			if !restrictionMatches(filter.Restriction, limit.Account) ||
+			if (filter.Mode != "" && limit.Mode != filter.Mode) ||
+				!restrictionMatches(filter.Restriction, limit.Account) ||
 				!r.restrictionReachesGroup(
 					filter.Restriction, limit.Account, limit.AccountGroup,
 				) ||
@@ -245,7 +248,10 @@ func (r *memoryRealm) ListRateLimits(
 		if out[i].Account != out[j].Account {
 			return out[i].Account < out[j].Account
 		}
-		return out[i].Asset < out[j].Asset
+		if out[i].Asset != out[j].Asset {
+			return out[i].Asset < out[j].Asset
+		}
+		return out[i].Mode < out[j].Mode
 	})
 	return out, nil
 }
@@ -394,13 +400,13 @@ func TestMemoryRealmSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 	}
 
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
-		{
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+		{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
 			Currency: "EUR", LowerBound: "-2",
 		},
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "acc-1",
 			Currency: "USD", LowerBound: "-3",
@@ -432,7 +438,7 @@ func TestMemoryRealmSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 		}
 	}
 
-	err = realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	err = realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "GHOST", LowerBound: "-4",
 	})

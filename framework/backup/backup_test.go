@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -103,10 +104,19 @@ func TestFixtureArchiveDecodes(t *testing.T) {
 		data.OrderSizeLimits[0].MaxQuantity != "100" {
 		t.Fatalf("limits not portable: %+v", data.OrderSizeLimits)
 	}
-	if len(data.PositionLimits) != 1 || data.PositionLimits[0] != (domain.LimitPosition{
+	if len(data.PositionLimits) != 1 || data.PositionLimits[0] != (domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001",
 	}) {
 		t.Fatalf("position limits not portable: %+v", data.PositionLimits)
+	}
+	bounds := data.SpotFundsPnlBounds()
+	if len(bounds) != 3 {
+		t.Fatalf("P&L bounds = %+v", bounds)
+	}
+	for i, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+		if bounds[i].Mode != mode || bounds[i].Validate() != nil {
+			t.Fatalf("P&L bound = %+v, want mode %s", bounds[i], mode)
+		}
 	}
 	if len(data.Orders) != 1 {
 		t.Fatalf("orders = %d, want 1", len(data.Orders))
@@ -323,6 +333,69 @@ func TestFilterDataPositionLimits(t *testing.T) {
 	}
 }
 
+func TestVersion6CountingLimitModes(t *testing.T) {
+	for _, mode := range []domain.RuleMode{"", domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold, "unknown"} {
+		for _, position := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/position=%t", mode, position), func(t *testing.T) {
+				var archive Archive
+				archive.Manifest.FormatVersion = 6
+				if position {
+					archive.Data.PositionLimits = []domain.LimitPosition{{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "10"}}
+				} else {
+					archive.Data.RateLimits = []domain.LimitRate{{Mode: mode, Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 10}}
+				}
+				err := archive.Upgrade()
+				if mode != "" {
+					if !errors.Is(err, domain.ErrInvalid) || archive.Manifest.FormatVersion != 6 {
+						t.Fatalf("upgrade mode %q: %v, version %d", mode, err, archive.Manifest.FormatVersion)
+					}
+					return
+				}
+				if err != nil || archive.Manifest.FormatVersion != FormatVersion {
+					t.Fatalf("upgrade: %v version=%d", err, archive.Manifest.FormatVersion)
+				}
+				got := domain.RuleMode("")
+				if position {
+					got = archive.Data.PositionLimits[0].Mode
+				} else {
+					got = archive.Data.RateLimits[0].Mode
+				}
+				if got != domain.RuleModeReject {
+					t.Fatalf("upgraded mode = %q, want reject", got)
+				}
+			})
+		}
+	}
+}
+
+func TestVersion6PnlLimitModes(t *testing.T) {
+	for _, axis := range domain.SpotFundsPnlAxes {
+		for _, mode := range []domain.RuleMode{"", domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold, "unknown"} {
+			t.Run(string(axis)+"/"+string(mode), func(t *testing.T) {
+				var archive Archive
+				archive.Manifest.FormatVersion = 6
+				if err := archive.Data.SetSpotFundsPnlBounds([]domain.LimitSpotFundsPnlBounds{{Mode: mode, Axis: axis, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"}}); err != nil {
+					t.Fatal(err)
+				}
+				err := archive.Upgrade()
+				if mode != "" {
+					if !errors.Is(err, domain.ErrInvalid) || archive.Manifest.FormatVersion != 6 {
+						t.Fatalf("upgrade mode %q: %v, version %d", mode, err, archive.Manifest.FormatVersion)
+					}
+					return
+				}
+				if err != nil || archive.Manifest.FormatVersion != FormatVersion {
+					t.Fatalf("upgrade: %v version=%d", err, archive.Manifest.FormatVersion)
+				}
+				bounds := archive.Data.SpotFundsPnlBounds()
+				if len(bounds) != 1 || bounds[0].Mode != domain.RuleModeReject || bounds[0].Axis != axis {
+					t.Fatalf("upgraded bounds = %+v", bounds)
+				}
+			})
+		}
+	}
+}
+
 func TestArchiveWithoutPositionLimits(t *testing.T) {
 	var archive Archive
 	if err := json.Unmarshal([]byte(`{"manifest":{"formatVersion":7},"data":{}}`), &archive); err != nil {
@@ -363,9 +436,9 @@ func TestFilterDataSpotFundsPnlBoundsIncludeSelectedAccountsGroup(t *testing.T) 
 // refused.
 func TestSpotFundsPnlBoundsListPerAxis(t *testing.T) {
 	bounds := []domain.LimitSpotFundsPnlBounds{
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000"},
-		{Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-200"},
-		{Axis: domain.SpotFundsPnlAxisTotal, Scope: domain.ScopeAccountGroup, AccountGroup: "grp-1", Currency: "EUR", UpperBound: "900"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-200"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisTotal, Scope: domain.ScopeAccountGroup, AccountGroup: "grp-1", Currency: "EUR", UpperBound: "900"},
 	}
 	var data Data
 	if err := data.SetSpotFundsPnlBounds(bounds); err != nil {
@@ -401,7 +474,7 @@ func TestSpotFundsPnlBoundsListPerAxis(t *testing.T) {
 	}
 
 	if err := data.SetSpotFundsPnlBounds([]domain.LimitSpotFundsPnlBounds{
-		{Axis: "position", Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+		{Mode: domain.RuleModeReject, Axis: "position", Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
 	}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown axis error = %v, want ErrInvalid", err)
 	}
@@ -413,11 +486,11 @@ func TestSpotFundsPnlBoundsListPerAxis(t *testing.T) {
 func TestSpotFundsPnlBoundsFromArchiveWithoutAxes(t *testing.T) {
 	var data Data
 	if err := json.Unmarshal([]byte(`{"spotFundsPnlBoundsLimits": [
-		{"scope": "global", "currency": "USD", "lowerBound": "-1000"}
+		{"mode": "reject", "scope": "global", "currency": "USD", "lowerBound": "-1000"}
 	]}`), &data); err != nil {
 		t.Fatal(err)
 	}
-	want := []domain.LimitSpotFundsPnlBounds{{
+	want := []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject,
 		Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1000",
 	}}
 	if got := data.SpotFundsPnlBounds(); !reflect.DeepEqual(got, want) {
@@ -827,18 +900,18 @@ func fixtureData() Data {
 			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-2", Asset: "AAPL", MaxQuantity: "200"},
 		},
 		PositionLimits: []domain.LimitPosition{
-			{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
-			{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "0"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "0"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "grp-1",
 				Currency:     "USD",
 				LowerBound:   "-100",
 			},
-			{
+			{Mode: domain.RuleModeReject,
 				Axis:         domain.SpotFundsPnlAxisRealized,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "grp-2",

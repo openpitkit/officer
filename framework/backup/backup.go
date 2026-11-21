@@ -705,18 +705,50 @@ type Archive struct {
 }
 
 // Upgrade brings an accepted archive to the current shape. Version 6 is the
-// previous released shape: its order-size barriers always reject and have no mode.
+// previous released shape: barriers of policies identified by
+// domain.LimitPolicyHasMode always reject and have no mode.
 func (a *Archive) Upgrade() error {
 	switch a.Manifest.FormatVersion {
 	case FormatVersion:
 		return nil
 	case 6:
+		pnlBounds := a.Data.SpotFundsPnlBounds()
+		for _, limit := range pnlBounds {
+			if limit.Mode != "" {
+				return fmt.Errorf("backup format version 6 %s carries mode %q: %w", limit.Axis.Policy(), limit.Mode, domain.ErrInvalid)
+			}
+		}
+		for _, limit := range a.Data.RateLimits {
+			if limit.Mode != "" {
+				return fmt.Errorf("backup format version 6 rate_limit carries mode %q: %w", limit.Mode, domain.ErrInvalid)
+			}
+		}
+		// The decoder accepts positionLimits in a version-6 archive too.
+		for _, limit := range a.Data.PositionLimits {
+			if limit.Mode != "" {
+				return fmt.Errorf("backup format version 6 position_limit carries mode %q: %w", limit.Mode, domain.ErrInvalid)
+			}
+		}
 		for _, limit := range a.Data.OrderSizeLimits {
 			if limit.Mode != "" {
 				return fmt.Errorf("backup format version 6 order_size_limit carries mode %q: %w", limit.Mode, domain.ErrInvalid)
 			}
 		}
+		for i := range pnlBounds {
+			pnlBounds[i].Mode = domain.RuleModeReject
+		}
+		if err := a.Data.SetSpotFundsPnlBounds(pnlBounds); err != nil {
+			return err
+		}
 		a.Data.OrderSizeLimits = slices.Clone(a.Data.OrderSizeLimits)
+		a.Data.RateLimits = slices.Clone(a.Data.RateLimits)
+		for i := range a.Data.RateLimits {
+			a.Data.RateLimits[i].Mode = domain.RuleModeReject
+		}
+		a.Data.PositionLimits = slices.Clone(a.Data.PositionLimits)
+		for i := range a.Data.PositionLimits {
+			a.Data.PositionLimits[i].Mode = domain.RuleModeReject
+		}
 		for i := range a.Data.OrderSizeLimits {
 			a.Data.OrderSizeLimits[i].Mode = domain.RuleModeReject
 		}

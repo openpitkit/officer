@@ -355,9 +355,10 @@ barriers among them.
 
 `add_limit` creates a barrier at a new address. An existing key returns
 `limit_exists` and leaves the barrier unchanged. A new account-tier order-size
-cap must be no looser than the reject asset-tier cap it overrides. `add_limit`
-and `update_limit` address only reject order-size barriers and accept no mode
-for them. Review barriers are read-only for an agent; MCP deletes no barrier.
+cap must be no looser than the reject asset-tier cap it overrides. For every
+policy with a rule mode, `add_limit` and `update_limit` address only the reject
+barrier and refuse a `mode` argument. Review barriers are read-only for an
+agent. MCP deletes no barrier.
 A new account or group bound must use the currency of the bound it takes over
 from and be at least as strict. The first reject order-size barrier is refused
 while a rate-limit barrier is configured, as installing it rebuilds the engine
@@ -371,9 +372,10 @@ an account or account_asset scope. Keep every cap and bound, and keep the
 currency of each P&L bound. Caps and upper bounds can only stay the same or
 decrease. Lower bounds can only stay the same or increase. For `position_limit` the ceiling
 can only stay the same or decrease.
-`update_limit` with policy `spot_funds_limit_mode` is refused for the switch to
-`track_only`, as the engine then stops refusing orders on funds; the switch to
-`enforce` passes.
+`update_limit` with policy `spot_funds_limit_mode` accepts `enforce` and
+`track_only` as arguments. It refuses a switch down to `track_only` with
+`loosening_refused` and either review value with `validation`. Set the
+review values through REST or the panel.
 Trading and market data may only be narrowed: `grant_trading_access`,
 `create_trading_connection`,
 `set_trading_instrument`, `delete_trading_instrument`,
@@ -457,12 +459,12 @@ The fourteen mutating tools are protective and ship disabled. The path code or i
 is the `account`, `asset`, `group` or `order` argument, a delete's `force` query
 parameter is the `force` argument, `missingAccount` keeps its query name, and
 body fields keep their REST names; `apply_adjustment` takes the whole REST body
-as its `adjustment` argument. `add_limit` and `update_limit` take the body of the
-corresponding REST write as flat arguments next to `policy`, except that an
-order-size barrier's `mode` is not a write argument. A field of another policy
-is refused with `validation`. Only `update_limit` accepts `spot_funds_limit_mode`
-and its `mode` argument. `get_limits` and `get_account_state` answer barriers
-with the write fields and also return an order-size barrier's `mode` read-only.
+as its `adjustment` argument. `add_limit` and `update_limit` take the fields of
+the corresponding REST body as flat arguments next to `policy`, omitting the
+barrier's rule mode. A field of another policy is refused with `validation`.
+Only `update_limit` accepts `spot_funds_limit_mode` and its `mode` argument.
+`get_limits` and `get_account_state` return the write fields and the read-only
+`mode` of every rate, order-size, position and P&L-bound barrier.
 A rate barrier's window is `windowMs` in integer milliseconds, as both write
 tools take it, in place of the `window` duration string
 they answered before. `get_limits` without an account also answers the stored
@@ -735,22 +737,27 @@ Both return the stored barrier, with `201 Created` for POST and `200 OK` for PUT
 A POST to an existing key returns `409` with code `limit_exists` and leaves the
 barrier intact. Use PUT to edit the barrier.
 
-An order-size body accepts `mode`: `reject`, `review_without_hold` or
-`review_with_hold`. An absent or empty mode means `reject`.
-Its key is (scope, account, asset, mode), so a
-reject and a review barrier can share a target. Changing a barrier's mode
-requires deleting it and adding a barrier with the new mode.
+Every body above accepts `mode` with one of the values `reject`,
+`review_without_hold` or `review_with_hold`. An absent or empty mode means
+`reject`. An unknown mode returns `422` with code `validation` at `/mode`.
+The mode is part of the key, so a reject and a review barrier can share a
+target. Changing a barrier's mode requires deleting it and adding a barrier
+with the new mode.
 
-`DELETE /limits` accepts `mode` for `policy=order_size_limit`; an absent or
-empty mode addresses the reject barrier. A mode on a policy without one is
-refused with `422 validation`.
+An SDK validation refusal during runtime configuration returns `422` with code
+`validation` and the SDK's message. An SDK refusal while registering a built-in
+policy during a first-barrier engine build returns `500`.
 
-`GET /limits` accepts a non-empty `mode` only with `policy=order_size` and
-returns that mode's barriers; `total` counts the filtered barriers. A mode
-without that policy, or an unknown mode, is refused with `422 validation`.
-Every order-size row carries its `mode`. Every other kind carries `mode: null`,
-including `spot_funds_limit_mode`, whose enforce/track_only setting stays in
-`values`.
+`DELETE /limits` accepts `mode` for each of these policies. An absent or empty
+mode addresses the reject barrier. An unknown mode returns `422 validation`.
+
+`GET /limits` accepts a non-empty `mode` filter with a specific policy
+(`rate`, `order_size`, `position`, or one of the three P&L-bound policies).
+An absent or empty mode leaves the list unfiltered by mode. `total` counts the
+filtered barriers before paging. A non-empty mode with an unsupported policy
+or an unknown mode is refused with `422 validation`. Every barrier row carries
+its rule `mode`. Only `spot_funds_limit_mode` carries `mode: null`, with its
+fund-control setting under `values.spotFundsLimitMode.mode`.
 
 ## Spot Funds P&L bounds
 
@@ -775,34 +782,38 @@ P&L.
 The SDK's SpotFunds policy enforces a non-negative position ceiling for each
 (account, asset) pair; Officer stores exact decimal strings and computes no
 position or decision. A buy adds the order to the owned position
-(`available + held`) plus open positive `incoming` and is rejected above the
-ceiling; a sell subtracts the order from the owned position less open positive
-`held` and is rejected below minus the ceiling, while equality passes.
+(`available + held`) plus open positive `incoming`. A sell subtracts the order
+from the owned position less open positive `held`. A buy above the ceiling or
+a sell below minus the ceiling triggers the barrier, while equality passes.
+The barrier refuses the order in `reject` mode and requests review in either
+review mode.
 The reject is policy `SpotFundsPolicy`, scope `order`, code
 `position_limit_exceeded`, reason "position limit exceeded", with details
 `asset {asset}, side long|short, projected worst-case position {projected}, limit {limit}`;
 the account is not blocked.
 
 `POST /limits/position` and `PUT /limits/position` take
-`{scope, account, asset, maxPosition}` with scope `account_asset`, a required
-asset and a required non-negative exact decimal
+`{scope, account, asset, maxPosition, mode}` with scope `account_asset`, a
+required asset, an optional rule mode and a required non-negative exact decimal
 `maxPosition` in plain notation; zero is valid. A negative or non-decimal
 ceiling answers `422` `validation`. `?missingAccount=create|reject` is
 required when an account is named, choosing whether to register a missing
 account or refuse with `404`. In single-account mode an omitted or empty
 account stands for that account. The answer is
-`{"positionLimit": {scope, account, asset, maxPosition}}`, read back as stored.
+`{"positionLimit": {scope, account, asset, maxPosition, mode}}`, read back as
+stored.
 
 `GET /limits` lists the barrier as kind `position_limit`, scope `account_asset`,
 with `values.position.maxPosition`; `policy=position` selects it alone and
 `policy=all` includes it. The account answer includes `limits.positionLimits`,
 always an array, and account-scoped callers see only their visible accounts'
 pairs. `DELETE /limits?policy=position_limit&scope=account_asset&account=acc-1&asset=BTC`
-clears that pair and answers `204`, or `404` when no barrier is stored.
+clears the reject barrier for that pair and answers `204`, or `404` when no
+reject barrier is stored. Pass `mode` to clear a review barrier.
 
 Every change applies from the next order without a restart. The stored set is
 what every engine build takes, a restart and a backup restore included.
-Position barriers apply in both `enforce` and `track_only` limit modes.
+Position barriers apply in all four Spot Funds fund-control modes.
 
 ## Spot Funds limit mode
 
@@ -815,10 +826,18 @@ documented default. First-run setup completes only once the row is stored; a
 database set up before that requirement may have none.
 
 - `enforce` refuses an order that lacks funds or holdings.
+- `review_with_hold` requests review on a funds shortfall and holds the full
+  amount, which can take available funds negative. A confirmed order retains
+  the hold.
+- `review_without_hold` requests review on a funds shortfall without holding
+  funds while review is pending. Confirmed and drop-copy orders use
+  `track_only` without a review mark. Overflow still rejects.
 - `track_only` does not refuse on funds but records every hold, so balances and
   positions may go negative: an account trades from zero without prepared
-  balances. P&L bounds, rate, order-size and position barriers apply in both
-  modes, and a P&L bound still halts trading on breach.
+  balances.
+
+P&L-bound, rate, order-size and position barriers apply in all four modes
+according to their own rule modes.
 
 `GET /limits/spot-funds-limit-mode` answers
 `{mode, stored, accountsWithoutCurrency}`. `stored` is whether the row is
@@ -842,23 +861,19 @@ stored, the row shows the effective default `enforce`;
 `DELETE /limits?policy=spot_funds_limit_mode&scope=global` is refused with 422:
 the policy is permanent. Change its mode through `PUT` instead.
 
-Like every policy, it is tighten-only for an agent (an MCP caller): the switch
-from `enforce` to `track_only` is refused with `loosening_refused`, while the
-switch to `enforce` passes. Deletion is refused for every caller.
+For tighten-only writes, the core ranks `enforce` above both equally ranked
+review modes, and both review modes above `track_only`. A switch to a lower
+rank is refused with `loosening_refused`. The MCP tool `get_spot_funds_limit_mode`
+can return any of the four values.
 
 The stored mode is what every later engine build takes, a restart and a backup
 restore included: the mode travels with the backup's general settings, and a
 restore applies it to the running engine.
 
 The panel lists it on the Policies page as one permanent global policy row.
-It can be edited, but cannot be added or deleted. Other policies are selected
-through the Orders, P&L, and Confirmation and review groups. Each policy links
-to its wiki section. The mode row has the
-values "Check funds" (`enforce`) and "Accounting without blocking"
-(`track_only`). The MCP tool `get_spot_funds_limit_mode` follows the REST
-`GET`, and `update_limit` with policy `spot_funds_limit_mode` and the one field
-`mode` follows the `PUT`; the switch to `track_only` is refused through MCP
-(see MCP tools).
+Edit that row to change the setting. Other policies are selected through the
+Orders, P&L, and Confirmation and review groups. Each policy links to its wiki
+section.
 
 ## Single-account mode
 

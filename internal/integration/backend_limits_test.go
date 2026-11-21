@@ -42,7 +42,7 @@ func TestRESTDeleteOrderSizeLimitMode(t *testing.T) {
 		{"review", "policy=order_size_limit&scope=broker&mode=review_without_hold", http.StatusNoContent, domain.RuleModeReject},
 		{"default reject", "policy=order_size_limit&scope=broker", http.StatusNoContent, domain.RuleModeReviewWithoutHold},
 		{"empty reject", "policy=order_size_limit&scope=broker&mode=", http.StatusNoContent, domain.RuleModeReviewWithoutHold},
-		{"foreign mode", "policy=rate_limit&scope=broker&mode=reject", http.StatusUnprocessableEntity, ""},
+		{"foreign mode", "policy=spot_funds_limit_mode&scope=global&mode=reject", http.StatusUnprocessableEntity, ""},
 		{"unknown mode", "policy=order_size_limit&scope=broker&mode=unknown", http.StatusUnprocessableEntity, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,7 +102,7 @@ func TestService_DeleteLimitModeValidation(t *testing.T) {
 	for _, target := range []node.LimitTarget{
 		{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker, Mode: "unknown"},
 		{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker},
-		{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker, Mode: domain.RuleModeReject},
+		{Policy: domain.PolicySpotFundsLimitMode, Scope: domain.ScopeGlobal, Mode: domain.RuleModeReject},
 	} {
 		svc, fn := newTestService(t)
 		err := svc.DeleteLimit(systemCtx(), target)
@@ -162,7 +162,7 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 		{"missing policy", "1", domain.ScopeAccountAsset, ""},
 	} {
 		t.Run("position/"+tc.name, func(t *testing.T) {
-			limit := domain.LimitPosition{Scope: tc.scope, Account: "acc-1", Asset: "BTC", MaxPosition: tc.maxPosition}
+			limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: tc.scope, Account: "acc-1", Asset: "BTC", MaxPosition: tc.maxPosition}
 			if err := svc.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, tc.missing); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("PutPositionLimit = %v, want ErrInvalid", err)
 			}
@@ -181,7 +181,7 @@ func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 	// Account "acc-new" does not exist in the fake node (getAccountErr is not set,
 	// but no account record exists either). PutRateLimit must succeed regardless: a
 	// policy rule may be created before the account is ever registered.
-	limit := domain.LimitRate{
+	limit := domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeAccountAsset,
 		Account:   "acc-new",
 		Asset:     "AAPL",
@@ -194,7 +194,7 @@ func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 	if len(fn.putRateLimitCalls) != 1 {
 		t.Fatalf("want 1 PutRateLimit call, got %d", len(fn.putRateLimitCalls))
 	}
-	position := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-new", Asset: "BTC", MaxPosition: "0"}
+	position := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-new", Asset: "BTC", MaxPosition: "0"}
 	if err := svc.PutPositionLimit(ctx, position, domain.LimitWriteReplace, domain.MissingAccountCreate); err != nil {
 		t.Fatalf("PutPositionLimit for non-existent account: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 	svc, fn := newTestService(t)
 	ctx := systemCtx()
 
-	limit := domain.LimitRate{
+	limit := domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeBroker,
 		MaxOrders: 100,
 		Window:    time.Second,
@@ -224,7 +224,7 @@ func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 		t.Fatalf("barrier not forwarded: %+v", fn.putRateLimitCalls[0])
 	}
 	for _, missing := range []domain.MissingAccountPolicy{domain.MissingAccountCreate, domain.MissingAccountReject} {
-		position := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "123.000000000000000001"}
+		position := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: "123.000000000000000001"}
 		if err := svc.PutPositionLimit(ctx, position, domain.LimitWriteReplace, missing); err != nil {
 			t.Fatalf("PutPositionLimit: %v", err)
 		}
@@ -241,7 +241,7 @@ func TestService_PutPositionLimitScopesAccountAndMissingPolicy(t *testing.T) {
 	t.Parallel()
 	scope := &recordingScope{account: scopeResolvedAccount, policy: domain.MissingAccountReject}
 	svc, fn, _ := newScopeTestService(t, scope)
-	limit := domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: scopeClientAccount, Asset: "BTC", MaxPosition: "10"}
+	limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: scopeClientAccount, Asset: "BTC", MaxPosition: "10"}
 	if err := svc.PutPositionLimit(systemCtx(), limit, domain.LimitWriteReplace, domain.MissingAccountCreate); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestService_PutLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	fn.restoreSink = sink
 	ctx := systemCtx()
 
-	limit := domain.LimitRate{
+	limit := domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeBroker,
 		MaxOrders: 100,
 		Window:    time.Second,
@@ -290,7 +290,7 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 	})
 	svc, fn := newTestServiceWithMarketDataRuntime(t, md)
 	fn.restoreSink = &backendTestSink{}
-	limit := domain.LimitRate{
+	limit := domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
 	}
 	putDone := make(chan error, 1)
@@ -342,7 +342,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 
 	rateDone := make(chan error, 1)
 	go func() {
-		rateDone <- svc.PutRateLimit(systemCtx(), domain.LimitRate{
+		rateDone <- svc.PutRateLimit(systemCtx(), domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
 		}, domain.LimitWriteReplace, domain.MissingAccountCreate)
 	}()
@@ -381,7 +381,7 @@ func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 	ctx := systemCtx()
 
 	// broker scope is not allowed for SpotFunds P&L bounds; target validation must reject.
-	bad := node.LimitTarget{
+	bad := node.LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
 		Scope:  domain.ScopeBroker,
 	}
@@ -392,7 +392,7 @@ func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 		t.Fatalf("invalid target must not reach the node")
 	}
 
-	good := node.LimitTarget{
+	good := node.LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicyRateLimit,
 		Scope:  domain.ScopeBroker,
 	}
@@ -415,7 +415,7 @@ func TestService_DeleteLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	fn.restoreSink = sink
 	ctx := systemCtx()
 
-	target := node.LimitTarget{
+	target := node.LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicyRateLimit,
 		Scope:  domain.ScopeBroker,
 	}

@@ -397,7 +397,7 @@ func TestLocalNode_RateAndOrderSizeCRUDConfigureLive(t *testing.T) {
 	}, testCaller); err != nil {
 		t.Fatalf("delete last order size: %v", err)
 	}
-	if _, err := n.DeleteLimit(ctx, LimitTarget{
+	if _, err := n.DeleteLimit(ctx, LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicyRateLimit,
 		Scope:  domain.ScopeBroker,
 	}, testCaller); err != nil {
@@ -698,7 +698,7 @@ func TestLocalNode_LastRateLimitStoreCommitFailureIsAtomic(t *testing.T) {
 	wrapped.deleteRateErr = commitErr
 	next := newFakeEngine()
 	n.build = fakeBuild(next, new(engine.Snapshot))
-	_, err := n.DeleteLimit(ctx, LimitTarget{
+	_, err := n.DeleteLimit(ctx, LimitTarget{Mode: domain.RuleModeReject,
 		Policy: domain.PolicyRateLimit,
 		Scope:  domain.ScopeBroker,
 	}, testCaller)

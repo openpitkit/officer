@@ -51,7 +51,7 @@
     "pnlRequires": "{{policy}} exige lower_bound ou upper_bound",
     "pnlBoundOrder": "lower_bound deve ser <= upper_bound",
     "modeRequired": "escolha um modo de limite de fundos",
-    "orderSizeModeInvalid": "escolha um modo de tamanho de ordem"
+    "ruleModeInvalid": "escolha um modo de barreira"
   },
   "password": {
     "mismatch": "As senhas não coincidem."

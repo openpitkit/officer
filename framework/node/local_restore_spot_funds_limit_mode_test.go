@@ -40,20 +40,30 @@ func TestLocalNode_RestoreBackupSpotFundsLimitMode(t *testing.T) {
 		restored string
 		scope    backup.Scope
 		mode     backup.RestoreMode
-		calls    []bool
+		calls    []domain.SpotFundsLimitMode
 	}{
 		{
 			name: "settings track only to enforce", before: "track_only",
 			restored: "enforce", scope: settings,
-			mode: backup.RestoreModeOverwrite, calls: []bool{false},
+			mode: backup.RestoreModeOverwrite, calls: []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeEnforce},
+		},
+		{
+			name: "settings enforce to review with hold", before: "enforce", restored: "review_with_hold",
+			scope: settings, mode: backup.RestoreModeOverwrite,
+			calls: []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeReviewWithHold},
+		},
+		{
+			name: "settings review to review without hold", before: "review_with_hold", restored: "review_without_hold",
+			scope: settings, mode: backup.RestoreModeOverwrite,
+			calls: []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeReviewWithoutHold},
 		},
 		{
 			name: "settings absent to track only", restored: "track_only",
-			scope: settings, mode: backup.RestoreModeOverwrite, calls: []bool{true},
+			scope: settings, mode: backup.RestoreModeOverwrite, calls: []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeTrackOnly},
 		},
 		{
 			name: "replace prunes mode to enforce", before: "track_only",
-			scope: settings, mode: backup.RestoreModeReplaceAll, calls: []bool{false},
+			scope: settings, mode: backup.RestoreModeReplaceAll, calls: []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeEnforce},
 		},
 		{
 			name: "unchanged track only", before: "track_only", restored: "track_only",
@@ -66,7 +76,7 @@ func TestLocalNode_RestoreBackupSpotFundsLimitMode(t *testing.T) {
 		{
 			name: "runtime applies online", restored: "track_only",
 			scope: backup.Scope{All: true}, mode: backup.RestoreModeOverwrite,
-			calls: []bool{true},
+			calls: []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeTrackOnly},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -94,8 +104,8 @@ func TestLocalNode_RestoreBackupSpotFundsLimitMode(t *testing.T) {
 			if summary.RestartRequired || n.currentEngine() != eng || sink != eng.MarketDataSink() {
 				t.Fatal("mode-only restore replaced the engine or sink")
 			}
-			if !reflect.DeepEqual(eng.spotFundsTrackOnlyCalls, test.calls) {
-				t.Fatalf("engine mode calls = %v, want %v", eng.spotFundsTrackOnlyCalls, test.calls)
+			if !reflect.DeepEqual(eng.spotFundsLimitModeCalls, test.calls) {
+				t.Fatalf("engine mode calls = %v, want %v", eng.spotFundsLimitModeCalls, test.calls)
 			}
 			requireStoredSpotFundsLimitMode(t, realm, test.restored, test.restored != "")
 			want := domain.SpotFundsLimitMode(test.restored)
@@ -116,7 +126,7 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeWaitsForActiveLane(t *testing.
 	st, realm := newSpotFundsLimitModeStore(t, "", false)
 	eng := &restoreSpotFundsModeLaneEngine{
 		fakeEngine: newFakeEngine(),
-		calls:      make(chan bool, 1),
+		calls:      make(chan domain.SpotFundsLimitMode, 1),
 	}
 	n := newTestNodeWithStore(t, st, eng.fakeEngine, failOnFatal(t))
 	n.engineMu.Lock()
@@ -159,8 +169,8 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeWaitsForActiveLane(t *testing.
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 	select {
-	case trackOnly := <-eng.calls:
-		if !trackOnly {
+	case mode := <-eng.calls:
+		if mode != domain.SpotFundsLimitModeTrackOnly {
 			t.Fatal("restored mode did not enable track only")
 		}
 	default:
@@ -171,12 +181,12 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeWaitsForActiveLane(t *testing.
 
 type restoreSpotFundsModeLaneEngine struct {
 	*fakeEngine
-	calls chan bool
+	calls chan domain.SpotFundsLimitMode
 }
 
-func (e *restoreSpotFundsModeLaneEngine) SetSpotFundsTrackOnly(ctx context.Context, trackOnly bool) error {
-	e.calls <- trackOnly
-	return e.fakeEngine.SetSpotFundsTrackOnly(ctx, trackOnly)
+func (e *restoreSpotFundsModeLaneEngine) SetSpotFundsLimitMode(ctx context.Context, mode domain.SpotFundsLimitMode) error {
+	e.calls <- mode
+	return e.fakeEngine.SetSpotFundsLimitMode(ctx, mode)
 }
 
 func TestLocalNode_RestoreBackupSpotFundsLimitModeSerializesAssetClassificationWithDelete(t *testing.T) {
@@ -332,7 +342,7 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeAssetAdditionRejectsReservedRe
 
 func TestLocalNode_RestoreBackupSpotFundsLimitModeRebuild(t *testing.T) {
 	t.Parallel()
-	for _, restored := range []string{"enforce", "track_only"} {
+	for _, restored := range []string{"enforce", "review_with_hold", "review_without_hold", "track_only"} {
 		t.Run(restored, func(t *testing.T) {
 			ctx := context.Background()
 			before := "enforce"
@@ -366,11 +376,11 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeRebuild(t *testing.T) {
 			if !summary.RestartRequired || builds != 1 || old.running || n.currentEngine() != next || sink != next.MarketDataSink() {
 				t.Fatalf("account-deleting restore summary=%+v builds=%d, want one engine swap", summary, builds)
 			}
-			if len(old.spotFundsTrackOnlyCalls) != 0 || len(next.spotFundsTrackOnlyCalls) != 0 {
-				t.Fatalf("rebuild made online mode calls: old=%v next=%v, want none", old.spotFundsTrackOnlyCalls, next.spotFundsTrackOnlyCalls)
+			if len(old.spotFundsLimitModeCalls) != 0 || len(next.spotFundsLimitModeCalls) != 0 {
+				t.Fatalf("rebuild made online mode calls: old=%v next=%v, want none", old.spotFundsLimitModeCalls, next.spotFundsLimitModeCalls)
 			}
-			if snapshot.SpotFundsTrackOnly != (restored == "track_only") {
-				t.Fatalf("rebuild snapshot track only = %v, want mode %q", snapshot.SpotFundsTrackOnly, restored)
+			if snapshot.SpotFundsLimitMode != domain.SpotFundsLimitMode(restored) {
+				t.Fatalf("rebuild snapshot mode = %q, want mode %q", snapshot.SpotFundsLimitMode, restored)
 			}
 			requireStoredSpotFundsLimitMode(t, realm, restored, true)
 		})
@@ -388,16 +398,16 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeApplyFailure(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			st, realm := newSpotFundsLimitModeStore(t, "track_only", true)
+			st, realm := newSpotFundsLimitModeStore(t, "review_with_hold", true)
 			eng := newFakeEngine()
 			n := newTestNodeWithStore(t, st, eng, failOnFatal(t))
 			applyErr := errors.New("mode apply failed")
-			eng.spotFundsTrackOnlyErr = applyErr
+			eng.spotFundsLimitModeErr = applyErr
 			var fatalErr error
 			n.fatal = func(err error) { fatalErr = err }
 			_, _, err := n.RestoreBackup(
 				ctx, testArchive(scope, backup.Data{Settings: []backup.SettingEntry{{
-					Key: domain.SettingKeySpotFundsLimitMode, Value: "enforce",
+					Key: domain.SettingKeySpotFundsLimitMode, Value: "review_without_hold",
 				}}}),
 				backup.RestoreOptions{Scope: scope, Mode: backup.RestoreModeOverwrite}, testCaller,
 			)
@@ -408,12 +418,12 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeApplyFailure(t *testing.T) {
 				if !errors.Is(fatalErr, applyErr) || !strings.Contains(fatalErr.Error(), "spot funds limit mode") {
 					t.Fatalf("fatal error = %v, want mode apply failure with mode context", fatalErr)
 				}
-				requireStoredSpotFundsLimitMode(t, realm, "enforce", true)
+				requireStoredSpotFundsLimitMode(t, realm, "review_without_hold", true)
 			} else {
 				if fatalErr != nil {
 					t.Fatalf("fatal error = %v, want settings-only rollback", fatalErr)
 				}
-				requireStoredSpotFundsLimitMode(t, realm, "track_only", true)
+				requireStoredSpotFundsLimitMode(t, realm, "review_with_hold", true)
 			}
 		})
 	}
@@ -498,8 +508,8 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeReadFailure(t *testing.T) {
 			if test.failRead == 1 && probe.restores != 0 {
 				t.Fatalf("store restore calls = %d, want none after pre-read failure", probe.restores)
 			}
-			if len(eng.spotFundsTrackOnlyCalls) != 0 {
-				t.Fatalf("engine mode calls = %v, want none after read failure", eng.spotFundsTrackOnlyCalls)
+			if len(eng.spotFundsLimitModeCalls) != 0 {
+				t.Fatalf("engine mode calls = %v, want none after read failure", eng.spotFundsLimitModeCalls)
 			}
 		})
 	}
@@ -530,21 +540,21 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeAuditFailure(t *testing.T) {
 			if !errors.Is(err, errRestoreAuditFailed) {
 				t.Fatalf("RestoreBackup error = %v, want audit failure", err)
 			}
-			wantCalls := []bool{true, false}
+			wantCalls := []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeTrackOnly, domain.SpotFundsLimitModeEnforce}
 			if runtimeScope {
 				if !errors.Is(fatalErr, errRestoreAuditFailed) {
 					t.Fatalf("fatal error = %v, want committed audit failure", fatalErr)
 				}
 				requireStoredSpotFundsLimitMode(t, realm, "track_only", true)
-				wantCalls = []bool{true}
+				wantCalls = []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeTrackOnly}
 			} else {
 				if fatalErr != nil {
 					t.Fatalf("fatal error = %v, want settings-only rollback", fatalErr)
 				}
 				requireStoredSpotFundsLimitMode(t, realm, "", false)
 			}
-			if !reflect.DeepEqual(eng.spotFundsTrackOnlyCalls, wantCalls) {
-				t.Fatalf("engine mode calls after audit failure = %v, want %v", eng.spotFundsTrackOnlyCalls, wantCalls)
+			if !reflect.DeepEqual(eng.spotFundsLimitModeCalls, wantCalls) {
+				t.Fatalf("engine mode calls after audit failure = %v, want %v", eng.spotFundsLimitModeCalls, wantCalls)
 			}
 		})
 	}
@@ -558,7 +568,7 @@ type restoreSpotFundsModeAuditRealm struct {
 
 func (r *restoreSpotFundsModeAuditRealm) AppendAudit(ctx context.Context, entry store.AuditEntry) error {
 	if entry.Action == domain.AuditActionRestoreBackup {
-		r.engine.spotFundsTrackOnlyErr = r.rollbackErr
+		r.engine.spotFundsLimitModeErr = r.rollbackErr
 	}
 	return r.failRestoreAuditRealm.AppendAudit(ctx, entry)
 }
@@ -590,7 +600,8 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeRollbackFailureFatals(t *testi
 		t.Fatalf("fatal error = %v, want mode rollback failure", fatalErr)
 	}
 	requireStoredSpotFundsLimitMode(t, realm, "track_only", true)
-	if !reflect.DeepEqual(eng.spotFundsTrackOnlyCalls, []bool{true}) {
-		t.Fatalf("engine mode calls = %v, want [true] before fatal rollback", eng.spotFundsTrackOnlyCalls)
+	wantModes := []domain.SpotFundsLimitMode{domain.SpotFundsLimitModeTrackOnly}
+	if !reflect.DeepEqual(eng.spotFundsLimitModeCalls, wantModes) {
+		t.Fatalf("engine mode calls = %v, want %v before fatal rollback", eng.spotFundsLimitModeCalls, wantModes)
 	}
 }

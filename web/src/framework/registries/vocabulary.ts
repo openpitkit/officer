@@ -17,6 +17,8 @@
 
 import type { TFunction } from "i18next";
 
+import { isSpotFundsPnlPolicy } from "../../api/spotFundsPnlPolicies";
+
 export type Policy = string;
 export type Scope = string;
 
@@ -117,6 +119,16 @@ export function isPolicy(value: string): value is Policy {
   return policies.has(value);
 }
 
+/** Whether the policy's barrier key includes a rule mode. */
+export function limitPolicyHasMode(policy: string): boolean {
+  return (
+    policy === "rate_limit" ||
+    policy === "order_size_limit" ||
+    policy === "position_limit" ||
+    isSpotFundsPnlPolicy(policy)
+  );
+}
+
 export function isScope(value: string): value is Scope {
   return scopes.has(value);
 }
@@ -156,12 +168,17 @@ export const ADJUSTMENT_TYPES = [
 export type AdjustmentType = (typeof ADJUSTMENT_TYPES)[number];
 
 /** Every Spot Funds limit mode, in the order the panel offers them. */
-export const SPOT_FUNDS_LIMIT_MODES = ["enforce", "track_only"] as const;
+export const SPOT_FUNDS_LIMIT_MODES = [
+  "enforce",
+  "review_without_hold",
+  "review_with_hold",
+  "track_only",
+] as const;
 
 /** The value of the Officer-level spot_funds_limit_mode policy (mirrors
  *  domain.SpotFundsLimitMode): enforce refuses an order the funds cannot
- *  cover, track_only accounts without that refusal. Derived from
- *  SPOT_FUNDS_LIMIT_MODES so the union and the list cannot drift apart. */
+ *  cover, review modes defer the order to an operator, and track_only
+ *  accounts without refusing on funds. */
 export type SpotFundsLimitMode = (typeof SPOT_FUNDS_LIMIT_MODES)[number];
 
 /** True when value is one of SPOT_FUNDS_LIMIT_MODES. */
@@ -174,23 +191,21 @@ export function isSpotFundsLimitMode(
   );
 }
 
-/** Every order-size barrier mode, in the order the panel offers them. */
-export const ORDER_SIZE_LIMIT_MODES = [
+/** Every rule mode, in the order the panel offers them. */
+export const RULE_MODES = [
   "reject",
   "review_without_hold",
   "review_with_hold",
 ] as const;
 
-/** The mode of an order-size barrier, derived from ORDER_SIZE_LIMIT_MODES. */
-export type OrderSizeLimitMode = (typeof ORDER_SIZE_LIMIT_MODES)[number];
+/** The mode of a barrier, mirroring domain.RuleMode. */
+export type RuleMode = (typeof RULE_MODES)[number];
 
-/** True when value is one of ORDER_SIZE_LIMIT_MODES. */
-export function isOrderSizeLimitMode(
-  value: unknown,
-): value is OrderSizeLimitMode {
+/** True when value is one of RULE_MODES. */
+export function isRuleMode(value: unknown): value is RuleMode {
   return (
     typeof value === "string" &&
-    (ORDER_SIZE_LIMIT_MODES as readonly string[]).includes(value)
+    (RULE_MODES as readonly string[]).includes(value)
   );
 }
 
@@ -217,10 +232,7 @@ export function adjustmentTypeLabel(t: TFunction, id: AdjustmentType): string {
 }
 
 /** The shared domain label for a barrier or review mark's rule mode. */
-export function ruleModeLabel(
-  t: TFunction,
-  mode: OrderSizeLimitMode | ReviewMarkMode,
-): string {
+export function ruleModeLabel(t: TFunction, mode: RuleMode): string {
   return t(`domain:ruleMode.${mode}`);
 }
 

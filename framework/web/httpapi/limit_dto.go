@@ -35,6 +35,7 @@ import (
 
 // RateLimitDTO is the wire shape of a rate-limit barrier.
 type RateLimitDTO struct {
+	Mode      string `json:"mode"`
 	Scope     string `json:"scope"`
 	Account   string `json:"account"`
 	Asset     string `json:"asset"`
@@ -55,6 +56,7 @@ type OrderSizeLimitDTO struct {
 
 // PositionLimitDTO carries a non-negative exact decimal ceiling; zero is valid.
 type PositionLimitDTO struct {
+	Mode        string `json:"mode"`
 	Scope       string `json:"scope"`
 	Account     string `json:"account"`
 	Asset       string `json:"asset"`
@@ -64,6 +66,7 @@ type PositionLimitDTO struct {
 // SpotFundsPnlBoundsLimitDTO is the wire shape of a currency-valued SpotFunds
 // self-computed P&L-bounds barrier.
 type SpotFundsPnlBoundsLimitDTO struct {
+	Mode         string `json:"mode"`
 	Scope        string `json:"scope"`
 	Account      string `json:"account"`
 	AccountGroup string `json:"accountGroup"`
@@ -125,10 +128,20 @@ type AccountLimitsDTO struct {
 	SpotFundsLimitModes                []SpotFundsLimitModeLimitDTO `json:"spotFundsLimitModes"`
 }
 
-// FromRateLimitDTO maps a wire rate-limit body onto the domain barrier. A
-// windowMs whose window in nanoseconds does not fit time.Duration is a
-// validation error on /windowMs: converted, it would wrap into a window nobody
-// sent. The window's own range is the domain's to check.
+// RuleModeFromWire maps an absent or empty mode to reject. Any other value is
+// carried through for domain validation.
+func RuleModeFromWire(mode string) domain.RuleMode {
+	if mode == "" {
+		return domain.RuleModeReject
+	}
+	return domain.RuleMode(mode)
+}
+
+// FromRateLimitDTO maps a wire rate-limit body onto the domain barrier.
+// An absent or empty mode means reject. A windowMs whose window in nanoseconds
+// does not fit time.Duration is a validation error on /windowMs: converted, it
+// would wrap into a window nobody sent. The window's own range is the domain's
+// to check.
 func FromRateLimitDTO(dto RateLimitDTO) (domain.LimitRate, error) {
 	if dto.WindowMs > math.MaxInt64/int64(time.Millisecond) ||
 		dto.WindowMs < math.MinInt64/int64(time.Millisecond) {
@@ -137,6 +150,7 @@ func FromRateLimitDTO(dto RateLimitDTO) (domain.LimitRate, error) {
 		)
 	}
 	return domain.LimitRate{
+		Mode:      RuleModeFromWire(dto.Mode),
 		Scope:     domain.LimitScope(dto.Scope),
 		Account:   domain.AccountID(dto.Account),
 		Asset:     dto.Asset,
@@ -149,12 +163,8 @@ func FromRateLimitDTO(dto RateLimitDTO) (domain.LimitRate, error) {
 // An absent or empty mode means reject. Other modes and decimal values are
 // carried through verbatim for domain validation; never parsed to float.
 func FromOrderSizeLimitDTO(dto OrderSizeLimitDTO) domain.LimitOrderSize {
-	mode := domain.RuleMode(dto.Mode)
-	if mode == "" {
-		mode = domain.RuleModeReject
-	}
 	return domain.LimitOrderSize{
-		Mode:        mode,
+		Mode:        RuleModeFromWire(dto.Mode),
 		Scope:       domain.LimitScope(dto.Scope),
 		Account:     domain.AccountID(dto.Account),
 		Asset:       dto.Asset,
@@ -164,8 +174,10 @@ func FromOrderSizeLimitDTO(dto OrderSizeLimitDTO) domain.LimitOrderSize {
 }
 
 // FromPositionLimitDTO preserves exact decimal strings for domain validation.
+// An absent or empty mode means reject.
 func FromPositionLimitDTO(dto PositionLimitDTO) domain.LimitPosition {
 	return domain.LimitPosition{
+		Mode:        RuleModeFromWire(dto.Mode),
 		Scope:       domain.LimitScope(dto.Scope),
 		Account:     domain.AccountID(dto.Account),
 		Asset:       dto.Asset,
@@ -175,13 +187,14 @@ func FromPositionLimitDTO(dto PositionLimitDTO) domain.LimitPosition {
 
 // FromSpotFundsPnlBoundsLimitDTO maps a wire SpotFunds P&L-bounds body onto
 // the domain barrier of axis, which the route or policy names and the body
-// does not carry. Decimal values are carried through verbatim; never parsed to
-// float.
+// does not carry. An absent or empty mode means reject. Decimal values are
+// carried through verbatim; never parsed to float.
 func FromSpotFundsPnlBoundsLimitDTO(
 	axis domain.SpotFundsPnlAxis,
 	dto SpotFundsPnlBoundsLimitDTO,
 ) domain.LimitSpotFundsPnlBounds {
 	return domain.LimitSpotFundsPnlBounds{
+		Mode:         RuleModeFromWire(dto.Mode),
 		Axis:         axis,
 		Scope:        domain.LimitScope(dto.Scope),
 		Account:      domain.AccountID(dto.Account),
@@ -214,6 +227,7 @@ func ToSpotFundsLimitModeLimitDTO(
 // ToRateLimitDTO maps a domain.LimitRate onto the wire DTO.
 func ToRateLimitDTO(l domain.LimitRate) RateLimitDTO {
 	return RateLimitDTO{
+		Mode:      string(l.Mode),
 		Scope:     string(l.Scope),
 		Account:   string(l.Account),
 		Asset:     l.Asset,
@@ -237,6 +251,7 @@ func ToOrderSizeLimitDTO(l domain.LimitOrderSize) OrderSizeLimitDTO {
 // ToPositionLimitDTO preserves the stored exact decimal ceiling.
 func ToPositionLimitDTO(l domain.LimitPosition) PositionLimitDTO {
 	return PositionLimitDTO{
+		Mode:        string(l.Mode),
 		Scope:       string(l.Scope),
 		Account:     string(l.Account),
 		Asset:       l.Asset,
@@ -250,6 +265,7 @@ func ToSpotFundsPnlBoundsLimitDTO(
 	l domain.LimitSpotFundsPnlBounds,
 ) SpotFundsPnlBoundsLimitDTO {
 	return SpotFundsPnlBoundsLimitDTO{
+		Mode:         string(l.Mode),
 		Scope:        string(l.Scope),
 		Account:      string(l.Account),
 		AccountGroup: l.AccountGroup,

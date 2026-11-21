@@ -338,7 +338,7 @@ func TestMarketDataSink_ClearRemovesStoredQuote(t *testing.T) {
 func TestOpenPitBuildFunc_RebuildPreservesPublishedQuoteWithoutStore(t *testing.T) {
 	t.Parallel()
 	build := NewOpenPitEngineBuildFunc()
-	snapshot := fwengine.Snapshot{Assets: testAssets()}
+	snapshot := fwengine.Snapshot{SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce, Assets: testAssets()}
 
 	firstEngine, err := build(snapshot)
 	if err != nil {
@@ -394,8 +394,9 @@ func TestOpenPitBuildFunc_RebuildUsesPublishedQuoteForMarketOrder(t *testing.T) 
 			t.Parallel()
 			build := NewOpenPitEngineBuildFunc()
 			firstSnapshot := fwengine.Snapshot{
-				Assets:   testAssets(),
-				Accounts: []domain.Account{account("acc-1")},
+				SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+				Assets:             testAssets(),
+				Accounts:           []domain.Account{account("acc-1")},
 				Balances: []domain.Balance{
 					fundedBalance("acc-1", "USD", "1000000"),
 					fundedBalance("acc-1", "AAPL", "1000000"),
@@ -469,7 +470,7 @@ func TestOpenPitBuildFunc_RebuildUsesPublishedQuoteForMarketOrder(t *testing.T) 
 func TestOpenPitBuildFunc_SharedServiceClosesOnlyAtFinalShutdown(t *testing.T) {
 	t.Parallel()
 	build := NewOpenPitEngineBuildFunc()
-	snapshot := fwengine.Snapshot{Assets: testAssets()}
+	snapshot := fwengine.Snapshot{SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce, Assets: testAssets()}
 
 	firstEngine, err := build(snapshot)
 	if err != nil {
@@ -505,7 +506,7 @@ func TestOpenPitBuildFunc_SharedServiceClosesOnlyAtFinalShutdown(t *testing.T) {
 func TestOpenPitBuildFunc_ReplacesClosedSharedService(t *testing.T) {
 	t.Parallel()
 	build := NewOpenPitEngineBuildFunc()
-	snapshot := fwengine.Snapshot{Assets: testAssets()}
+	snapshot := fwengine.Snapshot{SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce, Assets: testAssets()}
 	var engines []*openPitEngine
 	t.Cleanup(func() {
 		for _, eng := range engines {
@@ -555,7 +556,7 @@ func TestOpenPitBuildFunc_ReplacesClosedSharedService(t *testing.T) {
 func TestOpenPitBuildFunc_FailedRebuildKeepsSharedServiceLive(t *testing.T) {
 	t.Parallel()
 	build := NewOpenPitEngineBuildFunc()
-	snapshot := fwengine.Snapshot{Assets: testAssets()}
+	snapshot := fwengine.Snapshot{SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce, Assets: testAssets()}
 
 	firstEngine, err := build(snapshot)
 	if err != nil {

@@ -1030,6 +1030,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"limit_rate": {
 		backup: map[string]string{
+			"mode":       "Mode",
 			"scope":      "Scope",
 			"account_id": "Account",
 			"asset_id":   "Asset",
@@ -1048,6 +1049,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"limit_position": {
 		backup: map[string]string{
+			"mode":         "Mode",
 			"scope":        "Scope",
 			"account_id":   "Account",
 			"asset_id":     "Asset",
@@ -1056,6 +1058,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"limit_spot_funds_pnl_bound": {
 		backup: map[string]string{
+			"mode":              "Mode",
 			"axis":              "Axis",
 			"scope":             "Scope",
 			"account_id":        "Account",
@@ -1685,7 +1688,7 @@ func seedClientDataDriftRealm(
 		AverageEntryPrice:     "201.23",
 		UpdatedAt:             time.Date(2026, 7, 8, 10, 12, 12, 0, time.UTC),
 	}))
-	must(t, "PutRateLimit", rs.PutRateLimit(ctx, domain.LimitRate{
+	must(t, "PutRateLimit", rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeAccountAsset,
 		Account:   "acc-1",
 		Asset:     "AAPL",
@@ -1706,12 +1709,12 @@ func seedClientDataDriftRealm(
 		Asset:       "AAPL",
 		MaxNotional: "2500.75",
 	}))
-	must(t, "PutPositionLimit", rs.PutPositionLimit(ctx, domain.LimitPosition{
+	must(t, "PutPositionLimit", rs.PutPositionLimit(ctx, domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10.00000001",
 	}))
 	must(t, "PutSpotFundsPnlBoundsLimit", rs.PutSpotFundsPnlBoundsLimit(
 		ctx,
-		domain.LimitSpotFundsPnlBounds{
+		domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
@@ -1722,7 +1725,7 @@ func seedClientDataDriftRealm(
 	))
 	must(t, "PutSpotFundsPnlBoundsLimit unrealized group", rs.PutSpotFundsPnlBoundsLimit(
 		ctx,
-		domain.LimitSpotFundsPnlBounds{
+		domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:         domain.SpotFundsPnlAxisUnrealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "grp-1",
@@ -1733,7 +1736,7 @@ func seedClientDataDriftRealm(
 	))
 	must(t, "PutSpotFundsPnlBoundsLimit total", rs.PutSpotFundsPnlBoundsLimit(
 		ctx,
-		domain.LimitSpotFundsPnlBounds{
+		domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisTotal,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",

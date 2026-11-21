@@ -857,15 +857,15 @@ func TestLocalNode_ForcedDeleteGroupAuditsDetachedAccounts(t *testing.T) {
 			t.Fatalf("CreateAccount(%s): %v", code, err)
 		}
 	}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-10",
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-20"},
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "member-a", Currency: "USD", UpperBound: "20"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-20"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "member-a", Currency: "USD", UpperBound: "20"},
 	} {
 		if _, err := n.PutSpotFundsPnlBoundsLimit(
 			ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller,
@@ -945,7 +945,7 @@ func TestLocalNode_DeleteGroupBuildFailureLeavesStoreAndEngineUntouched(t *testi
 	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", UpperBound: "10",
 	}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {

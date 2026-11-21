@@ -24,12 +24,229 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	"go.openpit.dev/officer/framework/node"
+	fwstore "go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/officer/internal/store/sqlite"
 )
+
+type countingModeSource struct {
+	frameworkmcp.Source
+	realm fwstore.RealmStore
+	write domain.LimitWrite
+}
+
+type spotFundsModeWriteProbe struct {
+	frameworkmcp.Source
+	calls int
+}
+
+func (s *spotFundsModeWriteProbe) PutSpotFundsLimitMode(context.Context, domain.LimitSpotFundsLimitMode) error {
+	s.calls++
+	return errors.New("unexpected mode write")
+}
+
+func TestUpdateSpotFundsLimitModeRefusesReviewBeforeSource(t *testing.T) {
+	for _, mode := range []domain.SpotFundsLimitMode{
+		domain.SpotFundsLimitModeReviewWithHold, domain.SpotFundsLimitModeReviewWithoutHold,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			src := &spotFundsModeWriteProbe{}
+			input := limitWriteInput{Policy: domain.PolicySpotFundsLimitMode, Scope: "global", Mode: string(mode)}
+			_, err := putSpotFundsLimitMode(t.Context(), src, input, domain.LimitWriteChange)
+			if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/mode" ||
+				domain.ValidationConstraint(err) != "unsupported_value" {
+				t.Fatalf("error = %v, want unsupported_value at /mode wrapping ErrInvalid", err)
+			}
+			if !strings.Contains(err.Error(), "REST or the panel") {
+				t.Fatalf("error = %v, want setting route", err)
+			}
+			_, _, toolErr := updateLimitHandler(src)(t.Context(), nil, input)
+			if toolErr == nil || !strings.HasPrefix(toolErr.Error(), "validation:") {
+				t.Fatalf("tool error = %v, want validation shape", toolErr)
+			}
+			if src.calls != 0 {
+				t.Fatalf("source calls = %d, want no storage or engine call", src.calls)
+			}
+		})
+	}
+}
+
+func (s *countingModeSource) AccountFeatures() backend.AccountFeatures {
+	return backend.AccountFeatures{}
+}
+
+func (s *countingModeSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, _ domain.MissingAccountPolicy) error {
+	s.write = write
+	return s.realm.PutRateLimit(ctx, limit)
+}
+
+func (s *countingModeSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, _ domain.MissingAccountPolicy) error {
+	s.write = write
+	return s.realm.PutPositionLimit(ctx, limit)
+}
+
+func (s *countingModeSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, _ domain.MissingAccountPolicy) error {
+	s.write = write
+	return s.realm.PutSpotFundsPnlBoundsLimit(ctx, limit)
+}
+
+func (s *countingModeSource) ListLimits(ctx context.Context, account domain.AccountID) (node.AccountLimits, error) {
+	rate, err := s.realm.ListRateLimits(ctx, account)
+	if err != nil {
+		return node.AccountLimits{}, err
+	}
+	position, err := s.realm.ListPositionLimits(ctx, account)
+	if err != nil {
+		return node.AccountLimits{}, err
+	}
+	pnl, err := s.realm.ListSpotFundsPnlBoundsLimits(ctx, account)
+	if err != nil {
+		return node.AccountLimits{}, err
+	}
+	return node.AccountLimits{RateLimits: rate, PositionLimits: position, SpotFundsPnlBoundsLimits: pnl}, nil
+}
+
+func TestCountingLimitMCPUpdatesOnlyReject(t *testing.T) {
+	for _, policy := range []string{domain.PolicyRateLimit, domain.PolicyPositionLimit,
+		domain.PolicySpotFundsPnlBoundsKillSwitch, domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch} {
+		t.Run(policy, func(t *testing.T) {
+			ctx := t.Context()
+			db, err := sqlite.New(t.TempDir()+"/limits.db", domain.DefaultRealm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := db.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := db.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			realm, err := db.ForRealm(ctx, domain.DefaultRealm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := realm.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := realm.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
+				switch policy {
+				case domain.PolicyRateLimit:
+					err = realm.PutRateLimit(ctx, domain.LimitRate{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", Window: time.Second, MaxOrders: 10})
+				case domain.PolicyPositionLimit:
+					err = realm.PutPositionLimit(ctx, domain.LimitPosition{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10"})
+				default:
+					axis, ok := domain.SpotFundsPnlAxisOf(policy)
+					if !ok {
+						t.Fatal("missing P&L axis")
+					}
+					err = realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: mode, Axis: axis, Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-10"})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			src := &countingModeSource{realm: realm}
+			input := limitWriteInput{Policy: policy, Scope: "account_asset", Account: "acc-1", Asset: "AAPL", WindowMs: 1000, MaxOrders: 5, MaxPosition: "5"}
+			if _, ok := domain.SpotFundsPnlAxisOf(policy); ok {
+				input = limitWriteInput{Policy: policy, Scope: "global", Currency: "AAPL", LowerBound: "-5"}
+			}
+			_, out, err := updateLimitHandler(src)(ctx, nil, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if src.write != domain.LimitWriteChange {
+				t.Fatalf("write = %s", src.write)
+			}
+			limits, err := src.ListLimits(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch policy {
+			case domain.PolicyRateLimit:
+				if out.RateLimit == nil || out.RateLimit.Mode != "reject" || out.RateLimit.MaxOrders != 5 || len(limits.RateLimits) != 2 {
+					t.Fatalf("MCP response=%+v stored=%+v", out, limits)
+				}
+				for _, limit := range limits.RateLimits {
+					want := uint64(10)
+					if limit.Mode == domain.RuleModeReject {
+						want = 5
+					}
+					if limit.MaxOrders != want {
+						t.Fatalf("stored rate = %+v, want %d", limit, want)
+					}
+				}
+			case domain.PolicyPositionLimit:
+				if out.PositionLimit == nil || out.PositionLimit.Mode != "reject" || out.PositionLimit.MaxPosition != "5" || len(limits.PositionLimits) != 2 {
+					t.Fatalf("MCP response=%+v stored=%+v", out, limits)
+				}
+				for _, limit := range limits.PositionLimits {
+					want := "10"
+					if limit.Mode == domain.RuleModeReject {
+						want = "5"
+					}
+					if limit.MaxPosition != want {
+						t.Fatalf("stored position = %+v, want %s", limit, want)
+					}
+				}
+			default:
+				bound := out.SpotFundsPnlBoundsLimit
+				switch policy {
+				case domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch:
+					bound = out.SpotFundsUnrealizedPnlBoundsLimit
+				case domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
+					bound = out.SpotFundsTotalPnlBoundsLimit
+				}
+				if bound == nil || bound.Mode != "reject" || bound.LowerBound != "-5" || len(limits.SpotFundsPnlBoundsLimits) != 2 {
+					t.Fatalf("MCP response=%+v stored=%+v", out, limits)
+				}
+				for _, limit := range limits.SpotFundsPnlBoundsLimits {
+					want := "-10"
+					if limit.Mode == domain.RuleModeReject {
+						want = "-5"
+						key, err := limit.Key()
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := realm.DeleteLimit(ctx, key); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if limit.LowerBound != want {
+						t.Fatalf("stored P&L bound = %+v, want %s", limit, want)
+					}
+				}
+				if _, _, err := addLimitHandler(src)(ctx, nil, input); err != nil || src.write != domain.LimitWriteAdd {
+					t.Fatalf("add reject barrier: write=%s error=%v", src.write, err)
+				}
+				limits, err = src.ListLimits(ctx, "")
+				if err != nil || len(limits.SpotFundsPnlBoundsLimits) != 2 {
+					t.Fatalf("after add: %+v, %v", limits, err)
+				}
+				for _, limit := range limits.SpotFundsPnlBoundsLimits {
+					want := "-10"
+					if limit.Mode == domain.RuleModeReject {
+						want = "-5"
+					}
+					if limit.LowerBound != want {
+						t.Fatalf("added P&L bound = %+v, want %s", limit, want)
+					}
+				}
+			}
+		})
+	}
+}
 
 type orderSizeModeSource struct {
 	frameworkmcp.Source
@@ -126,8 +343,12 @@ func TestLimitWriteInputCarriesLimitBodies(t *testing.T) {
 		),
 	}
 	declared := jsonFields(reflect.TypeFor[limitWriteInput]())
-	// MCP writes only reject order-size barriers; mode is a foreign field.
-	delete(bodies[domain.PolicyOrderSizeLimit], "mode")
+	// MCP writes only reject barriers; rule mode is a foreign field.
+	for policy, body := range bodies {
+		if domain.LimitPolicyHasMode(policy) {
+			delete(body, "mode")
+		}
+	}
 	every := map[string]reflect.Type{}
 	every["mode"] = reflect.TypeFor[string]()
 	for policy, body := range bodies {

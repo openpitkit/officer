@@ -38,9 +38,10 @@ import (
 
 func orderSizeInstanceSnapshot(modes ...domain.RuleMode) fwengine.Snapshot {
 	snap := fwengine.Snapshot{
-		Accounts: []domain.Account{account("acc-1")},
-		Assets:   testAssets(),
-		Balances: []domain.Balance{fundedBalance("acc-1", "USD", "1000000")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Accounts:           []domain.Account{account("acc-1")},
+		Assets:             testAssets(),
+		Balances:           []domain.Balance{fundedBalance("acc-1", "USD", "1000000")},
 	}
 	for _, mode := range modes {
 		cap := "10"
@@ -64,7 +65,7 @@ func buildOrderSizeInstanceEngine(t *testing.T, snap fwengine.Snapshot) *openPit
 }
 
 func assertOrderSizeInstanceVerdict(
-	t *testing.T, eng fwengine.Engine, qty string, want domain.Verdict,
+	t *testing.T, eng fwengine.Engine, qty string, want domain.Verdict, code string,
 ) {
 	t.Helper()
 	order := domain.Order{
@@ -72,22 +73,7 @@ func assertOrderSizeInstanceVerdict(
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: qty, Price: "1",
 	}
-	out, err := materializeOrderResult(eng, order)
-	if err != nil || out.Verdict != want {
-		t.Fatalf("quantity %s result = %+v, %v; want %s", qty, out, err, want)
-	}
-	if want == domain.VerdictReview {
-		if len(out.Reviews) != 1 || out.Reviews[0].Mode != domain.RuleModeReviewWithoutHold ||
-			out.Reviews[0].Policy != nameOrderSizeLimit {
-			t.Fatalf("review marks = %+v, want one %s review_without_hold mark", out.Reviews, nameOrderSizeLimit)
-		}
-	}
-	if want == domain.VerdictAccept && len(out.Reviews) != 0 {
-		t.Fatalf("accepted order carries review marks: %+v", out.Reviews)
-	}
-	if want == domain.VerdictReject && !hasRejectCode(out.Rejects, "order_qty_exceeds_limit") {
-		t.Fatalf("rejects = %+v, want order_qty_exceeds_limit", out.Rejects)
-	}
+	assertCountingLimitOrder(t, eng, order, want, domain.RuleModeReviewWithoutHold, nameOrderSizeLimit, code)
 }
 
 func TestOrderSizeInstances_RejectOnly(t *testing.T) {
@@ -96,8 +82,8 @@ func TestOrderSizeInstances_RejectOnly(t *testing.T) {
 	if !maps.Equal(eng.registered, want) {
 		t.Fatalf("registered = %v, want %v", eng.registered, want)
 	}
-	assertOrderSizeInstanceVerdict(t, eng, "10", domain.VerdictAccept)
-	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject)
+	assertOrderSizeInstanceVerdict(t, eng, "10", domain.VerdictAccept, "order_qty_exceeds_limit")
+	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject, "order_qty_exceeds_limit")
 }
 
 func TestOrderSizeInstances_BothModes(t *testing.T) {
@@ -111,9 +97,9 @@ func TestOrderSizeInstances_BothModes(t *testing.T) {
 	if !maps.Equal(eng.registered, want) {
 		t.Fatalf("registered = %v, want %v", eng.registered, want)
 	}
-	assertOrderSizeInstanceVerdict(t, eng, "5", domain.VerdictAccept)
-	assertOrderSizeInstanceVerdict(t, eng, "6", domain.VerdictReview)
-	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject)
+	assertOrderSizeInstanceVerdict(t, eng, "5", domain.VerdictAccept, "order_qty_exceeds_limit")
+	assertOrderSizeInstanceVerdict(t, eng, "6", domain.VerdictReview, "order_qty_exceeds_limit")
+	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject, "order_qty_exceeds_limit")
 }
 
 func TestOrderSizeInstances_ModeMapping(t *testing.T) {
@@ -125,7 +111,7 @@ func TestOrderSizeInstances_ModeMapping(t *testing.T) {
 		{domain.RuleModeReviewWithoutHold, reject.RuleModeReviewWithoutHold},
 		{domain.RuleModeReviewWithHold, reject.RuleModeReviewWithHold},
 	} {
-		got, err := orderSizeInstanceMode(tc.mode)
+		got, err := ruleMode(tc.mode)
 		if err != nil || got != tc.want {
 			t.Fatalf("mode %q = %v, %v; want %v", tc.mode, got, err, tc.want)
 		}
@@ -135,7 +121,7 @@ func TestOrderSizeInstances_ModeMapping(t *testing.T) {
 		}
 	}
 	for _, mode := range []domain.RuleMode{"", "unknown"} {
-		if _, err := orderSizeInstanceMode(mode); err == nil || !strings.Contains(err.Error(), string(mode)) {
+		if _, err := ruleMode(mode); err == nil || !strings.Contains(err.Error(), string(mode)) {
 			t.Fatalf("unsupported mode %q error = %v", mode, err)
 		}
 		limit := orderSize(domain.ScopeBroker, "", "", "1", "")
@@ -158,7 +144,7 @@ func TestOrderSizeInstances_ConfigureReviewOnly(t *testing.T) {
 	snap := orderSizeInstanceSnapshot(domain.RuleModeReject, domain.RuleModeReviewWithoutHold)
 	eng := buildOrderSizeInstanceEngine(t, snap)
 	rejectBefore := maps.Clone(eng.orderSizeLimits[nameOrderSizeLimit])
-	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictReview)
+	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictReview, "order_qty_exceeds_limit")
 	snap.OrderSizeLimits[1].MaxQuantity = "8"
 	if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit,
 		fwengine.LimitSet{OrderSizeLimits: snap.OrderSizeLimits}); err != nil {
@@ -167,22 +153,22 @@ func TestOrderSizeInstances_ConfigureReviewOnly(t *testing.T) {
 	if !maps.Equal(rejectBefore, eng.orderSizeLimits[nameOrderSizeLimit]) {
 		t.Fatal("review update changed the reject instance's applied barriers")
 	}
-	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictAccept)
-	assertOrderSizeInstanceVerdict(t, eng, "9", domain.VerdictReview)
-	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject)
+	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictAccept, "order_qty_exceeds_limit")
+	assertOrderSizeInstanceVerdict(t, eng, "9", domain.VerdictReview, "order_qty_exceeds_limit")
+	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject, "order_qty_exceeds_limit")
 }
 
 func TestOrderSizeInstances_ConfigureRejectCap(t *testing.T) {
 	snap := orderSizeInstanceSnapshot(domain.RuleModeReject, domain.RuleModeReviewWithoutHold)
 	eng := buildOrderSizeInstanceEngine(t, snap)
-	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject)
+	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject, "order_qty_exceeds_limit")
 	snap.OrderSizeLimits[0].MaxQuantity = "12"
 	if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit,
 		fwengine.LimitSet{OrderSizeLimits: snap.OrderSizeLimits}); err != nil {
 		t.Fatal(err)
 	}
-	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReview)
-	assertOrderSizeInstanceVerdict(t, eng, "13", domain.VerdictReject)
+	assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReview, "order_qty_exceeds_limit")
+	assertOrderSizeInstanceVerdict(t, eng, "13", domain.VerdictReject, "order_qty_exceeds_limit")
 }
 
 func TestOrderSizeInstances_ConfigureNotionalOnly(t *testing.T) {
@@ -192,14 +178,14 @@ func TestOrderSizeInstances_ConfigureNotionalOnly(t *testing.T) {
 	snap.OrderSizeLimits[1].MaxQuantity = ""
 	snap.OrderSizeLimits[1].MaxNotional = "5"
 	eng := buildOrderSizeInstanceEngine(t, snap)
-	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictReview)
+	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictReview, "order_notional_exceeds_limit")
 	snap.OrderSizeLimits[1].MaxNotional = "8"
 	if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit,
 		fwengine.LimitSet{OrderSizeLimits: snap.OrderSizeLimits}); err != nil {
 		t.Fatal(err)
 	}
-	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictAccept)
-	assertOrderSizeInstanceVerdict(t, eng, "9", domain.VerdictReview)
+	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictAccept, "order_notional_exceeds_limit")
+	assertOrderSizeInstanceVerdict(t, eng, "9", domain.VerdictReview, "order_notional_exceeds_limit")
 }
 
 func TestOrderSizeInstances_ConfigureScopeTracked(t *testing.T) {
@@ -209,14 +195,14 @@ func TestOrderSizeInstances_ConfigureScopeTracked(t *testing.T) {
 		orderSize(domain.ScopeSettlementAsset, "", "AAPL", "", "100"),
 	}
 	eng := buildOrderSizeInstanceEngine(t, snap)
-	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictReject)
+	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictReject, "order_qty_exceeds_limit")
 	snap.OrderSizeLimits[0].MaxQuantity = "8"
 	if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit,
 		fwengine.LimitSet{OrderSizeLimits: snap.OrderSizeLimits}); err != nil {
 		t.Fatal(err)
 	}
-	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictAccept)
-	assertOrderSizeInstanceVerdict(t, eng, "9", domain.VerdictReject)
+	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictAccept, "order_qty_exceeds_limit")
+	assertOrderSizeInstanceVerdict(t, eng, "9", domain.VerdictReject, "order_qty_exceeds_limit")
 }
 
 func TestOrderSizeInstances_ConfigureValidatesAllBeforeUpdate(t *testing.T) {
@@ -232,7 +218,7 @@ func TestOrderSizeInstances_ConfigureValidatesAllBeforeUpdate(t *testing.T) {
 			snap := orderSizeInstanceSnapshot(domain.RuleModeReject, domain.RuleModeReviewWithoutHold)
 			eng := buildOrderSizeInstanceEngine(t, snap)
 			before := maps.Clone(eng.orderSizeLimits)
-			assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject)
+			assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject, "order_qty_exceeds_limit")
 			snap.OrderSizeLimits[0].MaxQuantity = "20"
 			tc.change(&snap.OrderSizeLimits[1])
 			if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit,
@@ -242,7 +228,7 @@ func TestOrderSizeInstances_ConfigureValidatesAllBeforeUpdate(t *testing.T) {
 			if !maps.EqualFunc(before, eng.orderSizeLimits, maps.Equal[map[orderSizeLimitKey]orderSizeLimitValue]) {
 				t.Fatal("invalid second instance changed the applied barriers")
 			}
-			assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject)
+			assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject, "order_qty_exceeds_limit")
 		})
 	}
 }
@@ -259,7 +245,7 @@ func TestOrderSizeInstances_ConfigureCallsOnlyChangedInstance(t *testing.T) {
 		fwengine.LimitSet{OrderSizeLimits: snap.OrderSizeLimits}); err != nil {
 		t.Fatal(err)
 	}
-	assertOrderSizeInstanceVerdict(t, reviewOnly, "7", domain.VerdictAccept)
+	assertOrderSizeInstanceVerdict(t, reviewOnly, "7", domain.VerdictAccept, "order_qty_exceeds_limit")
 }
 
 func TestOrderSizeInstances_ConfigureModeSetRequiresRebuild(t *testing.T) {
@@ -291,9 +277,9 @@ func TestOrderSizeInstances_ConfigureModeSetRequiresRebuild(t *testing.T) {
 			if slices.Contains(tc.before, domain.RuleModeReviewWithoutHold) {
 				want = domain.VerdictReview
 			}
-			assertOrderSizeInstanceVerdict(t, eng, "6", want)
+			assertOrderSizeInstanceVerdict(t, eng, "6", want, "order_qty_exceeds_limit")
 			if slices.Contains(tc.before, domain.RuleModeReject) {
-				assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject)
+				assertOrderSizeInstanceVerdict(t, eng, "11", domain.VerdictReject, "order_qty_exceeds_limit")
 			}
 		})
 	}
@@ -314,13 +300,13 @@ func TestOrderSizeInstances_ConfigureFailureKeepsAppliedBarriers(t *testing.T) {
 	if !maps.Equal(before, eng.orderSizeLimits[nameOrderSizeLimit+".review_without_hold"]) {
 		t.Fatal("failed update replaced the last applied barriers")
 	}
-	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictReview)
+	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictReview, "order_qty_exceeds_limit")
 	eng.configurator = configurator
 	if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit,
 		fwengine.LimitSet{OrderSizeLimits: snap.OrderSizeLimits}); err != nil {
 		t.Fatal(err)
 	}
-	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictAccept)
+	assertOrderSizeInstanceVerdict(t, eng, "7", domain.VerdictAccept, "order_qty_exceeds_limit")
 }
 
 func TestOrderSizeInstances_RenameSkipsSDK(t *testing.T) {

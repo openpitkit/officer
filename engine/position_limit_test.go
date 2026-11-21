@@ -29,10 +29,210 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/openpit/reject"
 )
 
+func TestPositionLimit_RuleModes(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.RuleMode{
+		domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold,
+	} {
+		for _, runtime := range []bool{false, true} {
+			path := "build"
+			if runtime {
+				path = "runtime"
+			}
+			t.Run(string(mode)+"/"+path, func(t *testing.T) {
+				limit := positionLimit("acc-1", "AAPL", "100")
+				limit.Mode = mode
+				snap := positionLimitSnapshot()
+				if !runtime {
+					snap.PositionLimits = []domain.LimitPosition{limit}
+				}
+				eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer eng.Stop()
+				if runtime {
+					if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyPositionLimit,
+						fwengine.LimitSet{PositionLimits: []domain.LimitPosition{limit}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				want := domain.VerdictReview
+				if mode == domain.RuleModeReject {
+					want = domain.VerdictReject
+				}
+				order := domain.Order{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+					Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "11", Price: "1"}
+				assertCountingLimitOrder(t, eng, order, want, mode, nameSpotFunds, domain.RejectCodePositionLimitExceeded)
+			})
+		}
+	}
+}
+
+func TestPositionLimit_SamePairModesCoexist(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+		for _, runtime := range []bool{false, true} {
+			for _, qty := range []string{"6", "11"} {
+				path := "build"
+				if runtime {
+					path = "runtime"
+				}
+				t.Run(string(mode)+"/"+path+"/"+qty, func(t *testing.T) {
+					rejectLimit := positionLimit("acc-1", "AAPL", "100")
+					reviewLimit := positionLimit("acc-1", "AAPL", "95")
+					reviewLimit.Mode = mode
+					limits := []domain.LimitPosition{rejectLimit, reviewLimit}
+					snap := positionLimitSnapshot()
+					if !runtime {
+						snap.PositionLimits = limits
+					}
+					eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer eng.Stop()
+					if runtime {
+						if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyPositionLimit,
+							fwengine.LimitSet{PositionLimits: limits}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if got := len(eng.(*openPitEngine).positionLimits); got != 2 {
+						t.Fatalf("applied barriers = %d, want two modes for the same pair", got)
+					}
+					want := domain.VerdictReview
+					if qty == "11" {
+						want = domain.VerdictReject
+					}
+					order := domain.Order{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+						Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: qty, Price: "1"}
+					assertCountingLimitOrder(t, eng, order, want, mode, nameSpotFunds, domain.RejectCodePositionLimitExceeded)
+				})
+			}
+		}
+	}
+}
+
+func TestPositionLimit_ModeKeysRetuneAndClear(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+		for _, clearReject := range []bool{false, true} {
+			removed := "review"
+			if clearReject {
+				removed = "reject"
+			}
+			t.Run(string(mode)+"/clear_"+removed, func(t *testing.T) {
+				rejectLimit := positionLimit("acc-1", "AAPL", "100")
+				reviewLimit := positionLimit("acc-1", "AAPL", "95")
+				reviewLimit.Mode = mode
+				snap := positionLimitSnapshot()
+				snap.PositionLimits = []domain.LimitPosition{rejectLimit, reviewLimit}
+				engine, err := newTestOpenPitEngineBuildFunc(t)(snap)
+				if err != nil {
+					t.Fatal(err)
+				}
+				eng := engine.(*openPitEngine)
+				defer eng.Stop()
+				configure := func(limits ...domain.LimitPosition) {
+					t.Helper()
+					if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyPositionLimit,
+						fwengine.LimitSet{PositionLimits: limits}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				assertApplied := func(wantReject, wantReview string) {
+					t.Helper()
+					account, err := eng.res.account("acc-1")
+					if err != nil {
+						t.Fatal(err)
+					}
+					asset, err := eng.res.asset("AAPL")
+					if err != nil {
+						t.Fatal(err)
+					}
+					sdkMode := reject.RuleModeReviewWithHold
+					if mode == domain.RuleModeReviewWithoutHold {
+						sdkMode = reject.RuleModeReviewWithoutHold
+					}
+					for sdkMode, maximum := range map[reject.RuleMode]string{
+						reject.RuleModeReject: wantReject, sdkMode: wantReview,
+					} {
+						value, exists := eng.positionLimits[accountAssetKey{account: account, asset: asset.Safe(), mode: sdkMode}]
+						if exists != (maximum != "") || value.maxPosition != maximum {
+							t.Fatalf("mode %v applied = %+v, exists=%t; want %q", sdkMode, value, exists, maximum)
+						}
+					}
+				}
+				assertApplied("100", "95")
+				probe := func(quantity string, want domain.Verdict) {
+					t.Helper()
+					out, err := materializeCheckedOrder(eng, checkProbe("acc-1", domain.OrderSideBuy, quantity, "1"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					switch want {
+					case domain.VerdictAccept:
+						if !out.Passed || len(out.Reviews) != 0 || len(out.Rejects) != 0 {
+							t.Fatalf("probe %s = %+v, want accept", quantity, out)
+						}
+					case domain.VerdictReview:
+						if !out.Passed || len(out.Rejects) != 0 || len(out.Reviews) != 1 || out.Reviews[0].Mode != mode ||
+							out.Reviews[0].Code != domain.RejectCodePositionLimitExceeded {
+							t.Fatalf("probe %s = %+v, want %s review", quantity, out, mode)
+						}
+					case domain.VerdictReject:
+						if out.Passed || len(out.Reviews) != 0 || !hasRejectCode(out.Rejects, domain.RejectCodePositionLimitExceeded) {
+							t.Fatalf("probe %s = %+v, want position limit reject", quantity, out)
+						}
+					default:
+						t.Fatalf("probe %s: unsupported expected verdict %q", quantity, want)
+					}
+				}
+				reviewLimit.MaxPosition = "96"
+				configure(rejectLimit, reviewLimit)
+				assertApplied("100", "96")
+				probe("6", domain.VerdictAccept)
+				rejectLimit.MaxPosition = "101"
+				configure(rejectLimit, reviewLimit)
+				assertApplied("101", "96")
+				probe("11", domain.VerdictReview)
+				invalid := reviewLimit
+				invalid.MaxPosition = "-1"
+				if _, err := eng.ConfigurePolicy(context.Background(), domain.PolicyPositionLimit,
+					fwengine.LimitSet{PositionLimits: []domain.LimitPosition{rejectLimit, invalid}}); err == nil {
+					t.Fatal("invalid complete set accepted")
+				}
+				assertApplied("101", "96")
+				want := domain.VerdictAccept
+				quantity := "7"
+				if clearReject {
+					configure(reviewLimit)
+					assertApplied("", "96")
+					want = domain.VerdictReview
+					quantity = "12"
+				} else {
+					configure(rejectLimit)
+					assertApplied("101", "")
+					probe("12", domain.VerdictReject)
+				}
+				probe(quantity, want)
+				if len(eng.positionLimits) != 1 {
+					t.Fatalf("applied = %+v, want one remaining mode", eng.positionLimits)
+				}
+				order := domain.Order{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+					Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: quantity, Price: "1"}
+				assertCountingLimitOrder(t, eng, order, want, mode, nameSpotFunds, domain.RejectCodePositionLimitExceeded)
+			})
+		}
+	}
+}
+
 func positionLimit(acct, asset, maximum string) domain.LimitPosition {
-	return domain.LimitPosition{
+	return domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: domain.AccountID(acct),
 		Asset: asset, MaxPosition: maximum,
 	}
@@ -40,8 +240,9 @@ func positionLimit(acct, asset, maximum string) domain.LimitPosition {
 
 func positionLimitSnapshot() fwengine.Snapshot {
 	return fwengine.Snapshot{
-		Assets:   testAssets(),
-		Accounts: []domain.Account{account("acc-1"), account("acc-2")},
+		SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+		Assets:             testAssets(),
+		Accounts:           []domain.Account{account("acc-1"), account("acc-2")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "10000"),
 			fundedBalance("acc-1", "AAPL", "90"),
@@ -122,7 +323,7 @@ func TestPositionLimit_ShortBoundary(t *testing.T) {
 	snap := positionLimitSnapshot()
 	// TrackOnly disables funds-shortfall gating, so the independent position
 	// ceiling can judge an order increasing an existing short position.
-	snap.SpotFundsTrackOnly = true
+	snap.SpotFundsLimitMode = domain.SpotFundsLimitModeTrackOnly
 	snap.Balances[1].Available = "-90"
 	eng, err := newTestOpenPitEngineBuildFunc(t)(snap)
 	if err != nil {
@@ -344,7 +545,7 @@ func TestPositionLimit_AtomicValidation(t *testing.T) {
 		positionLimit("unknown", "AAPL", "100"),
 		positionLimit("acc-2", "AAPL", "-1"),
 		positionLimit("acc-2", "AAPL", ""),
-		{Scope: domain.ScopeGlobal, MaxPosition: "100"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeGlobal, MaxPosition: "100"},
 		positionLimit("acc-1", "AAPL", "200"),
 	} {
 		t.Run(string(bad.Account)+"/"+bad.Asset+"/"+bad.MaxPosition, func(t *testing.T) {

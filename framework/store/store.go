@@ -993,7 +993,7 @@ type PolicyListFilter struct {
 	Asset        TextMatcher
 	Scope        domain.LimitScope
 	Kind         *PolicyKind
-	// Mode narrows the list to order-size barriers of this mode; zero means no filter.
+	// Mode narrows policies carrying a rule mode to barriers of this mode; zero means no filter.
 	Mode domain.RuleMode
 	Sort SortSpec
 	Page PageSpec

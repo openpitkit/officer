@@ -271,7 +271,7 @@ type CurrencyChangeBlockedError struct {
 
 // CurrencyChangeReason identifies a fact observed by the currency-change guard.
 // Decimal values are exact stored strings. Order is an external order ID;
-// scope, group and axis identify a P&L limit without exposing database IDs.
+// scope, group, axis and mode identify a P&L limit without exposing database IDs.
 type CurrencyChangeReason struct {
 	Account    AccountID  `json:"account"`
 	Kind       string     `json:"kind"`
@@ -282,6 +282,7 @@ type CurrencyChangeReason struct {
 	Scope      LimitScope `json:"scope,omitempty"`
 	Group      string     `json:"group,omitempty"`
 	Axis       string     `json:"axis,omitempty"`
+	Mode       RuleMode   `json:"mode,omitempty"`
 	Currency   string     `json:"currency,omitempty"`
 	LowerBound string     `json:"lowerBound,omitempty"`
 	UpperBound string     `json:"upperBound,omitempty"`

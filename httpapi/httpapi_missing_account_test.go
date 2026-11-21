@@ -175,13 +175,13 @@ func newMissingAccountService() *fakeService {
 		adjustment: domain.AccountAdjustmentRecord{Account: "acc-1", Asset: "USD"},
 		limits: node.AccountLimits{
 			RateLimits: []domain.LimitRate{
-				{
+				{Mode: domain.RuleModeReject,
 					Scope:     domain.ScopeAccount,
 					Account:   "acc-1",
 					Window:    time.Second,
 					MaxOrders: 100,
 				},
-				{
+				{Mode: domain.RuleModeReject,
 					Scope:     domain.ScopeBroker,
 					Window:    time.Second,
 					MaxOrders: 100,
@@ -194,10 +194,10 @@ func newMissingAccountService() *fakeService {
 				Asset:       "AAPL",
 				MaxQuantity: "10",
 			}},
-			PositionLimits: []domain.LimitPosition{{
+			PositionLimits: []domain.LimitPosition{{Mode: domain.RuleModeReject,
 				Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "10",
 			}},
-			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    "acc-1",

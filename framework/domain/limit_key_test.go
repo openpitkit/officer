@@ -27,9 +27,71 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
+func TestCountingLimitModes(t *testing.T) {
+	t.Parallel()
+	for _, policy := range []string{domain.PolicyRateLimit, domain.PolicyPositionLimit,
+		domain.PolicySpotFundsPnlBoundsKillSwitch, domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch} {
+		t.Run(policy, func(t *testing.T) {
+			keys := make(map[domain.LimitKey]bool)
+			for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold, "", "unknown"} {
+				t.Run(string(mode), func(t *testing.T) {
+					rate := domain.LimitRate{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", Window: time.Second, MaxOrders: 10}
+					position := domain.LimitPosition{Mode: mode, Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "10"}
+					var key domain.LimitKey
+					var keyErr, validationErr error
+					switch policy {
+					case domain.PolicyRateLimit:
+						key, keyErr = rate.Key()
+						validationErr = rate.Validate()
+					case domain.PolicyPositionLimit:
+						key, keyErr = position.Key()
+						validationErr = position.Validate()
+					default:
+						axis, ok := domain.SpotFundsPnlAxisOf(policy)
+						if !ok {
+							t.Fatal("missing P&L axis")
+						}
+						limit := domain.LimitSpotFundsPnlBounds{Mode: mode, Axis: axis, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"}
+						key, keyErr = limit.Key()
+						validationErr = limit.Validate()
+					}
+					if mode == "" || mode == "unknown" {
+						for _, err := range []error{keyErr, validationErr} {
+							if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/mode" {
+								t.Fatalf("mode %q: error = %v, want /mode validation", mode, err)
+							}
+						}
+						return
+					}
+					if keyErr != nil || validationErr != nil || key.Mode() != mode || keys[key] {
+						t.Fatalf("mode %q: key=%v key error=%v validation=%v", mode, key, keyErr, validationErr)
+					}
+					keys[key] = true
+				})
+			}
+			if len(keys) != 3 {
+				t.Fatalf("keys = %d, want three distinct modes", len(keys))
+			}
+		})
+	}
+}
+
+func TestLimitPolicyHasMode(t *testing.T) {
+	for _, policy := range []string{domain.PolicyRateLimit, domain.PolicyPositionLimit, domain.PolicyOrderSizeLimit,
+		domain.PolicySpotFundsPnlBoundsKillSwitch, domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch,
+		domain.PolicySpotFundsTotalPnlBoundsKillSwitch, domain.PolicySpotFundsLimitMode, "OrderValidation", "", "unknown"} {
+		_, pnl := domain.SpotFundsPnlAxisOf(policy)
+		want := policy == domain.PolicyRateLimit || policy == domain.PolicyPositionLimit || policy == domain.PolicyOrderSizeLimit || pnl
+		if got := domain.LimitPolicyHasMode(policy); got != want {
+			t.Errorf("LimitPolicyHasMode(%q) = %t, want %t", policy, got, want)
+		}
+	}
+}
+
 func TestStoredLimitKey(t *testing.T) {
 	t.Parallel()
-	limit := domain.LimitRate{Scope: domain.ScopeAsset, Asset: "AAPL"}
+	limit := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "AAPL"}
 	key, err := domain.StoredLimitKey(limit)
 	if err != nil {
 		t.Fatal(err)
@@ -50,8 +112,8 @@ func TestStoredLimitKey(t *testing.T) {
 
 func TestFindLimit(t *testing.T) {
 	t.Parallel()
-	first := domain.LimitRate{Scope: domain.ScopeBroker, MaxOrders: 1}
-	second := domain.LimitRate{Scope: domain.ScopeBroker, MaxOrders: 2}
+	first := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 1}
+	second := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 2}
 	key, err := first.Key()
 	if err != nil {
 		t.Fatal(err)
@@ -64,8 +126,8 @@ func TestFindLimit(t *testing.T) {
 		corrupt bool
 	}{
 		{name: "found", limits: []domain.LimitRate{first, second}, want: first, found: true},
-		{name: "not_found", limits: []domain.LimitRate{{Scope: domain.ScopeAsset, Asset: "AAPL"}}},
-		{name: "corrupt", limits: []domain.LimitRate{{Scope: "corrupt-scope"}, first}, corrupt: true},
+		{name: "not_found", limits: []domain.LimitRate{{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "AAPL"}}},
+		{name: "corrupt", limits: []domain.LimitRate{{Mode: domain.RuleModeReject, Scope: "corrupt-scope"}, first}, corrupt: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, found, err := domain.FindLimit(tc.limits, key)
@@ -118,13 +180,13 @@ func TestNewLimitKeyValidation(t *testing.T) {
 			name:    "order_size_unknown_mode",
 			axes:    limitKeyAxes{policy: domain.PolicyOrderSizeLimit, mode: "unknown", scope: domain.ScopeBroker},
 			pointer: "/mode", constraint: "unsupported_value",
-			message: "unsupported order_size_limit mode \"unknown\"" + invalid,
+			message: "unsupported rule mode \"unknown\"" + invalid,
 		},
 		{
-			name:    "non_order_size_mode",
-			axes:    limitKeyAxes{policy: domain.PolicyRateLimit, mode: domain.RuleModeReject, scope: domain.ScopeBroker},
+			name:    "policy_without_rule_mode",
+			axes:    limitKeyAxes{policy: domain.PolicySpotFundsLimitMode, mode: domain.RuleModeReject, scope: domain.ScopeGlobal},
 			pointer: "/mode", constraint: "unsupported_value",
-			message: "mode is only valid for order-size limits",
+			message: "policy does not support a rule mode",
 		},
 		{
 			name:    "unknown_policy",
@@ -134,43 +196,43 @@ func TestNewLimitKeyValidation(t *testing.T) {
 		},
 		{
 			name:    "scope_not_allowed",
-			axes:    limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeGlobal},
+			axes:    limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeGlobal},
 			pointer: "/scope", constraint: "enum",
 			message: "scope \"global\" not allowed for policy \"rate_limit\"" + invalid,
 		},
 		{
 			name:    "missing_account",
-			axes:    limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeAccount},
+			axes:    limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeAccount},
 			pointer: "/account", constraint: "required",
 			message: "scope \"account\" requires an account" + invalid,
 		},
 		{
 			name:    "missing_asset",
-			axes:    limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeAsset},
+			axes:    limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeAsset},
 			pointer: "/asset", constraint: "required",
 			message: "scope \"asset\" requires an asset" + invalid,
 		},
 		{
 			name:    "missing_account_group",
-			axes:    limitKeyAxes{policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccountGroup},
+			axes:    limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccountGroup},
 			pointer: "/accountGroup", constraint: "required",
 			message: "scope \"account_group\" requires an account_group" + invalid,
 		},
 		{
 			name:    "superfluous_account",
-			axes:    limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeBroker, account: "acc"},
+			axes:    limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeBroker, account: "acc"},
 			pointer: "/account", constraint: "unsupported_value",
 			message: "scope \"broker\" must not have account" + invalid,
 		},
 		{
 			name:    "superfluous_asset",
-			axes:    limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeBroker, asset: "AAPL"},
+			axes:    limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeBroker, asset: "AAPL"},
 			pointer: "/asset", constraint: "unsupported_value",
 			message: "scope \"broker\" must not have asset" + invalid,
 		},
 		{
 			name:    "superfluous_account_group",
-			axes:    limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeBroker, accountGroup: "desk"},
+			axes:    limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeBroker, accountGroup: "desk"},
 			pointer: "/accountGroup", constraint: "unsupported_value",
 			message: "scope \"broker\" must not have account_group" + invalid,
 		},
@@ -184,13 +246,13 @@ func TestNewLimitKeyValidation(t *testing.T) {
 			name:    "unknown_mode_before_scope",
 			axes:    limitKeyAxes{policy: domain.PolicyOrderSizeLimit, mode: "unknown", scope: domain.ScopeGlobal},
 			pointer: "/mode", constraint: "unsupported_value",
-			message: "unsupported order_size_limit mode \"unknown\"" + invalid,
+			message: "unsupported rule mode \"unknown\"" + invalid,
 		},
 		{
 			name:    "non_order_size_mode_before_unknown_policy",
 			axes:    limitKeyAxes{policy: "unknown", mode: domain.RuleModeReject, scope: domain.ScopeGlobal},
 			pointer: "/mode", constraint: "unsupported_value",
-			message: "mode is only valid for order-size limits",
+			message: "policy does not support a rule mode",
 		},
 		{
 			name:    "zero_arguments",
@@ -241,8 +303,8 @@ func TestLimitKeyAxesSeparateBarriers(t *testing.T) {
 	}{
 		{
 			"policy",
-			limitKeyAxes{policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccount, account: "acc"},
-			limitKeyAxes{policy: domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch, scope: domain.ScopeAccount, account: "acc"},
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccount, account: "acc"},
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicySpotFundsUnrealizedPnlBoundsKillSwitch, scope: domain.ScopeAccount, account: "acc"},
 		},
 		{
 			"mode_review_without_hold",
@@ -261,18 +323,18 @@ func TestLimitKeyAxesSeparateBarriers(t *testing.T) {
 		},
 		{
 			"account",
-			limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeAccount, account: "acc-one"},
-			limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeAccount, account: "acc-two"},
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeAccount, account: "acc-one"},
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeAccount, account: "acc-two"},
 		},
 		{
 			"account_group",
-			limitKeyAxes{policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccountGroup, accountGroup: "desk-one"},
-			limitKeyAxes{policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccountGroup, accountGroup: "desk-two"},
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccountGroup, accountGroup: "desk-one"},
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccountGroup, accountGroup: "desk-two"},
 		},
 		{
 			"asset",
-			limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeAsset, asset: "AAPL"},
-			limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeAsset, asset: "MSFT"},
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeAsset, asset: "AAPL"},
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeAsset, asset: "MSFT"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -318,7 +380,7 @@ func assertLimitKeyAxes(t *testing.T, key domain.LimitKey, want limitKeyAxes) {
 func TestLimitsKeyAxesAndPayload(t *testing.T) {
 	t.Parallel()
 	t.Run("rate", func(t *testing.T) {
-		limit := domain.LimitRate{
+		limit := domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL",
 			Window: time.Second, MaxOrders: 10,
 		}
@@ -326,7 +388,7 @@ func TestLimitsKeyAxesAndPayload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertLimitKeyAxes(t, key, limitKeyAxes{
+		assertLimitKeyAxes(t, key, limitKeyAxes{mode: domain.RuleModeReject,
 			policy: domain.PolicyRateLimit, scope: limit.Scope,
 			account: limit.Account, asset: limit.Asset,
 		})
@@ -364,7 +426,7 @@ func TestLimitsKeyAxesAndPayload(t *testing.T) {
 		}
 	})
 	t.Run("position", func(t *testing.T) {
-		limit := domain.LimitPosition{
+		limit := domain.LimitPosition{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL",
 			MaxPosition: "100",
 		}
@@ -372,7 +434,7 @@ func TestLimitsKeyAxesAndPayload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertLimitKeyAxes(t, key, limitKeyAxes{
+		assertLimitKeyAxes(t, key, limitKeyAxes{mode: domain.RuleModeReject,
 			policy: domain.PolicyPositionLimit, scope: limit.Scope,
 			account: limit.Account, asset: limit.Asset,
 		})
@@ -399,7 +461,7 @@ func TestLimitsKeyAxesAndPayload(t *testing.T) {
 			for _, scope := range []domain.LimitScope{
 				domain.ScopeAccount, domain.ScopeAccountGroup,
 			} {
-				limit := domain.LimitSpotFundsPnlBounds{
+				limit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis: axis, Scope: scope, Currency: "USD",
 					LowerBound: "-100", UpperBound: "100",
 				}
@@ -413,7 +475,7 @@ func TestLimitsKeyAxesAndPayload(t *testing.T) {
 					t.Fatal(err)
 				}
 				assertLimitKeyAxes(t, key, limitKeyAxes{
-					policy: policies[i], scope: limit.Scope,
+					policy: policies[i], mode: limit.Mode, scope: limit.Scope,
 					account: limit.Account, accountGroup: limit.AccountGroup,
 				})
 				if scope == domain.ScopeAccount {
@@ -447,8 +509,8 @@ func TestLimitsKeyInvalidAxes(t *testing.T) {
 	}{
 		{
 			"rate",
-			(domain.LimitRate{Scope: domain.ScopeAccount}).Key,
-			limitKeyAxes{policy: domain.PolicyRateLimit, scope: domain.ScopeAccount},
+			(domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount}).Key,
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyRateLimit, scope: domain.ScopeAccount},
 		},
 		{
 			"order_size",
@@ -462,13 +524,13 @@ func TestLimitsKeyInvalidAxes(t *testing.T) {
 		},
 		{
 			"position",
-			(domain.LimitPosition{Scope: domain.ScopeAccountAsset, Asset: "AAPL"}).Key,
-			limitKeyAxes{policy: domain.PolicyPositionLimit, scope: domain.ScopeAccountAsset, asset: "AAPL"},
+			(domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Asset: "AAPL"}).Key,
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicyPositionLimit, scope: domain.ScopeAccountAsset, asset: "AAPL"},
 		},
 		{
 			"pnl_bounds",
-			(domain.LimitSpotFundsPnlBounds{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup}).Key,
-			limitKeyAxes{policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccountGroup},
+			(domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup}).Key,
+			limitKeyAxes{mode: domain.RuleModeReject, policy: domain.PolicySpotFundsPnlBoundsKillSwitch, scope: domain.ScopeAccountGroup},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -496,7 +558,7 @@ func TestLimitsKeyInvalidAxes(t *testing.T) {
 func TestLimitSpotFundsPnlBoundsKeyUnknownAxis(t *testing.T) {
 	t.Parallel()
 	for _, axis := range []domain.SpotFundsPnlAxis{"", "unknown"} {
-		limit := domain.LimitSpotFundsPnlBounds{Axis: axis, Scope: "unknown"}
+		limit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: axis, Scope: "unknown"}
 		key, err := limit.Key()
 		want := fmt.Sprintf("unknown spot funds pnl axis %q: %v", axis, domain.ErrInvalid)
 		if !errors.Is(err, domain.ErrInvalid) {

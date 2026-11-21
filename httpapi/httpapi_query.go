@@ -900,12 +900,12 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 	}
 	mode := domain.RuleMode(q.Get("mode"))
 	if mode != "" {
-		if kind == nil || *kind != store.PolicyKindOrderSize {
+		if kind == nil || !domain.LimitPolicyHasMode(string(*kind)) {
 			return store.PolicyListFilter{}, domain.NewValidationError(
-				"/mode", "unsupported_value", "mode requires policy=order_size",
+				"/mode", "unsupported_value", "mode requires a policy supporting rule modes",
 			)
 		}
-		if err := domain.ValidateOrderSizeMode(mode); err != nil {
+		if err := domain.ValidateRuleMode(mode); err != nil {
 			return store.PolicyListFilter{}, err
 		}
 	}

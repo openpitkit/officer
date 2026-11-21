@@ -75,7 +75,7 @@ interface StatusMessage {
 const DEMO_LIMITS: Limit[] = [
   {
     policy: "rate_limit",
-    mode: null,
+    mode: "reject",
     scope: "account",
     account: DEMO_ACCOUNT_ID,
     accountGroup: "",

@@ -104,11 +104,11 @@ type fakeEngine struct {
 	configureErr  error
 	accountPnlErr error
 
-	// spotFundsTrackOnlyCalls records every successful SetSpotFundsTrackOnly
-	// argument in order; spotFundsTrackOnlyErr, when set, is returned instead
+	// spotFundsLimitModeCalls records every successful SetSpotFundsLimitMode
+	// argument in order; spotFundsLimitModeErr, when set, is returned instead
 	// and records nothing.
-	spotFundsTrackOnlyCalls []bool
-	spotFundsTrackOnlyErr   error
+	spotFundsLimitModeCalls []domain.SpotFundsLimitMode
+	spotFundsLimitModeErr   error
 
 	failConfigure          bool
 	failAdjustment         bool
@@ -296,7 +296,7 @@ func TestFakeEngineRejectsUnpublishedAssetOnEveryResolverPath(t *testing.T) {
 			name: "rate limit policy",
 			run: func(eng *fakeEngine) error {
 				_, err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, engine.LimitSet{
-					RateLimits: []domain.LimitRate{{
+					RateLimits: []domain.LimitRate{{Mode: domain.RuleModeReject,
 						Scope: domain.ScopeAsset,
 						Asset: unpublished,
 					}},
@@ -322,7 +322,7 @@ func TestFakeEngineRejectsUnpublishedAssetOnEveryResolverPath(t *testing.T) {
 			run: func(eng *fakeEngine) error {
 				_, err := eng.ConfigurePolicy(ctx,
 					domain.PolicySpotFundsPnlBoundsKillSwitch,
-					engine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+					engine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject,
 						Axis:     domain.SpotFundsPnlAxisRealized,
 						Currency: unpublished,
 					}}})
@@ -908,11 +908,11 @@ func (e *fakeEngine) ConfigurePolicy(
 	}, nil
 }
 
-func (e *fakeEngine) SetSpotFundsTrackOnly(_ context.Context, trackOnly bool) error {
-	if e.spotFundsTrackOnlyErr != nil {
-		return e.spotFundsTrackOnlyErr
+func (e *fakeEngine) SetSpotFundsLimitMode(_ context.Context, mode domain.SpotFundsLimitMode) error {
+	if e.spotFundsLimitModeErr != nil {
+		return e.spotFundsLimitModeErr
 	}
-	e.spotFundsTrackOnlyCalls = append(e.spotFundsTrackOnlyCalls, trackOnly)
+	e.spotFundsLimitModeCalls = append(e.spotFundsLimitModeCalls, mode)
 	return nil
 }
 

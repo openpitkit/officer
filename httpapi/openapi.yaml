@@ -3322,10 +3322,13 @@ paths:
         - name: mode
           in: query
           description: >-
-            Filter order-size barriers by mode. A value requires
-            policy=order_size; any other or absent policy, or an unknown mode,
-            returns 422 validation. An absent mode means no mode filter. The total
-            counts the filtered barriers before paging.
+            Filter barriers by rule mode. A non-empty value requires policy
+            rate, order_size, position, spot_funds_pnl_bounds,
+            spot_funds_unrealized_pnl_bounds or spot_funds_total_pnl_bounds.
+            An unsupported policy or unknown mode returns 422 validation.
+            An absent or empty mode means no mode filter. The total counts
+            the filtered barriers before paging.
+          allowEmptyValue: true
           schema:
             type: string
             enum: [reject, review_without_hold, review_with_hold]
@@ -3372,9 +3375,7 @@ paths:
         accepted in single-account mode. Policy `spot_funds_limit_mode` is
         permanent and cannot be deleted; deletion is refused with 422 for
         every caller. Change its mode through PUT instead.
-        For order_size_limit, the key includes mode; an absent mode
-        addresses the reject barrier. A mode on another policy returns 422
-        validation.
+        The key of each deletable policy includes its rule mode.
       tags: [limits]
       parameters:
         - name: policy
@@ -3408,9 +3409,10 @@ paths:
         - name: mode
           in: query
           description: >-
-            Order-size barrier mode, only for policy=order_size_limit. An
-            absent value means reject; a mode on another policy or
-            an unknown mode returns 422 validation.
+            Barrier rule mode for rate, order-size, position and all three
+            P&L-bound policies. An absent or empty value addresses the
+            reject barrier. An unknown mode returns 422 validation.
+          allowEmptyValue: true
           schema:
             type: string
             enum: [reject, review_without_hold, review_with_hold]
@@ -3453,7 +3455,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3469,7 +3471,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
     put:
       operationId: putRateLimit
       summary: Create or replace a rate-limit barrier
@@ -3493,7 +3495,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3507,7 +3509,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
 
   /limits/order-size:
     post:
@@ -3529,7 +3531,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3545,14 +3547,14 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
     put:
       operationId: putOrderSizeLimit
       summary: Create or replace an order-size barrier
       description: >
         Use PUT to edit the barrier at the key or create it if absent.
         The key is (scope, account, asset, mode), so reject and review barriers
-        can coexist on one target. An absent mode means reject.
+        can coexist on one target. An absent or empty mode means reject.
         Changing mode requires a delete and an add.
         `missingAccount` follows the rate-limit barrier: it is required when the
         scope carries the account axis and ignored otherwise. A broker barrier may
@@ -3575,7 +3577,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3589,7 +3591,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
 
   /limits/position:
     post:
@@ -3609,7 +3611,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3625,15 +3627,15 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
     put:
       operationId: putPositionLimit
       summary: Create or replace a position barrier
       description: >
         Use PUT to edit the barrier at the key or create it if absent.
-        Sets the SpotFunds position ceiling for one (account, asset) pair on
-        scope `account_asset`. `maxPosition` is a required non-negative exact
-        decimal string in plain notation; zero is valid. Officer stores the
+        Sets a Spot Funds position ceiling for one (account, asset) pair on
+        scope `account_asset`, keyed by rule mode. `maxPosition` is a required
+        non-negative exact decimal string in plain notation; zero is valid. Officer stores the
         ceiling; the SDK computes and enforces the worst-case position from
         the next order, without a restart. Every engine build takes the
         stored set, including after a restart or backup restore. A buy adds
@@ -3641,7 +3643,9 @@ paths:
         positive `incoming`; a sell
         subtracts the order from the owned position less open positive `held`.
         A projection above the ceiling or below minus the ceiling respectively
-        is rejected; equality passes. The reject is policy `SpotFundsPolicy`,
+        triggers the barrier; equality passes. The barrier refuses the order
+        in `reject` mode and requests review in either review mode.
+        The reject is policy `SpotFundsPolicy`,
         scope `order`, code `position_limit_exceeded`, reason "position limit
         exceeded", with details "asset {asset}, side long|short, projected
         worst-case position {projected}, limit {limit}". The account is not
@@ -3660,7 +3664,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3674,7 +3678,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
 
   /limits/spot-funds-unrealized-pnl-bounds:
     post:
@@ -3694,7 +3698,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3710,7 +3714,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
     put:
       operationId: putSpotFundsUnrealizedPnlBoundsLimit
       summary: Create or replace a SpotFunds unrealized P&L-bounds barrier
@@ -3719,8 +3723,9 @@ paths:
         The barrier of policy `spot_funds_unrealized_pnl_bounds_kill_switch`:
         it bounds the account's unrealized P&L, valued at the current price.
         Body, scopes, `missingAccount` and single-account mode are those of
-        `PUT /limits/spot-funds-pnl-bounds`. A breach blocks the account with
-        the same reject code as a realized P&L bound.
+        `PUT /limits/spot-funds-pnl-bounds`. A breach blocks the account in
+        `reject` mode with the same code as a realized P&L bound. A review
+        barrier requests review.
       tags: [limits]
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
@@ -3732,7 +3737,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3748,7 +3753,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
 
   /limits/spot-funds-total-pnl-bounds:
     post:
@@ -3768,7 +3773,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3784,7 +3789,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
     put:
       operationId: putSpotFundsTotalPnlBoundsLimit
       summary: Create or replace a SpotFunds total P&L-bounds barrier
@@ -3793,8 +3798,9 @@ paths:
         The barrier of policy `spot_funds_total_pnl_bounds_kill_switch`: it
         bounds the account's total P&L, realized plus unrealized. Body,
         scopes, `missingAccount` and single-account mode are those of
-        `PUT /limits/spot-funds-pnl-bounds`. A breach blocks the account with
-        the same reject code as a realized P&L bound.
+        `PUT /limits/spot-funds-pnl-bounds`. A breach blocks the account in
+        `reject` mode with the same code as a realized P&L bound. A review
+        barrier requests review.
       tags: [limits]
       parameters:
         - $ref: "#/components/parameters/MissingAccountOptional"
@@ -3806,7 +3812,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3822,7 +3828,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
 
   /limits/spot-funds-pnl-bounds:
     post:
@@ -3842,7 +3848,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3858,7 +3864,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
     put:
       operationId: putSpotFundsPnlBoundsLimit
       summary: Create or replace a SpotFunds realized P&L-bounds barrier
@@ -3883,7 +3889,7 @@ paths:
         "400":
           $ref: "#/components/responses/MalformedRequestError"
         "422":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/LimitWriteValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "403":
@@ -3899,7 +3905,7 @@ paths:
         "503":
           $ref: "#/components/responses/SetupRequiredOrEngineRestartingError"
         "500":
-          $ref: "#/components/responses/InternalError"
+          $ref: "#/components/responses/LimitWriteInternalError"
 
   /limits/spot-funds-limit-mode:
     get:
@@ -3907,7 +3913,9 @@ paths:
       summary: Read the global Spot Funds limit mode
       description: >
         The Officer-level policy `spot_funds_limit_mode`, one global value for
-        every account. With no row stored the effective mode is `enforce`,
+        every account. The mode is `enforce`, `review_with_hold`,
+        `review_without_hold` or `track_only`, as defined by SpotFundsLimitMode.
+        With no row stored the effective mode is `enforce`,
         the documented default, and `stored` is false.
         `accountsWithoutCurrency` contains codes of visible accounts without
         an effective currency to which a Spot Funds P&L bound applies. Their
@@ -3938,9 +3946,11 @@ paths:
         engine policy and carries no account, account group or asset; a body
         naming one is refused with 422. Switching back to `enforce` resets no
         balance; orders that need funds against a negative balance are refused
-        again. This route takes no tighten-only caller; an agent is one, and
-        MCP `update_limit` refuses its switch from `enforce` to `track_only`
-        with `loosening_refused`.
+        again. REST accepts all four modes. For tighten-only writes, the
+        core ranks `enforce` above both equally ranked review modes, and
+        both review modes above `track_only`. A switch to a lower rank is
+        refused with `loosening_refused`. MCP `update_limit` additionally
+        refuses both review values with `validation`.
         Returns the mode read back as stored, without the no-currency list.
       tags: [limits]
       requestBody:
@@ -7085,6 +7095,15 @@ components:
           schema:
             $ref: "#/components/schemas/ProblemDetails"
 
+    LimitWriteValidationError:
+      description: >
+        Request validation failed. If the SDK refuses the settings during
+        runtime configuration, validation includes the SDK's message.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+
     UnauthorizedError:
       description: >-
         Token access mode is on and the request carries no API token: the
@@ -7381,6 +7400,15 @@ components:
 
     InternalError:
       description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    LimitWriteInternalError:
+      description: >
+        Internal server error, including an SDK validation refusal when
+        registering a built-in policy during a first-barrier engine build.
       content:
         application/json:
           schema:
@@ -9402,11 +9430,22 @@ components:
         or `account`.
       enum: [global, account_group, account]
 
+    LimitBarrierMode:
+      type: string
+      enum: [reject, review_without_hold, review_with_hold, ""]
+      default: reject
+      description: >
+        Barrier rule mode, part of its key. An absent or empty request value
+        means reject. An unknown mode returns 422 validation at /mode.
+        Responses always contain the stored, non-empty mode.
+
     RateLimit:
       type: object
       additionalProperties: false
       required: [scope, asset, windowMs, maxOrders]
       properties:
+        mode:
+          $ref: "#/components/schemas/LimitBarrierMode"
         scope:
           $ref: "#/components/schemas/RateLimitScope"
         account:
@@ -9437,12 +9476,7 @@ components:
       required: [scope, asset, maxQuantity, maxNotional]
       properties:
         mode:
-          type: string
-          enum: [reject, review_without_hold, review_with_hold]
-          default: reject
-          description: >
-            Order-size barrier mode, part of its key. Optional in a request;
-            absent means reject. Always present in a response.
+          $ref: "#/components/schemas/LimitBarrierMode"
         scope:
           $ref: "#/components/schemas/OrderSizeLimitScope"
         account:
@@ -9485,6 +9519,8 @@ components:
       additionalProperties: false
       required: [scope, asset, maxPosition]
       properties:
+        mode:
+          $ref: "#/components/schemas/LimitBarrierMode"
         scope:
           type: string
           enum: [account_asset]
@@ -9514,6 +9550,8 @@ components:
       additionalProperties: false
       required: [scope, accountGroup, currency, lowerBound, upperBound]
       properties:
+        mode:
+          $ref: "#/components/schemas/LimitBarrierMode"
         scope:
           $ref: "#/components/schemas/SpotFundsPnlBoundsScope"
         account:
@@ -9544,18 +9582,20 @@ components:
             lowerBound must be.
     SpotFundsLimitMode:
       type: string
-      enum: [enforce, track_only]
+      enum: [enforce, review_with_hold, review_without_hold, track_only]
       default: enforce
       description: >
         The value of the Officer-level policy `spot_funds_limit_mode`, one
         global value for every account; with no row stored the effective mode
-        is `enforce`, the documented default. `enforce` refuses
-        an order that lacks funds or holdings. `track_only` does not refuse on
-        funds but records every hold, so balances and positions may go negative.
-        P&L bounds, rate, order-size and position barriers still apply in both
-        modes, and a P&L bound still halts trading on breach. Switching back to `enforce`
-        resets no balance; orders that need funds against a negative balance
-        are refused again.
+        is `enforce`, which refuses orders that lack funds or holdings.
+        `review_with_hold` requests review of a shortfall and holds the full
+        amount, which can take available funds negative. A confirmed order
+        retains the hold. `review_without_hold` requests review of a
+        shortfall without a hold while review is pending. Confirmed and
+        drop-copy orders use `track_only` without a review mark. Overflow
+        still rejects. `track_only` records every hold and permits negative
+        available funds. P&L-bound, rate, order-size and position barriers
+        apply in all four modes according to their own rule modes.
 
     SpotFundsLimitModeState:
       type: object
@@ -9650,9 +9690,9 @@ components:
           type: [string, "null"]
           enum: [reject, review_without_hold, review_with_hold, null]
           description: >
-            Order-size barrier mode. Null for every other kind, including
-            spot_funds_limit_mode, whose enforce/track_only setting remains
-            under values.spotFundsLimitMode.mode.
+            Rule mode for rate, order-size, position and all P&L-bound
+            barriers. Null only for spot_funds_limit_mode, whose setting
+            is under values.spotFundsLimitMode.mode.
         scope:
           $ref: "#/components/schemas/LimitScope"
         account:

@@ -32,7 +32,7 @@ func TestService_AggregatesReads(t *testing.T) {
 	svc, fn := newTestService(t)
 	fn.accounts = []domain.Account{{Code: "a"}, {Code: "b"}}
 	fn.limits = node.AccountLimits{
-		RateLimits: []domain.LimitRate{{Scope: domain.ScopeBroker}},
+		RateLimits: []domain.LimitRate{{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker}},
 	}
 	fn.audit = []domain.AuditRow{{ExternalID: domain.ExternalID("audit-1")}}
 	ctx := systemCtx()

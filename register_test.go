@@ -2680,7 +2680,7 @@ func (e *fakeEngine) ConfigurePolicy(
 	return engine.PolicyConfigurationResult{}, nil
 }
 
-func (e *fakeEngine) SetSpotFundsTrackOnly(context.Context, bool) error {
+func (*fakeEngine) SetSpotFundsLimitMode(context.Context, domain.SpotFundsLimitMode) error {
 	return nil
 }
 

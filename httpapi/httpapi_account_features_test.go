@@ -154,10 +154,10 @@ func TestOmittedAccountByAccountFeatures(t *testing.T) {
 // A barrier whose scope has no account axis is read back with its empty account.
 func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 	stored := node.AccountLimits{
-		RateLimits: []domain.LimitRate{{
+		RateLimits: []domain.LimitRate{{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
 			Window: time.Second, MaxOrders: 100,
-		}, {
+		}, {Mode: domain.RuleModeReject,
 			Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 50,
 		}},
 		OrderSizeLimits: []domain.LimitOrderSize{{
@@ -165,11 +165,11 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 			Scope: domain.ScopeAccountUnderlyingAsset, Account: oneAccountFeatures.Account,
 			Asset: "AAPL", MaxQuantity: "10",
 		}},
-		PositionLimits: []domain.LimitPosition{{
+		PositionLimits: []domain.LimitPosition{{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account,
 			Asset: "AAPL", MaxPosition: "10",
 		}},
-		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
 			Currency: "USD", LowerBound: "-100",

@@ -15,17 +15,26 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { NotebookPen, ShieldCheck } from "lucide-react";
+import {
+  ClipboardCheck,
+  LockKeyhole,
+  NotebookPen,
+  ShieldCheck,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { SpotFundsLimitMode } from "@/api/types";
 import { ChoiceCards } from "@/components/ChoiceCards";
+import { SPOT_FUNDS_LIMIT_MODES } from "@/framework/registries/vocabulary";
 
-/**
- * The choice between the two Spot Funds limit modes, as the policy dialog and
- * the first-run setup offer it: checking funds, or accounting without
- * blocking.
- */
+const MODE_ICONS = {
+  enforce: ShieldCheck,
+  review_with_hold: LockKeyhole,
+  review_without_hold: ClipboardCheck,
+  track_only: NotebookPen,
+};
+
+/** The Spot Funds mode choice shared by the policy dialog and first-run setup. */
 export function SpotFundsModeCards({
   label,
   value,
@@ -43,20 +52,12 @@ export function SpotFundsModeCards({
   return (
     <ChoiceCards
       label={label}
-      options={[
-        {
-          value: "enforce",
-          title: t("spotFundsMode.modes.enforce.title"),
-          description: t("spotFundsMode.modes.enforce.description"),
-          icon: ShieldCheck,
-        },
-        {
-          value: "track_only",
-          title: t("spotFundsMode.modes.track_only.title"),
-          description: t("spotFundsMode.modes.track_only.description"),
-          icon: NotebookPen,
-        },
-      ]}
+      options={SPOT_FUNDS_LIMIT_MODES.map((mode) => ({
+        value: mode,
+        title: t(`spotFundsMode.modes.${mode}.title`),
+        description: t(`spotFundsMode.modes.${mode}.description`),
+        icon: MODE_ICONS[mode],
+      }))}
       value={value}
       onChange={onChange}
       disabled={disabled}

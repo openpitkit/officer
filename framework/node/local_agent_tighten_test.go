@@ -214,7 +214,7 @@ func TestLocalNode_AgentGroupDeleteRefusalPrecedesCurrencyGuard(t *testing.T) {
 		},
 		"group-scoped spot funds pnl bound": func(t *testing.T, n *localNode, _ *rebuildProbe) {
 			t.Helper()
-			if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:  domain.SpotFundsPnlAxisRealized,
 				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 				Currency: "EUR", UpperBound: "10",
@@ -284,7 +284,7 @@ func TestLocalNode_AgentDeleteGroupRefusesGroupPnlBound(t *testing.T) {
 	newBoundNode := func(t *testing.T) (*localNode, *rebuildProbe) {
 		t.Helper()
 		n, probe := newDeskNode(t)
-		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 			Currency: "USD", UpperBound: "10",
@@ -412,7 +412,7 @@ func TestLocalNode_AgentDeleteGroupRefusedWhileRateBarrierExists(t *testing.T) {
 		); err != nil {
 			t.Fatalf("CreateGroup(other): %v", err)
 		}
-		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "other",
 			Currency: "USD", UpperBound: "10",
@@ -519,7 +519,7 @@ func newSubjectNode(
 // account recreated under the code has no block, no group and no barrier.
 var accountProtections = map[string]func(context.Context, store.RealmStore) error{
 	"own position barrier": func(ctx context.Context, realm store.RealmStore) error {
-		return realm.PutPositionLimit(ctx, domain.LimitPosition{
+		return realm.PutPositionLimit(ctx, domain.LimitPosition{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "USD", MaxPosition: "100",
 		})
 	},
@@ -536,7 +536,7 @@ var accountProtections = map[string]func(context.Context, store.RealmStore) erro
 		return realm.SetGroupBlocked(ctx, "desk", true, "risk")
 	},
 	"group-scoped spot funds pnl bound": func(ctx context.Context, realm store.RealmStore) error {
-		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
 			Currency: "USD", UpperBound: "10",
@@ -555,7 +555,7 @@ var accountProtections = map[string]func(context.Context, store.RealmStore) erro
 		})
 	},
 	"own spot funds pnl bound": func(ctx context.Context, realm store.RealmStore) error {
-		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "acc",
 			Currency: "USD", UpperBound: "10",
@@ -568,7 +568,7 @@ var accountProtections = map[string]func(context.Context, store.RealmStore) erro
 // since an asset recreated under the code is referenced by no barrier.
 var assetProtections = map[string]func(context.Context, store.RealmStore) error{
 	"position barrier": func(ctx context.Context, realm store.RealmStore) error {
-		return realm.PutPositionLimit(ctx, domain.LimitPosition{
+		return realm.PutPositionLimit(ctx, domain.LimitPosition{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
 		})
 	},
@@ -596,7 +596,7 @@ var assetProtections = map[string]func(context.Context, store.RealmStore) error{
 		})
 	},
 	"spot funds pnl bound in the asset": func(ctx context.Context, realm store.RealmStore) error {
-		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		return realm.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeGlobal, Currency: "AAPL", LowerBound: "-1",
 		})
@@ -934,13 +934,13 @@ func TestLocalNode_AgentReleasesUnprotectedSubjects(t *testing.T) {
 	must("block other", n.realm.SetAccountBlocked(ctx, "other", true, "risk"))
 	must("block halted", n.realm.SetGroupBlocked(ctx, "halted", true, "risk"))
 	must("bound halted", n.realm.PutSpotFundsPnlBoundsLimit(ctx,
-		domain.LimitSpotFundsPnlBounds{
+		domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "halted",
 			Currency: "USD", UpperBound: "10",
 		}))
 	must("bound other", n.realm.PutSpotFundsPnlBoundsLimit(ctx,
-		domain.LimitSpotFundsPnlBounds{
+		domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "other",
 			Currency: "USD", UpperBound: "10",
@@ -1182,7 +1182,7 @@ func requireStored(t *testing.T, n *localNode, want any) {
 func pnlBound(
 	scope domain.LimitScope, subject, currency, lower, upper string,
 ) domain.LimitSpotFundsPnlBounds {
-	bound := domain.LimitSpotFundsPnlBounds{
+	bound := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: scope, Currency: currency, LowerBound: lower, UpperBound: upper,
 	}
@@ -1718,6 +1718,67 @@ func TestLocalNode_AgentGroupPnlBoundTightensGlobal(t *testing.T) {
 	}
 }
 
+func TestLocalNode_AgentPnlBoundReferenceUsesIncomingMode(t *testing.T) {
+	for _, axis := range domain.SpotFundsPnlAxes {
+		for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+			for _, tc := range []struct{ scope, referenceScope domain.LimitScope }{
+				{domain.ScopeAccountGroup, domain.ScopeGlobal},
+				{domain.ScopeAccount, domain.ScopeAccountGroup},
+				{domain.ScopeAccount, domain.ScopeGlobal},
+			} {
+				scope := tc.scope
+				for _, referenceLower := range []string{"-1000", "-400"} {
+					t.Run(fmt.Sprintf("%s/%s/%s/%s/%s", axis, mode, scope, tc.referenceScope, referenceLower), func(t *testing.T) {
+						reject := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: axis, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100"}
+						review := reject
+						review.Mode, review.LowerBound = mode, referenceLower
+						if scope == domain.ScopeAccount {
+							reject.Scope, reject.AccountGroup = domain.ScopeAccountGroup, "desk"
+						}
+						if tc.referenceScope == domain.ScopeAccountGroup {
+							review.Scope, review.AccountGroup = domain.ScopeAccountGroup, "desk"
+						}
+						n, _ := newLimitNode(t, AccountLimits{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{reject, review}})
+						incoming := domain.LimitSpotFundsPnlBounds{Mode: mode, Axis: axis, Scope: scope, Currency: "USD", LowerBound: "-500"}
+						if scope == domain.ScopeAccountGroup {
+							incoming.AccountGroup = "desk"
+						} else {
+							incoming.Account = "acc"
+						}
+						// Isolate the guard's choice of reference from engine configuration.
+						err := n.guardTightenOnlySpotFundsPnlBounds(t.Context(), incoming, domain.LimitSpotFundsPnlBounds{}, false, "desk", "USD", agentCaller)
+						if referenceLower == "-1000" {
+							if err != nil {
+								t.Fatalf("tighter than own review reference: %v", err)
+							}
+						} else {
+							requireLoosening(t, "looser than own review reference", err)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestLocalNode_AgentGroupProtectedByReviewPnlBound(t *testing.T) {
+	for _, axis := range domain.SpotFundsPnlAxes {
+		for _, mode := range []domain.RuleMode{domain.RuleModeReviewWithHold, domain.RuleModeReviewWithoutHold} {
+			t.Run(string(axis)+"/"+string(mode), func(t *testing.T) {
+				n, _ := newDeskNode(t)
+				if _, err := n.PutSpotFundsPnlBoundsLimit(t.Context(), domain.LimitSpotFundsPnlBounds{
+					Mode: mode, Axis: axis, Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-100",
+				}, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
+					t.Fatal(err)
+				}
+				for _, force := range []bool{false, true} {
+					requireLoosening(t, "DeleteGroup protected by review bound", n.DeleteGroup(t.Context(), "desk", force, agentCaller))
+				}
+			})
+		}
+	}
+}
+
 // TestLocalNode_AgentPnlBoundForUnknownAccount compares an agent's Spot Funds
 // P&L bound for account ghost, which Officer does not know yet, with the bound
 // the cascade resolves for an account in no group and with no currency of its
@@ -1795,9 +1856,9 @@ func TestLocalNode_AgentDeleteLimitRefused(t *testing.T) {
 		},
 	}
 	targets := []LimitTarget{
-		{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker},
+		{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker, Mode: domain.RuleModeReject},
 		{Policy: domain.PolicyOrderSizeLimit, Scope: domain.ScopeBroker, Mode: domain.RuleModeReject},
-		{Policy: domain.PolicySpotFundsPnlBoundsKillSwitch, Scope: domain.ScopeGlobal},
+		{Policy: domain.PolicySpotFundsPnlBoundsKillSwitch, Mode: domain.RuleModeReject, Scope: domain.ScopeGlobal},
 	}
 
 	t.Run("agent", func(t *testing.T) {

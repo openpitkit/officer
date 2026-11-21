@@ -38,7 +38,7 @@ func TestLocalNode_RestoreBackupPositionLimitOnlyConfiguresOnline(t *testing.T) 
 	eng := newFakeEngine()
 	eng.enforceResolver = true
 	n, _ := newTestNode(t, eng)
-	limit := domain.LimitPosition{
+	limit := domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
 	}
 	if _, err := n.PutPositionLimit(ctx, limit, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
@@ -87,7 +87,7 @@ func TestLocalNode_RestoreBackupPublishesNewPositionLimitAxesOnline(t *testing.T
 	eng := newFakeEngine()
 	eng.enforceResolver = true
 	n, _ := newTestNode(t, eng)
-	existing := domain.LimitPosition{
+	existing := domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
 	}
 	if _, err := n.PutPositionLimit(ctx, existing, domain.LimitWriteReplace, domain.MissingAccountCreate, testCaller); err != nil {
@@ -99,7 +99,7 @@ func TestLocalNode_RestoreBackupPublishesNewPositionLimitAxesOnline(t *testing.T
 	}
 	archive.Data.Assets = append(archive.Data.Assets, backup.Asset{Code: "restored-asset"})
 	archive.Data.Accounts = append(archive.Data.Accounts, backup.Account{Code: "restored"})
-	archive.Data.PositionLimits = append(archive.Data.PositionLimits, domain.LimitPosition{
+	archive.Data.PositionLimits = append(archive.Data.PositionLimits, domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "restored", Asset: "restored-asset", MaxPosition: "50.00000001",
 	})
 	builds := 0
@@ -142,10 +142,10 @@ func TestLocalNode_RestoreBackupDropsAssetPositionLimit(t *testing.T) {
 	eng := newFakeEngine()
 	eng.enforceResolver = true
 	n, _ := newTestNode(t, eng)
-	removed := domain.LimitPosition{
+	removed := domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "100",
 	}
-	kept := domain.LimitPosition{
+	kept := domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "MSFT", MaxPosition: "25",
 	}
 	for _, limit := range []domain.LimitPosition{removed, kept} {

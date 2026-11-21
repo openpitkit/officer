@@ -444,9 +444,9 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 		}
 	}
 	for _, limit := range []domain.LimitRate{
-		{Scope: domain.ScopeAccount, Account: "a", MaxOrders: 1, Window: time.Minute},
-		{Scope: domain.ScopeAccount, Account: "b", MaxOrders: 2, Window: time.Minute},
-		{Scope: domain.ScopeBroker, MaxOrders: 3, Window: time.Minute},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "a", MaxOrders: 1, Window: time.Minute},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "b", MaxOrders: 2, Window: time.Minute},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 3, Window: time.Minute},
 	} {
 		if err := rs.PutRateLimit(ctx, limit); err != nil {
 			t.Fatalf("PutRateLimit(%s %s): %v", limit.Scope, limit.Account, err)
@@ -460,10 +460,10 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 		t.Fatalf("PutOrderSizeLimit(a): %v", err)
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "a", Currency: "USD", LowerBound: "-1"},
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-2"},
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "ops", Currency: "USD", LowerBound: "-4"},
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-3"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "a", Currency: "USD", LowerBound: "-1"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "desk", Currency: "USD", LowerBound: "-2"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "ops", Currency: "USD", LowerBound: "-4"},
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-3"},
 	} {
 		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
 			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", limit.Scope, err)
@@ -566,15 +566,15 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 func TestListPolicyRowsPosition(t *testing.T) {
 	ctx, rs := newRestrictionStore(t)
 	for _, limit := range []domain.LimitPosition{
-		{Scope: domain.ScopeAccountAsset, Account: "a", Asset: "AAPL", MaxPosition: "10"},
-		{Scope: domain.ScopeAccountAsset, Account: "a", Asset: "USD", MaxPosition: "9"},
-		{Scope: domain.ScopeAccountAsset, Account: "b", Asset: "AAPL", MaxPosition: "0"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "a", Asset: "AAPL", MaxPosition: "10"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "a", Asset: "USD", MaxPosition: "9"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "b", Asset: "AAPL", MaxPosition: "0"},
 	} {
 		if err := rs.PutPositionLimit(ctx, limit); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxOrders: 10, Window: time.Second,
 	}); err != nil {
 		t.Fatal(err)
@@ -586,9 +586,9 @@ func TestListPolicyRowsPosition(t *testing.T) {
 		t.Fatalf("position page = %+v, err=%v, want three rows", page, err)
 	}
 	for i, want := range []domain.LimitPosition{
-		{Scope: domain.ScopeAccountAsset, Account: "a", Asset: "AAPL", MaxPosition: "10"},
-		{Scope: domain.ScopeAccountAsset, Account: "a", Asset: "USD", MaxPosition: "9"},
-		{Scope: domain.ScopeAccountAsset, Account: "b", Asset: "AAPL", MaxPosition: "0"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "a", Asset: "AAPL", MaxPosition: "10"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "a", Asset: "USD", MaxPosition: "9"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "b", Asset: "AAPL", MaxPosition: "0"},
 	} {
 		row := page.Rows[i]
 		if row.Kind != kind || row.Scope != want.Scope || row.Account != want.Account || row.Asset != want.Asset ||

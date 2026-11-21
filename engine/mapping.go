@@ -620,26 +620,33 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 	assets := []policies.RateLimitAssetBarrier{}
 	accounts := []policies.RateLimitAccountBarrier{}
 	accountAssets := []policies.RateLimitAccountAssetBarrier{}
+	brokerModes := make(map[reject.RuleMode]bool)
 
 	for _, limit := range limits {
+		mode, err := ruleMode(limit.Mode)
+		if err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("engine: rate_limit: %w", err)
+		}
 		rate, err := rateLimitValue(limit)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
 		switch limit.Scope {
 		case domain.ScopeBroker:
-			// Officer stores at most one broker barrier.
-			if len(broker) != 0 {
+			// Officer stores at most one broker barrier per mode.
+			if brokerModes[mode] {
 				return nil, nil, nil, nil, fmt.Errorf(
-					"engine: rate_limit carries more than one broker barrier")
+					"engine: rate_limit carries more than one broker barrier for mode %q", limit.Mode)
 			}
-			broker = append(broker, policies.RateLimitBrokerBarrier{Limit: rate})
+			brokerModes[mode] = true
+			broker = append(broker, policies.RateLimitBrokerBarrier{Mode: mode, Limit: rate})
 		case domain.ScopeAsset:
 			asset, err := res.asset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
 			assets = append(assets, policies.RateLimitAssetBarrier{
+				Mode:            mode,
 				Limit:           rate,
 				SettlementAsset: asset,
 			})
@@ -649,6 +656,7 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 				return nil, nil, nil, nil, err
 			}
 			accounts = append(accounts, policies.RateLimitAccountBarrier{
+				Mode:      mode,
 				Limit:     rate,
 				AccountID: account,
 			})
@@ -662,6 +670,7 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 				return nil, nil, nil, nil, err
 			}
 			accountAssets = append(accountAssets, policies.RateLimitAccountAssetBarrier{
+				Mode:            mode,
 				Limit:           rate,
 				AccountID:       account,
 				SettlementAsset: asset,
@@ -674,10 +683,13 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 	return broker, assets, accounts, accountAssets, nil
 }
 
-// accountAssetKey identifies (account, asset) by engine ids across alias renames.
+// accountAssetKey identifies (account, asset, mode) by engine ids across alias
+// renames for position limits. Order-size deduplication leaves mode at zero
+// because orderSizeAxes handles one single-mode instance at a time.
 type accountAssetKey struct {
 	account param.AccountID
 	asset   string
+	mode    reject.RuleMode
 }
 
 // orderSizeAxes maps an order-size barrier set onto the public Configure axes:
@@ -793,6 +805,7 @@ func spotFundsPnlBoundsAxes(
 	global := []policies.SpotFundsPnlBoundsBarrier{}
 	groups := []policies.SpotFundsPnlBoundsAccountGroupBarrier{}
 	accounts := []policies.SpotFundsPnlBoundsAccountBarrier{}
+	globalModes := make(map[reject.RuleMode]bool)
 
 	for _, limit := range limits {
 		if limit.Axis != axis {
@@ -804,11 +817,12 @@ func spotFundsPnlBoundsAxes(
 		}
 		switch limit.Scope {
 		case domain.ScopeGlobal:
-			// Officer stores at most one global barrier per axis.
-			if len(global) != 0 {
+			// Officer stores at most one global barrier per axis and mode.
+			if globalModes[barrier.Mode] {
 				return nil, nil, nil, fmt.Errorf(
-					"engine: %s carries more than one global barrier", axis.Policy())
+					"engine: %s carries more than one global barrier for mode %q", axis.Policy(), limit.Mode)
 			}
+			globalModes[barrier.Mode] = true
 			global = append(global, barrier)
 		case domain.ScopeAccountGroup:
 			group, err := res.group(limit.AccountGroup)
@@ -842,71 +856,15 @@ func spotFundsPnlBoundsAxes(
 // guarantees it), distributed across the broker/asset/account/account-asset
 // axes by scope.
 func rateLimitReady(limits []domain.LimitRate, res idResolver) (*policies.RateLimitReadyBuilder, error) {
-	builder := policies.BuildRateLimit()
-	ready := builder.PolicyGroupID(0)
-
-	var (
-		broker        *policies.RateLimitBrokerBarrier
-		assets        []policies.RateLimitAssetBarrier
-		accounts      []policies.RateLimitAccountBarrier
-		accountAssets []policies.RateLimitAccountAssetBarrier
-	)
-	for _, limit := range limits {
-		rate, err := rateLimitValue(limit)
-		if err != nil {
-			return nil, err
-		}
-		switch limit.Scope {
-		case domain.ScopeBroker:
-			// Officer stores at most one broker barrier.
-			if broker != nil {
-				return nil, fmt.Errorf("engine: rate_limit carries more than one broker barrier")
-			}
-			broker = &policies.RateLimitBrokerBarrier{Limit: rate}
-		case domain.ScopeAsset:
-			asset, err := res.asset(limit.Asset)
-			if err != nil {
-				return nil, err
-			}
-			assets = append(assets, policies.RateLimitAssetBarrier{
-				Limit:           rate,
-				SettlementAsset: asset,
-			})
-		case domain.ScopeAccount:
-			account, err := res.account(limit.Account)
-			if err != nil {
-				return nil, err
-			}
-			accounts = append(accounts, policies.RateLimitAccountBarrier{
-				Limit:     rate,
-				AccountID: account,
-			})
-		case domain.ScopeAccountAsset:
-			account, err := res.account(limit.Account)
-			if err != nil {
-				return nil, err
-			}
-			asset, err := res.asset(limit.Asset)
-			if err != nil {
-				return nil, err
-			}
-			accountAssets = append(accountAssets, policies.RateLimitAccountAssetBarrier{
-				Limit:           rate,
-				AccountID:       account,
-				SettlementAsset: asset,
-			})
-		default:
-			return nil, fmt.Errorf("engine: rate_limit unsupported scope %q", limit.Scope)
-		}
+	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits, res)
+	if err != nil {
+		return nil, err
 	}
-
-	if broker != nil {
-		ready = ready.BrokerBarriers(*broker)
-	}
-	ready = ready.AssetBarriers(assets...).
+	return policies.BuildRateLimit().PolicyGroupID(0).
+		BrokerBarriers(broker...).
+		AssetBarriers(assets...).
 		AccountBarriers(accounts...).
-		AccountAssetBarriers(accountAssets...)
-	return ready, nil
+		AccountAssetBarriers(accountAssets...), nil
 }
 
 type orderSizeInstance struct {
@@ -919,9 +877,9 @@ type orderSizeInstance struct {
 func splitOrderSizeLimits(limits []domain.LimitOrderSize) ([]orderSizeInstance, error) {
 	byMode := make(map[domain.RuleMode]orderSizeInstance)
 	for _, limit := range limits {
-		sdkMode, err := orderSizeInstanceMode(limit.Mode)
+		sdkMode, err := ruleMode(limit.Mode)
 		if err != nil {
-			return nil, fmt.Errorf("%w for scope %q account %q asset %q",
+			return nil, fmt.Errorf("engine: order_size_limit: %w for scope %q account %q asset %q",
 				err, limit.Scope, limit.Account, limit.Asset)
 		}
 		instance, exists := byMode[limit.Mode]
@@ -1062,6 +1020,10 @@ func positionLimitValues(
 ) (map[accountAssetKey]positionLimitValue, error) {
 	values := make(map[accountAssetKey]positionLimitValue, len(limits))
 	for _, limit := range limits {
+		mode, err := ruleMode(limit.Mode)
+		if err != nil {
+			return nil, fmt.Errorf("engine: position_limit: %w", err)
+		}
 		if err := limit.Validate(); err != nil {
 			return nil, fmt.Errorf("engine: position_limit: %w", err)
 		}
@@ -1079,11 +1041,11 @@ func positionLimitValues(
 				"engine: position_limit max_position %q: %w", limit.MaxPosition, err,
 			)
 		}
-		key := accountAssetKey{account: account, asset: asset.Safe()}
+		key := accountAssetKey{account: account, asset: asset.Safe(), mode: mode}
 		if _, exists := values[key]; exists {
 			return nil, fmt.Errorf(
-				"engine: position_limit duplicate pair (%q, %q): %w",
-				limit.Account, limit.Asset, domain.ErrInvalid,
+				"engine: position_limit duplicate pair (%q, %q) for mode %q: %w",
+				limit.Account, limit.Asset, limit.Mode, domain.ErrInvalid,
 			)
 		}
 		values[key] = positionLimitValue{
@@ -1125,6 +1087,10 @@ func spotFundsPnlBoundsBarrier(
 	limit domain.LimitSpotFundsPnlBounds,
 	res idResolver,
 ) (policies.SpotFundsPnlBoundsBarrier, error) {
+	mode, err := ruleMode(limit.Mode)
+	if err != nil {
+		return policies.SpotFundsPnlBoundsBarrier{}, fmt.Errorf("engine: spot_funds_pnl_bounds: %w", err)
+	}
 	currency, err := res.asset(limit.Currency)
 	if err != nil {
 		return policies.SpotFundsPnlBoundsBarrier{}, err
@@ -1138,6 +1104,7 @@ func spotFundsPnlBoundsBarrier(
 		return policies.SpotFundsPnlBoundsBarrier{}, err
 	}
 	return policies.SpotFundsPnlBoundsBarrier{
+		Mode:       mode,
 		Currency:   currency,
 		LowerBound: lower,
 		UpperBound: upper,
@@ -1784,7 +1751,23 @@ func orderRejectFrom(r reject.Reject, res idResolver) (domain.OrderReject, error
 	}, nil
 }
 
-func orderSizeInstanceMode(mode domain.RuleMode) (reject.RuleMode, error) {
+func spotFundsLimitMode(mode domain.SpotFundsLimitMode) (policies.SpotFundsLimitMode, error) {
+	switch mode {
+	case domain.SpotFundsLimitModeEnforce:
+		return policies.SpotFundsLimitModeEnforce, nil
+	case domain.SpotFundsLimitModeReviewWithHold:
+		return policies.SpotFundsLimitModeReviewWithHold, nil
+	case domain.SpotFundsLimitModeReviewWithoutHold:
+		return policies.SpotFundsLimitModeReviewWithoutHold, nil
+	case domain.SpotFundsLimitModeTrackOnly:
+		return policies.SpotFundsLimitModeTrackOnly, nil
+	default:
+		return 0, fmt.Errorf("engine: unsupported spot funds limit mode %q", mode)
+	}
+}
+
+// ruleMode maps a domain rule mode to its SDK value.
+func ruleMode(mode domain.RuleMode) (reject.RuleMode, error) {
 	switch mode {
 	case domain.RuleModeReject:
 		return reject.RuleModeReject, nil
@@ -1793,7 +1776,7 @@ func orderSizeInstanceMode(mode domain.RuleMode) (reject.RuleMode, error) {
 	case domain.RuleModeReviewWithHold:
 		return reject.RuleModeReviewWithHold, nil
 	default:
-		return 0, fmt.Errorf("engine: order_size_limit unsupported mode %q", mode)
+		return 0, fmt.Errorf("engine: unsupported rule mode %q", mode)
 	}
 }
 

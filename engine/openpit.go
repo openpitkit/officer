@@ -116,8 +116,8 @@ type openPitEngine struct {
 	// by stable engine ids and compared using domain cap values. Guarded by mu.
 	orderSizeLimits map[string]map[orderSizeLimitKey]orderSizeLimitValue
 
-	// positionLimits tracks successful SDK calls by stable engine ids, including
-	// pairs whose dictionary aliases have since been renamed or removed.
+	// positionLimits tracks successful SDK calls by stable engine ids and mode,
+	// including pairs whose dictionary aliases have since been renamed or removed.
 	// Guarded by mu after construction.
 	positionLimits map[accountAssetKey]positionLimitValue
 
@@ -590,9 +590,14 @@ func (e *openPitEngine) CheckOrderModel(
 // spot_funds_pnl_bounds_kill_switch and position_limit, whose separate SDK
 // surfaces can clear empty sets online. Rate limit and P&L bounds change live
 // state only on success.
+//
+// An SDK *configure.Error of kind Validation is wrapped together with
+// domain.ErrInvalid. All other errors pass through unchanged.
 func (e *openPitEngine) ConfigurePolicy(
 	ctx context.Context, policy string, limits fwengine.LimitSet,
-) (fwengine.PolicyConfigurationResult, error) {
+) (result fwengine.PolicyConfigurationResult, err error) {
+	defer func() { err = classifyConfigureError(err) }()
+
 	if err := ctx.Err(); err != nil {
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf("engine: configure cancelled: %w", err)
 	}
@@ -644,6 +649,14 @@ func (e *openPitEngine) ConfigurePolicy(
 	default:
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf("engine: configure unknown policy %q", policy)
 	}
+}
+
+func classifyConfigureError(err error) error {
+	var sdkErr *configure.Error
+	if errors.As(err, &sdkErr) && sdkErr.Kind == configure.ErrorKindValidation {
+		return fmt.Errorf("%w: %w", err, domain.ErrInvalid)
+	}
+	return err
 }
 
 // configureRateLimitLocked replaces the rate-limit axes on the live handle from
@@ -721,7 +734,8 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize)
 }
 
 // configurePositionLimits validates and resolves the whole set before SDK calls,
-// pins new or changed pairs, and clears applied pairs absent from the set.
+// pins new or changed (account, asset, mode) entries, and clears applied entries
+// absent from the set.
 // It updates applied after each successful SDK call, matching partial failures.
 func configurePositionLimits(
 	configurator configure.Configurator,
@@ -739,7 +753,7 @@ func configurePositionLimits(
 		}
 		if err := configurator.SpotFundsPositionLimit(
 			nameSpotFunds, key.account, value.asset,
-			reject.RuleModeReject, optional.Some(value.quantity),
+			key.mode, optional.Some(value.quantity),
 		); err != nil {
 			return fmt.Errorf("engine: configure position_limit: %w", err)
 		}
@@ -751,7 +765,7 @@ func configurePositionLimits(
 		}
 		if err := configurator.SpotFundsPositionLimit(
 			nameSpotFunds, key.account, value.asset,
-			reject.RuleModeReject, optional.None[param.Quantity](),
+			key.mode, optional.None[param.Quantity](),
 		); err != nil {
 			return fmt.Errorf("engine: clear position_limit: %w", err)
 		}
@@ -844,10 +858,10 @@ func configureSpotFundsPnlBounds(
 	return fwengine.PolicyConfigurationResult{AccountBlocks: blocks}, nil
 }
 
-// SetSpotFundsTrackOnly sets the global Spot Funds limit mode on the live
-// engine: TrackOnly when trackOnly, otherwise Enforce. It runs in an exclusive
-// section under the engine lock, like the P&L-bounds retune.
-func (e *openPitEngine) SetSpotFundsTrackOnly(ctx context.Context, trackOnly bool) error {
+// SetSpotFundsLimitMode sets the global Spot Funds limit mode on the live
+// engine. Empty and unknown modes are errors. It runs in an exclusive section
+// under the engine lock, like the P&L-bounds retune.
+func (e *openPitEngine) SetSpotFundsLimitMode(ctx context.Context, mode domain.SpotFundsLimitMode) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: configure cancelled: %w", err)
 	}
@@ -864,22 +878,22 @@ func (e *openPitEngine) SetSpotFundsTrackOnly(ctx context.Context, trackOnly boo
 	return fwengine.RunExclusive(
 		context.WithoutCancel(ctx), e.async,
 		func(driver asyncengine.Driver) error {
-			return configureSpotFundsLimitMode(driver.Configure(), trackOnly)
+			return configureSpotFundsLimitMode(driver.Configure(), mode)
 		},
 	)
 }
 
 // configureSpotFundsLimitMode sets the global limit mode of the Spot Funds
-// policy through configurator: TrackOnly when trackOnly, otherwise Enforce.
+// policy through configurator, refusing empty and unknown modes.
 // The build and the live change both set the mode through it.
 func configureSpotFundsLimitMode(
-	configurator configure.Configurator, trackOnly bool,
+	configurator configure.Configurator, mode domain.SpotFundsLimitMode,
 ) error {
-	mode := policies.SpotFundsLimitModeEnforce
-	if trackOnly {
-		mode = policies.SpotFundsLimitModeTrackOnly
+	sdkMode, err := spotFundsLimitMode(mode)
+	if err != nil {
+		return err
 	}
-	if err := configurator.SpotFundsGlobalLimitMode(nameSpotFunds, mode); err != nil {
+	if err := configurator.SpotFundsGlobalLimitMode(nameSpotFunds, sdkMode); err != nil {
 		return fmt.Errorf("engine: configure spot funds limit mode: %w", err)
 	}
 	return nil
@@ -1387,7 +1401,7 @@ func buildEngine(
 	// The mode is set on every build, Enforce included, so a rebuild always
 	// matches the stored setting rather than whatever the SDK starts with.
 	if err := configureSpotFundsLimitMode(
-		eng.Configure(), snap.SpotFundsTrackOnly,
+		eng.Configure(), snap.SpotFundsLimitMode,
 	); err != nil {
 		return releaseOnErr(err)
 	}

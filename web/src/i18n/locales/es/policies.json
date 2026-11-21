@@ -1,10 +1,10 @@
 {
-  "orderSizeMode": {
+  "ruleMode": {
     "label": "Modo de la barrera",
     "descriptions": {
-      "review_with_hold": "Una orden que supera la barrera espera la revisión de un operador con sus fondos retenidos. La confirmación repite el control pre-negociación sin una segunda retención: si lo supera, la orden continúa; si no, sigue esperando con su retención. La cancelación libera la retención.",
-      "reject": "Se rechaza una orden que supera la barrera.",
-      "review_without_hold": "Una orden que supera la barrera espera la revisión de un operador; no se reserva ni se envía nada hasta su confirmación."
+      "review_with_hold": "Una orden detenida por esta barrera espera la revisión de un operador con sus fondos retenidos. La confirmación repite el control pre-negociación sin una segunda retención. La orden continúa si supera el control y sigue esperando con sus fondos retenidos si no lo supera. La cancelación libera los fondos.",
+      "reject": "Se rechaza toda orden que esta barrera detiene.",
+      "review_without_hold": "Una orden detenida por esta barrera espera la revisión de un operador. Hasta la confirmación no se retienen fondos ni se envía la orden."
     }
   },
   "spotFundsMode": {
@@ -12,6 +12,14 @@
       "enforce": {
         "title": "Comprobar fondos",
         "description": "Se rechaza una orden que necesita más fondos de los que tiene la cuenta. Al volver a este modo, los saldos se mantienen tal como están, incluidos los negativos, y se rechazan las órdenes que requieren fondos contra ellos."
+      },
+      "review_with_hold": {
+        "title": "Revisión con retención",
+        "description": "Una orden con fondos insuficientes espera la revisión de un operador. Se retiene el importe completo durante la espera, por lo que los fondos disponibles pueden quedar en negativo. La retención se mantiene tras la confirmación."
+      },
+      "review_without_hold": {
+        "title": "Revisión sin retención",
+        "description": "Una orden con fondos insuficientes espera la revisión de un operador sin retener fondos. Tras la confirmación, la orden se contabiliza aunque los fondos disponibles queden en negativo."
       },
       "track_only": {
         "title": "Contabilidad sin bloqueos",

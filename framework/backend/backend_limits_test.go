@@ -244,7 +244,7 @@ func TestServiceLimitWriteIntent(t *testing.T) {
 		put  func(*Service, domain.LimitWrite) error
 	}{
 		{"rate", func(s *Service, write domain.LimitWrite) error {
-			return s.PutRateLimit(systemCtx(), domain.LimitRate{
+			return s.PutRateLimit(systemCtx(), domain.LimitRate{Mode: domain.RuleModeReject,
 				Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 10,
 			}, write, "")
 		}},
@@ -255,12 +255,12 @@ func TestServiceLimitWriteIntent(t *testing.T) {
 			}, write, "")
 		}},
 		{"position", func(s *Service, write domain.LimitWrite) error {
-			return s.PutPositionLimit(systemCtx(), domain.LimitPosition{
+			return s.PutPositionLimit(systemCtx(), domain.LimitPosition{Mode: domain.RuleModeReject,
 				Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "10",
 			}, write, domain.MissingAccountCreate)
 		}},
 		{"pnl", func(s *Service, write domain.LimitWrite) error {
-			return s.PutSpotFundsPnlBoundsLimit(systemCtx(), domain.LimitSpotFundsPnlBounds{
+			return s.PutSpotFundsPnlBoundsLimit(systemCtx(), domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal,
 				Currency: "USD", LowerBound: "-10",
 			}, write, "")
@@ -313,7 +313,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 	}{
 		{
 			name: "rate broker",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy: domain.PolicyRateLimit,
 				Scope:  domain.ScopeBroker,
 			},
@@ -321,7 +321,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "rate asset",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy: domain.PolicyRateLimit,
 				Scope:  domain.ScopeAsset,
 				Asset:  "AAPL",
@@ -330,7 +330,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "rate account",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy:  domain.PolicyRateLimit,
 				Scope:   domain.ScopeAccount,
 				Account: "acc-1",
@@ -339,7 +339,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "rate account asset",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy:  domain.PolicyRateLimit,
 				Scope:   domain.ScopeAccountAsset,
 				Account: "acc-1",
@@ -400,7 +400,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "spot funds pnl global",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
 				Scope:  domain.ScopeGlobal,
 			},
@@ -408,7 +408,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "spot funds pnl account group",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
@@ -417,7 +417,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "spot funds pnl account",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy:  domain.PolicySpotFundsPnlBoundsKillSwitch,
 				Scope:   domain.ScopeAccount,
 				Account: "acc-1",
@@ -450,7 +450,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "global with account",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy:  domain.PolicySpotFundsPnlBoundsKillSwitch,
 				Scope:   domain.ScopeGlobal,
 				Account: "acc-1",
@@ -458,14 +458,14 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "account without account",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
 				Scope:  domain.ScopeAccount,
 			},
 		},
 		{
 			name: "account group on rate policy",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy:       domain.PolicyRateLimit,
 				Scope:        domain.ScopeAccountGroup,
 				AccountGroup: "desk-a",
@@ -473,7 +473,7 @@ func TestServiceDeleteLimitValidatesOnlyTargetAxes(t *testing.T) {
 		},
 		{
 			name: "asset on broker scope",
-			target: node.LimitTarget{
+			target: node.LimitTarget{Mode: domain.RuleModeReject,
 				Policy: domain.PolicyRateLimit,
 				Scope:  domain.ScopeBroker,
 				Asset:  "AAPL",
@@ -524,7 +524,7 @@ func TestValidateLimitTargetMode(t *testing.T) {
 		{"review", domain.PolicyOrderSizeLimit, domain.RuleModeReviewWithoutHold, true},
 		{"missing", domain.PolicyOrderSizeLimit, "", false},
 		{"unknown", domain.PolicyOrderSizeLimit, "unknown", false},
-		{"foreign_mode", domain.PolicyRateLimit, domain.RuleModeReject, false},
+		{"foreign_mode", domain.PolicySpotFundsLimitMode, domain.RuleModeReject, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := &limitTestNode{}
@@ -572,7 +572,7 @@ func TestServicePutSpotFundsPnlBoundsLimitValidatesCurrencyBeforeNode(t *testing
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			callsBefore := n.putCalls
-			err := svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+			err := svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   tc.currency,

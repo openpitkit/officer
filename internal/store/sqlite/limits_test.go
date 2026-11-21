@@ -56,7 +56,7 @@ func seedLimitFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	limit := domain.LimitRate{
+	limit := domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeAccountAsset,
 		Account:   "acc-1",
 		Asset:     "AAPL",
@@ -89,7 +89,7 @@ func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
 	}
 
 	// Delete removes the row.
-	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, "", domain.ScopeAccountAsset, "acc-1", "", "AAPL")); err != nil {
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, domain.RuleModeReject, domain.ScopeAccountAsset, "acc-1", "", "AAPL")); err != nil {
 		t.Fatalf("DeleteLimit: %v", err)
 	}
 	list, _ = rs.ListRateLimits(ctx, "")
@@ -98,7 +98,7 @@ func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
 	}
 
 	// Double delete is ErrNotFound.
-	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, "", domain.ScopeAccountAsset, "acc-1", "", "AAPL")); !errors.Is(err, domain.ErrNotFound) {
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, domain.RuleModeReject, domain.ScopeAccountAsset, "acc-1", "", "AAPL")); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("DeleteLimit(missing) error = %v, want ErrNotFound", err)
 	}
 }
@@ -106,14 +106,14 @@ func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
 func TestRateLimitUpsertUpdatesValue(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxOrders: 50, Window: time.Minute,
 	}); err != nil {
 		t.Fatalf("PutRateLimit (first): %v", err)
 	}
 	// Second put with same composite (broker, NULL, NULL) should update the
 	// value columns, not fail with a duplicate error.
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxOrders: 200, Window: 2 * time.Minute,
 	}); err != nil {
 		t.Fatalf("PutRateLimit (upsert): %v", err)
@@ -135,7 +135,7 @@ func TestRateLimitBrokerScopeNullAxes(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
 	// broker scope: no account, no asset.
-	limit := domain.LimitRate{
+	limit := domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeBroker, MaxOrders: 1000, Window: time.Hour,
 	}
 	if err := rs.PutRateLimit(ctx, limit); err != nil {
@@ -149,7 +149,7 @@ func TestRateLimitBrokerScopeNullAxes(t *testing.T) {
 		t.Fatalf("broker limit axes = account=%q asset=%q", list[0].Account, list[0].Asset)
 	}
 	// Deleting by (broker, "", "") should find the row.
-	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, "", domain.ScopeBroker, "", "", "")); err != nil {
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyRateLimit, domain.RuleModeReject, domain.ScopeBroker, "", "", "")); err != nil {
 		t.Fatalf("DeleteLimit(broker): %v", err)
 	}
 }
@@ -157,7 +157,7 @@ func TestRateLimitBrokerScopeNullAxes(t *testing.T) {
 func TestRateLimitInvalidScopeRejected(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	err := rs.PutRateLimit(ctx, domain.LimitRate{
+	err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: "bad_scope", MaxOrders: 1, Window: time.Minute,
 	})
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -168,7 +168,7 @@ func TestRateLimitInvalidScopeRejected(t *testing.T) {
 func TestRateLimitUnknownAccountIsInvalid(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	err := rs.PutRateLimit(ctx, domain.LimitRate{
+	err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccount, Account: "ghost",
 		MaxOrders: 1, Window: time.Minute,
 	})
@@ -180,7 +180,7 @@ func TestRateLimitUnknownAccountIsInvalid(t *testing.T) {
 func TestRateLimitUnknownAssetIsInvalid(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	err := rs.PutRateLimit(ctx, domain.LimitRate{
+	err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAsset, Asset: "GHOST",
 		MaxOrders: 1, Window: time.Minute,
 	})
@@ -192,7 +192,7 @@ func TestRateLimitUnknownAssetIsInvalid(t *testing.T) {
 func TestRateLimitCascadeOnAccountDelete(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope:     domain.ScopeAccount,
 		Account:   "acc-1",
 		MaxOrders: 10,
@@ -411,10 +411,10 @@ func TestPositionLimitPutListDeleteRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []domain.LimitPosition{
-		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "100"},
-		{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "10.00000001"},
-		{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "0"},
-		{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "0.1234567890123456789012345678"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "100"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "10.00000001"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxPosition: "0"},
+		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "USD", MaxPosition: "0.1234567890123456789012345678"},
 	}
 	for _, limit := range want {
 		if err := rs.PutPositionLimit(ctx, limit); err != nil {
@@ -447,11 +447,11 @@ func TestPositionLimitPutListDeleteRoundTrip(t *testing.T) {
 		}
 		assertLimits("", want)
 	}
-	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, "", domain.ScopeAccountAsset, "acc-1", "", "AAPL")); err != nil {
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, domain.RuleModeReject, domain.ScopeAccountAsset, "acc-1", "", "AAPL")); err != nil {
 		t.Fatalf("DeleteLimit: %v", err)
 	}
 	assertLimits("", want[1:])
-	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, "", domain.ScopeAccountAsset, "acc-1", "", "AAPL")); !errors.Is(err, domain.ErrNotFound) {
+	if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, domain.RuleModeReject, domain.ScopeAccountAsset, "acc-1", "", "AAPL")); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("DeleteLimit(missing) = %v, want ErrNotFound", err)
 	}
 }
@@ -462,11 +462,11 @@ func TestPositionLimitInvalidRejected(t *testing.T) {
 		name  string
 		limit domain.LimitPosition
 	}{
-		{"unknown account", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "missing", Asset: "AAPL", MaxPosition: "1"}},
-		{"unknown asset", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "missing", MaxPosition: "1"}},
-		{"missing value", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL"}},
-		{"negative", domain.LimitPosition{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "-1"}},
-		{"wrong scope", domain.LimitPosition{Scope: domain.ScopeBroker, MaxPosition: "1"}},
+		{"unknown account", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "missing", Asset: "AAPL", MaxPosition: "1"}},
+		{"unknown asset", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "missing", MaxPosition: "1"}},
+		{"missing value", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL"}},
+		{"negative", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "-1"}},
+		{"wrong scope", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxPosition: "1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := rs.PutPositionLimit(ctx, tc.limit); !errors.Is(err, domain.ErrInvalid) {
@@ -479,7 +479,7 @@ func TestPositionLimitInvalidRejected(t *testing.T) {
 		t.Fatalf("invalid writes left limits = %+v, err = %v", list, err)
 	}
 	for _, pair := range [][2]string{{"missing", "AAPL"}, {"acc-1", "missing"}} {
-		if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, "", domain.ScopeAccountAsset, domain.AccountID(pair[0]), "", pair[1])); !errors.Is(err, domain.ErrInvalid) {
+		if err := rs.DeleteLimit(ctx, mustSQLLimitKey(t, domain.PolicyPositionLimit, domain.RuleModeReject, domain.ScopeAccountAsset, domain.AccountID(pair[0]), "", pair[1])); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("DeleteLimit(%q) = %v, want ErrInvalid", pair, err)
 		}
 	}
@@ -509,7 +509,7 @@ func TestPositionLimitDependents(t *testing.T) {
 	for _, entity := range []string{"account", "asset"} {
 		t.Run(entity, func(t *testing.T) {
 			ctx, rs := seedLimitFixtures(t)
-			limit := domain.LimitPosition{
+			limit := domain.LimitPosition{Mode: domain.RuleModeReject,
 				Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "0",
 			}
 			if err := rs.PutPositionLimit(ctx, limit); err != nil {
@@ -613,7 +613,7 @@ func TestOrderSizeLimitCascadeOnAssetDelete(t *testing.T) {
 func TestDeleteAccountWithoutForceRejectsSpotFundsPnlBoundsDependent(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-100",
 	}); err != nil {
@@ -643,7 +643,7 @@ func TestDeleteAccountWithoutForceRejectsSpotFundsPnlBoundsDependent(t *testing.
 func TestDeleteAccountForceCascadesSpotFundsPnlBoundsDependent(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "acc-1", Currency: "USD", LowerBound: "-100",
 	}); err != nil {
@@ -689,13 +689,13 @@ func seedPolicyFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 		}
 	}
 	// acc-1 carries both supported kinds; acc-2 carries only a rate barrier.
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccount, Account: "acc-1",
 		MaxOrders: 100, Window: time.Minute,
 	}); err != nil {
 		t.Fatalf("PutRateLimit(acc-1): %v", err)
 	}
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccount, Account: "acc-2",
 		MaxOrders: 50, Window: time.Minute,
 	}); err != nil {
@@ -826,14 +826,14 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 		t.Fatalf("CreateGroup(desk-b): %v", err)
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
 			Currency:     "USD",
 			LowerBound:   "-1000",
 		},
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-b",
@@ -886,18 +886,18 @@ func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
 		t.Fatalf("CreateGroup(desk-a): %v", err)
 	}
-	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAsset, Asset: "USD", MaxOrders: 10, Window: time.Minute,
 	}); err != nil {
 		t.Fatalf("PutRateLimit(USD): %v", err)
 	}
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "acc-1",
 			Currency: "USD", LowerBound: "-100",
 		},
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:         domain.SpotFundsPnlAxisRealized,
 			Scope:        domain.ScopeAccountGroup,
 			AccountGroup: "desk-a",
@@ -963,13 +963,13 @@ func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 	}
 
 	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
-		{
+		{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1"},
+		{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
 			Currency: "EUR", LowerBound: "-2",
 		},
-		{
+		{Mode: domain.RuleModeReject,
 			Axis:  domain.SpotFundsPnlAxisRealized,
 			Scope: domain.ScopeAccount, Account: "acc-1",
 			Currency: "USD", LowerBound: "-3",
@@ -1001,7 +1001,7 @@ func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 		}
 	}
 
-	err = rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	err = rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "GHOST", LowerBound: "-4",
 	})
@@ -1016,7 +1016,7 @@ func TestSpotFundsPnlBoundsUpsertOverwritesCurrency(t *testing.T) {
 		t.Fatalf("CreateAsset(EUR): %v", err)
 	}
 	for _, currency := range []string{"USD", "EUR"} {
-		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    "acc-1",
@@ -1041,7 +1041,7 @@ func TestSpotFundsPnlBoundsUpsertOverwritesCurrency(t *testing.T) {
 
 func TestDeleteAssetRequiresForceForSpotFundsPnlBoundsCurrencyDependent(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
-	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
 	}); err != nil {

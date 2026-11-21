@@ -99,7 +99,7 @@ func TestExclusiveOperationsBesideOrderFlow(t *testing.T) {
 			wg.Wait()
 			t.Fatalf("round %d: SetAccountGroup(%q): %v", round, group, err)
 		}
-		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 			Axis:       domain.SpotFundsPnlAxisRealized,
 			Scope:      domain.ScopeAccount,
 			Account:    mover,
@@ -151,7 +151,7 @@ func TestExclusiveOperationsBesideOrderFlow(t *testing.T) {
 func TestSpotFundsRetuneWaitsForLaneWork(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
-	limits := []domain.LimitSpotFundsPnlBounds{{
+	limits := []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject,
 		Axis:       domain.SpotFundsPnlAxisRealized,
 		Scope:      domain.ScopeAccount,
 		Account:    testAccount,
@@ -159,6 +159,7 @@ func TestSpotFundsRetuneWaitsForLaneWork(t *testing.T) {
 		LowerBound: "-3",
 	}}
 	built, err := newTestOpenPitEngineBuildFunc(t)(fwengine.Snapshot{
+		SpotFundsLimitMode:       domain.SpotFundsLimitModeEnforce,
 		Assets:                   testAssets(),
 		Accounts:                 []domain.Account{acct},
 		SpotFundsPnlBoundsLimits: limits,
@@ -188,7 +189,7 @@ func TestSpotFundsRetuneWaitsForLaneWork(t *testing.T) {
 		_, err := eng.ConfigurePolicy(
 			context.Background(),
 			domain.PolicySpotFundsPnlBoundsKillSwitch,
-			fwengine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{
+			fwengine.LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeAccount,
 				Account:    testAccount,
