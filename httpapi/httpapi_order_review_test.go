@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
@@ -469,6 +470,7 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
 		value any
 	}{
 		{"OrderReview", httpx.OrderReviewDTO[json.RawMessage]{}},
+		{"BackupOrderReview", backup.OrderReview{}},
 		{"ReviewLastConfirm", httpx.ReviewConfirmDTO{}},
 		{"ConfirmOrderReviewResponse", confirmOrderReviewResponseDTO{}},
 		{"EventReproductionResponse", eventReproductionResponseDTO{}},
@@ -486,6 +488,39 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
 	schemas, ok := openAPIComponents(strings.Split(spec, "\n"), "schemas")
 	if !ok {
 		t.Fatal("OpenAPI schemas are missing")
+	}
+	if !strings.Contains(schemas["BackupData"], `
+        orderReviews:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupOrderReview"`) {
+		t.Fatal("BackupData.orderReviews must be an array of BackupOrderReview")
+	}
+	if strings.Count(spec, "enum: [immediate, hold]") != 1 {
+		t.Fatal("submission mode must be declared once in SubmitMode and referenced elsewhere")
+	}
+	if !strings.Contains(schemas["BackupOrderReview"], `
+        mode:
+          $ref: "#/components/schemas/SubmitMode"
+`) {
+		t.Fatal("BackupOrderReview.mode must reference SubmitMode")
+	}
+	if !strings.Contains(schemas["SubmitOrderRequest"], `
+            mode:
+              $ref: "#/components/schemas/SubmitMode"
+`) {
+		t.Fatal("SubmitOrderRequest.mode must reference SubmitMode")
+	}
+	if !strings.Contains(schemas["SubmitMode"]+"\n", "\n      enum: [immediate, hold]\n") {
+		t.Fatal("SubmitMode must enumerate exactly immediate and hold")
+	}
+	if !strings.Contains(schemas["BackupOrderReview"], `
+      dependentRequired:
+        connection: [route]
+        route: [connection]
+        venueAccount: [connection]
+      properties:`) {
+		t.Fatal("BackupOrderReview connection and route must appear together, and venueAccount requires connection")
 	}
 	for _, name := range []string{"SignedApproval", "ConfirmOrderReviewResponse", "OrderMutationResponse"} {
 		if !strings.Contains(schemas[name], "alertFailure:\n          $ref: \"#/components/schemas/AlertFailure\"") {

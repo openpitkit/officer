@@ -8144,6 +8144,13 @@ components:
           description: Serialized order rows.
           items:
             type: object
+        orderReviews:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupOrderReview"
+          description: >
+            Waiting-order review rows, one per order awaiting review, carried
+            with the activity_history section.
         orderEvents:
           type: array
           description: Serialized order event rows.
@@ -10772,6 +10779,36 @@ components:
           type: string
           format: date-time
 
+    BackupOrderReview:
+      type: object
+      additionalProperties: false
+      description: >
+        The connection and route fields are present together for an order sent
+        to a venue and are absent for a gateway order. The venueAccount field
+        appears only with connection and is omitted when the grant binds no
+        venue account.
+      required: [order, mode, held]
+      dependentRequired:
+        connection: [route]
+        route: [connection]
+        venueAccount: [connection]
+      properties:
+        order:
+          $ref: "#/components/schemas/Id"
+        mode:
+          $ref: "#/components/schemas/SubmitMode"
+          description: Submission mode used when confirmation re-runs the order.
+        held:
+          type: boolean
+          description: Whether the waiting order holds a live reservation. Required even when false.
+        connection:
+          $ref: "#/components/schemas/Id"
+        venueAccount:
+          type: string
+        route:
+          type: string
+          description: Compact connector JSON text in the portable backup format.
+
     # Market data
 
     MarketData:
@@ -11289,6 +11326,11 @@ components:
           type: string
           description: Exact decimal string. Omit for market orders.
 
+    SubmitMode:
+      type: string
+      description: The order submission mode.
+      enum: [immediate, hold]
+
     SubmitOrderRequest:
       allOf:
         - $ref: "#/components/schemas/OrderSubmissionRequest"
@@ -11301,14 +11343,13 @@ components:
                 Optional caller-supplied public id. When omitted the server
                 generates and returns one. A duplicate is a 409.
             mode:
-              type: string
+              $ref: "#/components/schemas/SubmitMode"
               description: >
                 Submit mode. `immediate` commits and settles at the order's
                 own `price` and requires it: an order without `price` is
                 refused with 422 (constraint `required` at `/price`) before
                 the order is recorded or the account is created; the refused
                 attempt is audited. `hold` waits for execution reports.
-              enum: [immediate, hold]
       unevaluatedProperties: false
 
     SendVenueOrderRequest:
