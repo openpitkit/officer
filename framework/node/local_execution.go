@@ -281,6 +281,9 @@ func (n *localNode) applyExecutionReport(
 		persistence := stampExecutionReportPersistence(
 			*state.result.Persistence, caller, request,
 		)
+		if persistence.Trade != nil {
+			persistence.Trade.VenueTradeID = state.in.VenueTradeID
+		}
 		reservedQuantity, err := reservationAfterOutcomes(state.order, persistence.Balances)
 		if err != nil {
 			return n.fatalPostEnginePersistence("record execution reservation", account, err)

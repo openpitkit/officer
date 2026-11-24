@@ -75,6 +75,12 @@
       "passphraseStored": "Passphrase: 已保存",
       "passphraseNotSet": "Passphrase: 未设置"
     },
+    "coinbase": {
+      "apiKeyIdStored": "API key ID: 已保存",
+      "apiKeyIdNotSet": "API key ID: 未设置",
+      "apiKeySecretStored": "Secret: 已保存",
+      "apiKeySecretNotSet": "Secret: 未设置"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "已启用",
@@ -97,7 +103,7 @@
   },
   "deleteConnection": {
     "title": "删除交易连接？",
-    "description": "将永久删除 {{label}} 及其配置。请先禁用连接。存在订单历史的连接无法删除。"
+    "description": "将永久删除 {{label}} 及其配置。存在订单历史的连接无法删除。"
   },
   "create": {
     "okx": {
@@ -109,6 +115,16 @@
         "createKey": "在您的 OKX 账户中创建 API 密钥，授予 {{tradePermission}} 权限，不授予出金权限，并设置 Passphrase。复制 API key、API secret 和 Passphrase - OKX 无法恢复丢失的 Passphrase。",
         "bindIp": "将运行 Officer 的计算机的公网 IPv4 地址绑定到密钥：对于拥有交易权限但未绑定网络地址的密钥，OKX 会在闲置 14 天后使其失效。"
       }
+    },
+    "keepDialogOpen": "请保持此对话框打开 - 下方字段需要填写这两个值。",
+    "coinbase": {
+      "logIn": "请登录 {{portal}} 门户，并确认门户顶部显示您账户名称的菜单中已选择 {{live}}：在 {{sandbox}} 中创建的密钥无法用于交易 API。",
+      "openPortal": "打开 Coinbase 开发者门户",
+      "authenticationGuide": "API 密钥身份验证指南",
+      "keyTypes": "关于支持的密钥类型",
+      "createKey": "在 {{apiKeys}} 中选择 {{secretApiKeys}}，然后点击 {{createApiKey}}。填写 {{nickname}}。如有需要，可在 {{ipAllowlist}} 中填写运行 Officer 的计算机的公网地址。",
+      "restrictKey": "请在 {{permissions}} 中展开 {{advancedTrade}}，选择投资组合并勾选 {{read}} 和 {{trade}}，不要勾选 {{transfer}}。在 {{signatureAlgorithm}} 中选择 {{ecdsa}}：Coinbase 交易 API 不接受 {{ed25519}} 密钥。点击 {{create}} 生成密钥。",
+      "copyKeys": "请按 Coinbase 对话框中显示的原样复制 {{apiKeyId}} 和 {{secret}}，或点击 {{downloadApiKey}} 将其保存到文件。"
     },
     "test": {
       "prepare": "此连接在本地执行测试订单，无需密钥。创建后，请为测试账户授予访问权限，配置交易品种掩码及其执行规则，然后启用连接。"
@@ -166,7 +182,6 @@
       "copyUserKey": "请从 Generated Keys 列表中复制新密钥，并填入 User key 字段。",
       "publicApiKey": "Public API key 用于标识应用程序。请将其填入 Public API key 字段。",
       "authenticationGuide": "eToro 身份验证指南",
-      "keepDialogOpen": "请保持此对话框打开 - 下方字段需要填写这两个值。",
       "live": {
         "createUserKey": "创建用户密钥：在 eToro 中打开设置，然后进入交易，向下滚动至 API Key Management 并点击 Create New Key。请选择真实环境 - 每个密钥仅适用于一个环境，Officer 在实盘交易模式下连接真实账户。请选择写入权限 - 只读权限仅可查看投资组合数据，无法下单。点击 Generate Key，并输入 eToro 发送到您手机的验证码。API Key Management 仅在您的 eToro 账户完成验证后显示。"
       }
@@ -192,6 +207,10 @@
         "eea": "欧洲经济区账户（{{site}}）",
         "us": "美国或澳大利亚账户（{{site}}）"
       }
+    },
+    "coinbase": {
+      "apiKeyId": "API key ID",
+      "apiKeySecret": "Secret"
     },
     "description": "将字段留空以保留已保存的值。",
     "unknownProviderCredentials": "此面板无法识别此提供方的凭据字段。",

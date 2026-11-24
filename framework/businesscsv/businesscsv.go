@@ -92,6 +92,7 @@ var (
 		"id", "order_id", "at", "account_code", "source",
 		"principal", "base_asset", "quote_asset", "side", "quantity", "price",
 		"lock_price", "commission_amount", "commission_currency",
+		"venue_trade_id",
 	}
 )
 
@@ -210,6 +211,7 @@ func EncodeTrades(rows []domain.Trade, delimiter Delimiter) ([]byte, error) {
 			string(row.Source), row.Principal, row.BaseAsset, row.QuoteAsset,
 			string(row.Side), row.Quantity, row.Price, row.LockPrice,
 			commissionAmount(row.Commission), commissionCurrency(row.Commission),
+			row.VenueTradeID,
 		})
 	}
 	return writeCSV(out, delimiter)

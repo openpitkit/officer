@@ -507,6 +507,7 @@ describe("trading client", () => {
         verifiesSymbols: true,
         searchesSymbols: true,
         unlinkedFees: true,
+        liveOnly: false,
       },
     ],
     connections: [connection],
@@ -599,14 +600,14 @@ describe("trading client", () => {
   };
 
   it.each([
-    [true, "desk/1 #paper"],
-    [false, ""],
+    [true, "desk/1 #paper", true],
+    [false, "", false],
   ] as const)(
-    "normalizes the trading snapshot with unlinkedFees %s and feeAccount %s",
-    async (unlinkedFees, feeAccount) => {
+    "normalizes the trading snapshot with unlinkedFees %s, feeAccount %s and liveOnly %s",
+    async (unlinkedFees, feeAccount, liveOnly) => {
       const snapshot = {
         ...trading,
-        providers: [{ ...trading.providers[0], unlinkedFees }],
+        providers: [{ ...trading.providers[0], unlinkedFees, liveOnly }],
         connections: [{ ...connection, feeAccount }],
       };
       const signal = new AbortController().signal;
@@ -754,6 +755,29 @@ describe("trading client", () => {
         code: "internal",
         message:
           "Invalid or missing trading provider unlinkedFees in the API response",
+      });
+    },
+  );
+
+  it.each([undefined, null, "true"])(
+    "rejects missing or invalid provider liveOnly %s",
+    async (liveOnly) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          trading: {
+            ...trading,
+            providers: [{ ...trading.providers[0], liveOnly }],
+          },
+        }),
+      );
+
+      const result = api().fetchTrading();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message:
+          "Invalid or missing trading provider liveOnly in the API response",
       });
     },
   );

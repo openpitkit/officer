@@ -761,6 +761,7 @@ type TradingProviderDTO struct {
 	VerifiesSymbols bool   `json:"verifiesSymbols"`
 	SearchesSymbols bool   `json:"searchesSymbols"`
 	UnlinkedFees    bool   `json:"unlinkedFees"`
+	LiveOnly        bool   `json:"liveOnly"`
 }
 
 // TradingConnectionDTO is one trading connection with its runtime state, the
@@ -813,7 +814,7 @@ func ToTradingDTO(status backend.TradingStatus) TradingDTO {
 			ExecutionPolicy: p.ExecutionPolicy,
 			Type:            p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
 			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
-			UnlinkedFees: p.UnlinkedFees,
+			UnlinkedFees: p.UnlinkedFees, LiveOnly: p.LiveOnly,
 		})
 	}
 	for _, c := range status.Connections {

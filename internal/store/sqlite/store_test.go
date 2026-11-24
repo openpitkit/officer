@@ -454,6 +454,37 @@ func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
 	}
 }
 
+func TestMigrateTradeVenueTradeID(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newRealmStore(t, domain.DefaultRealm)
+	db := rs.(*realmStore).rawDB()
+	var columnType string
+	var notNull int
+	if err := db.QueryRowContext(ctx,
+		`SELECT type, "notnull" FROM pragma_table_info('trade') WHERE name = 'venue_trade_id'`,
+	).Scan(&columnType, &notNull); err != nil {
+		t.Fatal(err)
+	}
+	if columnType != "TEXT" || notNull != 0 {
+		t.Fatalf("venue_trade_id = %s, notnull=%d; want TEXT NULL", columnType, notNull)
+	}
+	var unique, partial int
+	if err := db.QueryRowContext(ctx,
+		`SELECT "unique", partial FROM pragma_index_list('trade') WHERE name = 'idx_trades_venue_trade_id'`,
+	).Scan(&unique, &partial); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := db.QueryRowContext(ctx,
+		`SELECT name FROM pragma_index_info('idx_trades_venue_trade_id')`,
+	).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if unique != 0 || partial != 0 || name != "venue_trade_id" {
+		t.Fatalf("venue index: unique=%d partial=%d column=%s", unique, partial, name)
+	}
+}
+
 func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -105,12 +105,8 @@ func (m *memoryRealm) DeleteTradingInstrument(_ context.Context, connection doma
 func (m *memoryRealm) DeleteTradingConnection(_ context.Context, id domain.ExternalID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	connection, found := m.tradingConnections[id]
-	if !found {
+	if _, found := m.tradingConnections[id]; !found {
 		return domain.ErrNotFound
-	}
-	if connection.Enabled {
-		return domain.ErrConflict
 	}
 	delete(m.tradingConnections, id)
 	for key, instrument := range m.tradingInstruments {

@@ -103,8 +103,8 @@ func TestDeleteTradingConnection(t *testing.T) {
 	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	id := connection.ExternalID
-	if err := rs.DeleteTradingConnection(ctx, id); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("enabled connection: %v", err)
+	if !connection.Enabled {
+		t.Fatal("fixture connection must be enabled: an enabled connection deletes like a disabled one")
 	}
 	if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
 		Connection: id, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
@@ -112,9 +112,6 @@ func TestDeleteTradingConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := rs.PutTradingAccess(ctx, domain.TradingAccess{Connection: id, Account: "acc-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := rs.SetTradingConnectionEnabled(ctx, id, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := rs.DeleteTradingConnection(ctx, id); err != nil {
@@ -146,9 +143,6 @@ func TestDeleteTradingConnectionPreservesOrderHistory(t *testing.T) {
 	order := createTradingOrder(t, ctx, rs)
 	link := domain.VenueOrder{Order: order.ExternalID, Connection: connection.ExternalID, Route: "{}", ClientOrderID: "delete-guard"}
 	if _, err := rs.CreateVenueOrder(ctx, link); err != nil {
-		t.Fatal(err)
-	}
-	if err := rs.SetTradingConnectionEnabled(ctx, connection.ExternalID, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := rs.DeleteTradingConnection(ctx, connection.ExternalID); !errors.Is(err, domain.ErrConflict) {

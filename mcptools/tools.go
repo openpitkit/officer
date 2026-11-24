@@ -898,13 +898,14 @@ type orderApprovalDTO struct {
 }
 
 type tradeDTO struct {
-	At         time.Time      `json:"at"`
-	ExternalID string         `json:"id"`
-	Side       string         `json:"side"`
-	Quantity   string         `json:"quantity"`
-	Price      string         `json:"price"`
-	LockPrice  string         `json:"lockPrice"`
-	Commission *commissionDTO `json:"commission,omitempty"`
+	VenueTradeID string         `json:"venueTradeId,omitempty" jsonschema:"The venue's identifier of the fill, set when the connection's connector records it; absent otherwise."`
+	At           time.Time      `json:"at"`
+	ExternalID   string         `json:"id"`
+	Side         string         `json:"side"`
+	Quantity     string         `json:"quantity"`
+	Price        string         `json:"price"`
+	LockPrice    string         `json:"lockPrice"`
+	Commission   *commissionDTO `json:"commission,omitempty"`
 }
 
 type checkOrderBlockDTO struct {
@@ -1066,13 +1067,14 @@ func toTradeDTOs(trades []domain.Trade) []tradeDTO {
 	out := make([]tradeDTO, 0, len(trades))
 	for _, t := range trades {
 		out = append(out, tradeDTO{
-			At:         t.At,
-			ExternalID: t.ExternalID.String(),
-			Side:       string(t.Side),
-			Quantity:   t.Quantity,
-			Price:      t.Price,
-			LockPrice:  t.LockPrice,
-			Commission: toCommissionDTO(t.Commission),
+			VenueTradeID: t.VenueTradeID,
+			At:           t.At,
+			ExternalID:   t.ExternalID.String(),
+			Side:         string(t.Side),
+			Quantity:     t.Quantity,
+			Price:        t.Price,
+			LockPrice:    t.LockPrice,
+			Commission:   toCommissionDTO(t.Commission),
 		})
 	}
 	return out
@@ -1602,16 +1604,16 @@ type tradingConnectionInput struct {
 }
 type createTradingConnectionInput struct {
 	ID          string             `json:"id,omitempty" jsonschema:"Optional connection id; omitted lets the store assign one"`
-	Provider    string             `json:"provider" jsonschema:"Trading provider type; e.g. alpaca, binance, ib, etoro or okx"`
+	Provider    string             `json:"provider" jsonschema:"Trading provider type; e.g. alpaca, binance, coinbase, ib, etoro or okx"`
 	Label       string             `json:"label" jsonschema:"Display label for the trading connection"`
 	Mode        domain.TradingMode `json:"mode" jsonschema:"paper or live"`
-	Credentials map[string]any     `json:"credentials" jsonschema:"Write-only provider credential object; Alpaca and Binance both use {apiKey, apiSecret} (Binance: an HMAC key pair); IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}; OKX uses {apiKey, apiSecret, passphrase, site} (all required); site is the OKX site the account is registered on: www.okx.com (global accounts), my.okx.com (EEA accounts) or app.okx.com (US and Australian accounts); OKX paper mode uses demo trading with demo API keys and live mode uses live trading; OKX supports spot cash trading only, with no venue account binding"`
+	Credentials map[string]any     `json:"credentials" jsonschema:"Write-only provider credential object; Alpaca and Binance both use {apiKey, apiSecret} (Binance: an HMAC key pair); Coinbase uses {apiKeyId, apiKeySecret} (apiKeyId: the CDP API key ID organizations/{org}/apiKeys/{id}; apiKeySecret: the Secret, an EC P-256 private key as an unencrypted SEC1 PEM ('-----BEGIN EC PRIVATE KEY-----'), with line breaks or with the escaped newline sequences the Coinbase key dialog shows; Ed25519 keys are refused); IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}; OKX uses {apiKey, apiSecret, passphrase, site} (all required); site is the OKX site the account is registered on: www.okx.com (global accounts), my.okx.com (EEA accounts) or app.okx.com (US and Australian accounts); OKX paper mode uses demo trading with demo API keys and live mode uses live trading; OKX supports spot cash trading only, with no venue account binding"`
 	Enabled     *bool              `json:"enabled" jsonschema:"Required: whether the trading connection is enabled"`
 }
 type updateTradingConnectionInput struct {
 	Connection  string         `json:"connection" jsonschema:"Trading connection id"`
 	Label       *string        `json:"label,omitempty" jsonschema:"Optional display label; omitted keeps the stored value"`
-	Credentials map[string]any `json:"credentials,omitempty" jsonschema:"Optional write-only provider credential object; Alpaca and Binance both use {apiKey, apiSecret} (Binance: an HMAC key pair); IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}; OKX uses {apiKey, apiSecret, passphrase, site} (all required); site is the OKX site the account is registered on: www.okx.com (global accounts), my.okx.com (EEA accounts) or app.okx.com (US and Australian accounts); OKX paper mode uses demo trading with demo API keys and live mode uses live trading; OKX supports spot cash trading only, with no venue account binding; omitted keeps the stored value"`
+	Credentials map[string]any `json:"credentials,omitempty" jsonschema:"Optional write-only provider credential object; Alpaca and Binance both use {apiKey, apiSecret} (Binance: an HMAC key pair); Coinbase uses {apiKeyId, apiKeySecret} (apiKeyId: the CDP API key ID organizations/{org}/apiKeys/{id}; apiKeySecret: the Secret, an EC P-256 private key as an unencrypted SEC1 PEM ('-----BEGIN EC PRIVATE KEY-----'), with line breaks or with the escaped newline sequences the Coinbase key dialog shows; Ed25519 keys are refused); IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}; OKX uses {apiKey, apiSecret, passphrase, site} (all required); site is the OKX site the account is registered on: www.okx.com (global accounts), my.okx.com (EEA accounts) or app.okx.com (US and Australian accounts); OKX paper mode uses demo trading with demo API keys and live mode uses live trading; OKX supports spot cash trading only, with no venue account binding; omitted keeps the stored value"`
 }
 
 func (in *updateTradingConnectionInput) UnmarshalJSON(data []byte) error {
@@ -2025,7 +2027,7 @@ type sendVenueOrderInput struct {
 	BaseAsset   string               `json:"baseAsset" jsonschema:"Asset being bought or sold"`
 	QuoteAsset  string               `json:"quoteAsset" jsonschema:"Asset used for pricing"`
 	Side        string               `json:"side" jsonschema:"buy or sell"`
-	AmountKind  string               `json:"amountKind" jsonschema:"quantity or volume; built-in Alpaca, Binance, IB, eToro and OKX require quantity"`
+	AmountKind  string               `json:"amountKind" jsonschema:"quantity or volume; built-in Alpaca, Binance, Coinbase, IB, eToro and OKX require quantity"`
 	AmountValue string               `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
 	Price       string               `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market; IB crypto buys require a limit price"`
 	Destination sendDestinationInput `json:"destination" jsonschema:"Venue destination of the tool's mode (paper or live) with an explicit route"`
@@ -2034,7 +2036,7 @@ type sendVenueOrderInput struct {
 type sendDestinationInput struct {
 	Connection   string         `json:"connection,omitempty" jsonschema:"Connection id; omit only when one enabled destination of the tool's mode exists"`
 	VenueAccount string         `json:"venueAccount,omitempty" jsonschema:"Venue account; omitted uses the binding, supplied must match it"`
-	Route        map[string]any `json:"route" jsonschema:"Required venue route JSON object; timeInForce is case-sensitive and is the only supported field for built-in Alpaca, Binance, IB, eToro and OKX; Alpaca requires day, gtc, opg, cls, ioc or fok (good till cancelled is gtc); Alpaca crypto allows only gtc or ioc and fractional equity requires day; IB requires day, gtc or ioc; Binance requires GTC, IOC or FOK for a limit order and {} for a market order; eToro uses {} for market or {\"timeInForce\":\"ioc\"} for an IOC limit buy; OKX requires GTC, IOC or FOK for a limit order and {} for a market order"`
+	Route        map[string]any `json:"route" jsonschema:"Required venue route JSON object; timeInForce is case-sensitive and is the only supported field for built-in Alpaca, Binance, Coinbase, IB, eToro and OKX; Alpaca requires day, gtc, opg, cls, ioc or fok (good till cancelled is gtc); Alpaca crypto allows only gtc or ioc and fractional equity requires day; IB requires day, gtc or ioc; Binance requires GTC, IOC or FOK for a limit order and {} for a market order; Coinbase requires GTC, IOC or FOK for a limit order and {} for a market order; eToro uses {} for market or {\"timeInForce\":\"ioc\"} for an IOC limit buy; OKX requires GTC, IOC or FOK for a limit order and {} for a market order"`
 }
 
 type sendVenueOrderOutput struct {

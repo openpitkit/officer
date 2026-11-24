@@ -815,7 +815,8 @@ type Node interface {
 		ctx context.Context, instrument domain.TradingInstrument, caller domain.Caller,
 	) error
 
-	// DeleteTradingConnection removes a disabled connection with no venue orders.
+	// DeleteTradingConnection removes a connection, enabled or not, with no venue
+	// orders and no order reviews.
 	DeleteTradingConnection(ctx context.Context, id domain.ExternalID, caller domain.Caller) error
 
 	// DeleteTradingInstrument removes one instrument mapping.

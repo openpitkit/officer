@@ -60,6 +60,10 @@ const pair = <PasswordPairFields password={passwordProps} repeat={repeatProps} d
 const current = <SecretInput autoComplete="current-password" />;
 // ok: shared-panel-password-pair
 const recovery = <TextField autoComplete="one-time-code" />;
+function CredentialField() {
+  // ok: shared-panel-password-pair
+  return <SecretInput autoComplete="new-password" />;
+}
 // ok: shared-panel-reveal-button
 const reveal = <RevealButton shown={shown} onToggle={toggle} />;
 // ok: shared-panel-reveal-button

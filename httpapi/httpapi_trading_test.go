@@ -407,8 +407,13 @@ func TestTradingOptionalFieldsAndEmptyCollections(t *testing.T) {
 		`{"account":"","accountGroup":"desk","venueAccount":"sub-g","group":""},`+
 		`{"account":"acc-1","accountGroup":"","venueAccount":"sub-1","group":"desk"},`+
 		`{"account":"acc-2","accountGroup":"","venueAccount":"","group":""}]`, 1)
-	providers := `{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}`
+	providers := `{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true,"liveOnly":false}`
 	assertTradingJSON(t, rec, 200, `{"trading":{"providers":[`+providers+`],"connections":[`+expected+`]}}`)
+	svc.tradingStatus.Providers[0].LiveOnly = true
+	liveOnlyProviders := strings.Replace(providers, `"liveOnly":false`, `"liveOnly":true`, 1)
+	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/trading", ""), 200,
+		`{"trading":{"providers":[`+liveOnlyProviders+`],"connections":[`+expected+`]}}`)
+	svc.tradingStatus.Providers[0].LiveOnly = false
 	svc.tradingDestinations[0].State = "unavailable"
 	svc.tradingDestinations[0].Error = "keys unavailable"
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/accounts/acc-1/trading-destinations?mode=live", ""), 200, `{"destinations":[{"connection":"connection-1","label":"Paper","provider":"alpaca","mode":"paper","enabled":false,"venueAccount":"","state":"unavailable","error":"keys unavailable"}]}`)

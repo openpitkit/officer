@@ -1341,6 +1341,9 @@ type OrderEvent struct {
 // originating order by the order's opaque handle. All monetary values are exact
 // decimal strings, never float.
 type Trade struct {
+	// VenueTradeID is the venue's identifier of the fill, set by connectors that
+	// record it; empty otherwise.
+	VenueTradeID string
 	// At is the wall-clock time the fill was recorded.
 	At time.Time
 	// ExternalID is the opaque public handle of this trade.
@@ -1479,6 +1482,9 @@ func ReviewMarksHeld(marks []ReviewMark) (bool, error) {
 // (BaseAsset, QuoteAsset), and LockPrice is the single reference price captured
 // at pre-trade time. All values are exact decimal strings; never float.
 type ExecutionReportInput struct {
+	// VenueTradeID is the venue's identifier of the fill, supplied only by the
+	// trading runtime for connectors that record it; empty otherwise.
+	VenueTradeID string
 	// ExternalID is the optional caller-controlled public handle of this report.
 	// The store generates one when it is absent.
 	ExternalID ExternalID

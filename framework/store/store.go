@@ -1879,8 +1879,9 @@ type RealmStore interface {
 	// ListTradingConnections returns every connection, ordered by external id.
 	ListTradingConnections(ctx context.Context) ([]domain.TradingConnection, error)
 
-	// DeleteTradingConnection removes a disabled connection and its configuration.
-	// Any venue-order history prevents deletion with domain.ErrConflict.
+	// DeleteTradingConnection removes a connection, enabled or not, and its
+	// configuration. Any venue-order or order-review history prevents deletion
+	// with domain.ErrConflict.
 	DeleteTradingConnection(ctx context.Context, id domain.ExternalID) error
 
 	// UpdateTradingConnectionSettings replaces label and credentials, sealing

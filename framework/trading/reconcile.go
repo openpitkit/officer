@@ -138,8 +138,9 @@ func (w *worker) applyFill(link domain.VenueOrder, order domain.Order, fill Fill
 		status = domain.OrderStatusFilled
 	}
 	err = w.r.sink(context.WithoutCancel(w.r.ctx), domain.ExecutionReportInput{
-		ExternalID: reportID(link.ClientOrderID, "fill:"+cum.String()),
-		Order:      link.Order, OrderStatus: status,
+		VenueTradeID: fill.VenueTradeID,
+		ExternalID:   reportID(link.ClientOrderID, "fill:"+cum.String()),
+		Order:        link.Order, OrderStatus: status,
 		FillQuantity: fill.Quantity, FillPrice: fill.Price,
 		LeavesQuantity: fill.LeavesQuantity, Commission: commission,
 	})

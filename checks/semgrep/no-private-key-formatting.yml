@@ -1,0 +1,85 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# Whole credentials and private keys are secret; venue protocols send identifiers.
+# Field selections other than PrivateKey and D are safe unless the field itself
+# is typed as a private key or credentials.
+# Other venues' HMAC secret fields are outside this rule; safe calls stop signature/JWT taint.
+rules:
+  - id: no-private-key-formatting
+    message: Never format, log or JSON-encode private keys or whole credentials values.
+    severity: ERROR
+    languages: [go]
+    mode: taint
+    options:
+      taint_assume_safe_functions: true
+    pattern-sources:
+      - pattern: '($KEY : *ecdsa.PrivateKey)'
+        exact: true
+      - pattern: $X.PrivateKey
+        exact: true
+      - pattern: x509.ParseECPrivateKey(...)
+        exact: true
+      - pattern: '($CREDENTIALS : apikey.CDPCredentials)'
+        exact: true
+      - pattern: '($CREDENTIALS : CDPCredentials)'
+        exact: true
+      - pattern: '($CREDENTIALS : Credentials)'
+        exact: true
+    pattern-sanitizers:
+      - patterns:
+          - pattern: $X.$FIELD
+          # Method selectors must not sanitize the D.String/D.Text sink receiver.
+          - pattern-not-inside: $X.$FIELD(...)
+          - pattern-not: '($S : *ecdsa.PrivateKey)'
+          - pattern-not: '($S : apikey.CDPCredentials)'
+          - pattern-not: '($S : CDPCredentials)'
+          - pattern-not: '($S : Credentials)'
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: '^(?!(PrivateKey|D)$).+$'
+        exact: true
+    pattern-sinks:
+      - patterns:
+          - pattern: $SINK(..., $ARG, ...)
+          - focus-metavariable: $ARG
+          - metavariable-pattern:
+              metavariable: $SINK
+              pattern-either:
+                - pattern: fmt.$F
+                - pattern: log.$F
+                - pattern: slog.$F
+                - pattern: '($LOGGER : *slog.Logger).$F'
+                - pattern: slog.Default().$F
+                - pattern: errors.New
+                - pattern: json.Marshal
+                - pattern: json.MarshalIndent
+                - pattern: $ENCODER.Encode
+      - patterns:
+          - pattern-either:
+              - pattern: $SCALAR.String()
+              - pattern: $SCALAR.Text(...)
+          - metavariable-pattern:
+              metavariable: $SCALAR
+              pattern: $KEY.D
+          - focus-metavariable: $SCALAR
+    paths:
+      include:
+        - "/internal/**"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

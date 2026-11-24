@@ -5307,6 +5307,8 @@ paths:
         validation error: a key blank after trimming is pointed at by name,
         such as `/credentials/apiKey`; an unknown member or a malformed object
         is pointed at as `/credentials`, since member names are never echoed.
+        A provider whose catalogue entry has `liveOnly` refuses `mode: paper`
+        with a 422 validation error pointed at `/mode` (constraint `unsupported_value`).
       requestBody:
         required: true
         content:
@@ -5351,9 +5353,10 @@ paths:
       summary: Delete an unused trading connection
       tags: [trading]
       description: >
-        Removes a disabled connection and its settings, instrument mappings,
-        execution policy and access grants. Refused while enabled or referenced
-        by any venue-order history. Refused for a tighten-only caller.
+        Removes a connection, enabled or not, and its settings, instrument
+        mappings, execution policy and access grants. Refused while referenced
+        by any venue-order or order-review history. Refused for a tighten-only
+        caller.
       responses:
         "204":
           description: Connection deleted.
@@ -9167,6 +9170,11 @@ components:
         account:
           type: string
           description: Account code that owns the trade.
+        venueTradeId:
+          type: string
+          description: >
+            The venue's identifier of the fill, set when the connection's connector
+            records it; absent otherwise.
         principal:
           type: string
           description: Principal that caused the trade; omitted when absent.
@@ -10166,8 +10174,12 @@ components:
       additionalProperties: true
       description: >
         Provider credentials, accepted only on input. Never returned.
-        Alpaca uses {apiKey, apiSecret}; IB uses {host, port, clientId?};
-        eToro uses {apiKey, userKey}.
+        Alpaca uses {apiKey, apiSecret}; Coinbase uses {apiKeyId, apiKeySecret}
+        (apiKeyId: the CDP API key ID organizations/{org}/apiKeys/{id};
+        apiKeySecret: the Secret, an EC P-256 private key as an unencrypted
+        SEC1 PEM ('-----BEGIN EC PRIVATE KEY-----'), with line breaks or with
+        the \n escapes the Coinbase key dialog shows; Ed25519 keys are refused);
+        IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}.
         OKX uses {apiKey, apiSecret, passphrase, site}, all required.
         site is the OKX site the account is registered on: www.okx.com for
         global accounts, my.okx.com for EEA accounts or app.okx.com for US and
@@ -10178,7 +10190,7 @@ components:
     TradingProvider:
       type: object
       additionalProperties: false
-      required: [type, title, executionPolicy, venueAccounts, verifiesSymbols, searchesSymbols, unlinkedFees]
+      required: [type, title, executionPolicy, venueAccounts, verifiesSymbols, searchesSymbols, unlinkedFees, liveOnly]
       properties:
         executionPolicy:
           type: boolean
@@ -10195,6 +10207,9 @@ components:
           type: boolean
         unlinkedFees:
           type: boolean
+        liveOnly:
+          type: boolean
+          description: The provider supports live mode only.
 
     TradingInstrument:
       type: object
@@ -11399,7 +11414,9 @@ components:
                     Explicit venue route; Alpaca and IB require timeInForce
                     (IB accepts day, gtc or ioc); Binance requires timeInForce
                     GTC, IOC or FOK for a limit order and an empty object for a
-                    market order; eToro uses {} for market or {"timeInForce":"ioc"}
+                    market order; Coinbase requires timeInForce GTC, IOC or FOK
+                    for a limit order and an empty object for a market order;
+                    eToro uses {} for market or {"timeInForce":"ioc"}
                     for an IOC limit buy.
                     OKX requires timeInForce GTC, IOC or FOK for a limit order
                     and an empty object for a market order.

@@ -791,6 +791,60 @@ func TestOrderEventsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTradeVenueTradeIDRoundTrip(t *testing.T) {
+	for _, venueTradeID := range []string{"", "venue-trade-42"} {
+		t.Run("venue_trade_id="+venueTradeID, func(t *testing.T) {
+			ctx, rs := seedOrderFixtures(t)
+			order, err := rs.CreateOrder(ctx, sampleOrder())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 { // Venue identifiers deliberately are not unique.
+				trade, err := rs.CreateTrade(ctx, domain.Trade{
+					Order: order.ExternalID, Account: order.Account,
+					BaseAsset: order.BaseAsset, QuoteAsset: order.QuoteAsset,
+					Side: order.Side, Source: order.Source,
+					Quantity: "1", Price: "150", VenueTradeID: venueTradeID,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var stored sql.NullString
+				if err := rs.(*realmStore).rawDB().QueryRowContext(ctx,
+					`SELECT venue_trade_id FROM trade WHERE external_id = ?`,
+					trade.ExternalID.Bytes(),
+				).Scan(&stored); err != nil {
+					t.Fatal(err)
+				}
+				if stored.Valid != (venueTradeID != "") || stored.String != venueTradeID {
+					t.Fatalf("stored venue_trade_id = %+v, want %q or NULL", stored, venueTradeID)
+				}
+			}
+			check := func(trades []domain.Trade, err error) {
+				t.Helper()
+				if err != nil || len(trades) != 2 {
+					t.Fatalf("trades = %+v, err = %v", trades, err)
+				}
+				for _, trade := range trades {
+					if trade.VenueTradeID != venueTradeID {
+						t.Fatalf("VenueTradeID = %q, want %q", trade.VenueTradeID, venueTradeID)
+					}
+				}
+			}
+			check(rs.ListTrades(ctx, order.Account, "", 10))
+			check(rs.ListAllTrades(ctx, order.Account, ""))
+			detail, err := rs.GetOrder(ctx, order.ExternalID)
+			check(detail.Trades, err)
+			page, err := rs.ListTradeRows(ctx, fwstore.TradeListFilter{})
+			var trades []domain.Trade
+			for _, row := range page.Rows {
+				trades = append(trades, row.Trade)
+			}
+			check(trades, err)
+		})
+	}
+}
+
 func TestTradesRoundTrip(t *testing.T) {
 	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)

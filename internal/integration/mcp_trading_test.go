@@ -165,7 +165,7 @@ func TestTradingToolsSuccess(t *testing.T) {
 	runToolSuccess(t, tradingRecorded, []toolSuccessCase{
 		{"get_trading", map[string]any{},
 			[]string{"get"}, nil,
-			"trading connections", `{"providers":[{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[` + connection + `]}`},
+			"trading connections", `{"providers":[{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true,"liveOnly":false}],"connections":[` + connection + `]}`},
 		{"create_trading_connection", map[string]any{"provider": "alpaca", "label": "Paper", "mode": "paper", "credentials": map[string]any{"z": "secret-value", "a": "first-value"}, "enabled": true},
 			[]string{"create", "get"}, []any{domain.TradingConnection{Provider: "alpaca", Label: "Paper", Mode: domain.TradingModePaper, Credentials: `{"a":"first-value","z":"secret-value"}`, Enabled: true}},
 			"trading connection created", `{"connection":` + connection + `}`},
@@ -234,7 +234,7 @@ func TestTradingOptionalAndEmptyShapes(t *testing.T) {
 		}
 		res := callTool[map[string]any](t, src, "get_trading", map[string]any{})
 		requireNotToolError(t, res.IsError)
-		assertTradingWire(t, res.Wire, `{"providers":[{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}],"connections":[{"executionPolicy":false,"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"fees","state":"unavailable","error":"offline","diagnostics":[],"secrets":{"key":true},"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[`+
+		assertTradingWire(t, res.Wire, `{"providers":[{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":false,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true,"liveOnly":false}],"connections":[{"executionPolicy":false,"id":"conn","provider":"alpaca","label":"Paper","mode":"paper","enabled":true,"venueIdentity":"venue","feeAccount":"fees","state":"unavailable","error":"offline","diagnostics":[],"secrets":{"key":true},"instruments":[{"externalSymbol":"AAPL","baseAsset":"AAPL","quoteAsset":"USD","enabled":true}],"access":[`+
 			`{"account":"","accountGroup":"desks","venueAccount":"","group":""},`+
 			`{"account":"acc","accountGroup":"","venueAccount":"remote","group":"desks"},`+
 			`{"account":"solo","accountGroup":"","venueAccount":"","group":""}]}]}`)

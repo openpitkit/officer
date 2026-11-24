@@ -2223,11 +2223,11 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 		`INSERT OR REPLACE INTO trade
 		 (external_id, order_id, account_id, base_asset_id, quote_asset_id,
 		  principal_id, at, source_id, side_id, quantity, price, lock_price,
-		  commission_amount, commission_currency)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  commission_amount, commission_currency, venue_trade_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ExternalID.Bytes(), orderID, accountID, baseID, quoteID, principalID,
 		timeStr(t.At), sourceID, sideID, t.Quantity, t.Price, t.LockPrice,
-		commissionAmount(t.Commission), commissionCurrency(t.Commission),
+		commissionAmount(t.Commission), commissionCurrency(t.Commission), nullableString(t.VenueTradeID),
 	); err != nil {
 		return fmt.Errorf("store: restore trade %q: %w", t.ExternalID, err)
 	}

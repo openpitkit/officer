@@ -232,6 +232,14 @@ const VENUE_ORDER_OPTIONS: Record<
     },
     docsUrl: "https://developers.binance.com/docs/binance-spot-api-docs/enums",
   },
+  coinbase: {
+    timeInForce: {
+      limit: ["GTC", "IOC", "FOK"],
+      market: [],
+    },
+    docsUrl:
+      "https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/guides/orders",
+  },
   etoro: {
     timeInForce: {
       limit: ["ioc"],

@@ -225,6 +225,7 @@ func ToOrderRowDTO(row backend.OrderListRow) OrderDTO {
 // TradeDTO is the wire shape of one per-fill trade record. All monetary values
 // are exact decimal strings passed through verbatim.
 type TradeDTO struct {
+	VenueTradeID    string         `json:"venueTradeId,omitempty" jsonschema:"The venue's identifier of the fill, set when the connection's connector records it; absent otherwise."`
 	At              time.Time      `json:"at"`
 	ExternalID      string         `json:"id"`
 	Order           string         `json:"order"`
@@ -245,19 +246,20 @@ type TradeDTO struct {
 // originating order are addressed by opaque external ids; no surrogate id appears.
 func ToTradeDTO(t domain.Trade) TradeDTO {
 	return TradeDTO{
-		At:         t.At,
-		ExternalID: t.ExternalID.String(),
-		Order:      t.Order.String(),
-		Account:    string(t.Account),
-		Principal:  t.Principal,
-		BaseAsset:  t.BaseAsset,
-		QuoteAsset: t.QuoteAsset,
-		Side:       string(t.Side),
-		Quantity:   t.Quantity,
-		Price:      t.Price,
-		LockPrice:  t.LockPrice,
-		Commission: ToCommissionDTO(t.Commission),
-		Source:     string(t.Source),
+		VenueTradeID: t.VenueTradeID,
+		At:           t.At,
+		ExternalID:   t.ExternalID.String(),
+		Order:        t.Order.String(),
+		Account:      string(t.Account),
+		Principal:    t.Principal,
+		BaseAsset:    t.BaseAsset,
+		QuoteAsset:   t.QuoteAsset,
+		Side:         string(t.Side),
+		Quantity:     t.Quantity,
+		Price:        t.Price,
+		LockPrice:    t.LockPrice,
+		Commission:   ToCommissionDTO(t.Commission),
+		Source:       string(t.Source),
 	}
 }
 

@@ -461,9 +461,25 @@ prepared message and cause to `vendorhttp.NewRequestError`. Redacting text alone
 and error types with other fields or behavior are allowed. The framework
 backend boundary is outside the rules' paths.
 
+`checks/semgrep/no-private-key-formatting.yml` forbids passing ECDSA private
+keys or whole credentials values to formatting, logging, error-text construction or JSON
+encoding in production Go under `internal/`. Taint sources are values typed as
+`*ecdsa.PrivateKey`, `apikey.CDPCredentials`, `CDPCredentials` or `Credentials`,
+`PrivateKey` fields and `x509.ParseECPrivateKey` results. Taint follows local
+assignments, scalar fields and composite literals. Sinks include `fmt`, `log`,
+`slog`, `*slog.Logger`, `errors.New`, JSON marshal calls and encoder `Encode`
+calls, plus `String` and `Text` on a private key's `D` scalar. Field selections
+other than `PrivateKey` and `D` are safe unless the field itself is typed as a
+private key or credentials, allowing the identifier fields sent by venue
+protocols, including CDP `APIKeyID` and Binance `APIKey`. Individual HMAC
+secret fields of other venues are outside this rule. Function results, including
+builtins such as `append` and conversions such as `any(...)`, do not inherit
+argument taint, so signatures and JWT subscribe frames remain allowed.
+Go tests and rule fixtures are excluded; its fixture runs through `check-semgrep`.
+
 The credential rule keeps vendor credential parsing in `internal/apikey`. It
 matches map reads, comparisons and switch arms on `"apiKey"`, `"apiSecret"`,
-`"passphrase"`, `"keyName"` and `"privateKey"` outside `internal/apikey/`, and JSON
+`"passphrase"`, `"apiKeyId"` and `"apiKeySecret"` outside `internal/apikey/`, and JSON
 decoding inside a function named `ParseCredentials` outside that package, in Go
 files under `internal/`, excluding Go tests.
 Deliberate limits: decoding credentials into a struct tagged with any of the

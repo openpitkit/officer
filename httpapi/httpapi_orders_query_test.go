@@ -32,6 +32,40 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
+func TestTradeVenueTradeIDJSON(t *testing.T) {
+	for _, venueTradeID := range []string{"", "venue-trade-42"} {
+		t.Run("venue_trade_id="+venueTradeID, func(t *testing.T) {
+			trade := domain.Trade{ExternalID: extID("trade-1"), Order: extID("order-1"), VenueTradeID: venueTradeID}
+			svc := &fakeService{
+				orderDetail: domain.OrderDetail{
+					Order: domain.Order{ExternalID: trade.Order}, Trades: []domain.Trade{trade},
+				},
+				tradePage: &store.TradeListPage{Rows: []store.TradeListRow{{Trade: trade}}, Total: 1},
+			}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"/api/v1/trades", "/api/v1/orders/" + trade.Order.String()} {
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("%s: status=%d body=%s", path, rec.Code, rec.Body)
+				}
+				rows := bodyMap(t, rec.Result())["trades"].([]any)
+				row := rows[0].(map[string]any)
+				value, present := row["venueTradeId"]
+				if present != (venueTradeID != "") || (present && value != venueTradeID) {
+					t.Fatalf("%s: venueTradeId=%v, present=%v, want %q", path, value, present, venueTradeID)
+				}
+				if row["id"] != trade.ExternalID.String() {
+					t.Fatalf("trade id changed: %v", row)
+				}
+			}
+		})
+	}
+}
+
 func TestListOrdersAndTrades_VenueFilter(t *testing.T) {
 	tests := []struct {
 		name  string

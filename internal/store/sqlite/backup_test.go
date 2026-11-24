@@ -1606,6 +1606,88 @@ func TestBackupRestoreEmptyDefaultGroupCurrencyDoesNotCreateDefaultRow(t *testin
 	}
 }
 
+// TestBackupTradeVenueTradeIDRoundTrip preserves venue trade identifiers and
+// restores a released archive without the field as SQL NULL.
+func TestBackupTradeVenueTradeIDRoundTrip(t *testing.T) {
+	for _, venueTradeID := range []string{"", "venue-trade-42"} {
+		t.Run("venue_trade_id="+venueTradeID, func(t *testing.T) {
+			ctx, src := seedOrderFixtures(t)
+			order, err := src.CreateOrder(ctx, sampleOrder())
+			if err != nil {
+				t.Fatal(err)
+			}
+			trade, err := src.CreateTrade(ctx, domain.Trade{
+				Order: order.ExternalID, Account: order.Account,
+				BaseAsset: order.BaseAsset, QuoteAsset: order.QuoteAsset,
+				Side: order.Side, Source: order.Source,
+				Quantity: "1", Price: "150", VenueTradeID: venueTradeID,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := json.Marshal(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if venueTradeID == "" {
+				// A released 0.3.x archive has no VenueTradeID field at all.
+				var document map[string]any
+				if err := json.Unmarshal(wire, &document); err != nil {
+					t.Fatal(err)
+				}
+				trades := document["data"].(map[string]any)["trades"].([]any)
+				if len(trades) != 1 {
+					t.Fatalf("archive trade count = %d, want 1", len(trades))
+				}
+				for _, value := range trades {
+					trade := value.(map[string]any)
+					if _, present := trade["VenueTradeID"]; !present {
+						t.Fatal("archive trade has no VenueTradeID before deletion")
+					}
+					delete(trade, "VenueTradeID")
+					if _, present := trade["VenueTradeID"]; present {
+						t.Fatal("archive trade still has VenueTradeID after deletion")
+					}
+				}
+				wire, err = json.Marshal(document)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			var decoded backup.Archive
+			if err := json.Unmarshal(wire, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if len(decoded.Data.Trades) != 1 || decoded.Data.Trades[0].VenueTradeID != venueTradeID {
+				t.Fatalf("archived trades = %+v", decoded.Data.Trades)
+			}
+			_, dst := newRealmStore(t, domain.DefaultRealm)
+			if _, err := dst.RestoreBackup(ctx, decoded, backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			detail, err := dst.GetOrder(ctx, order.ExternalID)
+			if err != nil || len(detail.Trades) != 1 || !reflect.DeepEqual(detail.Trades[0], trade) {
+				t.Fatalf("restored trades = %+v, want %+v; err=%v", detail.Trades, trade, err)
+			}
+			var isNull bool
+			if err := dst.(*realmStore).rawDB().QueryRowContext(ctx,
+				`SELECT venue_trade_id IS NULL FROM trade WHERE external_id = ?`, trade.ExternalID.Bytes(),
+			).Scan(&isNull); err != nil {
+				t.Fatal(err)
+			}
+			if isNull != (venueTradeID == "") {
+				t.Fatalf("restored venue_trade_id NULL = %v, want %v", isNull, venueTradeID == "")
+			}
+		})
+	}
+}
+
 // TestBackupRoundTripIntoIsolatedRealm exports a seeded realm and restores it
 // into a fresh isolated single-realm database, asserting public identity is
 // preserved across every section and engine ids are freshly, validly assigned.

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/backend"
@@ -475,6 +476,26 @@ func TestApplyAdjustment_NoChangeReturnsNoContent(t *testing.T) {
 	}
 	if rec.Body.Len() != 0 {
 		t.Fatalf("response body = %q, want empty", rec.Body.String())
+	}
+}
+
+// TestApplyExecutionReport_RejectsVenueTradeID refuses a caller-supplied venue
+// trade identifier before the execution report reaches the service.
+func TestApplyExecutionReport_RejectsVenueTradeID(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	body := bytes.NewBufferString(`{"id":"report-1","quantity":"1","price":"100","leavesQuantity":"0","status":"filled","venueTradeId":"forged-venue-trade-id"}`)
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/order-1/execution-reports", body))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "venueTradeId") {
+		t.Fatalf("venueTradeId must be refused as unknown: status=%d body=%s", rec.Code, rec.Body)
+	}
+	if !svc.execReportIn.Order.IsZero() || svc.execReportIn.VenueTradeID != "" {
+		t.Fatalf("execution report reached service: %+v", svc.execReportIn)
 	}
 }
 

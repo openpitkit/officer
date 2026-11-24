@@ -3958,10 +3958,22 @@ describe("Orders venue sending", () => {
     },
   );
 
+  const coinbaseDestination: TradingDestination = {
+    ...binanceDestination,
+    connection: "coinbase-live",
+    label: "Coinbase live",
+    provider: "coinbase",
+    mode: "live",
+  };
+
   describe.each([
     {
       venue: "Binance",
       destination: binanceDestination,
+      modeButton: "Paper",
+      submitLabel: "Submit PAPER order",
+      sendMock: sendPaperOrderMock,
+      otherSendMock: sendLiveOrderMock,
       docsUrl:
         "https://developers.binance.com/docs/binance-spot-api-docs/enums",
     },
@@ -3973,65 +3985,141 @@ describe("Orders venue sending", () => {
         label: "OKX demo",
         provider: "okx",
       },
+      modeButton: "Paper",
+      submitLabel: "Submit PAPER order",
+      sendMock: sendPaperOrderMock,
+      otherSendMock: sendLiveOrderMock,
       docsUrl:
         "https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order",
     },
-  ])("$venue order options", ({ destination, docsUrl }) => {
-    it.each([
-      ["GTC", "GTC - Good till cancelled"],
-      ["IOC", "IOC - Immediate or cancel"],
-      ["FOK", "FOK - Fill or kill"],
-    ])(
-      "limit offers exactly its three TIFs and sends %s",
-      async (value, label) => {
+    {
+      venue: "Coinbase",
+      destination: coinbaseDestination,
+      modeButton: "Live",
+      submitLabel: "Submit LIVE order",
+      sendMock: sendLiveOrderMock,
+      otherSendMock: sendPaperOrderMock,
+      docsUrl:
+        "https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/guides/orders",
+    },
+  ])(
+    "$venue",
+    ({
+      destination,
+      modeButton,
+      submitLabel,
+      sendMock,
+      otherSendMock,
+      docsUrl,
+    }) => {
+      it.each([
+        ["GTC", "GTC - Good till cancelled"],
+        ["IOC", "IOC - Immediate or cancel"],
+        ["FOK", "FOK - Fill or kill"],
+      ])(
+        "limit offers exactly its three TIFs and sends %s",
+        async (value, label) => {
+          const user = userEvent.setup();
+          fetchTradingDestinationsMock.mockResolvedValue([destination]);
+          sendMock.mockRejectedValue(
+            new ApiError("Request inspected", "upstream", 502),
+          );
+          renderOrders("/orders");
+          const dialog = await openDialog(user);
+          await fillOrderFields(user, dialog);
+          await user.click(
+            within(dialog).getByRole("tab", { name: "Send to venue" }),
+          );
+          await user.click(
+            within(dialog).getByRole("button", { name: modeButton }),
+          );
+          await user.type(
+            within(dialog).getByLabelText("Limit price (optional)"),
+            "42.5",
+          );
+
+          const select = await within(dialog).findByRole("combobox", {
+            name: "Time in force",
+          });
+          expect(select).toHaveTextContent("Choose time in force");
+          expect(select).toBeRequired();
+          const submit = within(dialog).getByRole("button", {
+            name: submitLabel,
+          });
+          expect(submit).toBeDisabled();
+          await user.click(submit);
+          expect(sendMock).not.toHaveBeenCalled();
+          expect(
+            within(dialog).getByRole("link", { name: "About time in force" }),
+          ).toHaveAttribute("href", docsUrl);
+
+          const focusSpy = vi
+            .spyOn(HTMLElement.prototype, "focus")
+            .mockImplementation(() => {});
+          try {
+            await user.click(select);
+            const options = await screen.findAllByRole("option");
+            expect(options.map((option) => option.textContent)).toEqual([
+              "GTC - Good till cancelled",
+              "IOC - Immediate or cancel",
+              "FOK - Fill or kill",
+            ]);
+            await user.click(screen.getByRole("option", { name: label }));
+          } finally {
+            focusSpy.mockRestore();
+          }
+          expect(submit).toBeEnabled();
+          await user.click(submit);
+          await waitFor(() =>
+            expect(sendMock).toHaveBeenCalledExactlyOnceWith(
+              {
+                account: "desk-alpha",
+                baseAsset: "AAPL",
+                quoteAsset: "USD",
+                side: "buy",
+                amountKind: "quantity",
+                amountValue: "10",
+                price: "42.5",
+                destination: {
+                  connection: destination.connection,
+                  venueAccount: "",
+                  route: { timeInForce: value },
+                },
+              },
+              expect.any(AbortSignal),
+            ),
+          );
+          expect(otherSendMock).not.toHaveBeenCalled();
+        },
+      );
+
+      it("market hides TIF and sends an empty route", async () => {
         const user = userEvent.setup();
         fetchTradingDestinationsMock.mockResolvedValue([destination]);
-        sendPaperOrderMock.mockRejectedValue(
+        sendMock.mockRejectedValue(
           new ApiError("Request inspected", "upstream", 502),
         );
         renderOrders("/orders");
         const dialog = await openDialog(user);
         await fillOrderFields(user, dialog);
-        await enablePaperSending(user, dialog);
-        await user.type(
-          within(dialog).getByLabelText("Limit price (optional)"),
-          "42.5",
+        await user.click(
+          within(dialog).getByRole("tab", { name: "Send to venue" }),
         );
+        await user.click(
+          within(dialog).getByRole("button", { name: modeButton }),
+        );
+        await within(dialog).findByRole("combobox", { name: "Target" });
 
-        const select = await within(dialog).findByRole("combobox", {
-          name: "Time in force",
-        });
-        expect(select).toHaveTextContent("Choose time in force");
-        expect(select).toBeRequired();
-        const submit = within(dialog).getByRole("button", {
-          name: "Submit PAPER order",
-        });
-        expect(submit).toBeDisabled();
-        await user.click(submit);
-        expect(sendPaperOrderMock).not.toHaveBeenCalled();
         expect(
-          within(dialog).getByRole("link", { name: "About time in force" }),
-        ).toHaveAttribute("href", docsUrl);
-
-        const focusSpy = vi
-          .spyOn(HTMLElement.prototype, "focus")
-          .mockImplementation(() => {});
-        try {
-          await user.click(select);
-          const options = await screen.findAllByRole("option");
-          expect(options.map((option) => option.textContent)).toEqual([
-            "GTC - Good till cancelled",
-            "IOC - Immediate or cancel",
-            "FOK - Fill or kill",
-          ]);
-          await user.click(screen.getByRole("option", { name: label }));
-        } finally {
-          focusSpy.mockRestore();
-        }
+          within(dialog).queryByRole("combobox", { name: "Time in force" }),
+        ).not.toBeInTheDocument();
+        const submit = within(dialog).getByRole("button", {
+          name: submitLabel,
+        });
         expect(submit).toBeEnabled();
         await user.click(submit);
         await waitFor(() =>
-          expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
+          expect(sendMock).toHaveBeenCalledExactlyOnceWith(
             {
               account: "desk-alpha",
               baseAsset: "AAPL",
@@ -4039,59 +4127,19 @@ describe("Orders venue sending", () => {
               side: "buy",
               amountKind: "quantity",
               amountValue: "10",
-              price: "42.5",
               destination: {
                 connection: destination.connection,
                 venueAccount: "",
-                route: { timeInForce: value },
+                route: {},
               },
             },
             expect.any(AbortSignal),
           ),
         );
-      },
-    );
-
-    it("market hides TIF and sends an empty route", async () => {
-      const user = userEvent.setup();
-      fetchTradingDestinationsMock.mockResolvedValue([destination]);
-      sendPaperOrderMock.mockRejectedValue(
-        new ApiError("Request inspected", "upstream", 502),
-      );
-      renderOrders("/orders");
-      const dialog = await openDialog(user);
-      await fillOrderFields(user, dialog);
-      await enablePaperSending(user, dialog);
-      await within(dialog).findByRole("combobox", { name: "Target" });
-
-      expect(
-        within(dialog).queryByRole("combobox", { name: "Time in force" }),
-      ).not.toBeInTheDocument();
-      const submit = within(dialog).getByRole("button", {
-        name: "Submit PAPER order",
+        expect(otherSendMock).not.toHaveBeenCalled();
       });
-      expect(submit).toBeEnabled();
-      await user.click(submit);
-      await waitFor(() =>
-        expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
-          {
-            account: "desk-alpha",
-            baseAsset: "AAPL",
-            quoteAsset: "USD",
-            side: "buy",
-            amountKind: "quantity",
-            amountValue: "10",
-            destination: {
-              connection: destination.connection,
-              venueAccount: "",
-              route: {},
-            },
-          },
-          expect.any(AbortSignal),
-        ),
-      );
-    });
-  });
+    },
+  );
 
   it("drops a chosen Binance limit TIF when the price is cleared", async () => {
     const user = userEvent.setup();

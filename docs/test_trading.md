@@ -149,8 +149,8 @@ the access change was saved. Review the current access and alerts before retryin
   execution reaches no venue and needs no keys." This checks the connection;
   it does not demonstrate that an order has a matching rule and a usable quote.
 
-Use **Delete trading connection** on the card to remove a disabled connection
-with no venue-order history. The confirmation removes its credentials,
+Use **Delete trading connection** on the card to remove a connection with no
+venue-order history, enabled or not. The confirmation removes its credentials,
 instruments, execution policy and access grants. A connection referenced by any
 venue order is retained so its order history remains readable. The equivalent
 API operation is `DELETE /trading/connections/CONNECTION_ID`.

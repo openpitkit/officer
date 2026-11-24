@@ -19,6 +19,7 @@ package mcptools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -550,6 +551,33 @@ func TestListOrdersAwaitingReview(t *testing.T) {
 	}
 	if text != "1 of 1 order(s)" || out.Total != 1 || len(out.Orders) != 1 || out.Orders[0].Status != "awaiting_review" {
 		t.Fatalf("waiting order = %q, %+v; want awaiting_review row", text, out)
+	}
+}
+
+func TestTradeVenueTradeIDJSON(t *testing.T) {
+	for _, venueTradeID := range []string{"", "venue-trade-42"} {
+		trade := domain.Trade{ExternalID: "trade-1", VenueTradeID: venueTradeID}
+		src := &listSource{trades: store.TradeListPage{
+			Rows: []store.TradeListRow{{Trade: trade}}, Total: 1,
+		}}
+		_, out, err := listTradesHandler(src)(t.Context(), nil, listTradesInput{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, dto := range []any{out.Trades[0], toTradeDTOs([]domain.Trade{trade})[0]} {
+			wire, err := json.Marshal(dto)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var row map[string]any
+			if err := json.Unmarshal(wire, &row); err != nil {
+				t.Fatal(err)
+			}
+			value, present := row["venueTradeId"]
+			if present != (venueTradeID != "") || (present && value != venueTradeID) || row["id"] != "trade-1" {
+				t.Fatalf("trade output = %s, want venue trade id %q", wire, venueTradeID)
+			}
+		}
 	}
 }
 

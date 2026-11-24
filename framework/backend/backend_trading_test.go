@@ -166,6 +166,18 @@ func (n *tradingTestNode) SetTradingConnectionEnabled(_ context.Context, id doma
 	}
 	return domain.ErrNotFound
 }
+func (n *tradingTestNode) DeleteTradingConnection(_ context.Context, id domain.ExternalID, caller domain.Caller) error {
+	if err := n.write("delete", caller); err != nil {
+		return err
+	}
+	for i := range n.connections {
+		if n.connections[i].ExternalID == id {
+			n.connections = append(n.connections[:i], n.connections[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
 func (n *tradingTestNode) ListTradingInstruments(_ context.Context, id domain.ExternalID) ([]domain.TradingInstrument, error) {
 	var result []domain.TradingInstrument
 	for _, inst := range n.instruments {
@@ -374,6 +386,7 @@ func TestTradingCreate(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
 		enabled           bool
+		liveOnly          bool
 		mode              domain.TradingMode
 		provider, label   string
 		checkErr, wantErr error
@@ -381,6 +394,8 @@ func TestTradingCreate(t *testing.T) {
 		{name: "enabled", enabled: true, mode: domain.TradingModePaper, provider: " venue ", label: " Paper "},
 		{name: "disabled", mode: domain.TradingModePaper, provider: "venue", label: "Paper"},
 		{name: "live", enabled: true, mode: domain.TradingModeLive, provider: "venue", label: "Live"},
+		{name: "live-only-paper", liveOnly: true, mode: domain.TradingModePaper, provider: "venue", label: "Paper", wantErr: domain.ErrInvalid},
+		{name: "live-only-live", enabled: true, liveOnly: true, mode: domain.TradingModeLive, provider: "venue", label: "Live"},
 		{name: "unknown-mode", mode: "other", provider: "venue", label: "Paper", wantErr: domain.ErrInvalid},
 		{name: "unknown-provider", mode: domain.TradingModePaper, provider: "missing", label: "Paper", wantErr: domain.ErrInvalid},
 		{name: "label-required", mode: domain.TradingModePaper, provider: "venue", label: " ", wantErr: domain.ErrInvalid},
@@ -390,6 +405,7 @@ func TestTradingCreate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, n, rt := newTradingTestService(t)
 			rt.checkErr = tc.checkErr
+			rt.providers[0].LiveOnly = tc.liveOnly
 			c := tradingTestConnection()
 			c.VenueIdentity = "caller-supplied-identity"
 			c.Enabled, c.Mode, c.Provider, c.Label = tc.enabled, tc.mode, tc.provider, tc.label
@@ -398,6 +414,14 @@ func TestTradingCreate(t *testing.T) {
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("create error = %v, want %v", err, tc.wantErr)
+				}
+				if tc.liveOnly {
+					if pointer := domain.ValidationPointer(err); pointer != "/mode" {
+						t.Errorf("paper create validation pointer = %q, want /mode", pointer)
+					}
+					if errors.Is(err, domain.ErrUpstream) {
+						t.Errorf("paper create error = %v, must not be ErrUpstream", err)
+					}
 				}
 				if strings.Contains(err.Error(), "test-secret-value") {
 					t.Fatal("credential leaked in create error")
@@ -855,6 +879,7 @@ func TestTradingSymbolRotationUsesSnapshot(t *testing.T) {
 
 func TestTradingStatus(t *testing.T) {
 	s, n, rt := newTradingTestService(t)
+	rt.providers[0].LiveOnly = true
 	c := tradingTestConnection()
 	c.Credentials = `{"apiKey":"test-key-value","apiSecret":"test-secret-value","empty":"","unset":null,"nested":{"password":"nested-secret"}}`
 	n.connections = []domain.TradingConnection{c, c, c}
@@ -894,7 +919,7 @@ func TestTradingStatus(t *testing.T) {
 	}
 	if len(got.Providers) != 1 || got.Providers[0] != (TradingProvider{
 		ExecutionPolicy: false,
-		Type:            "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true,
+		Type:            "venue", Title: "Venue", VenueAccounts: true, VerifiesSymbols: true, SearchesSymbols: true, UnlinkedFees: true, LiveOnly: true,
 	}) {
 		t.Fatal("provider capabilities were not mapped")
 	}
@@ -1802,4 +1827,43 @@ func (n *refusingTightenOnlyEnableNode) SetTradingConnectionEnabled(ctx context.
 		return domain.ErrLoosening
 	}
 	return n.tradingTestNode.SetTradingConnectionEnabled(ctx, id, enabled, caller)
+}
+
+// TestDeleteTradingConnectionStopsItsWorker pins the delete's runtime side: an
+// enabled connection deletes, and the runtime restarts only when it holds a
+// worker for the deleted connection, so that worker and its venue session stop.
+func TestDeleteTradingConnectionStopsItsWorker(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		running      bool
+		writeErr     error
+		wantErr      error
+		wantRestarts int
+	}{
+		"running worker": {running: true, wantRestarts: 1},
+		"no worker":      {},
+		"refused delete": {running: true, writeErr: domain.ErrConflict, wantErr: domain.ErrConflict},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, n, rt := newTradingTestService(t)
+			connection := tradingTestConnection()
+			n.connections = []domain.TradingConnection{connection}
+			n.writeErr = tc.writeErr
+			if tc.running {
+				rt.states = map[domain.ExternalID]trading.ConnectionStatus{connection.ExternalID: {}}
+			}
+			err := s.DeleteTradingConnection(systemCtx(), " "+connection.ExternalID.String()+" ")
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("delete error = %v, want %v", err, tc.wantErr)
+			}
+			if rt.restarts != tc.wantRestarts {
+				t.Fatalf("restarts = %d, want %d", rt.restarts, tc.wantRestarts)
+			}
+			if wantLeft := tc.wantErr != nil; (len(n.connections) == 1) != wantLeft {
+				t.Fatalf("connections left = %v, want kept %t", n.connections, wantLeft)
+			}
+		})
+	}
 }

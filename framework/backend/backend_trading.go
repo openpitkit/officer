@@ -42,6 +42,7 @@ type TradingProvider struct {
 	Type, Title                                     string
 	VenueAccounts, VerifiesSymbols, SearchesSymbols bool
 	UnlinkedFees                                    bool
+	LiveOnly                                        bool
 }
 
 // TradingConnectionStatus contains configuration without credential values.
@@ -211,7 +212,7 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			ExecutionPolicy: p.ExecutionPolicy,
 			Type:            p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
 			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
-			UnlinkedFees: p.UnlinkedFees,
+			UnlinkedFees: p.UnlinkedFees, LiveOnly: p.LiveOnly,
 		})
 	}
 	states := s.trading.ConnectionStatuses()
@@ -271,6 +272,7 @@ func (s *Service) requireNonReleaseTradingConfirmation(caller domain.Caller, con
 // create also writes the scope account's grant (see grantScopeAccountLocked).
 // In a non-release build, enabling requires the operator's confirmation through
 // the panel.
+// A live-only provider refuses paper mode before any venue call or storage write.
 func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection, nonReleaseConfirmed bool) (result domain.TradingConnection, resultErr error) {
 	ctx, finish := node.PostCommitNotifications(ctx)
 	defer func() {
@@ -307,8 +309,13 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 	if !domain.TradingModeSupported(c.Mode) {
 		return domain.TradingConnection{}, domain.ErrInvalid
 	}
-	if _, err := s.tradingProvider(c.Provider); err != nil {
+	provider, err := s.tradingProvider(c.Provider)
+	if err != nil {
 		return domain.TradingConnection{}, err
+	}
+	if c.Mode == domain.TradingModePaper && provider.LiveOnly {
+		return domain.TradingConnection{}, domain.NewValidationError(
+			"/mode", "unsupported_value", "trading provider supports live mode only")
 	}
 	if err := domain.ValidateTradingConnectionSettings(c.Label, c.Credentials); err != nil {
 		return domain.TradingConnection{}, err
@@ -580,7 +587,9 @@ func (s *Service) DeleteTradingInstrument(ctx context.Context, connection, exter
 	return s.node.DeleteTradingInstrument(ctx, id, externalSymbol, caller)
 }
 
-// DeleteTradingConnection removes an unused, disabled connection.
+// DeleteTradingConnection removes a connection with no venue orders and no
+// order reviews, enabled or not. When the running runtime holds a worker for
+// it, the runtime restarts so that worker and its venue session stop.
 func (s *Service) DeleteTradingConnection(ctx context.Context, connection string) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -595,7 +604,14 @@ func (s *Service) DeleteTradingConnection(ctx context.Context, connection string
 	if err != nil {
 		return err
 	}
-	return s.node.DeleteTradingConnection(ctx, id, caller)
+	_, running := s.trading.ConnectionStatuses()[id]
+	if err := s.node.DeleteTradingConnection(ctx, id, caller); err != nil {
+		return err
+	}
+	if !running {
+		return nil
+	}
+	return s.restartTradingLocked()
 }
 
 // VerifyTradingSymbol asks the venue whether a symbol exists and is tradable.

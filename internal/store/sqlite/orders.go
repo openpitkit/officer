@@ -1074,7 +1074,7 @@ func scanOrderEvent(
 const tradeSelect = `
 SELECT t.external_id, o.external_id, a.code, ba.code, qa.code, p.code,
        t.at, t.source_id, t.side_id, t.quantity, t.price, t.lock_price,
-       t.commission_amount, t.commission_currency
+       t.commission_amount, t.commission_currency, t.venue_trade_id
 FROM trade t
 JOIN order_record o          ON o.id = t.order_id
 JOIN account a        ON a.id = t.account_id
@@ -1160,11 +1160,11 @@ func (r *realmStore) insertTrade(
 		`INSERT INTO trade
 	 (external_id, order_id, account_id, base_asset_id, quote_asset_id,
 	  principal_id, at, source_id, side_id, quantity, price, lock_price,
-	  commission_amount, commission_currency)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	  commission_amount, commission_currency, venue_trade_id)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), orderID, accountID, baseID, quoteID, principalID,
 		at, sourceID, sideID, t.Quantity, t.Price, t.LockPrice,
-		commissionAmount(t.Commission), commissionCurrency(t.Commission),
+		commissionAmount(t.Commission), commissionCurrency(t.Commission), nullableString(t.VenueTradeID),
 	); err != nil {
 		return domain.ExternalID(""), time.Time{}, fmt.Errorf("store: create trade: %w", err)
 	}
@@ -1226,7 +1226,7 @@ LEFT JOIN principal p ON p.id = t.principal_id` + whereFromClauses(clauses)
 	query := `
 SELECT t.external_id, o.external_id, a.code, ba.code, qa.code, p.code,
        t.at, t.source_id, t.side_id, t.quantity, t.price, t.lock_price,
-       t.commission_amount, t.commission_currency, tc.external_id
+       t.commission_amount, t.commission_currency, t.venue_trade_id, tc.external_id
 FROM trade t
 JOIN order_record o          ON o.id = t.order_id
 JOIN account a        ON a.id = t.account_id
@@ -1484,7 +1484,7 @@ func scanTradeListRow(
 		connectionID                         []byte
 		account                              string
 		baseAsset, quoteAsset                string
-		principal                            sql.NullString
+		principal, venueTradeID              sql.NullString
 		at, quantity, price, lockPx          string
 		sourceID, sideID                     int64
 		commissionAmount, commissionCurrency string
@@ -1492,14 +1492,14 @@ func scanTradeListRow(
 	if err := rows.Scan(
 		&tradeExtID, &orderExtID, &account, &baseAsset,
 		&quoteAsset, &principal, &at, &sourceID, &sideID, &quantity, &price, &lockPx,
-		&commissionAmount, &commissionCurrency, &connectionID,
+		&commissionAmount, &commissionCurrency, &venueTradeID, &connectionID,
 	); err != nil {
 		return fwstore.TradeListRow{}, fmt.Errorf("store: scan trade row: %w", err)
 	}
 	trade, err := tradeFromScanned(
 		dictionaries, tradeExtID, orderExtID, account, baseAsset, quoteAsset,
 		principal, at, sourceID, sideID, quantity, price, lockPx,
-		commissionAmount, commissionCurrency,
+		commissionAmount, commissionCurrency, venueTradeID,
 	)
 	if err != nil {
 		return fwstore.TradeListRow{}, err
@@ -1519,7 +1519,7 @@ func scanTrade(dictionaries *enumDictionaries, rows *sql.Rows) (domain.Trade, er
 		tradeExtID, orderExtID               []byte
 		account                              string
 		baseAsset, quoteAsset                string
-		principal                            sql.NullString
+		principal, venueTradeID              sql.NullString
 		at, quantity, price, lockPx          string
 		sourceID, sideID                     int64
 		commissionAmount, commissionCurrency string
@@ -1527,14 +1527,14 @@ func scanTrade(dictionaries *enumDictionaries, rows *sql.Rows) (domain.Trade, er
 	if err := rows.Scan(
 		&tradeExtID, &orderExtID, &account, &baseAsset, &quoteAsset, &principal,
 		&at, &sourceID, &sideID, &quantity, &price, &lockPx,
-		&commissionAmount, &commissionCurrency,
+		&commissionAmount, &commissionCurrency, &venueTradeID,
 	); err != nil {
 		return domain.Trade{}, fmt.Errorf("store: scan trade: %w", err)
 	}
 	return tradeFromScanned(
 		dictionaries, tradeExtID, orderExtID, account, baseAsset, quoteAsset,
 		principal, at, sourceID, sideID, quantity, price, lockPx,
-		commissionAmount, commissionCurrency,
+		commissionAmount, commissionCurrency, venueTradeID,
 	)
 }
 
@@ -1554,6 +1554,7 @@ func tradeFromScanned(
 	lockPx string,
 	commissionAmount string,
 	commissionCurrency string,
+	venueTradeID sql.NullString,
 ) (domain.Trade, error) {
 	tradeXID, err := domain.ExternalIDFromBytes(tradeExtID)
 	if err != nil {
@@ -1576,18 +1577,19 @@ func tradeFromScanned(
 		return domain.Trade{}, err
 	}
 	trade := domain.Trade{
-		ExternalID: tradeXID,
-		Order:      orderXID,
-		Account:    domain.AccountID(account),
-		BaseAsset:  baseAsset,
-		QuoteAsset: quoteAsset,
-		Principal:  principal.String,
-		At:         parsedAt,
-		Source:     domain.Source(source),
-		Side:       domain.OrderSide(side),
-		Quantity:   quantity,
-		Price:      price,
-		LockPrice:  lockPx,
+		VenueTradeID: venueTradeID.String,
+		ExternalID:   tradeXID,
+		Order:        orderXID,
+		Account:      domain.AccountID(account),
+		BaseAsset:    baseAsset,
+		QuoteAsset:   quoteAsset,
+		Principal:    principal.String,
+		At:           parsedAt,
+		Source:       domain.Source(source),
+		Side:         domain.OrderSide(side),
+		Quantity:     quantity,
+		Price:        price,
+		LockPrice:    lockPx,
 	}
 	if commissionAmount != "" || commissionCurrency != "" {
 		trade.Commission = &domain.Commission{

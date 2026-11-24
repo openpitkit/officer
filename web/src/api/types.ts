@@ -811,6 +811,8 @@ export interface TradingProvider {
   searchesSymbols: boolean;
   /** The venue charges fees not tied to orders, such as Alpaca FEE/CFEE. */
   unlinkedFees: boolean;
+  /** Whether the provider supports live mode only. */
+  liveOnly: boolean;
 }
 
 /** Mapping from a venue symbol to an Officer asset pair. */
