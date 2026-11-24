@@ -196,9 +196,10 @@ arguments; keys assigned before indexing and map-literal keys; declaration/new
 zero keys; query-to-DTO handler shapes; formatted SQL columns or predicates
 without scope/axis; other encodings/accessor chains. Package-level value fields
 such as `packageError.ErrCause` still receive the sentinel exemption; parameter
-and receiver qualifiers are checked. Mixed member/parameter
-pairs remain omitted: they need a new member-position/signature product.
-Both misses are pinned with `todoruleid` fixtures.
+and receiver qualifiers are checked. Mixed member/parameter pairs remain
+omitted: they need a new member-position/signature product. The package-level
+sentinel field and the mixed member/parameter pair are pinned with `todoruleid`
+fixtures.
 
 Known rule bugs marked `todook`: early-success/switch proofs on zero-key error
 returns, panel prose templates/concatenations over two axes, and derived Go
