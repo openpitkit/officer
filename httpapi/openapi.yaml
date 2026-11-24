@@ -8216,6 +8216,27 @@ components:
           description: Serialized realm setting rows.
           items:
             type: object
+        scheduledJobs:
+          type: array
+          description: >
+            Scheduled task definitions and progress, carried with the
+            general_settings section.
+          items:
+            type: object
+        scheduledExecutions:
+          type: array
+          description: >
+            Past scheduled task attempts, carried with the audit_log section
+            when it covers all accounts.
+          items:
+            type: object
+        accountPnlResetReceipts:
+          type: array
+          description: >
+            Completed account P&L reset receipts (run id and account code),
+            carried with the accounts_groups section.
+          items:
+            type: object
 
     BackupExecutionReport:
       type: object
