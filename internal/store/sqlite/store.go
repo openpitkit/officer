@@ -561,6 +561,19 @@ func beginTx(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (*sql.Tx, err
 	return tx, classifyTxCancel(ctx, err)
 }
 
+// beginReadTx opens a read-only transaction for one store snapshot.
+func (r *realmStore) beginReadTx(ctx context.Context, subject string) (*sql.Tx, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("store: begin %s read: %w", subject, err)
+	}
+	return tx, nil
+}
+
 // rollbackTransaction classifies context cancellation and returns a rollback
 // failure alongside the operation result.
 func rollbackTransaction(ctx context.Context, result *error, tx *sql.Tx) {

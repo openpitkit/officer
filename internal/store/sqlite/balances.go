@@ -286,13 +286,14 @@ func (r *realmStore) ListBalanceRows(
 		return fwstore.BalanceListPage{}, err
 	}
 	where, args := balanceListWhere(filter)
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "balance")
 	if err != nil {
 		return fwstore.BalanceListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	countQuery := `SELECT COUNT(*)` + balanceFrom + where
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.BalanceListPage{}, fmt.Errorf("store: count balance rows: %w", err)
 	}
 
@@ -302,7 +303,7 @@ func (r *realmStore) ListBalanceRows(
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.BalanceListPage{}, fmt.Errorf("store: list balance rows: %w", err)
 	}
@@ -318,6 +319,9 @@ func (r *realmStore) ListBalanceRows(
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.BalanceListPage{}, fmt.Errorf("store: iterate balance rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.BalanceListPage{}, fmt.Errorf("store: finish balance read: %w", err)
 	}
 	return fwstore.BalanceListPage{Rows: result, Total: total}, nil
 }

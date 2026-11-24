@@ -34,3 +34,107 @@ rules:
       exclude:
         - "**/*_test.go"
         - "/checks/semgrep/testdata/**"
+
+  - id: store-composite-read-snapshot
+    message: >-
+      Read the parts of a composite store result through one transaction opened
+      by realmStore.beginReadTx.
+    severity: ERROR
+    languages: [go]
+    options:
+      # Keep the two statement matches from overlapping inside a branch.
+      go_deeper_stmt: false
+    patterns:
+      # Match two distinct statements following pool acquisition. Each can
+      # contain a read or hand-off nested inside an expression or branch.
+      - pattern-either:
+          - patterns:
+              - pattern-either: &snapshot-statements
+                  - pattern: |
+                      func ($RECEIVER *realmStore) $METHOD(...) {
+                        ...
+                        $POOL, $ERR := $RECEIVER.db()
+                        ...
+                        $FIRST
+                        ...
+                        $SECOND
+                        ...
+                      }
+                  - pattern: |
+                      func ($RECEIVER *realmStore) $METHOD(...) {
+                        ...
+                        $POOL, $ERR = $RECEIVER.db()
+                        ...
+                        $FIRST
+                        ...
+                        $SECOND
+                        ...
+                      }
+                  - pattern: |
+                      func ($RECEIVER *realmStore) $METHOD(...) {
+                        ...
+                        $POOL, $ERR := $RECEIVER.db()
+                        ...
+                        var $ALIAS sqlQueryer = $POOL
+                        ...
+                        $FIRST
+                        ...
+                        $SECOND
+                        ...
+                      }
+                  - pattern: |
+                      func ($RECEIVER *realmStore) $METHOD(...) {
+                        ...
+                        $POOL, $ERR = $RECEIVER.db()
+                        ...
+                        var $ALIAS sqlQueryer = $POOL
+                        ...
+                        $FIRST
+                        ...
+                        $SECOND
+                        ...
+                      }
+              - metavariable-pattern:
+                  metavariable: $FIRST
+                  patterns: &snapshot-read
+                    - pattern: $DB.$QUERY(...)
+                    - metavariable-pattern:
+                        metavariable: $QUERY
+                        pattern-either:
+                          - pattern: Query
+                          - pattern: QueryContext
+                          - pattern: QueryRow
+                          - pattern: QueryRowContext
+                    - &snapshot-pool
+                      metavariable-pattern:
+                        metavariable: $DB
+                        pattern-either:
+                          - pattern: $POOL
+                          - patterns:
+                              - pattern: $TARGET
+                              - metavariable-comparison:
+                                  metavariable: $TARGET
+                                  comparison: str($TARGET) == str($ALIAS)
+              - metavariable-pattern:
+                  metavariable: $SECOND
+                  pattern-either:
+                    - patterns: *snapshot-read
+                    - patterns: &snapshot-handoff
+                        - pattern: $F(..., $DB, ...)
+                        - pattern-not: beginTx(...)
+                        - *snapshot-pool
+          - patterns:
+              - pattern-either: *snapshot-statements
+              - metavariable-pattern:
+                  metavariable: $FIRST
+                  patterns: *snapshot-handoff
+              - metavariable-pattern:
+                  metavariable: $SECOND
+                  patterns: *snapshot-read
+      - focus-metavariable: $POOL
+    paths:
+      include:
+        - "/internal/store/sqlite/**"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

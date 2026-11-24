@@ -99,6 +99,28 @@ Its fixture runs through `check-semgrep`.
 
 This rule has no approval marker or baseline.
 
+### `store-composite-read-snapshot`
+
+`checks/semgrep/store-transaction-helper.yml` requires one read transaction
+when a SQLite `*realmStore` method queries its pool twice or queries it and
+passes it to a helper. It matches Go calls after a local `r.db()` assignment,
+including calls through a `var reader sqlQueryer = pool` alias after that
+declaration. Passing the pool to `beginTx` is allowed. Two hand-offs with no
+direct query are allowed because write methods pass the pool to several
+helpers. The fixtures run through `check-semgrep`.
+
+The rule skips `Prepare*` reads, other receiver types, and free functions. It
+does not follow calls to other methods that open their own pool, or see reads
+in a transaction followed by one pool read after commit. It looks for calls
+in separate statements at method-body level, so it can miss a pair inside a
+single statement, and the `r.db()` assignment and the alias must be direct
+statements of the method body; the alias is only the typed `var` form. It does
+not track control flow or alias reassignment.
+Queries on mutually exclusive paths, or a query paired with a write-only
+helper hand-off, can therefore be flagged.
+
+This rule has no approval marker or baseline.
+
 ### Limit barrier keys
 
 Keep barrier identity in `domain.LimitKey`: use `domain.NewLimitKey`, a barrier's

@@ -419,19 +419,15 @@ func putEventAttestationTx(
 func (r *realmStore) GetOrder(
 	ctx context.Context, id domain.ExternalID,
 ) (detail domain.OrderDetail, err error) {
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "order")
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
+	defer rollbackTransaction(ctx, &err, tx)
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return domain.OrderDetail{}, fmt.Errorf("store: begin order read: %w", err)
-	}
-	defer rollbackTransaction(ctx, &err, tx)
 	row := tx.QueryRowContext(ctx, orderSelect+` WHERE o.external_id = ?`, id.Bytes())
 	o, err := scanOrderRow(dictionaries, row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -501,12 +497,13 @@ JOIN account a       ON a.id = o.account_id
 JOIN asset ba        ON ba.id = o.base_asset_id
 JOIN asset qa        ON qa.id = o.quote_asset_id
 LEFT JOIN principal p ON p.id = o.principal_id` + where
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "order")
 	if err != nil {
 		return fwstore.OrderListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: count order rows: %w", err)
 	}
 
@@ -516,7 +513,7 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: list order rows: %w", err)
 	}
@@ -535,12 +532,15 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 	if err := rows.Err(); err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: iterate order rows: %w", err)
 	}
-	subtotals, err := commissionSubtotalsByOrder(ctx, dictionaries, db, orderIDs)
+	subtotals, err := commissionSubtotalsByOrder(ctx, dictionaries, tx, orderIDs)
 	if err != nil {
 		return fwstore.OrderListPage{}, err
 	}
 	for i := range result {
 		result[i].Order.CommissionSubtotals = subtotals[result[i].Order.ExternalID]
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.OrderListPage{}, fmt.Errorf("store: finish order read: %w", err)
 	}
 	return fwstore.OrderListPage{Rows: result, Total: total}, nil
 }
@@ -1211,12 +1211,13 @@ JOIN account a        ON a.id = t.account_id
 JOIN asset ba         ON ba.id = t.base_asset_id
 JOIN asset qa         ON qa.id = t.quote_asset_id
 LEFT JOIN principal p ON p.id = t.principal_id` + whereFromClauses(clauses)
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "trade")
 	if err != nil {
 		return fwstore.TradeListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: count trade rows: %w", err)
 	}
 
@@ -1240,7 +1241,7 @@ LEFT JOIN trading_connection tc ON tc.id = vo.connection_id` +
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: list trade rows: %w", err)
 	}
@@ -1256,6 +1257,9 @@ LEFT JOIN trading_connection tc ON tc.id = vo.connection_id` +
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: iterate trade rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.TradeListPage{}, fmt.Errorf("store: finish trade read: %w", err)
 	}
 	return fwstore.TradeListPage{
 		Rows:  result,

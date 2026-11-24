@@ -58,6 +58,88 @@ import (
 // behaviour is covered by TestRealmDataOpAfterCloseReturnsClosedError.
 func (r *realmStore) rawDB() *sql.DB { return r.store.currentDB() }
 
+func newSnapshotReader(
+	t *testing.T,
+	writer *realmStore,
+	matches func(string) bool,
+	write func(context.Context) error,
+) *realmStore {
+	t.Helper()
+	writerDB := writer.rawDB()
+	// WAL lets the writer commit while the reader holds its snapshot.
+	var journalMode string
+	if err := writerDB.QueryRowContext(t.Context(), `PRAGMA journal_mode = WAL`).Scan(&journalMode); err != nil {
+		t.Fatalf("enable WAL: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal mode = %q, want wal", journalMode)
+	}
+
+	var once sync.Once
+	var writeErr error
+	var matched bool
+	readerDB := sql.OpenDB(snapshotConnector{
+		driver: writerDB.Driver(),
+		dsn:    sqliteDSN(writer.store.path),
+		beforeQuery: func(ctx context.Context, query string) error {
+			if !matches(query) {
+				return nil
+			}
+			once.Do(func() {
+				matched = true
+				writeErr = write(ctx)
+			})
+			return writeErr
+		},
+	})
+	t.Cleanup(func() {
+		if err := readerDB.Close(); err != nil {
+			t.Errorf("close snapshot reader: %v", err)
+		}
+		if !matched {
+			t.Error("snapshot reader never issued the expected query")
+		}
+	})
+	readerStore := &sqliteStore{}
+	readerStore.db.Store(readerDB)
+	readerStore.enumCodes.Store(writer.store.enumCodes.Load())
+	return &realmStore{store: readerStore}
+}
+
+type snapshotConnector struct {
+	driver      driver.Driver
+	dsn         string
+	beforeQuery func(context.Context, string) error
+}
+
+func (c snapshotConnector) Driver() driver.Driver { return c.driver }
+
+func (c snapshotConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := c.driver.Open(c.dsn)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotConn{Conn: conn, beforeQuery: c.beforeQuery}, nil
+}
+
+type snapshotConn struct {
+	driver.Conn
+	beforeQuery func(context.Context, string) error
+}
+
+func (c snapshotConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+}
+
+func (c snapshotConn) QueryContext(
+	ctx context.Context, query string, args []driver.NamedValue,
+) (driver.Rows, error) {
+	if err := c.beforeQuery(ctx, query); err != nil {
+		return nil, fmt.Errorf("commit write before snapshot query: %w", err)
+	}
+	return c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
+}
+
 // migratedDatabase is a database file migrated once per test binary without
 // options. Migrating from scratch costs about half a second under -race, and
 // paid by each of the package's several hundred cases it put the package past

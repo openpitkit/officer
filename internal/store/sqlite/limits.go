@@ -130,14 +130,15 @@ func (r *realmStore) ListPolicyRows(
 	}
 	from := ` FROM (` + policyUnion + `) AS policies` + where
 
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "policy")
 	if err != nil {
 		return fwstore.PolicyListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 
 	countQuery := `SELECT COUNT(*)` + from
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.PolicyListPage{}, fmt.Errorf("store: count policy rows: %w", err)
 	}
 
@@ -151,7 +152,7 @@ func (r *realmStore) ListPolicyRows(
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
 
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.PolicyListPage{}, fmt.Errorf("store: list policy rows: %w", err)
 	}
@@ -167,6 +168,9 @@ func (r *realmStore) ListPolicyRows(
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.PolicyListPage{}, fmt.Errorf("store: iterate policy rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.PolicyListPage{}, fmt.Errorf("store: finish policy read: %w", err)
 	}
 	return fwstore.PolicyListPage{Rows: result, Total: total}, nil
 }

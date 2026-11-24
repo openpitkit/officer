@@ -291,20 +291,13 @@ func (r *realmStore) ListAuditRows(
 		return fwstore.AuditListPage{}, err
 	}
 
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "audit")
 	if err != nil {
 		return fwstore.AuditListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	countQuery := `SELECT COUNT(*) FROM audit au` + whereFromClauses(clauses)
-	var reader sqlQueryer = db
-	var readTx *sql.Tx
 	if filter.Restriction.Selection != nil {
-		readTx, err = beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
-		if err != nil {
-			return fwstore.AuditListPage{}, fmt.Errorf("store: begin audit read: %w", err)
-		}
-		defer rollbackTransaction(ctx, &resultErr, readTx)
-		reader = readTx
 		unrestricted := filter
 		unrestricted.Restriction = domain.AccountRestriction{}
 		candidateClauses, candidateArgs, err := auditListClauses(dictionaries, unrestricted)
@@ -313,7 +306,7 @@ func (r *realmStore) ListAuditRows(
 		}
 		candidateClauses = append(candidateClauses, "((au.account_code <> '' AND au.account_identity = 0) OR (au.account_code = '' AND au.group_code <> '' AND au.group_identity = 0))")
 		var missing bool
-		if err := reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM audit au"+whereFromClauses(candidateClauses)+")", candidateArgs...).Scan(&missing); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM audit au"+whereFromClauses(candidateClauses)+")", candidateArgs...).Scan(&missing); err != nil {
 			return fwstore.AuditListPage{}, fmt.Errorf("store: validate audit identity: %w", err)
 		}
 		if missing {
@@ -321,12 +314,12 @@ func (r *realmStore) ListAuditRows(
 		}
 	}
 	var total int
-	if err := reader.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AuditListPage{}, fmt.Errorf("store: count audit rows: %w", err)
 	}
 
 	query, queryArgs := buildAuditListQuery(clauses, args, filter.Page)
-	rows, err := reader.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AuditListPage{}, fmt.Errorf("store: list audit rows: %w", err)
 	}
@@ -346,10 +339,8 @@ func (r *realmStore) ListAuditRows(
 	if err := rows.Close(); err != nil {
 		return fwstore.AuditListPage{}, err
 	}
-	if readTx != nil {
-		if err := readTx.Commit(); err != nil {
-			return fwstore.AuditListPage{}, fmt.Errorf("store: finish audit read: %w", err)
-		}
+	if err := tx.Commit(); err != nil {
+		return fwstore.AuditListPage{}, fmt.Errorf("store: finish audit read: %w", err)
 	}
 	return fwstore.AuditListPage{
 		Rows:  result,
