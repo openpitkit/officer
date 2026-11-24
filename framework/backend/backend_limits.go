@@ -335,8 +335,9 @@ func (s *Service) finishLimitChangeLocked(sink marketdata.Sink, err error) error
 	}
 	s.md.Stop()
 	restoreErr := s.restoreMarketDataAfterBackup(sink)
-	if err != nil {
-		return errors.Join(err, restoreErr)
+	if restoreErr == nil {
+		return err
 	}
-	return restoreErr
+	// A failed restore is internal even when either cause has a caller code.
+	return domain.Internal(errors.Join(err, restoreErr))
 }

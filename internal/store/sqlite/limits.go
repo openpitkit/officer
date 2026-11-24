@@ -854,11 +854,12 @@ func limitTableForPolicy(policy string) (limitTable, error) {
 		domain.PolicySpotFundsTotalPnlBoundsKillSwitch:
 		return limitTable{name: "limit_spot_funds_pnl_bound", noun: "spot funds pnl bounds limit", keyShape: limitKeyShapePnlAxis}, nil
 	}
-	return limitTable{}, fmt.Errorf("store: policy %q has no limit barrier table: %w", policy, domain.ErrInvalid)
+	return limitTable{}, fmt.Errorf("store: policy %q has no limit barrier table", policy)
 }
 
 // limitKeyWhere chooses the barrier table and its complete key predicate.
-// Keys without a barrier table are invalid, including the zero key.
+// The zero key or a key of a policy with no barrier table yields an internal
+// error.
 func limitKeyWhere(key domain.LimitKey, ids limitKeyIDs) (limitKeyPredicate, error) {
 	table, err := limitTableForPolicy(key.Policy())
 	if err != nil {

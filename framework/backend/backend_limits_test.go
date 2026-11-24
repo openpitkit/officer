@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/configure"
+
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -39,6 +41,7 @@ type limitTestNode struct {
 	putCalls       int
 	putWrite       domain.LimitWrite
 	putErr         error
+	putSink        marketdata.Sink
 	modeState      domain.SpotFundsLimitModeState
 	modeErr        error
 	modeReadCalls  int
@@ -234,7 +237,7 @@ func (n *limitTestNode) PutPositionLimit(
 func (n *limitTestNode) recordLimitWrite(write domain.LimitWrite) (marketdata.Sink, error) {
 	n.putCalls++
 	n.putWrite = write
-	return nil, n.putErr
+	return n.putSink, n.putErr
 }
 
 func TestServiceLimitWriteIntent(t *testing.T) {
@@ -296,6 +299,75 @@ func TestServiceLimitWriteIntent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServiceLimitChangeRestoreFailureIsInternal(t *testing.T) {
+	t.Parallel()
+	limit := domain.LimitSpotFundsPnlBounds{
+		Axis:       domain.SpotFundsPnlAxisRealized,
+		Mode:       domain.RuleModeReject,
+		Scope:      domain.ScopeAccount,
+		Account:    "acc",
+		Currency:   "USD",
+		LowerBound: "-10",
+	}
+	sdkErr := &configure.Error{
+		Kind:    configure.ErrorKindValidation,
+		Message: "duplicate account P&L barrier for mode reject",
+	}
+	engineErr := fmt.Errorf("engine: configure %s: %w", limit.Axis.Policy(), sdkErr)
+	nodeErr := fmt.Errorf(
+		"configure policy after limit: %w",
+		fmt.Errorf("%w: %w", engineErr, domain.ErrInvalid),
+	)
+	storeErr := fmt.Errorf("store: list market data instances: %w", context.Canceled)
+	restartErr := fmt.Errorf("marketdata: list enabled instances: %w", storeErr)
+	for _, tc := range []struct {
+		name       string
+		restartErr error
+	}{
+		{name: "rejected write and failed restore", restartErr: restartErr},
+		{name: "rejected write and successful restore"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &limitTestNode{putSink: marketDataDeleteTestSink{}, putErr: nodeErr}
+			svc := newLimitTestService(t, n)
+			svc.md = &marketDataDeleteTestRuntime{restartErr: tc.restartErr}
+			err := svc.PutSpotFundsPnlBoundsLimit(
+				systemCtx(), limit, domain.LimitWriteAdd, domain.MissingAccountReject,
+			)
+			if tc.restartErr == nil {
+				if !errors.Is(err, domain.ErrInvalid) || err.Error() != nodeErr.Error() {
+					t.Fatalf("limit error = %v, want validation error %q", err, nodeErr)
+				}
+				return
+			}
+			if err == nil || errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("market-data restore error = %v, want internal failure", err)
+			}
+			if !strings.Contains(err.Error(), tc.restartErr.Error()) {
+				t.Fatalf("error %q omits the failed restart: %v", err, tc.restartErr)
+			}
+			if !strings.Contains(err.Error(), nodeErr.Error()) {
+				t.Fatalf("error %q omits the rejected limit: %v", err, nodeErr)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("market-data restore error = %v, want context.Canceled cause", err)
+			}
+		})
+	}
+
+	t.Run("restore failure is surfaced after an accepted write", func(t *testing.T) {
+		n := &limitTestNode{putSink: marketDataDeleteTestSink{}}
+		svc := newLimitTestService(t, n)
+		svc.md = &marketDataDeleteTestRuntime{restartErr: restartErr}
+		err := svc.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
+			Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "10",
+		}, domain.LimitWriteAdd, "")
+		if err == nil || !strings.Contains(err.Error(), restartErr.Error()) {
+			t.Fatalf("limit error = %v, want failed restart %q", err, restartErr)
+		}
+	})
 }
 
 func newLimitTestService(t *testing.T, n *limitTestNode) *Service {

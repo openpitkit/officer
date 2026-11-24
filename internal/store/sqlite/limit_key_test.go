@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,6 +30,7 @@ import (
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	fwstore "go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/web/httpapi"
 )
 
 func TestCountingLimitModeStorage(t *testing.T) {
@@ -612,12 +614,15 @@ func TestSQLLimitKeyRejectsBeforeStorage(t *testing.T) {
 	limit := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 10, Window: time.Second}
 	putSQLKeyLimit(t, ctx, rs, limit)
 	foreign := mustSQLLimitKey(t, domain.PolicySpotFundsLimitMode, "", domain.ScopeGlobal, "", "", "")
-	for _, key := range []domain.LimitKey{{}, foreign} {
+	for _, key := range []domain.LimitKey{foreign, {}} {
 		err := rs.DeleteLimit(ctx, key)
-		if !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("DeleteLimit(%+v) = %v, want ErrInvalid", key, err)
+		if err == nil || errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("DeleteLimit(%+v) = %v, want internal failure", key, err)
 		}
-		if err.Error() != fmt.Sprintf("store: policy %q has no limit barrier table: invalid", key.Policy()) {
+		if public := httpapi.DescribeErr(err); public.Status != http.StatusInternalServerError || public.Code != "internal" {
+			t.Fatalf("DeleteLimit(%+v) = %+v, want HTTP 500 internal", key, public)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("policy %q has no limit barrier table", key.Policy())) {
 			t.Fatalf("DeleteLimit(%+v) message = %v, want policy and missing barrier table", key, err)
 		}
 		requireSQLKeyLimits(t, ctx, rs, limit)
@@ -626,8 +631,9 @@ func TestSQLLimitKeyRejectsBeforeStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, key := range []domain.LimitKey{{}, foreign} {
-		if err := rs.DeleteLimit(ctx, key); !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("closed DeleteLimit(%+v) = %v, want ErrInvalid before database access", key, err)
+		if err := rs.DeleteLimit(ctx, key); err == nil ||
+			!strings.Contains(err.Error(), fmt.Sprintf("policy %q has no limit barrier table", key.Policy())) {
+			t.Fatalf("closed DeleteLimit(%+v) = %v, want lookup failure before database access", key, err)
 		}
 	}
 }

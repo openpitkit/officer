@@ -288,10 +288,8 @@ type engineReconciliationResult struct {
 	reconciled bool
 }
 
-// internalPostCommitNodeMutationFailure is terminal so its domain causes
-// cannot be reclassified as caller errors. A custom Is cannot stop errors.Is
-// from unwrapping after it returns false, so this type deliberately has no
-// Unwrap or As method.
+// internalPostCommitNodeMutationFailure marks a post-commit failure that skips
+// further fatal escalation in the node.
 type internalPostCommitNodeMutationFailure struct {
 	err error
 }
@@ -300,11 +298,8 @@ func (e internalPostCommitNodeMutationFailure) Error() string {
 	return e.err.Error()
 }
 
-func (e internalPostCommitNodeMutationFailure) Is(target error) bool {
-	if domain.IsSentinel(target) {
-		return false
-	}
-	return errors.Is(e.err, target)
+func (e internalPostCommitNodeMutationFailure) Unwrap() error {
+	return e.err
 }
 
 // internalPostCommitNodeMutationError hides domain sentinels after a committed
@@ -319,7 +314,7 @@ func internalPostCommitNodeMutationError(err error) error {
 		*internalPostCommitNodeMutationFailure:
 		return err
 	default:
-		return internalPostCommitNodeMutationFailure{err: err}
+		return internalPostCommitNodeMutationFailure{err: domain.Internal(err)}
 	}
 }
 

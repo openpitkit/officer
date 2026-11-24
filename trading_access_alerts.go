@@ -66,7 +66,7 @@ func mixedTradingAccessType(visible func(context.Context, domain.AccountID) (boo
 func accountAlertVisibility(visible func(context.Context, domain.AccountID) (bool, error), name string) func(context.Context, alerts.Event) (bool, error) {
 	return func(ctx context.Context, event alerts.Event) (bool, error) {
 		if visible == nil {
-			return false, fmt.Errorf("%s account visibility is not bound: %w", name, domain.ErrInvalid)
+			return false, fmt.Errorf("%s account visibility is not bound", name)
 		}
 		var payload struct {
 			Account domain.AccountID `json:"account"`

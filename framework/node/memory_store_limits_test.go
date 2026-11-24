@@ -294,7 +294,7 @@ func (r *memoryRealm) DeleteLimit(_ context.Context, key domain.LimitKey) error 
 		delete(r.spotFundsPnlBoundsLimits, key)
 		return nil
 	}
-	return domain.ErrInvalid
+	return fmt.Errorf("store: policy %q has no limit barrier table", key.Policy())
 }
 
 func (r *memoryRealm) ListOrderSizeLimits(
