@@ -51,8 +51,8 @@ export PYTHONUTF8 := "1"
 venv_dir := justfile_directory() / ".venv"
 venv_bin := if os_family() == "windows" { venv_dir / "Scripts" } else { venv_dir / "bin" }
 venv_python := if os_family() == "windows" { venv_bin / "python.exe" } else { venv_bin / "python" }
-python := env_var_or_default("PYTHON", venv_python)
-bootstrap_python := if path_exists(venv_python) == "true" { python } else { env_var_or_default("PYTHON", if os_family() == "windows" { "python" } else { "python3" }) }
+# The system interpreter: it runs the stdlib-only helpers and creates the venv.
+python := env_var_or_default("PYTHON", if os_family() == "windows" { "python" } else { "python3" })
 semgrep := if os_family() == "windows" { venv_bin / "semgrep.exe" } else { venv_bin / "semgrep" }
 # Every node, npm and npx a recipe runs is the runtime ensure-node installs here.
 node_dir := justfile_directory() / ".tmp" / "node"
@@ -86,12 +86,12 @@ build-go-debug:
 build-go-release:
     "{{ python }}" {{ just_helper }} go build {{ go_packages }}
 
-# Build the SPA using already-installed frontend dependencies.
-build-js: ensure-node
+# Build the SPA with the frontend dependencies installed from the lockfile.
+build-js: frontend-ci-install
     cd web && npm run build
 
 # Build the published frontend library package.
-build-js-lib: ensure-node
+build-js-lib: frontend-ci-install
     cd web && npm run build:lib
 
 # Test the published frontend library package after building it.
@@ -195,7 +195,7 @@ vendor-swagger-ui:
 
 # Create the Python tools venv only when a tool is not at its pinned version.
 install-python-tools:
-    "{{ bootstrap_python }}" {{ just_helper }} install-python-tools
+    "{{ python }}" {{ just_helper }} install-python-tools
 
 # No per-rule timeout: a stall under machine load makes the gate slower, never
 # skips a file and never fails the scan; semgrep-scan still fails on every
@@ -206,8 +206,11 @@ check-semgrep: install-python-tools
     {{ semgrep }} --test --config checks/semgrep/ --metrics=off --disable-version-check checks/semgrep/testdata/
 
 # Lint all.
+lint-all: frontend-ci-install _lint-all-parallel
+
+# The install runs before this fan-out: lint-go walks web/node_modules, which npm ci rebuilds.
 [parallel]
-lint-all: lint-go lint-js lint-python check-semgrep
+_lint-all-parallel: lint-go lint-js lint-python check-semgrep
 
 # Lint all against a local Pit checkout.
 lint-all-dev pit_checkout="../pit": (lint-all-release-dev pit_checkout)
@@ -251,7 +254,7 @@ lint-python: install-python-tools
     "{{ venv_python }}" -m ruff format --check --quiet .
 
 # Check formatting, lint, and typecheck JS/TypeScript sources.
-lint-js: ensure-node
+lint-js: frontend-ci-install
     cd web && npm run format:check
     cd web && npm run lint
     cd web && npm run typecheck
@@ -278,7 +281,7 @@ test-all-debug-dev pit_checkout="../pit": (test-go-debug-dev pit_checkout) (test
 test-all-release-dev pit_checkout="../pit": (test-go-release-dev pit_checkout) (test-go-race-dev pit_checkout) test-js test-python
 
 # Test the release tooling without cutting a release.
-test-python:
+test-python: install-python-tools
     "{{ python }}" -m unittest discover -s scripts -p '*_test.py'
 
 # Run all Go tests.
@@ -320,7 +323,7 @@ test-go-race-dev pit_checkout="../pit":
     @echo Skipping Go race tests on Windows: Go ThreadSanitizer is not compatible with the CGo toolchain.
 
 # Run JS/TypeScript tests.
-test-js: ensure-node
+test-js: frontend-ci-install
     cd web && npm run test
 
 # Run all tests.
@@ -335,7 +338,7 @@ fmt-go:
     gofmt -w {{ go_dirs }}
 
 # Format JS/TypeScript sources.
-fmt-js: ensure-node
+fmt-js: frontend-ci-install
     cd web && npm run format
 
 # Format Python sources.
@@ -356,7 +359,7 @@ run-serve: build-release
 
 # Move the existing database aside and initialize a fresh serve configuration.
 run-serve-reset init_config="examples/setup/simple.json": build-release
-    {{ python }} {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve
+    {{ python }} {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve {{ sqlite_path_args }}
 
 # Run pit-officer in serve mode with debug compiler flags.
 run-serve-debug: build-debug
@@ -364,7 +367,7 @@ run-serve-debug: build-debug
 
 # Reset and initialize serve with debug compiler flags.
 run-serve-reset-debug init_config="examples/setup/simple.json": build-debug
-    {{ python }} {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve
+    {{ python }} {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve {{ sqlite_path_args }}
 
 # Print the running serve URL and open it (no rebuild; serve must be up).
 dashboard:
@@ -378,9 +381,9 @@ ensure-node:
 frontend-install: ensure-node
     cd web && npm install
 
-# Install frontend dependencies from the committed lockfile.
+# Install frontend dependencies from the committed lockfile unless already installed from it.
 frontend-ci-install: ensure-node
-    cd web && npm ci
+    "{{ python }}" {{ just_helper }} frontend-ci-install "{{ node_dir }}"
 
 # Build the stable Docker image from the published OpenPit module.
 docker-build tag="pit-officer:local":
@@ -478,7 +481,7 @@ run-serve-dev pit_checkout="../pit": (build-release-dev pit_checkout)
 
 # Reset and initialize serve against a local Pit checkout.
 run-serve-reset-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-release-dev pit_checkout)
-    {{ python }} {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} release {{ quote(pit_checkout) }} serve
+    {{ python }} {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} release {{ quote(pit_checkout) }} serve {{ sqlite_path_args }}
 
 # Run pit-officer in serve mode against a debug local Pit checkout.
 run-serve-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
@@ -486,7 +489,7 @@ run-serve-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
 
 # Reset and initialize debug serve against a local Pit checkout.
 run-serve-reset-debug-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-debug-dev pit_checkout)
-    {{ python }} {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} debug {{ quote(pit_checkout) }} serve
+    {{ python }} {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} debug {{ quote(pit_checkout) }} serve {{ sqlite_path_args }}
 # Run a Go command with a temporary workspace using the local OpenPit binding.
 _go-dev pit_checkout +go_args:
     just _go-dev-mode release {{ quote(pit_checkout) }} {{ go_args }}

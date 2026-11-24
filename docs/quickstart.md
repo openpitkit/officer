@@ -348,7 +348,7 @@ just sqlite_path="/path/to/officer.db" run-serve
 ```
 
 The same variable works with `run-serve-debug`, `run-serve-dev`, and
-`run-serve-debug-dev`.
+`run-serve-debug-dev`, and with every `run-serve-reset` recipe.
 
 Officer opens that exact file, or creates it and opens setup if it does not
 exist. This also applies to non-release builds: an explicit path skips the

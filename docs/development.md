@@ -16,7 +16,8 @@ error. To move the previous database aside and initialize again, use
 pass another file as `init_config` (after `pit_checkout` for the `-dev` recipes).
 Stop Officer first. Reset renames the build's database and SQLite sidecars with
 a `.backup-YYYYMMDDTHHMMSS.microseconds+HHMM` suffix, using the local timezone.
-Backups survive the automatic cleanup of stale dev databases.
+Backups survive the automatic cleanup of stale dev databases. With `sqlite_path`,
+reset moves that exact file and its sidecars aside instead.
 
 ## Importable packages
 
@@ -297,9 +298,12 @@ fails when it builds the SPA handler at startup.
 `.github/ci-versions.env` into `.tmp/node`. Every recipe that runs node, npm or
 npx depends on it and runs that runtime, whatever node is on the caller's PATH.
 
-`just frontend-ci-install` installs from the committed lockfile (`npm ci`);
-`just frontend-install` runs `npm install` and is what the binary build recipes
-use. `just build-js` builds the SPA into `web/dist`, and `just build-js-lib`
+`just frontend-ci-install` installs from the committed lockfile (`npm ci`) and
+skips the install when `web/node_modules` was already installed from the current
+`package.json`, `package-lock.json`, pinned Node.js version and platform. Every recipe that runs the frontend
+toolchain depends on it, so the gates need no earlier install and never rewrite
+the lockfile. `just frontend-install` runs `npm install` and is what the binary
+build recipes use. `just build-js` builds the SPA into `web/dist`, and `just build-js-lib`
 builds the publishable framework library into `web/lib`. Only
 `web/dist/embed-placeholder.txt` is committed; the rest of `web/dist` is build
 output, and `//go:embed dist` takes whatever is in that directory when the

@@ -100,7 +100,7 @@ uses golangci-lint and Semgrep, as described in the
 
 ```bash
 just install-python-tools # bootstrap the project-local Python environment
-just frontend-ci-install  # npm ci in web/ from the committed lockfile
+just frontend-ci-install  # npm ci in web/ from the lockfile, skipped when already installed from it
 just build                # build the SPA, then the pit-officer binary
 just run-serve            # build and serve
 just dashboard            # open the running instance in the browser

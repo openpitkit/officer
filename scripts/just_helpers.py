@@ -54,6 +54,8 @@ PYTHON_TOOL_PINS = (
     ("semgrep", ROOT / "checks" / "semgrep" / "requirements.txt"),
     ("ruff", ROOT / "requirements.txt"),
 )
+# Written into web/node_modules once `npm ci` has installed from the lockfile.
+FRONTEND_INSTALL_STAMP = ".officer-lockfile-stamp"
 # The swagger-ui-dist release /docs serves and the npm registry integrity of
 # its tarball. A refresh changes both and runs `just vendor-swagger-ui`.
 SWAGGER_UI_VERSION = "5.33.2"
@@ -460,6 +462,38 @@ def command_install_python_tools(_: argparse.Namespace) -> None:
     )
 
 
+def command_frontend_ci_install(args: argparse.Namespace) -> None:
+    web_dir = ROOT / "web"
+    # The stamp lives inside node_modules, so removing node_modules removes it.
+    stamp = web_dir / "node_modules" / FRONTEND_INSTALL_STAMP
+    # Everything the installed tree depends on: a package.json edit without a
+    # lockfile update must reach `npm ci`, which rejects the mismatch, and a
+    # Node.js or platform change invalidates the native modules.
+    current = "\n".join(
+        [
+            *(
+                sha256_file(web_dir / name)
+                for name in ("package.json", "package-lock.json")
+            ),
+            ci_version("CI_NODE"),
+            f"{sys.platform} {platform.machine()}",
+        ]
+    )
+    if stamp.is_file() and stamp.read_text(encoding="utf-8") == current:
+        print("Frontend dependencies already installed from the committed lockfile.")
+        return
+
+    # Only the project-local runtime's npm; `which` finds npm.cmd on Windows.
+    node_bin_dir = node_executable(Path(args.node_dir)).parent
+    npm = shutil.which("npm", path=str(node_bin_dir))
+    if npm is None:
+        raise SystemExit(
+            f"missing executable: npm in {node_bin_dir}; run just ensure-node"
+        )
+    run([npm, "ci"], cwd=web_dir)
+    stamp.write_text(current, encoding="utf-8")
+
+
 def command_semgrep_scan(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="officer-semgrep-") as temporary_dir:
         report_path = Path(temporary_dir) / "scan.json"
@@ -669,23 +703,42 @@ def command_go_tool_dev(args: argparse.Namespace) -> None:
         )
 
 
-def reset_serve_database(init_config: str) -> None:
-    """Move this checkout's stopped dev database aside before initialization."""
+def reset_serve_database(init_config: str, sqlite_path: str | None = None) -> None:
+    """Move a stopped dev database aside before initialization.
+
+    With sqlite_path, the database is exactly that file, as the binary opens an
+    explicit path. Otherwise it is this checkout's per-commit file next to the
+    path from PIT_OFFICER_SQLITE_PATH (default pit-officer.db). A relative path
+    is relative to the checkout.
+    """
     if not Path(init_config).is_file():
         raise SystemExit(f"initialization file not found: {init_config}")
-    configured = os.environ.get("PIT_OFFICER_SQLITE_PATH", "")
-    release_path = Path(configured if configured else "pit-officer.db")
-    if not release_path.is_absolute():
-        release_path = ROOT / release_path
-    state = release_path.parent / "officer-runtime.non-release.json"
-    if state.exists():
-        raise SystemExit(
-            f"stop Officer before resetting its database; runtime state exists: {state}"
-        )
-    commit = run(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise SystemExit(f"invalid build commit: {commit!r}")
-    database = Path(f"{release_path}.non-release-{commit}")
+    if sqlite_path is None:
+        configured = os.environ.get("PIT_OFFICER_SQLITE_PATH", "")
+        path = Path(configured if configured else "pit-officer.db")
+    else:
+        path = Path(sqlite_path)
+    if not path.is_absolute():
+        path = ROOT / path
+    # The per-commit file is opened only by a non-release build; an explicit path
+    # may be open in a release build too, which names its state file differently.
+    state_names = ["officer-runtime.non-release.json"]
+    if sqlite_path is not None:
+        state_names.append("officer-runtime.json")
+    for state_name in state_names:
+        state = path.parent / state_name
+        if state.exists():
+            raise SystemExit(
+                "stop Officer before resetting its database; "
+                f"runtime state exists: {state}"
+            )
+    if sqlite_path is None:
+        commit = run(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise SystemExit(f"invalid build commit: {commit!r}")
+        database = Path(f"{path}.non-release-{commit}")
+    else:
+        database = path
     if database.is_symlink() or (database.exists() and not database.is_file()):
         raise SystemExit(f"database is not a regular file: {database}")
     suffixes = ("", "-wal", "-shm", "-journal")
@@ -715,10 +768,17 @@ def reset_serve_database(init_config: str) -> None:
 def officer_launch_args(args: argparse.Namespace) -> list[str]:
     if args.reset_init is None:
         return args.officer_args
-    if args.officer_args != ["serve"]:
-        raise SystemExit("--reset-init requires the serve subcommand")
-    reset_serve_database(args.reset_init)
-    return ["serve", "-init", args.reset_init]
+    serve = args.officer_args
+    if serve == ["serve"]:
+        sqlite_path = None
+    elif len(serve) == 3 and serve[:2] == ["serve", "-sqlite-path"] and serve[2]:
+        sqlite_path = serve[2]
+    else:
+        raise SystemExit(
+            f"--reset-init accepts only: serve [-sqlite-path PATH]; got {serve}"
+        )
+    reset_serve_database(args.reset_init, sqlite_path)
+    return [*serve, "-init", args.reset_init]
 
 
 def command_run_officer(args: argparse.Namespace) -> None:
@@ -1022,6 +1082,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("install-python-tools").set_defaults(
         func=command_install_python_tools
     )
+
+    subparser = subparsers.add_parser("frontend-ci-install")
+    subparser.add_argument("node_dir")
+    subparser.set_defaults(func=command_frontend_ci_install)
 
     subparser = subparsers.add_parser("semgrep-scan")
     subparser.add_argument("semgrep")

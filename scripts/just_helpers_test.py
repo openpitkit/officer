@@ -19,17 +19,21 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import io
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import just_helpers as helpers
 
@@ -204,6 +208,73 @@ class ReleaseTests(unittest.TestCase):
             self.command("check-release-notes", "0.3.0")
 
 
+class SemgrepScanTests(unittest.TestCase):
+    VALID_RULE = """rules:
+  - id: valid-rule
+    pattern: fmt.Println(...)
+    message: no printing
+    languages: [go]
+    severity: ERROR
+"""
+    BROKEN_RULE = """rules:
+  - id: broken-rule
+    pattern: "func $X( {"
+    message: this pattern does not parse
+    languages: [go]
+    severity: ERROR
+"""
+
+    def setUp(self) -> None:
+        bin_dir = (
+            helpers.ROOT / ".venv" / ("Scripts" if helpers.is_windows() else "bin")
+        )
+        self.semgrep = bin_dir / ("semgrep.exe" if helpers.is_windows() else "semgrep")
+        if not self.semgrep.is_file():
+            self.fail(
+                f"semgrep is not installed at {self.semgrep}; "
+                "run just install-python-tools"
+            )
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.rules = Path(temporary.name) / "rules"
+        self.rules.mkdir()
+        (self.rules / "valid.yaml").write_text(self.VALID_RULE, encoding="utf-8")
+        self.target = Path(temporary.name) / "target.go"
+        self.target.write_text("package target\n", encoding="utf-8")
+
+    def scan(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(helpers.ROOT / "scripts" / "just_helpers.py"),
+                "semgrep-scan",
+                str(self.semgrep),
+                "--config",
+                f"{self.rules}/",
+                "--error",
+                "--timeout",
+                "0",
+                "--metrics=off",
+                "--disable-version-check",
+                str(self.target),
+            ],
+            cwd=helpers.ROOT,
+            text=True,
+            capture_output=True,
+            timeout=300,
+        )
+
+    def test_valid_rules_pass(self) -> None:
+        result = self.scan()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_rule_that_does_not_parse_fails_the_scan_and_is_named(self) -> None:
+        (self.rules / "broken.yaml").write_text(self.BROKEN_RULE, encoding="utf-8")
+        result = self.scan()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("broken-rule", result.stdout + result.stderr)
+
+
 class ResetServeTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -332,6 +403,31 @@ class ResetServeTests(unittest.TestCase):
             run.assert_not_called()
         self.assertEqual(self.database.read_bytes(), b"current database")
 
+    def test_release_runtime_state_next_to_the_default_path_does_not_block_reset(
+        self,
+    ) -> None:
+        # The per-commit file is opened only by a non-release build, so the
+        # state file of a running release build does not guard it.
+        self.database.write_bytes(b"per-commit data")
+        (self.root / "officer-runtime.json").write_text("{}", encoding="utf-8")
+
+        def run(command: list[str], **_: object):
+            if command == ["git", "rev-parse", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, self.commit + "\n", "")
+            self.assertEqual(command[1:], ["serve", "-init", str(self.config)])
+            self.assertFalse(self.database.exists())
+            self.assertEqual(self.backup.read_bytes(), b"per-commit data")
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            patch.object(helpers, "datetime") as clock,
+            patch.object(helpers, "run", side_effect=run) as launch,
+        ):
+            clock.now.return_value.astimezone.return_value = self.timestamp
+            self.command("run-officer", "--reset-init", str(self.config), "serve")
+            self.assertEqual(launch.call_count, 2)
+        self.assertEqual(self.release.read_bytes(), b"release data")
+
     def test_missing_config_refuses_reset_before_moving_anything(self) -> None:
         self.database.write_bytes(b"current database")
         self.config.unlink()
@@ -340,6 +436,406 @@ class ResetServeTests(unittest.TestCase):
                 self.command("run-officer", "--reset-init", str(self.config), "serve")
             run.assert_not_called()
         self.assertEqual(self.database.read_bytes(), b"current database")
+
+    def test_explicit_database_path_resets_that_file_and_serves_it(self) -> None:
+        chosen = self.root / "chosen.db"
+        suffixes = ("", "-wal", "-shm", "-journal")
+        backup = Path(f"{chosen}.backup-20261113T141516.123456+0200")
+        for dev in (False, True):
+            with self.subTest(dev=dev):
+                self.database.write_bytes(b"per-commit data")
+                for suffix in suffixes:
+                    Path(f"{chosen}{suffix}").write_bytes(f"chosen{suffix}".encode())
+
+                def run(
+                    command: list[str],
+                    *,
+                    suffixes: tuple[str, ...] = suffixes,
+                    **_: object,
+                ):
+                    self.assertEqual(
+                        command,
+                        [
+                            str(self.root / helpers.officer_binary()),
+                            "serve",
+                            "-sqlite-path",
+                            "chosen.db",
+                            "-init",
+                            str(self.config),
+                        ],
+                    )
+                    for suffix in suffixes:
+                        self.assertFalse(Path(f"{chosen}{suffix}").exists())
+                        self.assertEqual(
+                            Path(f"{backup}{suffix}").read_bytes(),
+                            f"chosen{suffix}".encode(),
+                        )
+                    return subprocess.CompletedProcess(command, 0)
+
+                with (
+                    patch.object(helpers, "datetime") as clock,
+                    patch.object(helpers, "run", side_effect=run) as launch,
+                    patch.object(
+                        helpers,
+                        "local_runtime_library",
+                        return_value=self.root / "runtime",
+                    ),
+                ):
+                    clock.now.return_value.astimezone.return_value = self.timestamp
+                    arguments = (
+                        [
+                            "run-officer-dev",
+                            "--reset-init",
+                            str(self.config),
+                            "debug",
+                            "../pit",
+                            "serve",
+                            "-sqlite-path",
+                            "chosen.db",
+                        ]
+                        if dev
+                        else [
+                            "run-officer",
+                            "--reset-init",
+                            str(self.config),
+                            "serve",
+                            "-sqlite-path",
+                            "chosen.db",
+                        ]
+                    )
+                    self.command(*arguments)
+                    # Only the launch: no commit is looked up for an explicit path.
+                    self.assertEqual(launch.call_count, 1)
+                self.assertEqual(self.database.read_bytes(), b"per-commit data")
+                self.assertEqual(self.release.read_bytes(), b"release data")
+                for suffix in suffixes:
+                    Path(f"{backup}{suffix}").unlink()
+
+    def test_runtime_state_next_to_explicit_path_refuses_reset(self) -> None:
+        # A release build writes officer-runtime.json, any other build the
+        # non-release name; either one means an Officer has the file open.
+        for state_name in ("officer-runtime.json", "officer-runtime.non-release.json"):
+            with self.subTest(state=state_name):
+                directory = self.root / f"chosen-{state_name}"
+                directory.mkdir()
+                chosen = directory / "officer.db"
+                chosen.write_bytes(b"chosen data")
+                (directory / state_name).write_text("{}", encoding="utf-8")
+                with patch.object(helpers, "run") as run:
+                    with self.assertRaisesRegex(SystemExit, "stop Officer"):
+                        self.command(
+                            "run-officer",
+                            "--reset-init",
+                            str(self.config),
+                            "serve",
+                            "-sqlite-path",
+                            f"chosen-{state_name}/officer.db",
+                        )
+                    run.assert_not_called()
+                self.assertEqual(chosen.read_bytes(), b"chosen data")
+                self.assertEqual(list(directory.glob("*.backup-*")), [])
+
+    def test_unsupported_serve_arguments_are_refused_before_moving_anything(
+        self,
+    ) -> None:
+        self.database.write_bytes(b"current database")
+        for serve_args in (
+            ["migrate"],
+            ["serve", "-x"],
+            ["serve", "-sqlite-path"],
+            ["serve", "-sqlite-path", ""],
+            ["serve", "-sqlite-path=chosen.db"],
+            ["serve", "-sqlite-path", "chosen.db", "extra"],
+            ["serve", "extra", "-sqlite-path", "chosen.db"],
+        ):
+            with self.subTest(serve_args=serve_args):
+                with patch.object(helpers, "run") as run:
+                    with self.assertRaisesRegex(
+                        SystemExit, r"serve \[-sqlite-path PATH\]"
+                    ):
+                        self.command(
+                            "run-officer", "--reset-init", str(self.config), *serve_args
+                        )
+                    run.assert_not_called()
+                self.assertEqual(self.database.read_bytes(), b"current database")
+                self.assertEqual(list(self.root.glob("*.backup-*")), [])
+
+
+class ServeRecipeTests(unittest.TestCase):
+    def test_every_serve_recipe_forwards_sqlite_path_to_the_launcher(self) -> None:
+        just = shutil.which("just")
+        if just is None:
+            self.fail("just is not on PATH; it is required to check the recipes")
+        justfile = str(helpers.ROOT / "justfile")
+        summary = subprocess.run(
+            [just, "--justfile", justfile, "--summary"],
+            cwd=helpers.ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        recipes = [
+            name for name in summary.stdout.split() if name.startswith("run-serve")
+        ]
+        self.assertTrue(recipes, "no run-serve recipes found")
+        database = "/path with space/officer.db"
+        for recipe in recipes:
+            with self.subTest(recipe=recipe):
+                dry_run = subprocess.run(
+                    [
+                        just,
+                        "--justfile",
+                        justfile,
+                        "--dry-run",
+                        f"sqlite_path={database}",
+                        recipe,
+                    ],
+                    cwd=helpers.ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                )
+                launches = [
+                    shlex.split(line)
+                    for line in dry_run.stderr.splitlines()
+                    if re.search(r"\brun-officer(-dev)?\b", line)
+                ]
+                self.assertEqual(len(launches), 1, dry_run.stderr)
+                self.assertEqual(launches[0][-3:], ["serve", "-sqlite-path", database])
+                self.assertEqual("--reset-init" in launches[0], "reset" in recipe)
+
+
+class RecipeTestCase(unittest.TestCase):
+    def dump(self) -> dict[str, dict[str, object]]:
+        just = shutil.which("just")
+        if just is None:
+            self.fail("just is not on PATH; it is required to check the recipes")
+        # pipeline.just imports the justfile, so its dump holds the CI recipes too.
+        dump = subprocess.run(
+            [
+                just,
+                "--justfile",
+                str(helpers.ROOT / "pipeline.just"),
+                "--dump",
+                "--dump-format",
+                "json",
+            ],
+            cwd=helpers.ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return json.loads(dump.stdout)
+
+    def recipes(self) -> dict[str, dict[str, object]]:
+        return self.dump()["recipes"]
+
+    def reachable(self, recipes: dict[str, dict[str, object]], name: str) -> set[str]:
+        seen: set[str] = set()
+        pending = [name]
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            pending.extend(
+                dependency["recipe"] for dependency in recipes[current]["dependencies"]
+            )
+        return seen
+
+    def body_text(self, recipe: dict[str, object]) -> str:
+        return "\n".join(
+            "".join(part for part in line if isinstance(part, str))
+            for line in recipe["body"]
+        )
+
+    def variables(self, expression: object) -> set[str]:
+        # The JSON dump nests a variable as ["variable", name] inside the
+        # fragments of a body line, the arguments of a call and an assignment.
+        found: set[str] = set()
+        pending = [expression]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, list):
+                if len(node) == 2 and node[0] == "variable":
+                    found.add(node[1])
+                else:
+                    pending.extend(node)
+        return found
+
+
+class FrontendRecipeTests(RecipeTestCase):
+    # A whole word: the helper subcommand ensure-node is not the node binary.
+    FRONTEND_TOOLCHAIN = re.compile(r"(?<![\w-])(?:npm|npx|node)(?![\w-])")
+    INSTALL_RECIPE = "frontend-ci-install"
+    # The only recipe running the toolchain that installs it instead of using it:
+    # it installs from package.json, and frontend-ci-install from the lockfile.
+    TOOLCHAIN_INSTALLERS = {"frontend-install"}
+
+    def test_every_recipe_running_the_frontend_toolchain_installs_its_dependencies(
+        self,
+    ) -> None:
+        recipes = self.recipes()
+        self.assertIn(self.INSTALL_RECIPE, recipes)
+        for installer in self.TOOLCHAIN_INSTALLERS:
+            self.assertIn(installer, recipes)
+        users = [
+            name
+            for name, recipe in recipes.items()
+            if name not in self.TOOLCHAIN_INSTALLERS
+            and self.FRONTEND_TOOLCHAIN.search(self.body_text(recipe))
+        ]
+        self.assertTrue(users, "no recipe runs the frontend toolchain")
+        for name in users:
+            with self.subTest(recipe=name):
+                self.assertIn(
+                    self.INSTALL_RECIPE,
+                    self.reachable(recipes, name),
+                    f"{name} runs node, npm or npx without installing the "
+                    f"frontend dependencies from the lockfile first",
+                )
+
+
+class PythonToolRecipeTests(RecipeTestCase):
+    INSTALL_RECIPE = "install-python-tools"
+
+    def venv_variables(self, assignments: dict[str, dict[str, object]]) -> set[str]:
+        # The venv exists only once install-python-tools has run, so every
+        # variable that names something inside it is a venv tool.
+        found = {"venv_dir", "venv_bin"}
+        grown = True
+        while grown:
+            grown = False
+            for name, assignment in assignments.items():
+                if name not in found and self.variables(assignment["value"]) & found:
+                    found.add(name)
+                    grown = True
+        return found
+
+    def test_every_recipe_running_a_venv_tool_installs_the_venv(self) -> None:
+        dump = self.dump()
+        recipes = dump["recipes"]
+        self.assertIn(self.INSTALL_RECIPE, recipes)
+        venv = self.venv_variables(dump["assignments"])
+        self.assertLess({"venv_dir", "venv_bin"}, venv)
+        users = [
+            name
+            for name, recipe in recipes.items()
+            if self.variables(recipe["body"]) & venv
+        ]
+        self.assertTrue(users, "no recipe runs a venv tool")
+        for name in users:
+            with self.subTest(recipe=name):
+                self.assertIn(
+                    self.INSTALL_RECIPE,
+                    self.reachable(recipes, name),
+                    f"{name} runs a venv interpreter or tool without creating "
+                    f"the venv first",
+                )
+
+
+class FrontendInstallTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.web = self.root / "web"
+        self.web.mkdir()
+        (self.web / "package.json").write_text(
+            '{"name": "web", "version": "1.0.0"}\n', encoding="utf-8"
+        )
+        self.lockfile = self.web / "package-lock.json"
+        self.lockfile.write_text('{"lockfileVersion": 3}\n', encoding="utf-8")
+        self.versions = self.root / ".github" / "ci-versions.env"
+        self.versions.parent.mkdir()
+        self.versions.write_text("CI_NODE=22.1.0\n", encoding="utf-8")
+        # The project-local runtime ensure-node installs, with a real npm file.
+        self.node_dir = self.root / "node"
+        self.node_bin_dir = helpers.node_executable(self.node_dir).parent
+        self.node_bin_dir.mkdir(parents=True)
+        self.npm = self.node_bin_dir / ("npm.cmd" if helpers.is_windows() else "npm")
+        self.npm.write_text("", encoding="utf-8")
+        self.npm.chmod(0o755)
+
+    def install(self, side_effect: object = None) -> Mock:
+        parser = helpers.build_parser()
+        args = parser.parse_args(["frontend-ci-install", str(self.node_dir)])
+        with (
+            patch.object(helpers, "ROOT", self.root),
+            patch.object(helpers, "run", side_effect=side_effect) as run,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            args.func(args)
+        return run
+
+    def npm_ci(self, command: list[str], cwd: Path | None = None) -> None:
+        self.assertEqual(command[1:], ["ci"])
+        self.assertTrue(Path(command[0]).samefile(self.npm), command[0])
+        (self.web / "node_modules").mkdir(exist_ok=True)
+
+    def assert_npm_ci_ran(self, run: Mock) -> None:
+        run.assert_called_once()
+        command, options = run.call_args
+        self.assertEqual(command[0][1:], ["ci"])
+        self.assertTrue(Path(command[0][0]).samefile(self.npm), command[0][0])
+        self.assertEqual(options, {"cwd": self.web})
+
+    def test_nothing_installed_runs_npm_ci_in_web_then_skips_the_next_call(
+        self,
+    ) -> None:
+        run = self.install(side_effect=self.npm_ci)
+        self.assert_npm_ci_ran(run)
+
+        run = self.install(side_effect=self.npm_ci)
+        run.assert_not_called()
+
+    def test_a_lockfile_changed_after_an_install_runs_npm_ci_again(self) -> None:
+        self.install(side_effect=self.npm_ci)
+        self.lockfile.write_text('{"lockfileVersion": 3, "packages": {}}\n')
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_a_package_json_changed_after_an_install_runs_npm_ci_again(self) -> None:
+        self.install(side_effect=self.npm_ci)
+        (self.web / "package.json").write_text(
+            '{"name": "web", "version": "1.0.1"}\n', encoding="utf-8"
+        )
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_a_node_version_changed_after_an_install_runs_npm_ci_again(self) -> None:
+        self.install(side_effect=self.npm_ci)
+        self.versions.write_text("CI_NODE=22.2.0\n", encoding="utf-8")
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_wiped_node_modules_runs_npm_ci_again(self) -> None:
+        self.install(side_effect=self.npm_ci)
+        shutil.rmtree(self.web / "node_modules")
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_failed_npm_ci_propagates_and_records_no_install(self) -> None:
+        failure = subprocess.CalledProcessError(1, [str(self.npm), "ci"])
+
+        def fail(command: list[str], cwd: Path | None = None) -> None:
+            (self.web / "node_modules").mkdir(exist_ok=True)
+            raise failure
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.install(side_effect=fail)
+        self.assertEqual(list((self.web / "node_modules").iterdir()), [])
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_missing_project_npm_fails_naming_the_runtime_directory(self) -> None:
+        self.npm.unlink()
+
+        with self.assertRaisesRegex(
+            SystemExit, f"npm in {re.escape(str(self.node_bin_dir))}"
+        ):
+            self.install()
+        self.assertFalse((self.web / "node_modules").exists())
 
 
 if __name__ == "__main__":

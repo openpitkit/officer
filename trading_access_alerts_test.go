@@ -244,6 +244,7 @@ func mixedAlertApp(t *testing.T, channels []alerts.Channel, configure ...func(*f
 		local = n
 		return n, eng, err
 	})
+	builder.SetSPAFactory(gateTestSPA)
 	for _, configureBuilder := range configure {
 		configureBuilder(builder)
 	}
