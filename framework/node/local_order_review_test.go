@@ -605,14 +605,18 @@ func TestLocalNode_HeldReviewRefusals(t *testing.T) {
 	}
 }
 
+func heldReviewCancelOutcomes() []engine.BalanceOutcome {
+	return []engine.BalanceOutcome{
+		{Asset: "AAPL", Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "-1", IncomingResult: "0", BalanceResult: "0", HeldResult: "0"}},
+		{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{HeldDelta: "-100", HeldResult: "0", BalanceResult: "1000", IncomingResult: "0"}},
+	}
+}
+
 func TestLocalNode_HeldReviewCancel(t *testing.T) {
 	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate} {
 		t.Run(mode, func(t *testing.T) {
 			n, eng, waiting := newOrderReviewTestNode(t, mode, true)
-			eng.execReportOutcomes = []engine.BalanceOutcome{
-				{Asset: "AAPL", Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "-1", IncomingResult: "0", BalanceResult: "0", HeldResult: "0"}},
-				{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{HeldDelta: "-100", HeldResult: "0", BalanceResult: "1000", IncomingResult: "0"}},
-			}
+			eng.execReportOutcomes = heldReviewCancelOutcomes()
 			preTradeCalls := eng.preTradeCalls
 			var attested []domain.OrderEvent
 			cancelled, err := n.CancelOrderReview(context.Background(), waiting.ExternalID, testCaller,
@@ -1427,7 +1431,7 @@ func (r *panicOrderReviewRealm) RecordOrderSettlement(ctx context.Context, settl
 }
 
 func (r *panicOrderReviewRealm) AppendAudit(ctx context.Context, entry store.AuditEntry) error {
-	if r.audit && (entry.Action == domain.AuditActionConfirmOrderReview || entry.Action == domain.AuditActionForceOrderReview) {
+	if r.audit && (entry.Action == domain.AuditActionConfirmOrderReview || entry.Action == domain.AuditActionForceOrderReview || entry.Action == domain.AuditActionCancelOrderReview) {
 		panic("review audit panic")
 	}
 	return r.RealmStore.AppendAudit(ctx, entry)
@@ -1435,7 +1439,7 @@ func (r *panicOrderReviewRealm) AppendAudit(ctx context.Context, entry store.Aud
 
 func TestLocalNode_OrderReviewPostCommitPanic(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate, "force"} {
+	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate, "force", "cancel_held"} {
 		for _, step := range []string{"settlement", "audit"} {
 			if mode == "force" && step == "settlement" {
 				continue
@@ -1443,19 +1447,23 @@ func TestLocalNode_OrderReviewPostCommitPanic(t *testing.T) {
 			t.Run(mode+"/"+step, func(t *testing.T) {
 				t.Parallel()
 				submitMode := mode
-				if mode == "force" {
+				if mode == "force" || mode == "cancel_held" {
 					submitMode = domain.SubmitModeHold
 				}
-				n, _, waiting := newOrderReviewTestNode(t, submitMode, mode == "force")
+				n, eng, waiting := newOrderReviewTestNode(t, submitMode, mode == "force" || mode == "cancel_held")
 				before := reviewTestDetail(t, n, waiting.ExternalID)
 				original := n.realm
 				n.realm = &panicOrderReviewRealm{RealmStore: original, audit: step == "audit"}
 				var fatals []error
 				n.fatal = func(err error) { fatals = append(fatals, err) }
 				var err error
-				if mode == "force" {
+				switch mode {
+				case "force":
 					_, _, err = n.ForceOrderReview(context.Background(), waiting.ExternalID, testCaller, nil)
-				} else {
+				case "cancel_held":
+					eng.execReportOutcomes = heldReviewCancelOutcomes()
+					_, err = n.CancelOrderReview(context.Background(), waiting.ExternalID, testCaller, nil)
+				default:
 					_, _, err = confirmReviewForTest(n, mode, waiting.ExternalID, nil)
 				}
 				if len(fatals) != 1 {
@@ -1478,6 +1486,11 @@ func TestLocalNode_OrderReviewPostCommitPanic(t *testing.T) {
 					if after.Review != nil || after.Order.Status == domain.OrderStatusAwaitingReview {
 						t.Fatalf("audit panic lost accepted settlement: %+v", after)
 					}
+					if strings.HasPrefix(mode, "cancel_") &&
+						(after.Order.Status != domain.OrderStatusCancelled ||
+							after.Order.Leaves != "0" || after.Order.ReservedQuantity != "0") {
+						t.Fatalf("audit panic cancel order = %+v, want cancelled with leaves 0 and reserved 0", after.Order)
+					}
 					if !strings.Contains(fatals[0].Error(), "post-commit audit failure") {
 						t.Fatalf("audit panic fatal = %v, want audit failure", fatals[0])
 					}
@@ -1487,6 +1500,9 @@ func TestLocalNode_OrderReviewPostCommitPanic(t *testing.T) {
 				}
 				if rows := reviewTestAudit(t, n, domain.AuditActionForceOrderReview); len(rows) != 0 {
 					t.Fatalf("panic force audit = %+v, want none", rows)
+				}
+				if rows := reviewTestAudit(t, n, domain.AuditActionCancelOrderReview); len(rows) != 0 {
+					t.Fatalf("panic cancel audit = %+v, want none", rows)
 				}
 			})
 		}

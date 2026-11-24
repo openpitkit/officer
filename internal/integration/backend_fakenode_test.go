@@ -1228,10 +1228,7 @@ func (n *fakeNode) decideOrderReview(
 		return domain.Order{}, fwengine.OrderResult{}, n.confirmErr
 	}
 	result := fwengine.OrderResult{Verdict: domain.VerdictAccept}
-	if force {
-		result.Lock = slices.Clone(order.Lock)
-		result.SettlementLockPrice = string(order.Lock)
-	} else if n.submitResult != nil {
+	if !force && n.submitResult != nil {
 		result = *n.submitResult
 	}
 	if result.Verdict != domain.VerdictAccept && result.Verdict != domain.VerdictReject {
@@ -1242,10 +1239,13 @@ func (n *fakeNode) decideOrderReview(
 	before := len(n.orderEvents[orderID])
 	if result.Verdict == domain.VerdictAccept {
 		order.Status = domain.OrderStatusCommitted
-		order.Lock = slices.Clone(result.Lock)
-		if force {
-			order.Leaves = order.ReservedQuantity
+		// A held review reserved at submit time; deciding it makes no second
+		// reservation, so the stored leaves, reserved quantity and lock stay.
+		if review.Held {
+			result.Lock = slices.Clone(order.Lock)
+			result.SettlementLockPrice = string(order.Lock)
 		} else {
+			order.Lock = slices.Clone(result.Lock)
 			order.Leaves, order.ReservedQuantity = order.AmountValue, order.AmountValue
 		}
 		delete(n.orderReviews, orderID)
@@ -1293,11 +1293,7 @@ func (n *fakeNode) decideImmediateReview(
 		return domain.Order{}, fwengine.ImmediateResult{}, n.confirmErr
 	}
 	result := fwengine.ImmediateResult{Verdict: domain.VerdictAccept, TradePrice: order.Price, FillQuantity: order.AmountValue}
-	if force {
-		result.Lock = slices.Clone(order.Lock)
-		result.SettlementLockPrice = string(order.Lock)
-		result.FillQuantity = order.ReservedQuantity
-	} else if n.immediateResult != nil {
+	if !force && n.immediateResult != nil {
 		result = *n.immediateResult
 	}
 	if result.Verdict != domain.VerdictAccept && result.Verdict != domain.VerdictReject {
@@ -1307,6 +1303,11 @@ func (n *fakeNode) decideImmediateReview(
 	snapshot := n.snapshotOrderTxn()
 	before := len(n.orderEvents[orderID])
 	if result.Verdict == domain.VerdictAccept {
+		if review.Held {
+			result.Lock = slices.Clone(order.Lock)
+			result.SettlementLockPrice = string(order.Lock)
+			result.FillQuantity = order.ReservedQuantity
+		}
 		order.Status, order.Leaves, order.ReservedQuantity = domain.OrderStatusFilled, "0", "0"
 		order.Lock = slices.Clone(result.Lock)
 		result = completeFakeImmediateResult(order, result)

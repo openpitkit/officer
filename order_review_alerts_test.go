@@ -381,10 +381,11 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 			case <-done:
 			case <-time.After(3 * time.Second):
 				t.Error("order review operation did not finish during cleanup")
-				return
 			}
 		}
-		_ = app.Close()
+		if err := app.Close(); err != nil {
+			t.Fatal(err)
+		}
 	})
 	cp := app.Service()
 	ctx := auth.ContextWithCaller(t.Context(), domain.Caller{Source: domain.SourceAPI, Principal: domain.PrincipalOperator})
