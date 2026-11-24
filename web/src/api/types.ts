@@ -1387,6 +1387,9 @@ export interface PublicKeyMaterial {
   key: string;
 }
 
+/** Mode selected when submitting an order. */
+export type SubmitMode = "immediate" | "hold";
+
 /** The persisted signed-attestation envelope metadata for one order event: the
  *  exact base64url envelope plus its own fields. Bound 1:1 to the event
  *  it attested. */
@@ -1398,8 +1401,12 @@ export interface EventAttestation {
   alg: ApprovalAlg;
   /** The trading request this attestation binds. */
   requestType: string;
-  /** Wire submit mode carried by the attestation ("hold" | "immediate"). */
-  mode: string;
+  /**
+   * The original submit mode of the order this attestation belongs to.
+   * Execution-report attestations signed by Officer 0.3.1 and earlier carry
+   * `immediate` whatever the order's mode.
+   */
+  mode: SubmitMode;
   /** RFC3339Nano timestamp at which the envelope was issued. May be empty. */
   issuedAt: string;
   /** Whether the envelope carries a real cryptographic signature. */

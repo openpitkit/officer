@@ -53,6 +53,7 @@ type etoroRuntimeTest struct {
 	st       store.Store
 	realm    store.RealmStore
 	n        node.Node
+	service  *backend.Service
 	runtime  *fwtrading.Runtime
 	registry *fwtrading.Registry
 	server   *httptest.Server
@@ -160,6 +161,7 @@ func (h *etoroRuntimeTest) start() {
 	h.must(err)
 	service, err := backend.New(h.n, nil, signer, engine.LockSettlementPrice)
 	h.must(err)
+	h.service = service
 	h.runtime, err = fwtrading.NewRuntime(h.registry, h.realm, nil,
 		func(ctx context.Context, in domain.ExecutionReportInput) error {
 			h.mu.Lock()
@@ -340,14 +342,17 @@ func (h *etoroRuntimeTest) draft(side domain.OrderSide, quantity, price string) 
 
 func (h *etoroRuntimeTest) submit(side domain.OrderSide, price string) domain.Order {
 	h.t.Helper()
-	draft := h.draft(side, "0.3", price)
-	h.must(h.runtime.PreCheck(h.ctx, draft, h.dest))
-	order, err := h.n.SubmitOrder(h.ctx, draft, domain.MissingAccountReject, h.caller)
-	h.must(err)
+	order := h.submitDraft(h.draft(side, "0.3", price))
 	if order.Status != domain.OrderStatusCommitted {
 		h.t.Fatalf("pre-trade did not commit order: %+v", order)
 	}
 	return order
+}
+
+func (h *etoroRuntimeTest) submitDraft(draft domain.Order) domain.Order {
+	h.t.Helper()
+	h.must(h.runtime.PreCheck(h.ctx, draft, h.dest))
+	return submitHeldOrder(h.t, h.ctx, h.service, h.realm, h.caller, draft)
 }
 
 func (h *etoroRuntimeTest) detail(order domain.Order) domain.OrderDetail {
@@ -634,10 +639,7 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 	t.Run("pre-trade-reject", func(t *testing.T) {
 		h := newEtoroRuntimeTest(t)
 		h.dest.Route = `{"timeInForce":"ioc"}`
-		draft := h.draft(domain.OrderSideBuy, "5", "201")
-		h.must(h.runtime.PreCheck(h.ctx, draft, h.dest))
-		order, err := h.n.SubmitOrder(h.ctx, draft, domain.MissingAccountReject, h.caller)
-		h.must(err)
+		order := h.submitDraft(h.draft(domain.OrderSideBuy, "5", "201"))
 		if order.Status != domain.OrderStatusRejected {
 			t.Fatalf("pre-trade did not reject: %+v", order)
 		}

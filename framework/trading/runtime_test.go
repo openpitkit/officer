@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/trading"
 )
@@ -464,10 +465,7 @@ func TestEligibility(t *testing.T) {
 			var order domain.Order
 			switch kind {
 			case "rejected":
-				draft := f.draft("10000")
-				var err error
-				order, err = f.n.SubmitOrder(testCtx, draft, domain.MissingAccountReject, testCaller)
-				must(t, err)
+				order = f.submitWithMode(f.draft("10000"), backend.SubmitModeHold)
 				if order.Status != domain.OrderStatusRejected {
 					t.Fatalf("expected rejection: %s", order.Status)
 				}
@@ -478,9 +476,7 @@ func TestEligibility(t *testing.T) {
 				order, err = f.n.SubmitOrder(testCtx, draft, domain.MissingAccountReject, testCaller)
 				must(t, err)
 			case "immediate":
-				var err error
-				order, _, err = f.n.SubmitImmediate(testCtx, f.draft("10"), domain.MissingAccountReject, testCaller)
-				must(t, err)
+				order = f.submitWithMode(f.draft("10"), backend.SubmitModeImmediate)
 			case "no-acceptance":
 				var err error
 				draft := f.draft("10")
@@ -555,8 +551,7 @@ func TestDestinationChecksAndPreCheckWritesNothing(t *testing.T) {
 			if err := f.runtime.PreCheck(testCtx, tc.draft, tc.dest); !errors.Is(err, tc.want) {
 				t.Fatalf("precheck=%v want=%v", err, tc.want)
 			}
-			order, err := f.n.SubmitOrder(testCtx, tc.draft, domain.MissingAccountReject, testCaller)
-			must(t, err)
+			order := f.submitWithMode(tc.draft, backend.SubmitModeHold)
 			if _, err := f.runtime.Send(testCtx, order.ExternalID, tc.dest); !errors.Is(err, tc.want) {
 				t.Fatalf("send=%v want=%v", err, tc.want)
 			}

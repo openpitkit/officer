@@ -49,6 +49,7 @@ type coinbaseRuntimeTest struct {
 	ctx           context.Context
 	n             node.Node
 	realm         store.RealmStore
+	service       *backend.Service
 	runtime       *fwtrading.Runtime
 	dest          domain.TradingDestination
 	sockets       chan *websocket.Conn
@@ -123,10 +124,10 @@ func newCoinbaseRuntimeTest(t *testing.T) *coinbaseRuntimeTest {
 	h.dest = domain.TradingDestination{Connection: connection.ExternalID, Route: `{"timeInForce":"GTC"}`}
 	signer, err := signing.New(h.realm)
 	h.must(err)
-	service, err := backend.New(h.n, nil, signer, engine.LockSettlementPrice)
+	h.service, err = backend.New(h.n, nil, signer, engine.LockSettlementPrice)
 	h.must(err)
 	h.runtime, err = fwtrading.NewRuntime(registry, h.realm, nil, func(ctx context.Context, in domain.ExecutionReportInput) error {
-		_, _, err := service.ApplyExecutionReport(auth.ContextWithCaller(ctx, auth.SystemCaller()), in)
+		_, _, err := h.service.ApplyExecutionReport(auth.ContextWithCaller(ctx, auth.SystemCaller()), in)
 		return err
 	},
 		func(context.Context, domain.AccountID, domain.ExternalID, domain.AdjustmentRequest) error {
@@ -243,8 +244,7 @@ func (h *coinbaseRuntimeTest) submit() domain.Order {
 	caller := domain.Caller{Principal: domain.PrincipalOperator, Source: domain.SourceAPI}
 	draft := domain.Order{Account: "desk", BaseAsset: "BTC", QuoteAsset: "USD", Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "10"}
 	h.must(h.runtime.PreCheck(h.ctx, draft, h.dest))
-	order, err := h.n.SubmitOrder(h.ctx, draft, domain.MissingAccountReject, caller)
-	h.must(err)
+	order := submitHeldOrder(h.t, h.ctx, h.service, h.realm, caller, draft)
 	if order.Status != domain.OrderStatusCommitted {
 		h.t.Fatalf("order not committed: %+v", order)
 	}
