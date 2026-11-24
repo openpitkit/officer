@@ -206,18 +206,47 @@ const ALPACA_TIME_IN_FORCE = ["day", "gtc", "opg", "cls", "ioc", "fok"];
 
 const IB_TIME_IN_FORCE = ["day", "gtc", "ioc"];
 
+const ROUTE_FIELDS: Record<
+  "timeInForce" | "product",
+  {
+    inputId: string;
+    labelKey: string;
+    placeholderKey: string;
+    optionKeyPrefix: string;
+    docsLabelKey: string;
+  }
+> = {
+  timeInForce: {
+    inputId: "so-time-in-force",
+    labelKey: "addOrder.dialog.venue.timeInForce",
+    placeholderKey: "addOrder.dialog.venue.chooseTimeInForce",
+    optionKeyPrefix: "addOrder.dialog.venue.timeInForceOptions",
+    docsLabelKey: "addOrder.dialog.venue.aboutTimeInForce",
+  },
+  product: {
+    inputId: "so-product",
+    labelKey: "addOrder.dialog.venue.product",
+    placeholderKey: "addOrder.dialog.venue.chooseProduct",
+    optionKeyPrefix: "addOrder.dialog.venue.productOptions",
+    docsLabelKey: "addOrder.dialog.venue.aboutProducts",
+  },
+};
+
 const VENUE_ORDER_OPTIONS: Record<
   string,
   {
-    timeInForce: Record<"limit" | "market", string[]>;
+    routeKey: "timeInForce" | "product";
+    options: Record<"limit" | "market", string[]>;
     docsUrl?: string;
   }
 > = {
   test: {
-    timeInForce: { limit: [], market: [] },
+    routeKey: "timeInForce",
+    options: { limit: [], market: [] },
   },
   alpaca: {
-    timeInForce: {
+    routeKey: "timeInForce",
+    options: {
       limit: ALPACA_TIME_IN_FORCE,
       market: ALPACA_TIME_IN_FORCE,
     },
@@ -225,33 +254,43 @@ const VENUE_ORDER_OPTIONS: Record<
       "https://docs.alpaca.markets/us/docs/orders-at-alpaca#time-in-force",
   },
   binance: {
-    timeInForce: {
+    routeKey: "timeInForce",
+    options: {
       limit: ["GTC", "IOC", "FOK"],
       market: [],
     },
     docsUrl: "https://developers.binance.com/docs/binance-spot-api-docs/enums",
   },
   etoro: {
-    timeInForce: {
+    routeKey: "timeInForce",
+    options: {
       limit: ["ioc"],
       market: [],
     },
     docsUrl: "https://api-portal.etoro.com/core/guides/market-orders",
   },
   ib: {
-    timeInForce: {
+    routeKey: "timeInForce",
+    options: {
       limit: IB_TIME_IN_FORCE,
       market: IB_TIME_IN_FORCE,
     },
     docsUrl: "https://www.interactivebrokers.com/docs/tws-api/doc/",
   },
   okx: {
-    timeInForce: {
+    routeKey: "timeInForce",
+    options: {
       limit: ["GTC", "IOC", "FOK"],
       market: [],
     },
     docsUrl:
       "https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order",
+  },
+  openalgo: {
+    routeKey: "product",
+    options: { limit: ["CNC", "MIS"], market: ["CNC", "MIS"] },
+    docsUrl:
+      "https://docs.openalgo.in/api-documentation/v1/orders-api/placeorder",
   },
 };
 
@@ -661,7 +700,7 @@ function SubmitOrderDialog({
     null,
   );
   const [selectedConnection, setSelectedConnection] = useState("");
-  const [timeInForce, setTimeInForce] = useState("");
+  const [routeValue, setRouteValue] = useState("");
   const [dropCopyConfirmOpen, setDropCopyConfirmOpen] = useState(false);
   const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
     useState(false);
@@ -705,12 +744,11 @@ function SubmitOrderDialog({
     Object.hasOwn(VENUE_ORDER_OPTIONS, selectedDestination.provider)
       ? VENUE_ORDER_OPTIONS[selectedDestination.provider]
       : undefined;
-  const timeInForceOptions =
-    selectedVenueOptions?.timeInForce[price.trim() ? "limit" : "market"];
-  const timeInForceValid =
-    timeInForceOptions !== undefined &&
-    (timeInForceOptions.length === 0 ||
-      timeInForceOptions.includes(timeInForce));
+  const routeOptions =
+    selectedVenueOptions?.options[price.trim() ? "limit" : "market"];
+  const routeValid =
+    routeOptions !== undefined &&
+    (routeOptions.length === 0 || routeOptions.includes(routeValue));
   const selectedProviderTitle = selectedDestination
     ? providerTitle(tradingSnapshot, selectedDestination.provider)
     : "";
@@ -779,7 +817,7 @@ function SubmitOrderDialog({
     setDestinationsKey(requestKey);
     setDestinations([]);
     setSelectedConnection("");
-    setTimeInForce("");
+    setRouteValue("");
     setDestinationsError(null);
     setDestinationsLoading(true);
     fetchTradingDestinations(debouncedAccount, venueMode, controller.signal)
@@ -965,7 +1003,7 @@ function SubmitOrderDialog({
     setDestinationsLoading(false);
     setDestinationsError(null);
     setSelectedConnection("");
-    setTimeInForce("");
+    setRouteValue("");
     setDropCopyConfirmOpen(false);
     setMissingAccountConfirmOpen(false);
     setBusy(false);
@@ -1014,8 +1052,9 @@ function SubmitOrderDialog({
       venueMode === "" ||
       selectedDestination === undefined ||
       !selectedDestinationIsSelectable ||
-      timeInForceOptions === undefined ||
-      !timeInForceValid
+      selectedVenueOptions === undefined ||
+      routeOptions === undefined ||
+      !routeValid
     ) {
       return;
     }
@@ -1040,7 +1079,10 @@ function SubmitOrderDialog({
           destination: {
             connection: selectedDestination.connection,
             venueAccount: selectedDestination.venueAccount,
-            route: timeInForceOptions.length > 0 ? { timeInForce } : {},
+            route:
+              routeOptions.length > 0
+                ? { [selectedVenueOptions.routeKey]: routeValue }
+                : {},
           },
         },
         controller.signal,
@@ -1252,7 +1294,7 @@ function SubmitOrderDialog({
         amountKind === "quantity" &&
         venueMode !== "" &&
         selectedDestinationIsSelectable &&
-        timeInForceValid
+        routeValid
       : commonFieldsValid && amountKind !== "" && tab !== "";
 
   const fields = (
@@ -1358,7 +1400,7 @@ function SubmitOrderDialog({
                       value={selectedConnection}
                       onValueChange={(value) => {
                         setSelectedConnection(value);
-                        setTimeInForce("");
+                        setRouteValue("");
                       }}
                       disabled={busy}
                     >
@@ -1447,31 +1489,36 @@ function SubmitOrderDialog({
 
           {selectedDestinationIsSelectable &&
             selectedVenueOptions !== undefined &&
-            timeInForceOptions !== undefined &&
-            timeInForceOptions.length > 0 && (
+            routeOptions !== undefined &&
+            routeOptions.length > 0 && (
               <div className="flex flex-col gap-y-1.5">
-                <Label htmlFor="so-time-in-force">
-                  {t("addOrder.dialog.venue.timeInForce")}
+                <Label
+                  htmlFor={ROUTE_FIELDS[selectedVenueOptions.routeKey].inputId}
+                >
+                  {t(ROUTE_FIELDS[selectedVenueOptions.routeKey].labelKey)}
                 </Label>
                 <Select
-                  value={timeInForceValid ? timeInForce : ""}
-                  onValueChange={setTimeInForce}
+                  value={routeValid ? routeValue : ""}
+                  onValueChange={setRouteValue}
                   required
                   disabled={busy}
                 >
                   <SelectTrigger
-                    id="so-time-in-force"
+                    id={ROUTE_FIELDS[selectedVenueOptions.routeKey].inputId}
                     className="h-9 w-full text-sm"
                   >
                     <SelectValue
-                      placeholder={t("addOrder.dialog.venue.chooseTimeInForce")}
+                      placeholder={t(
+                        ROUTE_FIELDS[selectedVenueOptions.routeKey]
+                          .placeholderKey,
+                      )}
                     />
                   </SelectTrigger>
                   <SelectContent>
-                    {timeInForceOptions.map((value) => (
+                    {routeOptions.map((value) => (
                       <SelectItem key={value} value={value}>
                         {t(
-                          `addOrder.dialog.venue.timeInForceOptions.${value.toLowerCase()}`,
+                          `${ROUTE_FIELDS[selectedVenueOptions.routeKey].optionKeyPrefix}.${value.toLowerCase()}`,
                         )}
                       </SelectItem>
                     ))}
@@ -1484,7 +1531,9 @@ function SubmitOrderDialog({
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
                   >
-                    {t("addOrder.dialog.venue.aboutTimeInForce")}
+                    {t(
+                      ROUTE_FIELDS[selectedVenueOptions.routeKey].docsLabelKey,
+                    )}
                     <ExternalLink className="h-3 w-3" />
                   </a>
                 )}
@@ -3343,6 +3392,16 @@ function OrderDetailDialog({
                         </span>
                         <div className="nums mt-0.5 text-text">
                           {venueOrder.route.timeInForce.toUpperCase()}
+                        </div>
+                      </div>
+                    )}
+                    {venueOrder.route.product && (
+                      <div>
+                        <span className="text-muted-lt">
+                          {t("detail.dialog.venue.product")}
+                        </span>
+                        <div className="nums mt-0.5 text-text">
+                          {venueOrder.route.product}
                         </div>
                       </div>
                     )}

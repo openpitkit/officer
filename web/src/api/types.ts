@@ -862,7 +862,7 @@ export interface TradingConnection {
   diagnostics: Diagnostic[];
   /** Presence flags only; credential values are write-only. */
   secrets: Record<string, boolean>;
-  /** Non-secret provider settings; IB host, port, clientId; OKX site. */
+  /** Non-secret provider settings: IB host, port, clientId; OKX site; OpenAlgo url, wsUrl. */
   settings?: Record<string, unknown>;
   instruments: TradingInstrument[];
   access: TradingAccessGrant[];

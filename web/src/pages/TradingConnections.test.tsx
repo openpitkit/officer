@@ -4816,6 +4816,340 @@ describe("Test execution policy", () => {
   });
 });
 
+describe("OpenAlgo trading connections", () => {
+  const openalgoProvider: TradingProvider = {
+    ...provider,
+    type: "openalgo",
+    title: "OpenAlgo",
+    venueAccounts: false,
+    unlinkedFees: false,
+  };
+
+  beforeEach(() => {
+    snapshot = {
+      providers: [openalgoProvider],
+      connections: [
+        connection({
+          id: "openalgo-1",
+          provider: "openalgo",
+          label: "OpenAlgo paper",
+          settings: {
+            url: "http://openalgo.local:5000",
+            wsUrl: "ws://openalgo.local:8765",
+          },
+          secrets: { apiKey: true },
+        }),
+      ],
+    };
+  });
+
+  async function openCreate(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(
+      await screen.findByRole("button", { name: /^Add trading connection/ }),
+    );
+    const picker = within(
+      screen.getByRole("dialog", { name: "Add trading connection" }),
+    );
+    expect(
+      picker.queryByRole("link", { name: "Site" }),
+    ).not.toBeInTheDocument();
+    await user.click(picker.getByRole("button", { name: "OpenAlgo" }));
+    return within(
+      await screen.findByRole("dialog", { name: "Add OpenAlgo connection" }),
+    );
+  }
+
+  it.each(["paper", "live"] as const)(
+    "guides and creates a disabled %s connection with explicit trimmed settings and key",
+    async (mode) => {
+      const user = userEvent.setup();
+      renderTrading();
+      const dialog = await openCreate(user);
+      const modeControl = within(dialog.getByRole("group", { name: "Mode" }));
+      if (mode === "live")
+        await user.click(modeControl.getByRole("button", { name: "Live" }));
+      expect(dialog.getAllByRole("listitem")).toHaveLength(5);
+      for (const text of [
+        "Install OpenAlgo on a machine Officer can reach and start it. In OpenAlgo, open Select Broker, save your broker's API keys and log in to the broker with Login with.",
+        "Open API Key from OpenAlgo's profile menu, generate the API key and copy it. On the same page keep Order Execution Mode on Auto: in Semi-Auto OpenAlgo queues orders for approval in its Action Center instead of sending them, and Officer reports each such order as an error with an unknown outcome.",
+        "Enter OpenAlgo's REST address (its HOST_SERVER setting) and WebSocket address (WEBSOCKET_URL) below, with the API key. The REST address identifies this connection and cannot be changed later: to use another address, create a new connection.",
+        mode === "paper"
+          ? "Switch OpenAlgo to Analyzer mode and keep it there while this connection is enabled. Officer refuses a paper connection while OpenAlgo is in live mode. An order OpenAlgo places in live mode is reported as an error, and Officer does not track it further: if it closes, it stays pending for you to check at the broker."
+          : "Switch OpenAlgo to live mode and keep it there while this connection is enabled: live mode sends real orders to your broker. Officer refuses a live connection while OpenAlgo is in Analyzer mode. An order OpenAlgo places in Analyzer mode is reported as an error, and Officer does not track it further: if it closes, it stays pending for you to check in OpenAlgo.",
+      ])
+        expect(dialog.getByText(text, { exact: true })).toBeInTheDocument();
+      const tradingDayTexts = {
+        paper:
+          "OpenAlgo's order and trade books cover the current trading day only, and OpenAlgo confirms the filled quantity of a cancelled, rejected or expired order only through its live order stream. An order Officer cannot reconcile within its trading day, or one that closed while Officer was stopped, stays pending with an error: check it in OpenAlgo while it is in Analyzer mode.",
+        live: "OpenAlgo's order and trade books cover the current trading day only, and OpenAlgo confirms the filled quantity of a cancelled, rejected or expired order only through its live order stream. An order Officer cannot reconcile within its trading day, or one that closed while Officer was stopped, stays pending with an error: check it at the broker.",
+      };
+      expect(
+        dialog.getByText(tradingDayTexts[mode], { exact: true }),
+      ).toBeInTheDocument();
+      expect(
+        dialog.queryByText(
+          tradingDayTexts[mode === "paper" ? "live" : "paper"],
+          {
+            exact: true,
+          },
+        ),
+      ).not.toBeInTheDocument();
+      expect(
+        dialog.queryByText(
+          mode === "paper"
+            ? "Switch OpenAlgo to live mode and keep it there while this connection is enabled: live mode sends real orders to your broker. Officer refuses a live connection while OpenAlgo is in Analyzer mode. An order OpenAlgo places in Analyzer mode is reported as an error, and Officer does not track it further: if it closes, it stays pending for you to check in OpenAlgo."
+            : "Switch OpenAlgo to Analyzer mode and keep it there while this connection is enabled. Officer refuses a paper connection while OpenAlgo is in live mode. An order OpenAlgo places in live mode is reported as an error, and Officer does not track it further: if it closes, it stays pending for you to check at the broker.",
+          { exact: true },
+        ),
+      ).not.toBeInTheDocument();
+      for (const [name, href] of [
+        [
+          "Installation guide",
+          "https://docs.openalgo.in/installation-guidelines/getting-started",
+        ],
+        [
+          "Broker configuration",
+          "https://docs.openalgo.in/connect-brokers/broker-configuration",
+        ],
+        [
+          "About Analyzer mode",
+          "https://docs.openalgo.in/new-features/api-analyzer",
+        ],
+        [
+          "About order execution modes",
+          "https://docs.openalgo.in/new-features/action-center",
+        ],
+      ])
+        expect(dialog.getByRole("link", { name })).toHaveAttribute(
+          "href",
+          href,
+        );
+      const url = dialog.getByLabelText("REST address");
+      const wsUrl = dialog.getByLabelText("WebSocket address");
+      const key = dialog.getByLabelText("API key");
+      expect(url).toHaveValue("");
+      expect(wsUrl).toHaveValue("");
+      expect(url).toHaveAttribute("placeholder", "http://127.0.0.1:5000");
+      expect(wsUrl).toHaveAttribute("placeholder", "ws://127.0.0.1:8765");
+      expect(url).not.toHaveAttribute("readonly");
+      expect(url).toHaveAccessibleDescription(
+        "The REST address identifies this connection and cannot be changed later. To use another address, create a new connection.",
+      );
+      expect(key).toHaveAttribute("type", "password");
+      expect(
+        dialog.queryByText(i18n.t("trading:settings.openalgo.addressKeyHint")),
+      ).not.toBeInTheDocument();
+      const create = dialog.getByRole("button", { name: "Create" });
+      const entries = [
+        [url, " http://openalgo.local:5000 "],
+        [wsUrl, " ws://openalgo.local:8765 "],
+        [key, " openalgo-private-key "],
+      ] as const;
+      for (const [field, value] of entries) {
+        expect(create).toBeDisabled();
+        fireEvent.change(field, { target: { value } });
+      }
+      expect(create).toBeEnabled();
+      for (const [field, value] of entries) {
+        fireEvent.change(field, { target: { value: "   " } });
+        expect(create).toBeDisabled();
+        fireEvent.change(field, { target: { value } });
+      }
+      await user.click(create);
+      expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+        provider: "openalgo",
+        label: "OpenAlgo",
+        mode,
+        enabled: false,
+        credentials: {
+          url: "http://openalgo.local:5000",
+          wsUrl: "ws://openalgo.local:8765",
+          apiKey: "openalgo-private-key",
+        },
+      });
+      expect(
+        screen.queryByDisplayValue(/openalgo-private-key/),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("shows public addresses and key presence and requires a key for an address change", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const form = await card("OpenAlgo paper");
+    expect(
+      form.getByText("REST address: http://openalgo.local:5000"),
+    ).toBeInTheDocument();
+    expect(
+      form.getByText("WebSocket address: ws://openalgo.local:8765"),
+    ).toBeInTheDocument();
+    expect(form.getByText("API key: stored")).toBeInTheDocument();
+    expect(
+      form.queryByRole("link", { name: "Provider site" }),
+    ).not.toBeInTheDocument();
+    expect(form.getByRole("link", { name: "Provider docs" })).toHaveAttribute(
+      "href",
+      "https://docs.openalgo.in/new-features/api-analyzer",
+    );
+    await user.click(form.getByRole("button", { name: "Edit settings" }));
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Edit settings" }),
+    );
+    const url = dialog.getByLabelText("REST address");
+    expect(url).toHaveValue("http://openalgo.local:5000");
+    expect(url).toHaveAttribute("readonly");
+    expect(
+      dialog.getByText(i18n.t("trading:settings.openalgo.urlHint")),
+    ).toBeVisible();
+    expect(url).toHaveAccessibleDescription(
+      "The REST address identifies this connection. To use another address, create a new connection.",
+    );
+    expect(dialog.getByLabelText("API key")).toHaveValue("");
+    expect(dialog.getByLabelText("API key")).toHaveAttribute(
+      "placeholder",
+      i18n.t("venues:settings.keepStoredSecret"),
+    );
+    const save = dialog.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    fireEvent.change(dialog.getByLabelText("WebSocket address"), {
+      target: { value: "   " },
+    });
+    expect(save).toBeDisabled();
+    fireEvent.change(dialog.getByLabelText("WebSocket address"), {
+      target: { value: " ws://other.local:8765 " },
+    });
+    expect(save).toBeDisabled();
+    expect(
+      dialog.getByText(i18n.t("trading:settings.openalgo.addressKeyHint")),
+    ).toBeVisible();
+    expect(
+      dialog.getByLabelText("WebSocket address"),
+    ).toHaveAccessibleDescription(
+      i18n.t("trading:settings.openalgo.addressKeyHint"),
+    );
+    await user.click(save);
+    expect(api.updateTradingConnectionSettings).not.toHaveBeenCalled();
+    fireEvent.change(dialog.getByLabelText("API key"), {
+      target: { value: "   " },
+    });
+    expect(save).toBeDisabled();
+    fireEvent.change(dialog.getByLabelText("API key"), {
+      target: { value: " fake-new-key " },
+    });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(api.updateTradingConnectionSettings).toHaveBeenCalledExactlyOnceWith(
+      "openalgo-1",
+      {
+        credentials: {
+          wsUrl: "ws://other.local:8765",
+          apiKey: "fake-new-key",
+        },
+      },
+    );
+    expect(screen.queryByDisplayValue(/fake-new-key/)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("fake-new-key");
+  });
+
+  it("keeps the stored key when the trimmed address is unchanged", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    await user.click(
+      (await card("OpenAlgo paper")).getByRole("button", {
+        name: "Edit settings",
+      }),
+    );
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Edit settings" }),
+    );
+    fireEvent.change(dialog.getByLabelText("WebSocket address"), {
+      target: { value: " ws://openalgo.local:8765 " },
+    });
+    const save = dialog.getByRole("button", { name: "Save" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(api.updateTradingConnectionSettings).toHaveBeenCalledExactlyOnceWith(
+      "openalgo-1",
+      { credentials: { wsUrl: "ws://openalgo.local:8765" } },
+    );
+  });
+
+  it("updates a non-empty key and label without sending either unchanged address", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    await user.click(
+      (await card("OpenAlgo paper")).getByRole("button", {
+        name: "Edit settings",
+      }),
+    );
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Edit settings" }),
+    );
+    fireEvent.change(dialog.getByLabelText("API key"), {
+      target: { value: " replacement-key " },
+    });
+    fireEvent.change(dialog.getByLabelText("Label"), {
+      target: { value: " OpenAlgo renamed " },
+    });
+    await user.click(dialog.getByRole("button", { name: "Save" }));
+    expect(api.updateTradingConnectionSettings).toHaveBeenCalledExactlyOnceWith(
+      "openalgo-1",
+      { label: "OpenAlgo renamed", credentials: { apiKey: "replacement-key" } },
+    );
+    expect(
+      screen.queryByDisplayValue(/replacement-key/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("saves a label-only edit without a key when stored addresses have surrounding spaces", async () => {
+    snapshot.connections[0].settings = {
+      url: "  http://openalgo.local:5000  ",
+      wsUrl: "  ws://openalgo.local:8765  ",
+    };
+    const user = userEvent.setup();
+    renderTrading();
+    await user.click(
+      (await card("OpenAlgo paper")).getByRole("button", {
+        name: "Edit settings",
+      }),
+    );
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Edit settings" }),
+    );
+    fireEvent.change(dialog.getByLabelText("Label"), {
+      target: { value: "OpenAlgo renamed" },
+    });
+    expect(dialog.getByLabelText("API key")).toHaveValue("");
+    const save = dialog.getByRole("button", { name: "Save" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(api.updateTradingConnectionSettings).toHaveBeenCalledExactlyOnceWith(
+      "openalgo-1",
+      { label: "OpenAlgo renamed" },
+    );
+  });
+
+  it("shows the backend URL error without imposing client URL validation", async () => {
+    api.createTradingConnection.mockRejectedValue(
+      new Error("OpenAlgo REST URL must use http or https"),
+    );
+    const user = userEvent.setup();
+    renderTrading();
+    const dialog = await openCreate(user);
+    for (const [label, value] of [
+      ["REST address", "invalid"],
+      ["WebSocket address", "ws://openalgo.local:8765"],
+      ["API key", "key"],
+    ]) {
+      fireEvent.change(dialog.getByLabelText(label), { target: { value } });
+    }
+    await user.click(dialog.getByRole("button", { name: "Create" }));
+    expect(
+      await dialog.findByText("OpenAlgo REST URL must use http or https"),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("IB trading connections", () => {
   const ibProvider: TradingProvider = {
     ...provider,

@@ -1742,6 +1742,18 @@ describe("unsealed key warning", () => {
       credentials: '{"token":"usable-token"}',
       secrets: { token: true },
     },
+    {
+      type: "openalgo",
+      title: "OpenAlgo",
+      fields: {
+        "REST address": "http://127.0.0.1:5000",
+        "WebSocket address": "ws://127.0.0.1:8765",
+        "API key": "usable-key",
+      },
+      credentials:
+        '{"url":"http://127.0.0.1:5000","wsUrl":"ws://127.0.0.1:8765","apiKey":"usable-key"}',
+      secrets: { apiKey: true },
+    },
   ];
   const keyedCases = keyedProviders.flatMap((provider) => [
     { ...provider, sealed: false, warning: true },
@@ -1876,6 +1888,217 @@ describe("unsealed key warning", () => {
     expect(dialog.queryByText(warningText)).not.toBeInTheDocument();
     await user.type(dialog.getByLabelText("Token"), "usable-token");
     expect(dialog.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+});
+
+describe("OpenAlgo market data", () => {
+  const url = "http://127.0.0.1:5000";
+  const wsUrl = "ws://127.0.0.1:8765";
+
+  it("creates a source only with both addresses and an API key, trimming credentials", async () => {
+    const user = userEvent.setup();
+    fetchMarketDataMock.mockResolvedValue({
+      ...status(ibInstance()),
+      providers: [
+        { type: "openalgo", title: "OpenAlgo" },
+        { type: "finnhub", title: "Finnhub" },
+      ],
+    });
+    renderMarketDataPage();
+    await screen.findByRole("heading", { name: "IB Gateway" });
+    await user.click(
+      screen.getByRole("button", { name: /Add a market-data source/ }),
+    );
+    const guide = within(screen.getByRole("dialog", { name: "Sources" }));
+    expect(
+      guide
+        .getAllByRole("button", { name: /^(Finnhub|OpenAlgo)/ })
+        .map((button) => button.textContent),
+    ).toEqual([
+      expect.stringMatching(/^Finnhub/),
+      expect.stringMatching(/^OpenAlgo/),
+    ]);
+    const tile = guide.getByRole("button", { name: /^OpenAlgo/ });
+    const card = within(tile.parentElement!);
+    expect(card.queryByRole("link", { name: "Site" })).not.toBeInTheDocument();
+    expect(card.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://docs.openalgo.in/api-documentation/v1/websockets",
+    );
+    expect(card.getByRole("link", { name: "Symbols" })).toHaveAttribute(
+      "href",
+      "https://docs.openalgo.in/symbol-format",
+    );
+    await user.click(tile);
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Add OpenAlgo source" }),
+    );
+    const rest = dialog.getByLabelText("REST address");
+    const websocket = dialog.getByLabelText("WebSocket address");
+    const key = dialog.getByLabelText("API key");
+    const create = dialog.getByRole("button", { name: "Create" });
+    expect(rest).toHaveValue("");
+    expect(rest).toHaveAttribute("placeholder", url);
+    expect(websocket).toHaveValue("");
+    expect(websocket).toHaveAttribute("placeholder", wsUrl);
+    expect(key).toHaveAttribute("type", "password");
+    expect(
+      dialog.queryByText(i18n.t("trading:settings.openalgo.addressKeyHint"), {
+        exact: false,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      dialog.queryByRole("link", { name: /Get API/ }),
+    ).not.toBeInTheDocument();
+    expect(create).toBeDisabled();
+    await user.type(key, "  openalgo-create-secret  ");
+    expect(create).toBeDisabled();
+    await user.type(rest, `  ${url}  `);
+    expect(create).toBeDisabled();
+    await user.type(websocket, "   ");
+    expect(create).toBeDisabled();
+    await user.type(websocket, `${wsUrl}  `);
+    expect(create).toBeEnabled();
+    await user.clear(rest);
+    await user.type(rest, "   ");
+    expect(create).toBeDisabled();
+    await user.type(rest, `${url}  `);
+    await user.clear(key);
+    await user.type(key, "   ");
+    expect(create).toBeDisabled();
+    await user.type(key, "openalgo-create-secret  ");
+    await user.click(create);
+    expect(createInstanceMock).toHaveBeenCalledExactlyOnceWith({
+      provider: "openalgo",
+      label: "OpenAlgo",
+      credentials: JSON.stringify({
+        url,
+        wsUrl,
+        apiKey: "openalgo-create-secret",
+      }),
+      enabled: true,
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByDisplayValue(/openalgo-create-secret/),
+    ).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("openalgo-create-secret");
+  });
+
+  it.each(["unchanged", "url", "wsUrl"] as const)(
+    "edits %s addresses without displaying the key after save",
+    async (changedAddress) => {
+      const user = userEvent.setup();
+      const instance = ibInstance({
+        id: "openalgo-1",
+        provider: "openalgo",
+        label: "OpenAlgo",
+        settings: { url, wsUrl },
+        secrets: { apiKey: true },
+        verifiesSymbols: false,
+        searchesSymbols: false,
+      });
+      fetchMarketDataMock.mockResolvedValue({
+        ...status(instance),
+        providers: [{ type: "openalgo", title: "OpenAlgo" }],
+      });
+      renderMarketDataPage();
+      await screen.findByRole("heading", { name: "OpenAlgo" });
+      await user.click(screen.getByRole("button", { name: "Edit settings" }));
+      const dialog = within(
+        screen.getByRole("dialog", { name: "Edit source settings" }),
+      );
+      expect(dialog.getByLabelText("REST address")).toHaveValue(url);
+      const websocket = dialog.getByLabelText("WebSocket address");
+      expect(websocket).toHaveValue(wsUrl);
+      const key = dialog.getByLabelText("API key");
+      expect(key).toHaveValue("");
+      expect(key).toHaveAttribute("placeholder", "Keep stored secret");
+      const save = dialog.getByRole("button", { name: "Save" });
+      expect(save).toBeEnabled();
+      expect(
+        dialog.getByText(i18n.t("trading:settings.openalgo.addressKeyHint"), {
+          exact: false,
+        }),
+      ).toBeVisible();
+      const changedUrl =
+        changedAddress === "url" ? "https://openalgo.example" : url;
+      const changedWsUrl =
+        changedAddress === "wsUrl" ? "wss://openalgo.example/ws" : wsUrl;
+      const rest = dialog.getByLabelText("REST address");
+      await user.clear(rest);
+      expect(save).toBeDisabled();
+      await user.type(rest, `  ${changedUrl}  `);
+      await user.clear(websocket);
+      expect(save).toBeDisabled();
+      await user.type(websocket, `  ${changedWsUrl}  `);
+      if (changedAddress !== "unchanged") {
+        expect(save).toBeDisabled();
+        await user.click(save);
+        expect(updateSettingsMock).not.toHaveBeenCalled();
+        await user.type(key, "   ");
+        expect(save).toBeDisabled();
+        await user.clear(key);
+        await user.type(key, "  openalgo-replacement-secret  ");
+      }
+      expect(save).toBeEnabled();
+      await user.click(save);
+      expect(updateSettingsMock).toHaveBeenCalledExactlyOnceWith("openalgo-1", {
+        label: "OpenAlgo",
+        credentials: JSON.stringify({
+          url: changedUrl,
+          wsUrl: changedWsUrl,
+          ...(changedAddress !== "unchanged"
+            ? { apiKey: "openalgo-replacement-secret" }
+            : {}),
+        }),
+      });
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      );
+      expect(
+        screen.queryByDisplayValue(/openalgo-replacement-secret/),
+      ).not.toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent(
+        "openalgo-replacement-secret",
+      );
+      await user.click(screen.getByRole("button", { name: "Edit settings" }));
+      expect(screen.getByLabelText("API key")).toHaveValue("");
+    },
+  );
+  it("saves a label-only edit without a key when stored addresses have surrounding spaces", async () => {
+    const user = userEvent.setup();
+    const instance = ibInstance({
+      id: "openalgo-1",
+      provider: "openalgo",
+      label: "OpenAlgo",
+      settings: { url: `  ${url}  `, wsUrl: `  ${wsUrl}  ` },
+      secrets: { apiKey: true },
+      verifiesSymbols: false,
+      searchesSymbols: false,
+    });
+    fetchMarketDataMock.mockResolvedValue({
+      ...status(instance),
+      providers: [{ type: "openalgo", title: "OpenAlgo" }],
+    });
+    renderMarketDataPage();
+    await screen.findByRole("heading", { name: "OpenAlgo" });
+    await user.click(screen.getByRole("button", { name: "Edit settings" }));
+    const dialog = within(
+      screen.getByRole("dialog", { name: "Edit source settings" }),
+    );
+    await user.clear(dialog.getByLabelText("Label"));
+    await user.type(dialog.getByLabelText("Label"), "OpenAlgo renamed");
+    expect(dialog.getByLabelText("API key")).toHaveValue("");
+    const save = dialog.getByRole("button", { name: "Save" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(updateSettingsMock).toHaveBeenCalledExactlyOnceWith("openalgo-1", {
+      label: "OpenAlgo renamed",
+      credentials: JSON.stringify({ url, wsUrl }),
+    });
   });
 });
 

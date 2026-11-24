@@ -167,6 +167,9 @@ func TestMarketDataInstanceDTOSecrets(t *testing.T) {
 		{"alpaca-key-only", domain.MarketDataProviderAlpaca, `{"apiKey":"k"}`, `{"apiKey":true,"apiSecret":false}`},
 		{"alpaca-blank", domain.MarketDataProviderAlpaca, `{"apiKey":" ","apiSecret":""}`, `null`},
 		{"oanda", domain.MarketDataProviderOANDA, `{"token":"t","accountID":"a"}`, `{"token":true}`},
+		{"openalgo", domain.MarketDataProviderOpenAlgo, `{"url":"http://localhost:5000","wsUrl":"ws://localhost:8765","apiKey":"fake-key"}`, `{"apiKey":true}`},
+		{"openalgo-blank", domain.MarketDataProviderOpenAlgo, `{"apiKey":" "}`, `null`},
+		{"openalgo-number", domain.MarketDataProviderOpenAlgo, `{"apiKey":1}`, `null`},
 		{"finnhub", domain.MarketDataProviderFinnhub, `{"token":"t"}`, `{"token":true}`},
 		{"finnhub-number-token", domain.MarketDataProviderFinnhub, `{"token":1}`, `null`},
 		{"ib", domain.MarketDataProviderIB, `{"host":"127.0.0.1","port":4002}`, `null`},
@@ -1055,6 +1058,26 @@ func TestVerifyMarketDataSymbol_NotFound(t *testing.T) {
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
 	if errObj["code"] != "not_found" {
 		t.Fatalf("want code=not_found, got %v", errObj["code"])
+	}
+}
+
+func TestMarketDataSafeSettings_OpenAlgo(t *testing.T) {
+	instance := domain.MarketDataInstance{
+		Provider:    domain.MarketDataProviderOpenAlgo,
+		Credentials: `{"url":"http://localhost:5000","wsUrl":"ws://localhost:8765","apiKey":"fake-key","extra":"private"}`,
+	}
+	settings := marketDataSafeSettings(instance)
+	if len(settings) != 2 || settings["url"] != "http://localhost:5000" ||
+		settings["wsUrl"] != "ws://localhost:8765" {
+		t.Fatal("OpenAlgo settings must expose only url and wsUrl")
+	}
+	dto := toMarketDataInstanceDTO(backend.MarketDataInstanceStatus{Instance: instance})
+	encoded, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal("could not marshal OpenAlgo instance")
+	}
+	if strings.Contains(string(encoded), "fake-key") || strings.Contains(string(encoded), "private") {
+		t.Fatal("OpenAlgo instance exposed a secret")
 	}
 }
 

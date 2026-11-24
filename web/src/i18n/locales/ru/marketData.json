@@ -75,6 +75,11 @@
       "description": "Живые цены сделок из Finnhub WebSocket. Нужен токен API; внешние символы должны поддерживаться Finnhub.",
       "createHint": "Создайте источник Finnhub для живых цен сделок. Добавьте токен API."
     },
+    "openalgo": {
+      "title": "OpenAlgo",
+      "description": "Цены последних сделок по инструментам NSE и BSE из потока котировок вашего OpenAlgo. Нужны адреса REST и WebSocket OpenAlgo и его ключ API; внешние символы используют EXCHANGE:SYMBOL, например NSE:RELIANCE.",
+      "createHint": "Создайте источник OpenAlgo для живых цен NSE и BSE. Укажите адреса и ключ API вашего OpenAlgo."
+    },
     "byo": {
       "title": "BYO",
       "description": "Ручные цены, которые ведёт оператор. Используйте для статичного FX, тестовых котировок или фидов, которые подаёт другая система.",

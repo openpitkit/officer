@@ -634,9 +634,10 @@ second account, needs the fee account there and is refused with
 `fee_account_required` without one.
 
 Paper and live sends require `destination.route`, a JSON object. The built-in
-Alpaca, Binance, IB, eToro and OKX providers require `amountKind: "quantity"`
-and support only the `timeInForce` route field. Values are case-sensitive and
-are never normalized:
+Alpaca, Binance, IB, eToro, OKX and OpenAlgo providers require
+`amountKind: "quantity"`. Alpaca, Binance, IB, eToro and OKX support only the
+`timeInForce` route field. OpenAlgo requires `product`. Values are
+case-sensitive and are never normalized:
 
 - Alpaca requires `day`, `gtc`, `opg`, `cls`, `ioc` or `fok`. Good till cancelled
   is `{"timeInForce":"gtc"}`; uppercase `GTC` is refused locally with the
@@ -652,6 +653,8 @@ are never normalized:
   buys are unsupported.
 - eToro uses `{}` for market orders or `{"timeInForce":"ioc"}` for an IOC
   limit buy. Limit sells are unsupported.
+- OpenAlgo requires `{"product":"CNC"}` or `{"product":"MIS"}`, with no default
+  and no time-in-force field.
 
 The `ib` provider trades through a running TWS or IB Gateway session over the
 TWS API. Its credentials are `{host, port, clientId?}`: host and port are
@@ -672,6 +675,21 @@ on: `www.okx.com` for global accounts, `my.okx.com` for EEA accounts or
 `site` under `settings`, never API key, API secret or passphrase values. Paper
 mode uses OKX demo trading with demo API keys; live mode uses live trading. Only
 spot cash trading is supported, with no venue account binding.
+
+The `openalgo` provider uses `{url, wsUrl, apiKey}`. The addresses are non-secret
+settings returned under `settings`; the API key is write-only. Paper requires
+OpenAlgo's analyzer mode and live requires live mode, checked at account check
+and pre-check. OpenAlgo has no account ID: identity is
+`<broker> <analyze|live> <url>`, so changing an existing connection's REST url is
+refused; a wsUrl change must carry apiKey, because Officer does not send a
+stored key to a new address. Quantity orders use whole numbers in multiples of
+the lot size, limit prices are multiples of the tick size, and currency is INR.
+NSE and BSE symbols use the form `NSE:SYMBOL`. Semi-auto mode queues orders in
+OpenAlgo's Action Center; their outcome stays unknown with a diagnostic.
+Reconciliation reads `orderstatus` and `tradebook` per order, covering the
+current trading day. Fills are booked only at a final status; a closed order's
+fills require the order
+stream's filled quantity to match the trade book. No commission is reported.
 
 Execution Simulator (provider `test`) is a paper-only venue that takes credentials
 `{}` and sends no requests to external venues.

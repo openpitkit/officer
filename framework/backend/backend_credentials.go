@@ -20,8 +20,6 @@ package backend
 import (
 	"context"
 	"fmt"
-
-	"go.openpit.dev/officer/framework/secret"
 )
 
 // CredentialStorage reports how stored credentials sit at rest. Both plaintext
@@ -31,7 +29,7 @@ type CredentialStorage struct {
 	// master key.
 	Sealed bool
 	// PlaintextTradingKeys is true when credentials are not sealed and at
-	// least one trading connection holds a key.
+	// least one trading connection holds a non-setting credential value.
 	PlaintextTradingKeys bool
 	// PlaintextMarketDataKeys is true when credentials are not sealed and
 	// at least one market-data source holds a key.
@@ -54,7 +52,7 @@ func (s *Service) CredentialStorage(ctx context.Context) (CredentialStorage, err
 		return CredentialStorage{}, fmt.Errorf("backend: list trading connections: %w", err)
 	}
 	for _, c := range connections {
-		secrets, _, err := secret.CredentialRedactor(c.Credentials)
+		secrets, _, err := tradingCredentialRedactor(c)
 		if err != nil {
 			return CredentialStorage{}, fmt.Errorf("backend: trading connection %s: %w", c.ExternalID, err)
 		}

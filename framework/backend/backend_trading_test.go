@@ -19,6 +19,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -982,6 +983,39 @@ func TestTradingConnectionSettings(t *testing.T) {
 				"host": "gateway", "port": float64(4002), "clientId": float64(7),
 			},
 		},
+		{
+			name: "openalgo settings", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://gateway","wsUrl":"ws://gateway","apiKey":"k-secret"}`,
+			want:        map[string]any{"url": "http://gateway", "wsUrl": "ws://gateway"},
+		},
+		{
+			name: "openalgo local addresses", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://127.0.0.1:5000","wsUrl":"ws://127.0.0.1:8765"}`,
+			want:        map[string]any{"url": "http://127.0.0.1:5000", "wsUrl": "ws://127.0.0.1:8765"},
+		},
+		{
+			name: "openalgo other schemes", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"custom://gateway","wsUrl":"other://gateway"}`,
+			want:        map[string]any{"url": "custom://gateway", "wsUrl": "other://gateway"},
+		},
+		{name: "openalgo userinfo url", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"https://admin:hunter2@algo.example","wsUrl":"ws://admin:hunter2@algo.example"}`},
+		{name: "openalgo query url", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"http://h/?t=k-secret","wsUrl":"ws://x/?t=k-secret"}`},
+		{name: "openalgo bare query url", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"http://h/?","wsUrl":"ws://x/?"}`},
+		{name: "openalgo fragment url", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"http://h/#token","wsUrl":"ws://x/#token"}`},
+		{name: "openalgo bare fragment url", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"http://h/#","wsUrl":"ws://x/#"}`},
+		{name: "openalgo relative url", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"/api","wsUrl":"/ws"}`},
+		{name: "openalgo scheme-less host pins empty-host check", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"algo.example:5000","wsUrl":"algo.example:8765"}`},
+		{name: "openalgo network-path reference", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"//gateway:5000","wsUrl":"//gateway:8765"}`},
+		{name: "openalgo malformed url", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"http://h/%zz","wsUrl":"ws://x/%zz"}`},
+		{name: "openalgo secrets only", provider: domain.TradingProviderOpenAlgo, credentials: `{"apiKey":"k-secret"}`},
+		{name: "openalgo wrong types", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":1,"wsUrl":true}`},
+		{
+			name: "openalgo blank url", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"  ","wsUrl":"ws://gateway"}`,
+			want:        map[string]any{"wsUrl": "ws://gateway"},
+		},
+		{name: "openalgo blank settings", provider: domain.TradingProviderOpenAlgo, credentials: `{"url":"  ","wsUrl":""}`},
+		{name: "openalgo ib members", provider: domain.TradingProviderOpenAlgo, credentials: `{"host":"gateway","port":4002,"clientId":7}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -995,35 +1029,249 @@ func TestTradingConnectionSettings(t *testing.T) {
 	}
 }
 
-func TestTradingStatusSettings(t *testing.T) {
-	for _, provider := range []string{
-		domain.TradingProviderIB, domain.TradingProviderAlpaca, domain.TradingProviderOKX,
+func TestTradingStatusSettingsAndSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, credentials string
+		settings                    map[string]any
+		secrets                     map[string]bool
+	}{
+		{
+			name: "ib settings", provider: domain.TradingProviderIB,
+			credentials: `{"host":"gateway","port":4002,"clientId":7,"apiKey":"test-key","apiSecret":"test-secret"}`,
+			settings:    map[string]any{"host": "gateway", "port": float64(4002), "clientId": float64(7)},
+			secrets:     map[string]bool{"apiKey": true, "apiSecret": true},
+		},
+		{
+			name: "alpaca secrets", provider: domain.TradingProviderAlpaca,
+			credentials: `{"host":"gateway","port":4002,"clientId":7,"apiKey":"test-key","apiSecret":"test-secret"}`,
+			secrets:     map[string]bool{"host": true, "port": true, "clientId": true, "apiKey": true, "apiSecret": true},
+		},
+		{
+			name: "okx settings", provider: domain.TradingProviderOKX,
+			credentials: `{"apiKey":"test-key","apiSecret":"test-secret","passphrase":"test-passphrase","site":"app.okx.com"}`,
+			settings:    map[string]any{"site": "app.okx.com"},
+			secrets:     map[string]bool{"apiKey": true, "apiSecret": true, "passphrase": true},
+		},
+		{
+			name: "openalgo settings", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://gateway","wsUrl":"ws://gateway","apiKey":"test-key"}`,
+			settings:    map[string]any{"url": "http://gateway", "wsUrl": "ws://gateway"},
+			secrets:     map[string]bool{"apiKey": true},
+		},
+		{
+			name: "openalgo userinfo url", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"https://admin:hunter2@algo.example","wsUrl":"ws://x","apiKey":"k-secret"}`,
+			settings:    map[string]any{"wsUrl": "ws://x"},
+			secrets:     map[string]bool{"url": true, "apiKey": true},
+		},
+		{
+			name: "openalgo secret in path", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://h/k-secret","wsUrl":"ws://x/k-secret","apiKey":"k-secret"}`,
+			settings:    map[string]any{"url": "http://h/[redacted]", "wsUrl": "ws://x/[redacted]"},
+			secrets:     map[string]bool{"apiKey": true},
+		},
+		{
+			name: "ib secret in host", provider: domain.TradingProviderIB,
+			credentials: `{"host":"k-secret.gateway","port":4002,"clientId":7,"apiKey":"k-secret"}`,
+			settings:    map[string]any{"host": "[redacted].gateway", "port": float64(4002), "clientId": float64(7)},
+			secrets:     map[string]bool{"apiKey": true},
+		},
+		{
+			name: "openalgo numeric url", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":5,"wsUrl":"ws://x","apiKey":"k-secret"}`,
+			settings:    map[string]any{"wsUrl": "ws://x"},
+			secrets:     map[string]bool{"url": true, "apiKey": true},
+		},
+		{
+			name: "openalgo wrong types", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":1,"wsUrl":true}`,
+			secrets:     map[string]bool{"url": true, "wsUrl": true},
+		},
+		{
+			name: "openalgo blank url", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"  ","wsUrl":"ws://x","apiKey":"k-secret"}`,
+			settings:    map[string]any{"wsUrl": "ws://x"},
+			secrets:     map[string]bool{"apiKey": true},
+		},
+		{
+			name: "ib wrong types", provider: domain.TradingProviderIB,
+			credentials: `{"host":1,"port":"p-secret","clientId":true}`,
+			secrets:     map[string]bool{"host": true, "port": true, "clientId": true},
+		},
+		{
+			name: "openalgo ib members", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"host":"h-secret","port":4002,"clientId":7}`,
+			secrets:     map[string]bool{"host": true, "port": true, "clientId": true},
+		},
 	} {
-		t.Run(provider, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			s, n, _ := newTradingTestService(t)
 			c := tradingTestConnection()
-			c.Provider = provider
-			c.Credentials = `{"host":"gateway","port":4002,"clientId":7,"apiKey":"test-key","apiSecret":"test-secret"}`
-			if provider == domain.TradingProviderOKX {
-				c.Credentials = `{"apiKey":"test-key","apiSecret":"test-secret",` +
-					`"passphrase":"test-passphrase","site":"app.okx.com"}`
-			}
+			c.Provider, c.Credentials = tc.provider, tc.credentials
 			n.connections = []domain.TradingConnection{c}
-			got, err := s.GetTrading(systemCtx())
+			status, err := s.GetTrading(systemCtx())
 			if err != nil {
 				t.Fatal(err)
 			}
-			var want map[string]any
-			switch provider {
-			case domain.TradingProviderIB:
-				want = map[string]any{"host": "gateway", "port": float64(4002), "clientId": float64(7)}
-			case domain.TradingProviderOKX:
-				want = map[string]any{"site": "app.okx.com"}
+			if len(status.Connections) != 1 {
+				t.Fatalf("connections = %d, want 1", len(status.Connections))
 			}
-			if len(got.Connections) != 1 || !reflect.DeepEqual(got.Connections[0].Settings, want) {
-				t.Fatal("unexpected connection count or status settings")
+			got := status.Connections[0]
+			if !reflect.DeepEqual(got.Settings, tc.settings) {
+				t.Errorf("settings = %v, want %v", got.Settings, tc.settings)
+			}
+			if !reflect.DeepEqual(got.Secrets, tc.secrets) {
+				t.Errorf("secrets = %v, want %v", got.Secrets, tc.secrets)
 			}
 		})
+	}
+}
+
+func TestTradingSettingRedaction(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, credentials, text, want string
+	}{
+		{
+			name: "ib host in clear", provider: domain.TradingProviderIB,
+			credentials: `{"host":"gateway","port":4002,"clientId":7,"apiKey":"k-secret","apiSecret":"s-secret"}`,
+			text:        "connect gateway k-secret s-secret", want: "connect gateway [redacted] [redacted]",
+		},
+		{
+			name: "openalgo urls in clear", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://h","wsUrl":"ws://x","apiKey":"k-secret"}`,
+			text:        "connect http://h ws://x k-secret", want: "connect http://h ws://x [redacted]",
+		},
+		{
+			name: "alpaca host stays secret", provider: domain.TradingProviderAlpaca,
+			credentials: `{"host":"h-secret","apiKey":"k"}`,
+			text:        "connect h-secret k", want: "connect [redacted] [redacted]",
+		},
+		{
+			name: "openalgo secret inside url", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://h/?t=k-secret","wsUrl":"ws://x","apiKey":"k-secret"}`,
+			text:        "connect http://h/?t=k-secret ws://x k-secret", want: "connect [redacted] ws://x [redacted]",
+		},
+		{
+			name: "openalgo userinfo url", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"https://admin:hunter2@algo.example","wsUrl":"ws://x","apiKey":"k-secret"}`,
+			text:        "connect https://admin:hunter2@algo.example ws://x k-secret", want: "connect [redacted] ws://x [redacted]",
+		},
+		{
+			name: "openalgo secret inside reported url path", provider: domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://h/k-secret","wsUrl":"ws://x","apiKey":"k-secret"}`,
+			text:        "connect http://h/k-secret ws://x k-secret", want: "connect http://h/[redacted] ws://x [redacted]",
+		},
+		{
+			name: "ib wrong type stays redacted", provider: domain.TradingProviderIB,
+			credentials: `{"host":"gateway","port":"p-secret","apiKey":"k-secret"}`,
+			text:        "connect gateway p-secret k-secret", want: "connect gateway [redacted] [redacted]",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			c := tradingTestConnection()
+			c.Provider, c.Credentials = tc.provider, tc.credentials
+			n.connections = []domain.TradingConnection{c}
+			n.access = []domain.TradingAccess{{Account: "acct-1", Connection: c.ExternalID}}
+			rt.providers = []trading.Provider{{Type: c.Provider}}
+			rt.states = map[domain.ExternalID]trading.ConnectionStatus{c.ExternalID: {
+				State: trading.ConnectionUnavailable, Error: tc.text,
+				Diagnostics: []health.Diagnostic{{Detail: tc.text}},
+			}}
+			t.Run("status", func(t *testing.T) {
+				status, err := s.GetTrading(systemCtx())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := status.Connections[0].Error; got != tc.want {
+					t.Errorf("status error = %q, want %q", got, tc.want)
+				}
+				if got := status.Connections[0].Diagnostics[0].Detail; got != tc.want {
+					t.Errorf("diagnostic detail = %q, want %q", got, tc.want)
+				}
+			})
+			t.Run("destinations", func(t *testing.T) {
+				destinations, err := s.ListTradingDestinations(systemCtx(), "acct-1", domain.TradingModePaper)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(destinations) != 1 || destinations[0].Error != tc.want {
+					t.Errorf("destinations = %+v, want error %q", destinations, tc.want)
+				}
+			})
+			t.Run("upstream", func(t *testing.T) {
+				rt.checkErr = errors.New(tc.text)
+				_, err := s.CheckTradingConnection(systemCtx(), c.ExternalID.String())
+				if !errors.Is(err, domain.ErrUpstream) || !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("upstream error = %v, want upstream with %q", err, tc.want)
+				}
+			})
+			t.Run("create validation", func(t *testing.T) {
+				rt.checkErr = domain.NewValidationError("/credentials/apiKey", "format", tc.text)
+				c.Enabled = false
+				_, err := s.CreateTradingConnection(systemCtx(), c, false)
+				if !errors.Is(err, domain.ErrInvalid) || err.Error() != tc.want {
+					t.Errorf("create validation error = %v, want %q", err, tc.want)
+				}
+				if domain.ValidationPointer(err) != "/credentials/apiKey" || len(n.writes) != 0 {
+					t.Errorf("validation pointer = %q, writes = %v", domain.ValidationPointer(err), n.writes)
+				}
+			})
+		})
+	}
+}
+
+func TestSendPaperOrderSettingRedaction(t *testing.T) {
+	for _, tc := range []struct {
+		provider, credentials, text, want string
+	}{
+		{
+			provider:    domain.TradingProviderIB,
+			credentials: `{"host":"gateway","port":4002,"apiKey":"k-secret"}`,
+			text:        "connect gateway k-secret", want: "connect gateway [redacted]",
+		},
+		{
+			provider:    domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://h/?t=k-secret","wsUrl":"ws://x","apiKey":"k-secret"}`,
+			text:        "connect http://h/?t=k-secret ws://x k-secret", want: "connect [redacted] ws://x [redacted]",
+		},
+		{
+			provider:    domain.TradingProviderAlpaca,
+			credentials: `{"host":"h-secret","apiKey":"k-secret"}`,
+			text:        "connect h-secret k-secret", want: "connect [redacted] [redacted]",
+		},
+		{
+			provider:    domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://h/k-secret","wsUrl":"ws://x","apiKey":"k-secret"}`,
+			text:        "connect http://h/k-secret ws://x k-secret", want: "connect http://h/[redacted] ws://x [redacted]",
+		},
+	} {
+		for _, named := range []bool{false, true} {
+			for _, stage := range []string{"precheck", "send"} {
+				t.Run(fmt.Sprintf("%s/named=%t/%s", tc.provider, named, stage), func(t *testing.T) {
+					s, n, rt, _ := newPaperSendTestService(t)
+					n.connections[0].Provider, n.connections[0].Credentials = tc.provider, tc.credentials
+					if stage == "precheck" {
+						rt.preCheckErr = errors.New(tc.text)
+					} else {
+						rt.sendErr = errors.New(tc.text)
+					}
+					dest := SendDestination{Route: "{}"}
+					if named {
+						dest.Connection = n.connections[0].ExternalID
+					}
+					got, err := s.SendPaperOrder(systemCtx(), paperSendTestOrder(), dest)
+					if stage == "precheck" {
+						if !errors.Is(err, domain.ErrUpstream) || !strings.Contains(err.Error(), tc.want) {
+							t.Errorf("precheck error = %v, want upstream with %q", err, tc.want)
+						}
+						assertPaperSendNotHeld(t, s, n, rt)
+					} else if err != nil || got.Send == nil || got.Send.Error != tc.want {
+						t.Errorf("send = %+v, error = %v, want %q", got.Send, err, tc.want)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -1487,6 +1735,87 @@ func TestTradingAgentCreateRefusedBeforeVenue(t *testing.T) {
 					"create: venue checks %d, connections %d, restarts %d, callers %v",
 					len(rt.checks), len(n.connections), rt.restarts, n.callers,
 				)
+			}
+		})
+	}
+}
+
+func TestTradingOpenAlgoAddressUpdate(t *testing.T) {
+	for _, tc := range []struct {
+		name, update             string
+		wantChecks, wantRestarts int
+		wantErr                  error
+		spaced, agent            bool
+	}{
+		{name: "websocket without key", update: `{"wsUrl":"ws://other.local:8765"}`, wantErr: domain.ErrInvalid},
+		{name: "url without key", update: `{"url":"http://other.local:5000"}`, wantErr: domain.ErrConflict},
+		{name: "websocket with empty key", update: `{"wsUrl":"ws://other.local:8765","apiKey":""}`, wantErr: domain.ErrInvalid},
+		{name: "websocket with blank key", update: `{"wsUrl":"ws://other.local:8765","apiKey":"  "}`, wantErr: domain.ErrInvalid},
+		{name: "websocket with key", update: `{"wsUrl":"ws://other.local:8765","apiKey":"fake-new-key"}`, wantChecks: 1, wantRestarts: 1},
+		{name: "url with key refused before venue", update: `{"url":"http://other.local:5000","apiKey":"fake-new-key"}`, wantErr: domain.ErrConflict},
+		{name: "url trailing slash refused before venue", update: `{"url":"http://openalgo.local:5000/","apiKey":"fake-new-key"}`, wantErr: domain.ErrConflict},
+		{name: "unchanged addresses", update: `{"url":"http://openalgo.local:5000","wsUrl":"ws://openalgo.local:8765"}`},
+		{name: "trimmed stored websocket", update: `{"wsUrl":"ws://openalgo.local:8765"}`, spaced: true, wantChecks: 1, wantRestarts: 1},
+		{name: "agent websocket change", update: `{"wsUrl":"ws://other.local:8765"}`, agent: true, wantErr: domain.ErrLoosening},
+		{name: "agent url change", update: `{"url":"http://other.local:5000"}`, agent: true, wantErr: domain.ErrLoosening},
+		{name: "blank addresses", update: `{"url":" ","wsUrl":""}`},
+		{name: "label only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, n, rt := newTradingTestService(t)
+			before := tradingTestConnection()
+			before.Provider = domain.TradingProviderOpenAlgo
+			before.Credentials = `{"url":"http://openalgo.local:5000","wsUrl":"ws://openalgo.local:8765","apiKey":"fake-stored-key"}`
+			if tc.spaced {
+				before.Credentials = `{"url":"http://openalgo.local:5000","wsUrl":"  ws://openalgo.local:8765  ","apiKey":"fake-stored-key"}`
+			}
+			n.connections = []domain.TradingConnection{before}
+			ctx := systemCtx()
+			if tc.agent {
+				ctx = auth.ContextWithCaller(context.Background(), tradingTestAgent)
+			}
+			err := s.UpdateTradingConnectionSettings(ctx, "connection-1", "Renamed", tc.update)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatal("unexpected trading update result")
+			}
+			if len(rt.checks) != tc.wantChecks || rt.restarts != tc.wantRestarts {
+				t.Fatalf("venue checks/restarts = %d/%d, want %d/%d", len(rt.checks), rt.restarts, tc.wantChecks, tc.wantRestarts)
+			}
+			if tc.wantChecks > 0 {
+				var checked map[string]string
+				wantKey := "fake-new-key"
+				if tc.spaced {
+					wantKey = "fake-stored-key"
+				}
+				if err := json.Unmarshal([]byte(rt.checks[0].Credentials), &checked); err != nil || checked["apiKey"] != wantKey {
+					t.Fatal("venue did not receive the expected key")
+				}
+			}
+			if tc.wantErr != nil {
+				if errors.Is(tc.wantErr, domain.ErrInvalid) && (domain.ValidationPointer(err) != "/credentials/apiKey" || domain.ValidationConstraint(err) != "required") {
+					t.Fatal("address update must require apiKey at /credentials/apiKey")
+				}
+				if n.connections[0] != before || len(n.writes) != 0 {
+					t.Fatal("refused update changed the stored connection")
+				}
+				return
+			}
+			if n.connections[0].Label != "Renamed" || len(n.writes) != 1 {
+				t.Fatal("connection update was not stored")
+			}
+			var actual map[string]string
+			if err := json.Unmarshal([]byte(n.connections[0].Credentials), &actual); err != nil {
+				t.Fatal("invalid stored credentials after update")
+			}
+			if tc.wantChecks > 0 && !tc.spaced {
+				if actual["wsUrl"] != "ws://other.local:8765" || actual["apiKey"] != "fake-new-key" {
+					t.Fatal("updated websocket and supplied key were not stored")
+				}
+			} else if actual["wsUrl"] != "ws://openalgo.local:8765" || actual["apiKey"] != "fake-stored-key" {
+				t.Fatal("unchanged credentials were not preserved")
+			}
+			if actual["url"] != "http://openalgo.local:5000" {
+				t.Fatal("stored url changed unexpectedly")
 			}
 		})
 	}

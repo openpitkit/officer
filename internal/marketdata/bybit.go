@@ -351,7 +351,13 @@ func (c *bybitConnector) stream(
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
 	pingErr := make(chan error, 1)
-	go bybitPingLoop(pingCtx, conn, c.pingInterval, pingErr)
+	go pingLoop(pingCtx, c.pingInterval, func(ctx context.Context) error {
+		payload, err := json.Marshal(bybitOpRequest{Op: "ping"})
+		if err != nil {
+			return err
+		}
+		return conn.Write(ctx, payload)
+	}, pingErr)
 
 	readCtx, cancelRead := context.WithCancel(ctx)
 	defer cancelRead()
@@ -456,42 +462,6 @@ func bybitSubscribePayload(subs []bybitSubscription) ([]byte, error) {
 		args = append(args, sub.topic)
 	}
 	return json.Marshal(bybitOpRequest{Op: "subscribe", Args: args})
-}
-
-func bybitPingLoop(
-	ctx context.Context,
-	conn bybitConn,
-	interval time.Duration,
-	errs chan<- error,
-) {
-	if interval <= 0 {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			payload, err := json.Marshal(bybitOpRequest{Op: "ping"})
-			if err != nil {
-				select {
-				case errs <- err:
-				default:
-				}
-				return
-			}
-			if err := conn.Write(ctx, payload); err != nil {
-				select {
-				case errs <- err:
-				default:
-				}
-				return
-			}
-		}
-	}
 }
 
 type bybitInstrumentsResponse struct {

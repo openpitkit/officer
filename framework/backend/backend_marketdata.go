@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -653,6 +654,16 @@ func (s *Service) UpdateMarketDataInstanceSettings(
 	if err != nil {
 		return err
 	}
+	if instance.Provider == domain.MarketDataProviderOpenAlgo {
+		urlChanged, wsURLChanged, hasAPIKey, err := openAlgoAddressChanges(instance.Credentials, mergedCredentials, credentials)
+		if err != nil {
+			return err
+		}
+		if (urlChanged || wsURLChanged) && !hasAPIKey {
+			return domain.NewValidationError("/apiKey", "required",
+				"openalgo: a changed url or wsUrl requires apiKey; Officer does not send a stored key to a new address")
+		}
+	}
 	instance.Label = label
 	instance.Credentials = mergedCredentials
 	if err := validateMarketDataInstance(s.registry, instance); err != nil {
@@ -869,6 +880,34 @@ func mergeMarketDataCredentials(existing, update string) (string, error) {
 	return string(out), nil
 }
 
+func openAlgoAddressChanges(stored, merged, update string) (urlChanged, wsURLChanged, hasAPIKey bool, err error) {
+	var storedValues, mergedValues map[string]any
+	if err := decodeCredentialsJSON(stored, &storedValues); err != nil {
+		return false, false, false, fmt.Errorf("openalgo stored credentials: %w", domain.ErrInvalid)
+	}
+	if err := decodeCredentialsJSON(merged, &mergedValues); err != nil {
+		return false, false, false, fmt.Errorf("openalgo merged credentials: %w", domain.ErrInvalid)
+	}
+	for _, values := range []map[string]any{storedValues, mergedValues} {
+		for _, key := range []string{"url", "wsUrl"} {
+			if value, ok := values[key].(string); ok {
+				values[key] = strings.TrimSpace(value)
+			}
+		}
+	}
+	urlChanged = !reflect.DeepEqual(storedValues["url"], mergedValues["url"])
+	wsURLChanged = !reflect.DeepEqual(storedValues["wsUrl"], mergedValues["wsUrl"])
+	if !urlChanged && !wsURLChanged {
+		return false, false, false, nil
+	}
+	var incoming map[string]any
+	if err := decodeCredentialsJSON(update, &incoming); err != nil {
+		return false, false, false, fmt.Errorf("openalgo credentials: %w", domain.ErrInvalid)
+	}
+	apiKey, ok := incoming["apiKey"].(string)
+	return urlChanged, wsURLChanged, ok && strings.TrimSpace(apiKey) != "", nil
+}
+
 // decodeCredentialsJSON decodes raw as exactly one JSON value, as strictly as
 // json.Unmarshal, but keeps numbers as json.Number: a float64 round trip
 // would rewrite an integer above 2^53 that the merge must carry unchanged.
@@ -886,8 +925,9 @@ func decodeCredentialsJSON(raw string, out *map[string]any) error {
 
 // MarketDataSettings reports non-secret settings safe to display in edit
 // forms: IB host, port, clientId, marketDataType and contracts, Bybit category,
-// and OANDA accountID and environment. It is nil for any other provider and
-// when the stored credentials are not a JSON object or hold no such settings.
+// OpenAlgo url and wsUrl, and OANDA accountID and environment. It is nil for
+// any other provider and when the stored credentials are not a JSON object
+// or hold no such settings.
 func MarketDataSettings(instance domain.MarketDataInstance) map[string]any {
 	credentials := credentialsObject(instance.Credentials)
 	if len(credentials) == 0 {
@@ -903,6 +943,9 @@ func MarketDataSettings(instance domain.MarketDataInstance) map[string]any {
 		copyObjectSetting(settings, credentials, "contracts")
 	case domain.MarketDataProviderBybit:
 		copyStringSetting(settings, credentials, "category")
+	case domain.MarketDataProviderOpenAlgo:
+		copyStringSetting(settings, credentials, "url")
+		copyStringSetting(settings, credentials, "wsUrl")
 	case domain.MarketDataProviderOANDA:
 		copyStringSetting(settings, credentials, "accountID")
 		copyStringSetting(settings, credentials, "environment")
@@ -949,15 +992,15 @@ func copyObjectSetting(dst, src map[string]any, key string) {
 }
 
 // MarketDataSecrets reports which secret credentials a market-data source
-// stores, by name and never by value: the Alpaca apiKey and apiSecret, and the
-// OANDA and Finnhub token. It is nil for any other provider, whose credentials
-// it never reads, and when the stored credentials are empty or hold no secret.
-// It fails only when the credentials of one of those three providers are not a
-// JSON object.
+// stores, by name and never by value: the Alpaca apiKey and apiSecret, the
+// OANDA and Finnhub token, and the OpenAlgo apiKey. It is nil for any other
+// provider, whose credentials it never reads, and when the stored credentials
+// are empty or hold no secret. It fails only when the credentials of one of
+// those four providers are not a JSON object.
 func MarketDataSecrets(instance domain.MarketDataInstance) (map[string]bool, error) {
 	switch instance.Provider {
 	case domain.MarketDataProviderAlpaca, domain.MarketDataProviderOANDA,
-		domain.MarketDataProviderFinnhub:
+		domain.MarketDataProviderFinnhub, domain.MarketDataProviderOpenAlgo:
 	default:
 		// A provider without a secret may store any valid JSON, such
 		// as null, so its credentials are never read.
@@ -980,6 +1023,8 @@ func MarketDataSecrets(instance domain.MarketDataInstance) (map[string]bool, err
 		secrets["apiSecret"] = stringCredentialPresent(credentials, "apiSecret")
 	case domain.MarketDataProviderOANDA, domain.MarketDataProviderFinnhub:
 		secrets["token"] = stringCredentialPresent(credentials, "token")
+	case domain.MarketDataProviderOpenAlgo:
+		secrets["apiKey"] = stringCredentialPresent(credentials, "apiKey")
 	}
 	if !holdsSecret(secrets) {
 		return nil, nil

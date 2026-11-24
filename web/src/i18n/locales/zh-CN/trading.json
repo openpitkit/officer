@@ -75,6 +75,10 @@
       "passphraseStored": "Passphrase: 已保存",
       "passphraseNotSet": "Passphrase: 未设置"
     },
+    "openalgo": {
+      "url": "REST 地址：{{url}}",
+      "wsUrl": "WebSocket 地址：{{wsUrl}}"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "已启用",
@@ -109,6 +113,19 @@
         "createKey": "在您的 OKX 账户中创建 API 密钥，授予 {{tradePermission}} 权限，不授予出金权限，并设置 Passphrase。复制 API key、API secret 和 Passphrase - OKX 无法恢复丢失的 Passphrase。",
         "bindIp": "将运行 Officer 的计算机的公网 IPv4 地址绑定到密钥：对于拥有交易权限但未绑定网络地址的密钥，OKX 会在闲置 14 天后使其失效。"
       }
+    },
+    "openalgo": {
+      "install": "请在 Officer 可以访问的机器上安装并启动 OpenAlgo。在 OpenAlgo 中打开 {{selectBroker}}，保存您券商的 API 密钥，并通过 {{loginWith}} 登录券商。",
+      "installationGuide": "安装指南",
+      "brokerConfiguration": "券商配置",
+      "paperMode": "请将 OpenAlgo 切换到 {{analyzer}} 模式，并在此连接启用期间保持该模式。OpenAlgo 处于实盘模式时，Officer 会拒绝模拟连接。如果 OpenAlgo 在实盘模式下提交订单，Officer 会报告错误并停止跟踪该订单：订单结束后仍保持待处理状态，需要您到券商处核查。",
+      "liveMode": "请将 OpenAlgo 切换到实盘模式，并在此连接启用期间保持该模式：实盘模式会向您的券商发送真实订单。OpenAlgo 处于 {{analyzer}} 模式时，Officer 会拒绝实盘连接。如果 OpenAlgo 在 {{analyzer}} 模式下提交订单，Officer 会报告错误并停止跟踪该订单：订单结束后仍保持待处理状态，需要您在 OpenAlgo 中核查。",
+      "aboutAnalyzer": "关于 Analyzer 模式",
+      "apiKey": "请从 OpenAlgo 的个人资料菜单打开 {{apiKeyPage}}，生成并复制 API 密钥。在同一页面将 {{orderMode}} 保持为 {{auto}}：在 {{semiAuto}} 模式下，OpenAlgo 将订单放入 {{actionCenter}} 等待审批而非发送，Officer 会将每个此类订单报告为结果未知的错误。",
+      "orderExecutionModes": "关于订单执行模式",
+      "addresses": "请在下方输入 OpenAlgo 的 REST 地址（{{hostServer}} 设置）、WebSocket 地址（{{websocketUrl}}）和 API 密钥。REST 地址标识此连接，之后无法更改：如需使用其他地址，请创建新连接。",
+      "paperTradingDay": "OpenAlgo 的订单簿和成交簿仅涵盖当前交易日，且只有通过实时订单流才能确认已取消、被拒绝或已到期订单的成交数量。Officer 无法在订单所属交易日内完成核对的订单，或在 Officer 停止期间结束的订单，会保持待处理状态并显示错误：请在 OpenAlgo 中核查（OpenAlgo 需处于 {{analyzer}} 模式）。",
+      "liveTradingDay": "OpenAlgo 的订单簿和成交簿仅涵盖当前交易日，且只有通过实时订单流才能确认已取消、被拒绝或已到期订单的成交数量。Officer 无法在订单所属交易日内完成核对的订单，或在 Officer 停止期间结束的订单，会保持待处理状态并显示错误：请到券商处核查。"
     },
     "test": {
       "prepare": "此连接在本地执行测试订单，无需密钥。创建后，请为测试账户授予访问权限，配置交易品种掩码及其执行规则，然后启用连接。"
@@ -192,6 +209,13 @@
         "eea": "欧洲经济区账户（{{site}}）",
         "us": "美国或澳大利亚账户（{{site}}）"
       }
+    },
+    "openalgo": {
+      "url": "REST 地址",
+      "wsUrl": "WebSocket 地址",
+      "urlCreateHint": "REST 地址标识此连接，之后无法更改。如需使用其他地址，请创建新连接。",
+      "urlHint": "REST 地址标识此连接。如需使用其他地址，请创建新连接。",
+      "addressKeyHint": "如需更改地址，请重新输入 API 密钥：Officer 不会将已保存的密钥发送到新地址。"
     },
     "description": "将字段留空以保留已保存的值。",
     "unknownProviderCredentials": "此面板无法识别此提供方的凭据字段。",

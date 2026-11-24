@@ -154,6 +154,12 @@ func TestToTradingConnectionDTOSettings(t *testing.T) {
 			secrets: map[string]bool{"apiKey": true, "apiSecret": true, "passphrase": true},
 			want:    map[string]any{"site": "www.okx.com"},
 		},
+		{
+			provider:    domain.TradingProviderOpenAlgo,
+			credentials: `{"url":"http://gateway","wsUrl":"ws://gateway","apiKey":"test-key"}`,
+			secrets:     map[string]bool{"apiKey": true},
+			want:        map[string]any{"url": "http://gateway", "wsUrl": "ws://gateway"},
+		},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			connection := domain.TradingConnection{

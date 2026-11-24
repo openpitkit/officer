@@ -51,8 +51,8 @@ func TestParseWithPassphrase(t *testing.T) {
 }
 
 func TestParseKey(t *testing.T) {
-	got, err := apikey.ParseKey(`{"apiKey":" \t test-key-marker \n "}`, "openalgo")
-	if err != nil || got != "test-key-marker" {
+	got, settings, err := apikey.ParseKey(`{"apiKey":" \t test-key-marker \n "}`, "openalgo")
+	if err != nil || got != "test-key-marker" || len(settings) != 0 {
 		t.Fatal("valid single-key credentials were refused or not trimmed")
 	}
 }
@@ -69,7 +69,10 @@ func TestCredentialShapeValidation(t *testing.T) {
 			[]string{"test-key-marker", "test-secret-marker", "test-passphrase-marker"},
 			func(raw, vendor string) error { _, _, err := apikey.ParseWithPassphrase(raw, vendor); return err }},
 		{"single_key", "openalgo", []string{"apiKey"}, []string{"test-key-marker"},
-			func(raw, vendor string) error { _, err := apikey.ParseKey(raw, vendor); return err }},
+			func(raw, vendor string) error { _, _, err := apikey.ParseKey(raw, vendor); return err }},
+		{"key_with_settings", "openalgo", []string{"apiKey", "url", "wsUrl"},
+			[]string{"test-key-marker", "http://localhost:5000", "ws://localhost:8765"},
+			func(raw, vendor string) error { _, _, err := apikey.ParseKey(raw, vendor, "url", "wsUrl"); return err }},
 		{"cdp", "coinbase", []string{"keyName", "privateKey"},
 			[]string{"test-key-name-marker", encodeECKey(t, key)},
 			func(raw, vendor string) error { _, err := apikey.ParseCDP(raw, vendor); return err }},
@@ -369,4 +372,15 @@ func TestParseWithPassphraseExtraFieldsValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseKeySettings(t *testing.T) {
+	key, settings, err := apikey.ParseKey(`{"apiKey":" test-key-marker ","url":" http://host ","wsUrl":" ws://host "}`, "openalgo", "wsUrl", "url")
+	if err != nil || key != "test-key-marker" || len(settings) != 2 || settings[0] != "ws://host" || settings[1] != "http://host" {
+		t.Fatal("key or ordered settings were refused or not trimmed")
+	}
+	_, _, err = apikey.ParseKey(`{"apiKey":"test-key-marker","url":"http://host","wsUrl":"ws://host","extra":"test-value-marker"}`, "openalgo", "url", "wsUrl")
+	assertValidationError(t, err, "", "unknown_field", "openalgo: unknown credentials field")
+	_, _, err = apikey.ParseKey(`{"apiKey":"test-key-marker"}`, "openalgo", "url", "wsUrl")
+	assertValidationError(t, err, "/url", "required", "openalgo: url is required")
 }

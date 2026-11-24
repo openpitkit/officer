@@ -72,14 +72,15 @@ func ParseWithPassphrase(raw, vendor string, fields ...string) (PassphraseCreden
 	}, values[3:], nil
 }
 
-// ParseKey accepts only apiKey, non-blank after trimming, and returns the
-// trimmed key.
-func ParseKey(raw, vendor string) (string, error) {
-	values, err := parseFields(raw, vendor, "apiKey")
+// ParseKey accepts only apiKey and the named settings, all non-blank after
+// trimming. It validates apiKey first, then settings in the named order, and
+// returns the trimmed key and settings in that order.
+func ParseKey(raw, vendor string, settings ...string) (string, []string, error) {
+	values, err := parseFields(raw, vendor, append([]string{"apiKey"}, settings...)...)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return values[0], nil
+	return values[0], values[1:], nil
 }
 
 // CDPCredentials identifies a Coinbase CDP key by its name and P-256 private

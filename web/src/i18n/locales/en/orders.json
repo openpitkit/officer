@@ -229,6 +229,13 @@
           "ioc": "IOC - Immediate or cancel",
           "fok": "FOK - Fill or kill"
         },
+        "product": "Product",
+        "chooseProduct": "Choose product",
+        "productOptions": {
+          "cnc": "CNC - delivery",
+          "mis": "MIS - intraday"
+        },
+        "aboutProducts": "About products",
         "aboutTimeInForce": "About time in force",
         "unsupportedProvider": "Sending to {{provider}} is not supported by this panel.",
         "quantityHint": "Orders are sent to the venue by quantity.",
@@ -460,6 +467,7 @@
         "statusFilled": "Filled",
         "statusCancelled": "Cancelled, rejected or expired at the venue",
         "timeInForce": "Time in force",
+        "product": "Product",
         "linkedAt": "Linked at",
         "fees": "{{venue}} fees that are not tied to orders are booked later as account adjustments.",
         "feesUnknownProvider": "Venue fees that are not tied to orders are booked later as account adjustments.",

@@ -776,6 +776,78 @@ func TestService_CreateMarketDataInstanceRejectsDuplicateLabel(t *testing.T) {
 	}
 }
 
+func TestService_UpdateMarketDataInstanceSettingsOpenAlgoAddresses(t *testing.T) {
+	t.Parallel()
+	const stored = `{"url":"http://openalgo.local:5000","wsUrl":"ws://openalgo.local:8765","apiKey":"fake-stored-key"}`
+	for _, tc := range []struct {
+		name, update, url, wsURL string
+		refused, replaced        bool
+		spaced                   bool
+	}{
+		{name: "changed url", update: `{"url":"http://other.local:5000"}`, refused: true},
+		{name: "changed websocket", update: `{"wsUrl":"ws://other.local:8765"}`, refused: true},
+		{name: "empty key", update: `{"wsUrl":"ws://other.local:8765","apiKey":""}`, refused: true},
+		{name: "blank key", update: `{"url":"http://other.local:5000","apiKey":"  "}`, refused: true},
+		{name: "non-string key", update: `{"url":"http://other.local:5000","apiKey":123}`, refused: true},
+		{name: "url string difference", update: `{"url":"http://openalgo.local:5000/"}`, refused: true},
+		{name: "url with key", update: `{"url":"http://other.local:5000","apiKey":"fake-new-key"}`, url: "http://other.local:5000", replaced: true},
+		{name: "websocket with key", update: `{"wsUrl":"ws://other.local:8765","apiKey":"fake-new-key"}`, wsURL: "ws://other.local:8765", replaced: true},
+		{name: "both with key", update: `{"url":"http://other.local:5000","wsUrl":"ws://other.local:8765","apiKey":"fake-new-key"}`, url: "http://other.local:5000", wsURL: "ws://other.local:8765", replaced: true},
+		{name: "unchanged addresses", update: `{"url":"http://openalgo.local:5000","wsUrl":"ws://openalgo.local:8765"}`},
+		{name: "trimmed stored addresses", update: `{"url":"http://openalgo.local:5000","wsUrl":"ws://openalgo.local:8765"}`, spaced: true},
+		{name: "blank addresses", update: `{"url":"  ","wsUrl":""}`},
+		{name: "label only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, fn := newTestService(t)
+			before := domain.MarketDataInstance{
+				ExternalID: mdID("openalgo-1"), Provider: domain.MarketDataProviderOpenAlgo,
+				Label: "OpenAlgo", Credentials: stored,
+			}
+			if tc.spaced {
+				before.Credentials = `{"url":"  http://openalgo.local:5000  ","wsUrl":"  ws://openalgo.local:8765  ","apiKey":"fake-stored-key"}`
+			}
+			fn.mdInstances = []domain.MarketDataInstance{before}
+			err := svc.UpdateMarketDataInstanceSettings(systemCtx(), before.ExternalID.String(), "Renamed", tc.update)
+			if tc.refused {
+				if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/apiKey" || domain.ValidationConstraint(err) != "required" {
+					t.Fatal("address update must require apiKey at /apiKey")
+				}
+				if fn.mdInstances[0] != before {
+					t.Fatal("refused update changed the stored source")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("source update failed")
+			}
+			got := fn.mdInstances[0]
+			if got.Label != "Renamed" {
+				t.Fatal("source label was not updated")
+			}
+			var want, actual map[string]string
+			if err := json.Unmarshal([]byte(stored), &want); err != nil {
+				t.Fatal("invalid stored fixture")
+			}
+			if tc.url != "" {
+				want["url"] = tc.url
+			}
+			if tc.wsURL != "" {
+				want["wsUrl"] = tc.wsURL
+			}
+			if tc.replaced {
+				want["apiKey"] = "fake-new-key"
+			}
+			if err := json.Unmarshal([]byte(got.Credentials), &actual); err != nil {
+				t.Fatal("invalid stored credentials after update")
+			}
+			if len(actual) != len(want) || actual["url"] != want["url"] || actual["wsUrl"] != want["wsUrl"] || actual["apiKey"] != want["apiKey"] {
+				t.Fatal("source update did not preserve or replace the expected credentials")
+			}
+		})
+	}
+}
+
 func TestService_UpdateMarketDataInstanceSettingsMergesBlankSecret(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService(t)

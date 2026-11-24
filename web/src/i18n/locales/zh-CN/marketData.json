@@ -75,6 +75,11 @@
       "description": "来自 Finnhub WebSocket 的实时成交价格。需要 API 令牌；外部代码必须是 Finnhub 支持的代码。",
       "createHint": "创建 Finnhub 来源以接收实时成交价格。填写 API 令牌。"
     },
+    "openalgo": {
+      "title": "OpenAlgo",
+      "description": "来自您 OpenAlgo 报价流的 NSE 和 BSE 工具的最新成交价格。需要 OpenAlgo 的 REST 和 WebSocket 地址及其 API 密钥；外部代码使用 EXCHANGE:SYMBOL，例如 NSE:RELIANCE。",
+      "createHint": "创建 OpenAlgo 来源以接收 NSE 和 BSE 实时价格。请输入您的 OpenAlgo 地址和 API 密钥。"
+    },
     "byo": {
       "title": "BYO",
       "description": "由操作员维护的手动价格。适用于静态外汇、测试价格，或由其他系统注入的行情。",

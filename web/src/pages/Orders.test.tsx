@@ -3793,6 +3793,90 @@ describe("Orders verify envelope toolbar", () => {
 });
 
 describe("Orders venue sending", () => {
+  it.each(["market", "limit"] as const)(
+    "OpenAlgo %s requires a product and sends only that route field",
+    async (kind) => {
+      const user = userEvent.setup();
+      fetchTradingDestinationsMock.mockResolvedValue([
+        {
+          ...binanceDestination,
+          provider: "openalgo",
+          connection: "openalgo-paper",
+          label: "OpenAlgo paper",
+        },
+      ]);
+      sendPaperOrderMock.mockRejectedValue(
+        new ApiError("Request inspected", "upstream", 502),
+      );
+      renderOrders("/orders");
+      const dialog = await openDialog(user);
+      await fillOrderFields(user, dialog);
+      await enablePaperSending(user, dialog);
+      if (kind === "limit")
+        await user.type(
+          within(dialog).getByLabelText("Limit price (optional)"),
+          "42.5",
+        );
+      const select = await within(dialog).findByRole("combobox", {
+        name: "Product",
+      });
+      expect(select).toHaveTextContent("Choose product");
+      expect(select).toBeRequired();
+      expect(
+        within(dialog).queryByRole("combobox", { name: "Time in force" }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(dialog).getByRole("link", { name: "About products" }),
+      ).toHaveAttribute(
+        "href",
+        "https://docs.openalgo.in/api-documentation/v1/orders-api/placeorder",
+      );
+      const submit = within(dialog).getByRole("button", {
+        name: "Submit PAPER order",
+      });
+      expect(submit).toBeDisabled();
+      await user.click(submit);
+      expect(sendPaperOrderMock).not.toHaveBeenCalled();
+      const focusSpy = vi
+        .spyOn(HTMLElement.prototype, "focus")
+        .mockImplementation(() => {});
+      try {
+        await user.click(select);
+        expect(
+          (await screen.findAllByRole("option")).map(
+            (option) => option.textContent,
+          ),
+        ).toEqual(["CNC - delivery", "MIS - intraday"]);
+        await user.click(
+          screen.getByRole("option", { name: "CNC - delivery" }),
+        );
+      } finally {
+        focusSpy.mockRestore();
+      }
+      expect(submit).toBeEnabled();
+      await user.click(submit);
+      await waitFor(() =>
+        expect(sendPaperOrderMock).toHaveBeenCalledExactlyOnceWith(
+          {
+            account: "desk-alpha",
+            baseAsset: "AAPL",
+            quoteAsset: "USD",
+            side: "buy",
+            amountKind: "quantity",
+            amountValue: "10",
+            ...(kind === "limit" ? { price: "42.5" } : {}),
+            destination: {
+              connection: "openalgo-paper",
+              venueAccount: "",
+              route: { product: "CNC" },
+            },
+          },
+          expect.any(AbortSignal),
+        ),
+      );
+    },
+  );
+
   it.each(["row", "detail", "event"])(
     "clones the target and its mode from the %s despite different saved preferences",
     async (source) => {
@@ -7043,6 +7127,22 @@ describe("Order review panel", () => {
 });
 
 describe("Order detail venue section", () => {
+  it("OpenAlgo detail shows Product without a time-in-force row", async () => {
+    const dialog = await openSampleOrderDetail(userEvent.setup(), {
+      order: sampleOrder,
+      events: [],
+      trades: [],
+      venueOrder: {
+        ...linkedVenueOrder,
+        connection: "openalgo-paper",
+        route: { product: "CNC" },
+      },
+    });
+    expect(await within(dialog).findByText("Product")).toBeInTheDocument();
+    expect(within(dialog).getByText("CNC")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Time in force")).not.toBeInTheDocument();
+  });
+
   it("Binance market detail omits the time-in-force row for an empty route", async () => {
     const dialog = await openSampleOrderDetail(userEvent.setup(), {
       order: { ...sampleOrder, price: "" },

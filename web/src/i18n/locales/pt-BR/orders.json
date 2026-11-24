@@ -229,6 +229,13 @@
           "ioc": "IOC - Executa ou cancela",
           "fok": "FOK - Tudo ou nada"
         },
+        "product": "Produto",
+        "chooseProduct": "Escolha o produto",
+        "productOptions": {
+          "cnc": "CNC - entrega",
+          "mis": "MIS - intradiário"
+        },
+        "aboutProducts": "Sobre os produtos",
         "aboutTimeInForce": "Sobre a validade",
         "unsupportedProvider": "Este painel não oferece suporte ao envio para {{provider}}.",
         "quantityHint": "As ordens são enviadas à plataforma por quantidade.",
@@ -460,6 +467,7 @@
         "statusFilled": "Executada",
         "statusCancelled": "Cancelada, rejeitada ou expirada na plataforma",
         "timeInForce": "Validade",
+        "product": "Produto",
         "linkedAt": "Vinculada em",
         "fees": "As taxas de {{venue}} não vinculadas a ordens são lançadas depois como ajustes da conta.",
         "feesUnknownProvider": "As taxas da plataforma não vinculadas a ordens são lançadas depois como ajustes da conta.",
