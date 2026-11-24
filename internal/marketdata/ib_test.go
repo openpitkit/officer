@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -1344,6 +1345,24 @@ func TestLiveIBClientForceDisconnectZeroClient(t *testing.T) {
 	}
 }
 
+type handshakeDeadlineContext struct {
+	context.Context
+	expired <-chan struct{}
+}
+
+func (c handshakeDeadlineContext) Done() <-chan struct{} {
+	return c.expired
+}
+
+func (c handshakeDeadlineContext) Err() error {
+	select {
+	case <-c.expired:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
 func TestLiveIBClientConnectTimeoutClosesPartialHandshake(t *testing.T) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -1367,22 +1386,37 @@ func TestLiveIBClientConnectTimeoutClosesPartialHandshake(t *testing.T) {
 		"ib-test",
 		fmt.Sprintf(`{"host":"127.0.0.1","port":%d,"clientId":109}`, addr.Port),
 	)
-	connector.connectTimeout = time.Millisecond
+	connector.connectTimeout = time.Hour
 	client := liveIBClient{client: ibapi.NewEClient(nil)}
 
-	err = connector.connect(context.Background(), client)
+	expired := make(chan struct{})
+	ctx := handshakeDeadlineContext{Context: context.Background(), expired: expired}
+	result := make(chan error, 1)
+	go func() { result <- connector.connect(ctx, client) }()
+
+	var conn net.Conn
+	select {
+	case conn = <-accepted:
+	case err := <-acceptErr:
+		t.Fatalf("Accept: %v", err)
+	case err := <-result:
+		t.Fatalf("connect returned before the listener accepted: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	// Accept can precede ibapi storing its socket. Handshake bytes prove
+	// the socket is installed before the caller's deadline expires.
+	var header [4]byte
+	if _, err := io.ReadFull(conn, header[:]); err != nil {
+		t.Fatalf("Read handshake: %v", err)
+	}
+	close(expired)
+	err = <-result
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("connect err = %v, want context deadline exceeded", err)
 	}
 	if client.client.IsConnected() {
 		t.Fatal("client remains connected after partial-handshake timeout")
-	}
-
-	select {
-	case conn := <-accepted:
-		_ = conn.Close()
-	case err := <-acceptErr:
-		t.Fatalf("Accept: %v", err)
 	}
 }
 

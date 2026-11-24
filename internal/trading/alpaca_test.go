@@ -439,14 +439,13 @@ func TestInvariantUnknownOutcomeIsNotRejected(t *testing.T) {
 			defer cancel()
 		}
 		c := testAlpacaConnector(t, server)
-		started := time.Now()
+		if tc.slow {
+			// The caller's deadline is the only one that can end the request.
+			c.client = alpaca.NewClient(server.URL, c.credentials, &http.Client{Timeout: time.Hour}, c.redact)
+		}
 		_, err := c.Send(ctx, testOrder())
-		elapsed := time.Since(started)
 		close(late)
 		server.Close()
-		if tc.slow && elapsed >= alpacaHTTPTimeout {
-			t.Fatal("Send was ended by the client timeout rather than the caller's deadline")
-		}
 		if tc.slow && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			t.Fatal("Send returned before its deadline")
 		}
