@@ -2048,8 +2048,6 @@ func (r *realmStore) recordOrderSettlementTx(
 		}
 	}
 
-	// Lock rewrite: only when explicitly requested (nil-vs-empty matters: an
-	// empty non-nil slice clears the column, nil leaves it).
 	if st.SetLock {
 		if _, err := tx.ExecContext(
 			ctx,

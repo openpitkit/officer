@@ -73,12 +73,13 @@ func (n *localNode) beginOrderReview(
 
 func (n *localNode) recordReviewSettlement(
 	ctx context.Context, state *orderReviewChainState,
-	settlement domain.OrderSettlement, attest store.EventAttestor,
+	settlement domain.OrderSettlement, decision string,
+	attest store.EventAttestor,
 ) error {
 	if err := n.persistReviewSettlement(ctx, state, settlement, attest); err != nil {
-		operation := "record order review decision"
+		operation := "record " + decision
 		if state.persistenceCompleted {
-			operation = "read order review decision"
+			operation = "read " + decision
 		}
 		return n.fatalPostEnginePersistence(operation, state.order.Account, err)
 	}
@@ -182,7 +183,9 @@ func (n *localNode) recordReviewRejection(
 			orderRejectedPayload(result.Rejects),
 		)},
 	}
-	if err := n.recordReviewSettlement(ctx, state, settlement, attest); err != nil {
+	if err := n.recordReviewSettlement(
+		ctx, state, settlement, "order review rejection", attest,
+	); err != nil {
 		return err
 	}
 	return n.auditSubmittedOrder(ctx, state.order.Account, state.order, result,
@@ -268,7 +271,9 @@ func (n *localNode) ConfirmOrderReview(
 	})
 	runner := builder.Then(func(_ context.Context, state *orderReviewChainState) error {
 		preTradeFinalized = true
-		state.err = n.recordReviewSettlement(persistenceCtx, state, settlement, attest)
+		state.err = n.recordReviewSettlement(
+			persistenceCtx, state, settlement, "order review acceptance", attest,
+		)
 		return state.err
 	}).Then(func(_ context.Context, state *orderReviewChainState) error {
 		state.err = n.auditSubmittedOrder(persistenceCtx, state.order.Account, state.order, result,
@@ -410,7 +415,9 @@ func (n *localNode) runImmediateReviewReport(
 			return state.err
 		}
 		settlement.ClearReview = true
-		state.err = n.recordReviewSettlement(persistenceCtx, state, settlement, attest)
+		state.err = n.recordReviewSettlement(
+			persistenceCtx, state, settlement, "order review acceptance", attest,
+		)
 		return state.err
 	}).Then(func(_ context.Context, state *orderReviewChainState) error {
 		state.err = n.auditImmediateSubmission(persistenceCtx, state.order.Account, state.order, result,

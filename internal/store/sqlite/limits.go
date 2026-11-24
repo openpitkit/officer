@@ -119,8 +119,9 @@ SELECT 'spot_funds_limit_mode' AS kind, 'global' AS scope,
 `
 
 // ListPolicyRows returns the typed barrier tables and the meta-policy setting
-// flattened into one sorted, paged list with the pre-paging total. It applies filters in SQL and
-// reconstructs each row's typed value from the projected columns.
+// flattened into one sorted, paged list with the pre-paging total. It applies
+// filters in SQL and reconstructs each row's typed value from the projected
+// columns.
 func (r *realmStore) ListPolicyRows(
 	ctx context.Context, filter fwstore.PolicyListFilter,
 ) (value fwstore.PolicyListPage, resultErr error) {
@@ -255,10 +256,10 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 		direction = "DESC"
 		tieDirection = "DESC"
 	}
-	// The (kind, scope, account, asset, mode) composite is unique across the union, so
-	// it is a deterministic tiebreak that does not depend on the per-table
-	// surrogate id. stable_id stays the final tiebreak for the degenerate case
-	// where the composite repeats.
+	// The (kind, scope, account, asset, mode) composite is unique across the
+	// union, so it is a deterministic tiebreak that does not depend on the
+	// per-table surrogate id. stable_id stays the final tiebreak for the
+	// degenerate case where the composite repeats.
 	tie := "kind " + tieDirection + ", scope " + tieDirection +
 		", account_code " + tieDirection +
 		", account_group_code " + tieDirection +
@@ -416,8 +417,8 @@ LEFT JOIN asset   ast ON ast.id = lr.asset_id`
 
 // PutRateLimit upserts one rate-limit barrier keyed by (scope, account, asset).
 // It calls domain.Validate() before persisting; validation failure returns an
-// error wrapping domain.ErrInvalid. Unknown account/asset codes on non-NULL axes
-// also return domain.ErrInvalid.
+// error wrapping domain.ErrInvalid. Unknown account/asset codes on non-NULL
+// axes also return domain.ErrInvalid.
 //
 // SQLite treats NULL as distinct in UNIQUE constraints, so the standard
 // ON CONFLICT clause does not fire when account_id or asset_id is NULL. The
@@ -622,7 +623,8 @@ func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 	}, nil
 }
 
-// ListPositionLimits returns the position ceilings, optionally narrowed to an account.
+// ListPositionLimits returns the position ceilings, optionally narrowed to an
+// account.
 func (r *realmStore) ListPositionLimits(
 	ctx context.Context, account domain.AccountID,
 ) (value []domain.LimitPosition, resultErr error) {
@@ -905,8 +907,8 @@ func (table limitTable) pnlAxisKeyed() (bool, error) {
 }
 
 // putLimitRow upserts one limit row in table using DELETE-then-INSERT inside a
-// transaction. This is required because SQLite treats NULL as distinct in UNIQUE
-// constraints: two rows with the same (scope, NULL, NULL) are considered
+// transaction. This is required because SQLite treats NULL as distinct in
+// UNIQUE constraints: two rows with the same (scope, NULL, NULL) are considered
 // different by the ON CONFLICT clause, so the standard upsert idiom silently
 // inserts a duplicate. The delete-first approach is safe under SQLite's
 // single-writer serialisation. The complete key predicate comes from

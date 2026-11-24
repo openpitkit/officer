@@ -108,6 +108,24 @@ Its fixture runs through `check-semgrep`.
 
 This rule has no approval marker or baseline.
 
+### `error-type-one-form`
+
+`checks/semgrep/error-type-one-form.yml` requires a single probe form for an
+error type. A type switch case that lists both `T` and `*T`, or a function
+that probes both with `errors.As`, can keep a dead path and obscure which
+form the code actually returns. The rule scans production Go across the
+repository, excluding `*_test.go` and `testdata` directories.
+
+The switch check compares type spellings within one case. The `errors.As`
+check looks for addressed local variables with explicit types in one function
+body, in either order. Known misses include type aliases, parenthesised types,
+the two forms in separate cases of one switch, a switch or type assertion in
+one form with `errors.As` in the other, inferred or inline `errors.As` targets,
+targets that are parameters, fields or package variables, and a case list
+whose earlier item contains braces. Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
 ### `store-transaction-helper`
 
 `checks/semgrep/store-transaction-helper.yml` requires SQLite store transactions

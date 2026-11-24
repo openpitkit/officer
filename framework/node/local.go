@@ -289,7 +289,9 @@ type engineReconciliationResult struct {
 }
 
 // internalPostCommitNodeMutationFailure marks a post-commit failure that skips
-// further fatal escalation in the node.
+// further fatal escalation in the node and suppresses the engine rebuild.
+// Its err is the domain.Internal result set by
+// internalPostCommitNodeMutationError.
 type internalPostCommitNodeMutationFailure struct {
 	err error
 }
@@ -310,8 +312,7 @@ func internalPostCommitNodeMutationError(err error) error {
 		return nil
 	}
 	switch err.(type) {
-	case internalPostCommitNodeMutationFailure,
-		*internalPostCommitNodeMutationFailure:
+	case internalPostCommitNodeMutationFailure:
 		return err
 	default:
 		return internalPostCommitNodeMutationFailure{err: domain.Internal(err)}

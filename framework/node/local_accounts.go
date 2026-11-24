@@ -188,8 +188,7 @@ func (n *localNode) administrativeChainTerminalError(
 		return state.err
 	}
 	switch state.err.(type) {
-	case internalPostCommitNodeMutationFailure,
-		*internalPostCommitNodeMutationFailure:
+	case internalPostCommitNodeMutationFailure:
 		return state.err
 	}
 	failureOperation := state.failureOperation
@@ -209,11 +208,7 @@ func (n *localNode) administrativeChainTerminalError(
 
 func isInternalPostCommitNodeMutation(err error) bool {
 	var value internalPostCommitNodeMutationFailure
-	if errors.As(err, &value) {
-		return true
-	}
-	var pointer *internalPostCommitNodeMutationFailure
-	return errors.As(err, &pointer)
+	return errors.As(err, &value)
 }
 
 func (n *localNode) reconcileAdministrativeChainFailure(

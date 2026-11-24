@@ -269,13 +269,14 @@ func (e internalError) Is(target error) bool {
 
 // Internal returns nil for nil and returns an error it previously returned
 // unchanged. Otherwise it wraps err so errors.Is returns false for domain
-// sentinels and delegates other matches to errors.Is on err.
+// sentinels and delegates other matches to errors.Is on err. errors.As and
+// errors.Unwrap cannot see through the wrapper.
 func Internal(err error) error {
 	if err == nil {
 		return nil
 	}
 	switch err.(type) {
-	case internalError, *internalError:
+	case internalError:
 		return err
 	default:
 		return internalError{err: err}
