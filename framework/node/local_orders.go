@@ -227,17 +227,18 @@ type submitOrderChainState struct {
 }
 
 type submitImmediateChainState struct {
-	ctx                 context.Context
-	bridge              *orderSubmissionBridge
-	order               domain.Order
-	result              engine.ImmediateResult
-	preparation         engine.ImmediatePreparation
-	attest              store.EventAttestor
-	err                 error
-	preTradeFinalized   bool
-	reportSettled       bool
-	heldSettlement      domain.OrderSettlement
-	heldReviewCompleted bool
+	ctx                  context.Context
+	bridge               *orderSubmissionBridge
+	order                domain.Order
+	result               engine.ImmediateResult
+	preparation          engine.ImmediatePreparation
+	attest               store.EventAttestor
+	err                  error
+	preTradeFinalized    bool
+	reportSettled        bool
+	heldSettlement       domain.OrderSettlement
+	heldReviewCompleted  bool
+	persistenceCompleted bool
 }
 
 // SubmitOrder runs pre-trade and caller persistence in one account chain and
@@ -320,6 +321,7 @@ func (n *localNode) submitOrder(
 			)
 			return nil, state.err
 		}
+		state.ctx = context.WithoutCancel(state.ctx)
 		bridge, persisted, beginErr := beginOrderSubmission(
 			state.ctx, n.realm, draft, submitted, attestSubmitted,
 		)
@@ -878,6 +880,7 @@ func (n *localNode) submitImmediate(
 			)
 			return nil, state.err
 		}
+		state.ctx = context.WithoutCancel(state.ctx)
 		bridge, persisted, beginErr := beginOrderSubmission(
 			state.ctx, n.realm, draft, submitted, attestSubmitted,
 		)
@@ -1043,6 +1046,7 @@ func (n *localNode) submitImmediate(
 				state.err = n.fatalPostEnginePersistence("record immediate submission", o.Account, state.err)
 				return state.err
 			}
+			state.persistenceCompleted = true
 			state.err = n.auditSubmittedOrder(state.ctx, o.Account, state.order, engine.OrderResult{
 				Verdict: state.result.Verdict, Reviews: state.result.Reviews, Blocks: state.preparation.Blocks,
 			}, caller, state.bridge.accountIdentity, submissionAuditAction(state.order))
@@ -1106,6 +1110,7 @@ func (n *localNode) submitImmediate(
 	}).Then(func(
 		_ context.Context, state *submitImmediateChainState,
 	) error {
+		state.persistenceCompleted = true
 		state.err = n.auditImmediateSubmission(
 			state.ctx, o.Account, state.order, state.result, caller,
 			state.bridge.accountIdentity, submissionAuditAction(state.order),
@@ -1116,13 +1121,19 @@ func (n *localNode) submitImmediate(
 		state *submitImmediateChainState,
 		outcome asyncengine.ChainOutcome,
 	) error {
-		if !state.heldReviewCompleted && state.err == nil && state.preTradeFinalized &&
+		if !state.heldReviewCompleted && !state.preparation.Held && state.preTradeFinalized &&
 			!state.reportSettled && outcome.Err != nil {
-			state.err = immediateReconciliationError(
+			outcome.Err = immediateReconciliationError(
 				state.order,
 				state.preparation.ReconciliationState,
 				"the execution report failed and the fill is unsettled",
 				chainRootCause(outcome.Err),
+			)
+		}
+		if !state.heldReviewCompleted {
+			state.err = n.accountChainTerminalError(
+				"submit immediate", o.Account, state.err,
+				state.preTradeFinalized, state.persistenceCompleted, outcome,
 			)
 		}
 		state.bridge.abortAndWait()

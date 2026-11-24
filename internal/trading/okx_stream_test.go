@@ -58,11 +58,18 @@ func okxWSHandshake(
 		return nil
 	}
 	_, raw, err := conn.Read(ctx)
+	if err != nil {
+		if t.Context().Err() == nil {
+			t.Error("OKX login request")
+		}
+		_ = conn.CloseNow()
+		return nil
+	}
 	var login struct {
 		Op   string
 		Args []map[string]string
 	}
-	if err != nil || json.Unmarshal(raw, &login) != nil || login.Op != "login" ||
+	if json.Unmarshal(raw, &login) != nil || login.Op != "login" ||
 		len(login.Args) != 1 || login.Args[0]["apiKey"] == "" ||
 		login.Args[0]["passphrase"] == "" || login.Args[0]["sign"] == "" {
 		t.Error("OKX login request")
@@ -74,8 +81,14 @@ func okxWSHandshake(
 		return nil
 	}
 	_, raw, err = conn.Read(ctx)
-	if err != nil ||
-		string(raw) != `{"op":"subscribe","args":[{"channel":"orders","instType":"SPOT"}]}` {
+	if err != nil {
+		if t.Context().Err() == nil {
+			t.Error("OKX orders subscription")
+		}
+		_ = conn.CloseNow()
+		return nil
+	}
+	if string(raw) != `{"op":"subscribe","args":[{"channel":"orders","instType":"SPOT"}]}` {
 		t.Error("OKX orders subscription")
 		_ = conn.CloseNow()
 		return nil
@@ -117,8 +130,8 @@ func okxNextEvent(t *testing.T, events <-chan fwtrading.Event) fwtrading.Event {
 }
 
 func TestOKXStreamEvents(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
 	c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v5/public/instruments" {
 			okxReply(w, []okx.Instrument{okxTestInstrument()})
@@ -229,8 +242,8 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 	} {
 		for _, lifecycle := range []bool{false, true} {
 			t.Run(tc.stage+"/"+tc.code+"/"+strconv.FormatBool(lifecycle), func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				t.Cleanup(cancel)
 				signatures := make(chan string, 1)
 				c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/api/v5/public/instruments" {
@@ -243,8 +256,14 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 					}
 					defer func() { _ = conn.CloseNow() }()
 					_, login, err := conn.Read(ctx)
+					if err != nil {
+						if t.Context().Err() == nil {
+							t.Error("missing captured login")
+						}
+						return
+					}
 					var frame struct{ Args []struct{ Sign string } }
-					if err != nil || json.Unmarshal(login, &frame) != nil ||
+					if json.Unmarshal(login, &frame) != nil ||
 						len(frame.Args) != 1 || frame.Args[0].Sign == "" {
 						t.Error("missing captured login")
 						return
@@ -305,8 +324,6 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 					}
 					message = err.Error()
 				}
-				cancel()
-				c.Close()
 				var signature string
 				select {
 				case signature = <-signatures:
@@ -346,8 +363,8 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 func TestOKXStreamCloseReasonStaysPrivate(t *testing.T) {
 	for _, lifecycle := range []bool{false, true} {
 		t.Run(strconv.FormatBool(lifecycle), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			t.Cleanup(cancel)
 			c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v5/public/instruments" {
 					okxReply(w, []okx.Instrument{okxTestInstrument()})
@@ -388,8 +405,6 @@ func TestOKXStreamCloseReasonStaysPrivate(t *testing.T) {
 				}
 				message = err.Error()
 			}
-			cancel()
-			c.Close()
 			if !strings.Contains(message, "okx: stream closed by venue: status 4004") ||
 				strings.Contains(message, "venue-close-reason-marker") {
 				t.Fatal("close status missing or venue reason escaped into error or status")
@@ -401,8 +416,8 @@ func TestOKXStreamCloseReasonStaysPrivate(t *testing.T) {
 func TestOKXStreamReconnect(t *testing.T) {
 	for _, reason := range []string{"notice", "close", "error"} {
 		t.Run(reason, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+			t.Cleanup(cancel)
 			var sessions atomic.Int32
 			c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v5/public/instruments" {
@@ -491,8 +506,8 @@ func TestOKXStreamRowDiagnostics(t *testing.T) {
 }
 
 func TestOKXStreamPongTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	t.Cleanup(cancel)
 	pingSeen := make(chan struct{}, 1)
 	c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v5/public/instruments" {
@@ -533,8 +548,8 @@ func TestOKXStreamPongTimeout(t *testing.T) {
 }
 
 func TestOKXStreamBlockedDeliveryPongTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	t.Cleanup(cancel)
 	c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v5/public/instruments" {
 			okxReply(w, []okx.Instrument{okxTestInstrument()})
@@ -565,8 +580,8 @@ func TestOKXStreamCancelWithFill(t *testing.T) {
 	for _, state := range []string{"canceled", "mmp_canceled"} {
 		for _, withFill := range []bool{false, true} {
 			t.Run(state+"/"+strconv.FormatBool(withFill), func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				t.Cleanup(cancel)
 				c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/api/v5/public/instruments" {
 						okxReply(w, []okx.Instrument{okxTestInstrument()})
@@ -613,8 +628,8 @@ func TestOKXStreamCancelWithFill(t *testing.T) {
 func TestOKXStreamCatalogue(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(strconv.FormatBool(fail), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			t.Cleanup(cancel)
 			var requests atomic.Int32
 			c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v5/public/instruments" {

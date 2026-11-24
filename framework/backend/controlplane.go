@@ -100,18 +100,20 @@ type ControlPlane interface {
 	ListPolicyRows(
 		ctx context.Context, filter store.PolicyListFilter,
 	) (store.PolicyListPage, error)
+	// Limit writes return their stored barrier before another writer can
+	// change or remove it. A read-back failure is returned as an error.
 	PutRateLimit(
 		ctx context.Context,
 		limit domain.LimitRate,
 		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
-	) error
+	) (domain.LimitRate, error)
 	PutOrderSizeLimit(
 		ctx context.Context,
 		limit domain.LimitOrderSize,
 		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
-	) error
+	) (domain.LimitOrderSize, error)
 	// PutPositionLimit sets the account-asset ceiling under the caller resolved
 	// from ctx. The SDK enforces the stored ceiling from the next order.
 	PutPositionLimit(
@@ -119,13 +121,13 @@ type ControlPlane interface {
 		limit domain.LimitPosition,
 		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
-	) error
+	) (domain.LimitPosition, error)
 	PutSpotFundsPnlBoundsLimit(
 		ctx context.Context,
 		limit domain.LimitSpotFundsPnlBounds,
 		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
-	) error
+	) (domain.LimitSpotFundsPnlBounds, error)
 	// SpotFundsLimitMode returns the effective global mode and the visible
 	// accounts without an effective currency to which a Spot Funds P&L bound
 	// applies, under the caller resolved from ctx.
@@ -134,7 +136,7 @@ type ControlPlane interface {
 	// (domain.PolicySpotFundsLimitMode, global only) under the caller resolved
 	// from ctx. A tighten-only caller is refused Enforce to TrackOnly with
 	// domain.ErrLoosening.
-	PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error
+	PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error)
 	// DeleteLimit removes the addressed barrier under the caller resolved from
 	// ctx. Removing the Spot Funds limit-mode meta-policy restores Enforce and
 	// is allowed to a tighten-only caller.

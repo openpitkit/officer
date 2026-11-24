@@ -533,7 +533,7 @@ export function IdCell({
 }: IdCellProps) {
   return (
     <span
-      className="inline-flex min-w-0 items-center"
+      className="inline-flex min-w-0 max-w-full items-center"
       style={{ gap, ...style }}
     >
       <span className={cn("min-w-0 truncate", mono && "nums")}>

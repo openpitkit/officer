@@ -1,0 +1,88 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# A missing order status is an error, never a lifecycle fact to invent (Go).
+#
+# Match an empty-string guard that assigns any value to the guarded status,
+# including a caller's requested status rather than just a constant. Both
+# comparison orders count. Status fields are recognised by OrderStatus or
+# Status; locals must be bound from domain.OrderStatus(...) in the same block.
+# An error-returning guard has no assignment and is allowed.
+#
+# Deliberate limits: this is a syntactic check, not type or data-flow analysis.
+# A differently named field, a local initialised through another expression,
+# a package alias, or an emptiness check hidden behind a helper is not covered.
+# A field named Status is checked regardless of its owner's type. Assignments
+# in nested control flow inside the guard count too.
+#
+# There is no approval marker or baseline: a false positive narrows the rule.
+
+rules:
+  - id: empty-order-status-default
+    message: >-
+      An empty order status must fail explicitly. Assigning a replacement
+      status invents a lifecycle fact the producer did not report.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  if $S == "" {
+                    ...
+                    $S = $V
+                    ...
+                  }
+              - pattern: |
+                  if "" == $S {
+                    ...
+                    $S = $V
+                    ...
+                  }
+          - metavariable-pattern:
+              metavariable: $S
+              patterns:
+                - pattern-either:
+                    - pattern: $X.OrderStatus
+                    - pattern: $X.Status
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  if $S == "" {
+                    ...
+                    $S = $V
+                    ...
+                  }
+              - pattern: |
+                  if "" == $S {
+                    ...
+                    $S = $V
+                    ...
+                  }
+          - pattern-either:
+              - pattern-inside: |
+                  $S := domain.OrderStatus(...)
+                  ...
+              - pattern-inside: |
+                  var $S = domain.OrderStatus(...)
+                  ...
+    paths:
+      include:
+        - "**/*.go"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

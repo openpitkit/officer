@@ -180,6 +180,99 @@ func sampleOrder() domain.Order {
 	}
 }
 
+func TestGetOrderReadsOneSnapshotDuringFill(t *testing.T) {
+	t.Parallel()
+	_, rs := seedOrderFixtures(t)
+	ctx := t.Context()
+	writer := rs.(*realmStore)
+
+	created, settlement := seedSubmittedOrderWithFill(t, writer)
+	id := created.ExternalID
+	commission := *settlement.Trade.Commission
+	isFilled := func(detail domain.OrderDetail) bool {
+		return detail.Order.Status == domain.OrderStatusFilled &&
+			len(detail.Events) == 2 && detail.Events[0].Type == domain.OrderEventSubmitted &&
+			detail.Events[1].Type == domain.OrderEventFill && len(detail.Trades) == 1 &&
+			commissionsEqual(detail.Order.CommissionSubtotals, []domain.Commission{commission})
+	}
+	reader := newSnapshotReader(t, writer, func(query string) bool {
+		return strings.Contains(query, "FROM order_event ")
+	}, func(ctx context.Context) error {
+		_, err := writer.RecordOrderSettlement(ctx, settlement)
+		return err
+	})
+
+	snapshot, err := reader.GetOrder(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOrder during fill: %v", err)
+	}
+	submitted := snapshot.Order.Status == domain.OrderStatusSubmitted &&
+		len(snapshot.Events) == 1 && snapshot.Events[0].Type == domain.OrderEventSubmitted &&
+		len(snapshot.Trades) == 0 && len(snapshot.Order.CommissionSubtotals) == 0
+	if !submitted && !isFilled(snapshot) {
+		t.Fatalf("order snapshot has status %q, %d events, %d trades, commissions %v "+
+			"(want a complete submitted or filled snapshot)",
+			snapshot.Order.Status, len(snapshot.Events), len(snapshot.Trades),
+			snapshot.Order.CommissionSubtotals)
+	}
+
+	latest, err := writer.GetOrder(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOrder after fill: %v", err)
+	}
+	if !isFilled(latest) {
+		t.Fatalf("filled order has status %q, %d events, %d trades, commissions %v",
+			latest.Order.Status, len(latest.Events), len(latest.Trades),
+			latest.Order.CommissionSubtotals)
+	}
+}
+
+func seedSubmittedOrderWithFill(t *testing.T, writer fwstore.RealmStore) (domain.Order, domain.OrderSettlement) {
+	t.Helper()
+	ctx := t.Context()
+	order := sampleOrder()
+	order.Lock = nil
+	order.Leaves = order.AmountValue
+	created, err := writer.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	id := created.ExternalID
+	if _, err := writer.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: id, At: created.At, Type: domain.OrderEventSubmitted, Source: created.Source,
+	}); err != nil {
+		t.Fatalf("AppendOrderEvent: %v", err)
+	}
+
+	fillAt := created.At.Add(time.Second)
+	commission := domain.Commission{Amount: "-1", Currency: created.QuoteAsset}
+	report := domain.ExecutionReportRequest{
+		Order: id, Account: created.Account, Side: created.Side,
+		BaseAsset: created.BaseAsset, QuoteAsset: created.QuoteAsset,
+		FillQuantity: created.AmountValue, FillPrice: created.Price,
+		LeavesQuantity: "0", OrderStatus: domain.OrderStatusFilled, Commission: &commission,
+	}
+	settlement := domain.OrderSettlement{
+		Order: id, Account: report.Account, OrderStatus: report.OrderStatus,
+		Leaves: report.LeavesQuantity, AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		ReportID: &report.ExternalID,
+		Trade: &domain.Trade{
+			Order: id, Account: report.Account, At: fillAt, Source: domain.SourceAPI,
+			BaseAsset: report.BaseAsset, QuoteAsset: report.QuoteAsset, Side: report.Side,
+			Quantity: report.FillQuantity, Price: report.FillPrice, Commission: &commission,
+		},
+		Events: []domain.OrderEvent{{
+			Order: id, At: fillAt, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+			Payload: domain.OrderEventPayload{
+				FillQuantity: report.FillQuantity, FillPrice: report.FillPrice,
+				LeavesQuantity: report.LeavesQuantity, OrderStatus: string(report.OrderStatus),
+				Commission: &commission, ExecutionReport: &report,
+			},
+		}},
+	}
+	return created, settlement
+}
+
 func TestCreateOrderGetListRoundTrip(t *testing.T) {
 	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
@@ -699,8 +792,10 @@ func TestOrderEventsRoundTrip(t *testing.T) {
 }
 
 func TestTradeVenueTradeIDRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, venueTradeID := range []string{"", "venue-trade-42"} {
 		t.Run("venue_trade_id="+venueTradeID, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedOrderFixtures(t)
 			order, err := rs.CreateOrder(ctx, sampleOrder())
 			if err != nil {

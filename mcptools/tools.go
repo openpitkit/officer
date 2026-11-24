@@ -716,7 +716,7 @@ type getOrderOutput struct {
 	Order      orderDTO                              `json:"order"`
 	Approval   *orderApprovalDTO                     `json:"approval"`
 	Trades     []tradeDTO                            `json:"trades"`
-	VenueOrder *venueOrderDTO                        `json:"venueOrder,omitempty"`
+	VenueOrder *httpx.VenueOrderDTO[map[string]any]  `json:"venueOrder,omitempty"`
 	Review     *httpx.OrderReviewDTO[map[string]any] `json:"review,omitempty"`
 }
 
@@ -1215,9 +1215,9 @@ func getOrderHandler(
 			out.Review = &review
 		}
 		if detail.Venue != nil {
-			venue, err := toVenueOrderDTO(*detail.Venue)
+			venue, err := httpx.ToVenueOrderDTO(*detail.Venue, storedTradingRouteDTO)
 			if err != nil {
-				return "", getOrderOutput{}, toolError(err)
+				return "", getOrderOutput{}, toolError(errStoredVenueOrderRoute)
 			}
 			out.VenueOrder = &venue
 		}
@@ -1579,28 +1579,9 @@ func summarizeHealth(out healthOutput) string {
 	return "officer degraded"
 }
 
-type venueOrderDTO struct {
-	Connection    string         `json:"connection"`
-	VenueAccount  string         `json:"venueAccount"`
-	Route         map[string]any `json:"route"`
-	ClientOrderID string         `json:"clientOrderId"`
-	VenueOrderID  string         `json:"venueOrderId,omitempty"`
-	SendAttempted bool           `json:"sendAttempted"`
-	CreatedAt     string         `json:"createdAt"`
-}
-
-func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
-	route, err := storedTradingRouteDTO(v.Route)
-	if err != nil {
-		return venueOrderDTO{}, fmt.Errorf("stored venue order route is invalid")
-	}
-	return venueOrderDTO{
-		Connection: v.Connection.String(), VenueAccount: v.VenueAccount,
-		Route: route, ClientOrderID: v.ClientOrderID,
-		VenueOrderID: v.VenueOrderID, SendAttempted: v.SendAttempted,
-		CreatedAt: v.CreatedAt.Format(time.RFC3339Nano),
-	}, nil
-}
+// errStoredVenueOrderRoute replaces the route converter's error when a stored
+// venue order's route fails to encode.
+var errStoredVenueOrderRoute = errors.New("stored venue order route is invalid")
 
 func storedTradingRouteDTO(raw string) (map[string]any, error) {
 	if err := domain.ValidateTradingRoute(raw); err != nil {
@@ -2070,10 +2051,10 @@ type sendVenueOrderOutput struct {
 }
 
 type venueSendDTO struct {
-	Status     string                        `json:"status"`
-	Error      string                        `json:"error,omitempty"`
-	VenueOrder *venueOrderDTO                `json:"venueOrder,omitempty"`
-	Refusal    *trading.TestExecutionRefusal `json:"refusal,omitempty"`
+	Status     string                               `json:"status"`
+	Error      string                               `json:"error,omitempty"`
+	VenueOrder *httpx.VenueOrderDTO[map[string]any] `json:"venueOrder,omitempty"`
+	Refusal    *trading.TestExecutionRefusal        `json:"refusal,omitempty"`
 }
 
 // venueSend is the Source method that pre-checks, holds and sends an order
@@ -2133,9 +2114,9 @@ func sendVenueOrder(ctx context.Context, src frameworkmcp.Source, send venueSend
 		}
 		out.VenueSend = &venueSendDTO{Status: result.Send.Status, Error: result.Send.Error, Refusal: result.Send.Refusal}
 		if result.Send.Order != nil {
-			link, err := toVenueOrderDTO(*result.Send.Order)
+			link, err := httpx.ToVenueOrderDTO(*result.Send.Order, storedTradingRouteDTO)
 			if err != nil {
-				return "", sendVenueOrderOutput{}, toolError(err)
+				return "", sendVenueOrderOutput{}, toolError(errStoredVenueOrderRoute)
 			}
 			out.VenueSend.VenueOrder = &link
 		}

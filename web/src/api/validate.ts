@@ -23,6 +23,7 @@ import { isSpotFundsPnlPolicy } from "@/api/spotFundsPnlPolicies";
 import type { Limit } from "@/api/types";
 import {
   getAllowedScopes,
+  getPolicyKinds,
   isPolicy,
   isScope,
   scopeHasAccount,
@@ -221,10 +222,13 @@ export function parseGoDurationSeconds(value: string): number | null {
 /** Validate one kind/value pair for a policy. Returns a {@link FieldError} or
  *  null. */
 export function validateKindValue(
-  _policy: Policy,
+  policy: Policy,
   kind: string,
   value: string,
 ): FieldError | null {
+  if (!getPolicyKinds(policy).some((spec) => spec.kind === kind)) {
+    return { key: "kind.notAllowed", values: { kind, policy } };
+  }
   switch (kind) {
     case "max_orders": {
       if (!isPositiveInteger(value)) {

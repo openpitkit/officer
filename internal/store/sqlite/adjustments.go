@@ -352,17 +352,18 @@ func (r *realmStore) ListAdjustmentRows(
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, err
 	}
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "adjustment")
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	countQuery := `SELECT COUNT(*)
 FROM adjustment adj
 JOIN account  a   ON a.id   = adj.account_id
 JOIN asset    ast ON ast.id = adj.asset_id
 LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: count adjustments: %w", err)
 	}
 
@@ -375,7 +376,7 @@ LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: list adjustment rows: %w", err)
 	}
@@ -393,6 +394,9 @@ LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 		return fwstore.AdjustmentListPage{}, fmt.Errorf(
 			"store: iterate adjustment rows: %w", err,
 		)
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: finish adjustment read: %w", err)
 	}
 	return fwstore.AdjustmentListPage{
 		Rows:  result,

@@ -122,20 +122,29 @@ func replaceReviewTestPayload(t *testing.T, n *fakeNode, signer *signing.Service
 }
 
 func TestService_ConfirmOrderReviewDecision(t *testing.T) {
-	testServiceOrderReviewDecision(t, false)
+	t.Parallel()
+	t.Run("unheld", func(t *testing.T) {
+		testServiceOrderReviewDecision(t, false, false)
+	})
+	t.Run("held", func(t *testing.T) {
+		testServiceOrderReviewDecision(t, true, false)
+	})
 }
 
 func TestService_ForceOrderReviewDecision(t *testing.T) {
-	testServiceOrderReviewDecision(t, true)
+	t.Parallel()
+	t.Run("held", func(t *testing.T) {
+		testServiceOrderReviewDecision(t, true, true)
+	})
 }
 
-func testServiceOrderReviewDecision(t *testing.T, force bool) {
+func testServiceOrderReviewDecision(t *testing.T, held, force bool) {
 	t.Parallel()
 	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate} {
 		for _, off := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/eSignOff=%t", mode, off), func(t *testing.T) {
 				t.Parallel()
-				svc, n, signer, review := newBackendReviewTest(t, mode, off, force)
+				svc, n, signer, review := newBackendReviewTest(t, mode, off, held)
 				id := domain.ExternalID(review.OrderExternalID)
 				original := verifiedReviewTestPayload(t, signer, review.SignedApproval, n.orders[id])
 				caller := domain.Caller{Source: domain.SourceAPI, Principal: "review-operator"}
@@ -170,10 +179,10 @@ func testServiceOrderReviewDecision(t *testing.T, force bool) {
 					t.Fatalf("confirm payload=%+v original=%+v", p, original)
 				}
 				wantPrice := "234.56"
-				if force {
+				if held {
 					wantPrice = "123.45"
 				}
-				if mode == domain.SubmitModeHold && p.EstimatePrice != wantPrice {
+				if (mode == domain.SubmitModeHold || held && !force) && p.EstimatePrice != wantPrice {
 					t.Fatalf("lock price=%q, want %s", p.EstimatePrice, wantPrice)
 				}
 				submitted, err := svc.SubmitOrder(ctx, sampleOrder(), mode, domain.MissingAccountCreate)

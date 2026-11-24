@@ -64,8 +64,7 @@ func (n *localNode) accountChainTerminalError(
 		return stateErr
 	}
 	switch stateErr.(type) {
-	case internalPostCommitNodeMutationFailure,
-		*internalPostCommitNodeMutationFailure:
+	case internalPostCommitNodeMutationFailure:
 		return stateErr
 	}
 	cause := chainRootCause(outcome.Err)

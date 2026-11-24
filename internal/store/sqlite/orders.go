@@ -407,7 +407,9 @@ func putEventAttestationTx(
 
 // GetOrder returns the order addressed by external id together with its events
 // (each carrying its 1:1 signed attestation when one was issued) and trades.
-// A waiting order's review is read consistently with its status.
+// The order row, review, events and trades are read in one read-only
+// transaction, so the answer, including commission subtotals derived from those
+// trades and events, describes one moment of the store.
 // Returns domain.ErrNotFound when the order is absent.
 //
 // Each event's attestation is persisted in event_attestation (written by
@@ -417,19 +419,15 @@ func putEventAttestationTx(
 func (r *realmStore) GetOrder(
 	ctx context.Context, id domain.ExternalID,
 ) (detail domain.OrderDetail, err error) {
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "order")
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
+	defer rollbackTransaction(ctx, &err, tx)
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return domain.OrderDetail{}, fmt.Errorf("store: begin order read: %w", err)
-	}
-	defer rollbackTransaction(ctx, &err, tx)
 	row := tx.QueryRowContext(ctx, orderSelect+` WHERE o.external_id = ?`, id.Bytes())
 	o, err := scanOrderRow(dictionaries, row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -442,18 +440,18 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
+	events, err := r.queryOrderEvents(ctx, tx, id)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
+	trades, err := r.queryTradesByOrder(ctx, tx, id)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return domain.OrderDetail{}, fmt.Errorf("store: finish order read: %w", err)
 	}
 
-	events, err := r.ListOrderEvents(ctx, id)
-	if err != nil {
-		return domain.OrderDetail{}, err
-	}
-	trades, err := r.listTradesByOrder(ctx, id)
-	if err != nil {
-		return domain.OrderDetail{}, err
-	}
 	o.CommissionSubtotals, err = commissionSubtotals(id, trades, events)
 	if err != nil {
 		return domain.OrderDetail{}, err
@@ -499,12 +497,13 @@ JOIN account a       ON a.id = o.account_id
 JOIN asset ba        ON ba.id = o.base_asset_id
 JOIN asset qa        ON qa.id = o.quote_asset_id
 LEFT JOIN principal p ON p.id = o.principal_id` + where
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "order")
 	if err != nil {
 		return fwstore.OrderListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: count order rows: %w", err)
 	}
 
@@ -514,7 +513,7 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: list order rows: %w", err)
 	}
@@ -533,12 +532,15 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 	if err := rows.Err(); err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: iterate order rows: %w", err)
 	}
-	subtotals, err := commissionSubtotalsByOrder(ctx, dictionaries, db, orderIDs)
+	subtotals, err := commissionSubtotalsByOrder(ctx, dictionaries, tx, orderIDs)
 	if err != nil {
 		return fwstore.OrderListPage{}, err
 	}
 	for i := range result {
 		result[i].Order.CommissionSubtotals = subtotals[result[i].Order.ExternalID]
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.OrderListPage{}, fmt.Errorf("store: finish order read: %w", err)
 	}
 	return fwstore.OrderListPage{Rows: result, Total: total}, nil
 }
@@ -940,16 +942,22 @@ func (r *realmStore) AppendOrderEvent(
 // oldest first by (at, id).
 func (r *realmStore) ListOrderEvents(
 	ctx context.Context, order domain.ExternalID,
-) (value []domain.OrderEvent, resultErr error) {
+) ([]domain.OrderEvent, error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
 	}
+	return r.queryOrderEvents(ctx, db, order)
+}
+
+func (r *realmStore) queryOrderEvents(
+	ctx context.Context, q sqlQueryer, order domain.ExternalID,
+) (value []domain.OrderEvent, resultErr error) {
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(
+	rows, err := q.QueryContext(
 		ctx,
 		orderEventSelect+`
 		 JOIN order_record o ON o.id = e.order_id
@@ -1203,12 +1211,13 @@ JOIN account a        ON a.id = t.account_id
 JOIN asset ba         ON ba.id = t.base_asset_id
 JOIN asset qa         ON qa.id = t.quote_asset_id
 LEFT JOIN principal p ON p.id = t.principal_id` + whereFromClauses(clauses)
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "trade")
 	if err != nil {
 		return fwstore.TradeListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: count trade rows: %w", err)
 	}
 
@@ -1232,7 +1241,7 @@ LEFT JOIN trading_connection tc ON tc.id = vo.connection_id` +
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: list trade rows: %w", err)
 	}
@@ -1248,6 +1257,9 @@ LEFT JOIN trading_connection tc ON tc.id = vo.connection_id` +
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: iterate trade rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.TradeListPage{}, fmt.Errorf("store: finish trade read: %w", err)
 	}
 	return fwstore.TradeListPage{
 		Rows:  result,
@@ -1427,16 +1439,12 @@ func (r *realmStore) listTrades(
 	return scanTrades(dictionaries, rows)
 }
 
-// listTradesByOrder returns all trade for one order (addressed by its external
-// id), oldest first by (at, id). It backs GetOrder's trade list.
-func (r *realmStore) listTradesByOrder(
-	ctx context.Context, order domain.ExternalID,
+// queryTradesByOrder returns all trades for one order (addressed by its
+// external id), oldest first by (at, id).
+func (r *realmStore) queryTradesByOrder(
+	ctx context.Context, q sqlQueryer, order domain.ExternalID,
 ) (result []domain.Trade, resultErr error) {
-	db, err := r.db()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := db.QueryContext(
+	rows, err := q.QueryContext(
 		ctx,
 		tradeSelect+` WHERE o.external_id = ? ORDER BY t.at ASC, t.id ASC`,
 		order.Bytes(),
@@ -2042,8 +2050,6 @@ func (r *realmStore) recordOrderSettlementTx(
 		}
 	}
 
-	// Lock rewrite: only when explicitly requested (nil-vs-empty matters: an
-	// empty non-nil slice clears the column, nil leaves it).
 	if st.SetLock {
 		if _, err := tx.ExecContext(
 			ctx,

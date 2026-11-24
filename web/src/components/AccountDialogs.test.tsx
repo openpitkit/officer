@@ -15,9 +15,9 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Account } from "@/api/types";
@@ -29,6 +29,7 @@ import {
 import { ApiError, createApiClient, createOfficerApi } from "@/framework";
 import i18n from "@/i18n";
 import { accountRow, renderWithApi } from "@/test/apiClient";
+import { deferred } from "@/test/deferred";
 
 const blockAccountMock = vi.fn();
 const unblockAccountMock = vi.fn();
@@ -149,6 +150,41 @@ describe("UnblockAccountConfirm", () => {
     expect(unblockAccountMock).toHaveBeenCalledWith("desk-alpha", "reject");
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(unblocked));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("stays open on Escape while the unblock request is pending", async () => {
+    const user = userEvent.setup();
+    const request = deferred<Account>();
+    unblockAccountMock.mockReturnValueOnce(request.promise);
+
+    function UnblockConfirmation() {
+      const [open, setOpen] = useState(true);
+      return (
+        <UnblockAccountConfirm
+          account={blockedDesk}
+          open={open}
+          onOpenChange={setOpen}
+          onDone={vi.fn()}
+        />
+      );
+    }
+
+    renderDialog(<UnblockConfirmation />);
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Unblock account?",
+    });
+    try {
+      await user.click(screen.getByRole("button", { name: "Unblock" }));
+      expect(unblockAccountMock).toHaveBeenCalledExactlyOnceWith(
+        "desk-alpha",
+        "reject",
+      );
+      await user.keyboard("{Escape}");
+      expect(dialog).toBeInTheDocument();
+    } finally {
+      await act(async () => request.resolve(deskAccount()));
+    }
+    expect(dialog).not.toBeInTheDocument();
   });
 
   it("warns that the group's block stays in force", () => {

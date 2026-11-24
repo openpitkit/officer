@@ -2392,6 +2392,30 @@ describe("limits client", () => {
     maxNotional: "",
   };
 
+  it("reports an unknown policy kind without treating it as a rate limit", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        policies: [
+          {
+            kind: "exposure_limit",
+            mode: "reject",
+            scope: "broker",
+            account: "",
+            asset: "",
+            values: { exposure: { maxNotional: "10000" } },
+          },
+        ],
+        total: 1,
+      }),
+    );
+    const result = api().fetchPoliciesPage();
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "internal",
+      message: expect.stringContaining('"exposure_limit"'),
+    });
+  });
+
   it.each(["addLimit", "putLimit"] as const)(
     "refuses an order-size write with null mode on %s without fetching",
     async (method) => {
@@ -5406,7 +5430,12 @@ describe("event reproduction client", () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
         response: {
-          submitResponse: { signed_approval: "env-snake-response" },
+          submitResponse: {
+            signed_approval: "env-snake-response",
+            keyId: "key-1",
+            id: "ord-1",
+            verdict: "accept",
+          },
         },
       }),
     );
@@ -6067,38 +6096,48 @@ describe("Orders createOrder submit lifecycle", () => {
     },
   );
 
-  it("keeps an empty submitResponse verdict", async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            order: { id: "ord_legacy_0000001" },
-            submitResponse: {
-              signedApproval: "legacy-envelope",
-              keyId: "key-1",
-              id: "ord_legacy_0000001",
-              verdict: "",
-            },
-          }),
-          { status: 201, headers: { "Content-Type": "application/json" } },
-        ),
-      )
-      .mockResolvedValueOnce(orderResponse("ord_legacy_0000001"));
-    const { createOrder } = api();
-    const result = await createOrder(
-      {
-        account: "desk-alpha",
-        baseAsset: "AAPL",
-        quoteAsset: "USD",
-        side: "buy",
-        amountKind: "quantity",
-        amountValue: "100",
-      },
-      "reject",
-    );
-    expect(result.approval?.verdict).toBe("");
-    expect(result.approval?.reasons).toEqual([]);
-  });
+  it.each([
+    ["defer", '"defer"'],
+    [undefined, "undefined"],
+    ["", '""'],
+  ])(
+    "reports an invalid submitResponse verdict %j",
+    async (verdict, received) => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              order: { id: "ord_invalid_0000001" },
+              submitResponse: {
+                signedApproval: "order-envelope",
+                keyId: "key-1",
+                id: "ord_invalid_0000001",
+                verdict,
+              },
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(orderResponse("ord_invalid_0000001"));
+      const { createOrder } = api();
+      const result = createOrder(
+        {
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "100",
+        },
+        "reject",
+      );
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message: expect.stringContaining(received),
+      });
+    },
+  );
 
   it("normalizes displayPrice from the fetched order", async () => {
     vi.mocked(fetch)

@@ -1609,8 +1609,10 @@ func TestBackupRestoreEmptyDefaultGroupCurrencyDoesNotCreateDefaultRow(t *testin
 // TestBackupTradeVenueTradeIDRoundTrip preserves venue trade identifiers and
 // restores a released archive without the field as SQL NULL.
 func TestBackupTradeVenueTradeIDRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, venueTradeID := range []string{"", "venue-trade-42"} {
 		t.Run("venue_trade_id="+venueTradeID, func(t *testing.T) {
+			t.Parallel()
 			ctx, src := seedOrderFixtures(t)
 			order, err := src.CreateOrder(ctx, sampleOrder())
 			if err != nil {

@@ -51,7 +51,9 @@ func binanceWriteFrame(t *testing.T, conn *websocket.Conn, value any) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
-		t.Error(err)
+		if t.Context().Err() == nil {
+			t.Error(err)
+		}
 	}
 }
 
@@ -68,7 +70,9 @@ func binanceAccept(t *testing.T, w http.ResponseWriter,
 	defer cancel()
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
-		t.Error(err)
+		if t.Context().Err() == nil {
+			t.Error(err)
+		}
 		_ = conn.CloseNow()
 		return nil, ""
 	}
@@ -414,7 +418,9 @@ func TestBinanceStreamVenueReconnect(t *testing.T) {
 					if attempt == 1 {
 						if reason == "close frame" {
 							if err := conn.Close(websocket.StatusGoingAway, "restart"); err != nil {
-								t.Error(err)
+								if t.Context().Err() == nil {
+									t.Error(err)
+								}
 							}
 							return
 						}
@@ -784,7 +790,7 @@ func TestBinanceRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	t.Cleanup(c.Close)
 	reports := binanceRecordReports(c)
 	_, sendErr := c.Send(context.Background(), binanceTestOrder())
 	if !errors.Is(sendErr, fwtrading.ErrRejected) {
@@ -799,13 +805,15 @@ func TestBinanceRedaction(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("missing refused subscription status")
 	}
-	c.Close()
-	reports.mu.Lock()
-	defer reports.mu.Unlock()
-	text := sendErr.Error() + fmt.Sprint(reports.messages, reports.diagnostics)
-	for _, variant := range variants {
-		if strings.Contains(text, variant) {
-			t.Fatal("credentials appeared in error, status or diagnostic")
+	t.Cleanup(func() {
+		c.Close()
+		reports.mu.Lock()
+		defer reports.mu.Unlock()
+		text := sendErr.Error() + fmt.Sprint(reports.messages, reports.diagnostics)
+		for _, variant := range variants {
+			if strings.Contains(text, variant) {
+				t.Fatal("credentials appeared in error, status or diagnostic")
+			}
 		}
-	}
+	})
 }

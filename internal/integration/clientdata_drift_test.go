@@ -25,7 +25,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -295,6 +294,22 @@ var clientDataAllowlist = []clientDataAllow{
 		Field:   "realm_id",
 		Kind:    "internal",
 		Why:     "single-realm store binding supplies the realm identity",
+	},
+	{
+		Surface: driftSchema,
+		Entity:  "audit",
+		Field:   "account_identity",
+		Kind:    "backup-uncovered",
+		Why: "engine account id is local to the source store; the archive has no " +
+			"portable target identity, so restore marks it unavailable",
+	},
+	{
+		Surface: driftSchema,
+		Entity:  "audit",
+		Field:   "group_identity",
+		Kind:    "backup-uncovered",
+		Why: "engine group id is local to the source store; the archive has no " +
+			"portable target identity, so restore marks it unavailable",
 	},
 	{
 		Surface: driftSchema,
@@ -1040,6 +1055,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"limit_order_size": {
 		backup: map[string]string{
+			"mode":         "Mode",
 			"scope":        "Scope",
 			"account_id":   "Account",
 			"asset_id":     "Asset",
@@ -1193,23 +1209,25 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"audit": {
 		backup: map[string]string{
-			"order_id":      "OrderID",
-			"verdict":       "Verdict",
-			"reject_code":   "RejectCode",
-			"external_id":   "ExternalID",
-			"account_code":  "Account",
-			"account_title": "AccountTitle",
-			"asset_code":    "Asset",
-			"group_code":    "Group",
-			"actor_code":    "Actor",
-			"actor_title":   "ActorTitle",
-			"at":            "At",
-			"action_id":     "Action",
-			"source_id":     "Source",
-			"detail":        "Detail.Text",
-			"detail_code":   "Detail.Code",
-			"detail_params": "Detail.Params",
-			"detail_fields": "Detail.Fields",
+			"order_id":         "OrderID",
+			"verdict":          "Verdict",
+			"reject_code":      "RejectCode",
+			"external_id":      "ExternalID",
+			"account_code":     "Account",
+			"account_title":    "AccountTitle",
+			"asset_code":       "Asset",
+			"group_code":       "Group",
+			"actor_code":       "Actor",
+			"actor_title":      "ActorTitle",
+			"at":               "At",
+			"action_id":        "Action",
+			"source_id":        "Source",
+			"detail":           "Detail.Text",
+			"detail_code":      "Detail.Code",
+			"detail_params":    "Detail.Params",
+			"detail_fields":    "Detail.Fields",
+			"account_identity": "",
+			"group_identity":   "",
 		},
 	},
 	"market_data_instance": {
@@ -1542,6 +1560,88 @@ func TestClientDataSchemaParserRejectsMalformedCreateTable(t *testing.T) {
 	_, err := parseClientDataSchemaSQL("CREATE TABLE (\n    id INTEGER\n);\n")
 	if err == nil {
 		t.Fatalf("expected malformed CREATE TABLE to fail")
+	}
+}
+
+func TestClientDataSchemaParserMigrations(t *testing.T) {
+	const initial = `
+CREATE TABLE limit_order_size (
+    id INTEGER,
+    max_quantity TEXT
+);
+CREATE TABLE limit_spot_funds_pnl_bound (
+    id INTEGER,
+    threshold TEXT
+);
+CREATE TABLE audit (id INTEGER PRIMARY KEY);
+`
+	const upgrade = `
+ALTER TABLE limit_order_size ADD COLUMN mode TEXT NOT NULL DEFAULT 'reject'
+    CHECK (mode IN ('reject', 'review_without_hold', 'review_with_hold'));
+ALTER TABLE audit ADD account_identity BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE limit_spot_funds_pnl_bound
+    RENAME TO limit_spot_funds_pnl_bound_v1;
+CREATE TABLE limit_spot_funds_pnl_bound (
+    id INTEGER,
+    axis TEXT NOT NULL,
+    lower_bound TEXT,
+    upper_bound TEXT
+);
+INSERT INTO limit_spot_funds_pnl_bound (id, axis, lower_bound)
+    SELECT id, 'realized', threshold FROM limit_spot_funds_pnl_bound_v1;
+DROP TABLE IF EXISTS limit_spot_funds_pnl_bound_v1;
+`
+	tables := map[string][]string{}
+	for _, migration := range []string{initial, upgrade} {
+		if err := applyClientDataSchemaSQL(tables, migration); err != nil {
+			t.Fatalf("parse schema migration: %v", err)
+		}
+	}
+	want := map[string][]string{
+		"audit":                      {"id", "account_identity"},
+		"limit_order_size":           {"id", "max_quantity", "mode"},
+		"limit_spot_funds_pnl_bound": {"id", "axis", "lower_bound", "upper_bound"},
+	}
+	if !reflect.DeepEqual(tables, want) {
+		t.Fatalf("migrated tables mismatch:\nwant %#v\ngot  %#v", want, tables)
+	}
+}
+
+func TestClientDataSchemaParserRejectsUnsupportedAlter(t *testing.T) {
+	const initial = "CREATE TABLE limit_order_size (\n    max_quantity TEXT\n);\n"
+	const alter = "ALTER TABLE limit_order_size DROP COLUMN max_quantity"
+	_, err := parseClientDataSchemaSQL(initial + "/* unsupported schema change */ " + alter + ";\n")
+	if err == nil || !strings.Contains(err.Error(), alter) {
+		t.Fatalf("expected error naming unsupported statement %q, got %v", alter, err)
+	}
+}
+
+func TestClientDataSchemaParserRejectsMissingTables(t *testing.T) {
+	for _, statement := range []string{
+		"ALTER TABLE audit ADD COLUMN account_identity BIGINT",
+		"ALTER TABLE audit RENAME TO audit_v1",
+		"DROP TABLE IF EXISTS audit",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			_, err := parseClientDataSchemaSQL(statement + ";")
+			if err == nil || !strings.Contains(err.Error(), statement) {
+				t.Fatalf("expected error naming statement for a missing table, got %v", err)
+			}
+		})
+	}
+}
+
+func TestClientDataSchemaParserRejectsUnplacedCreate(t *testing.T) {
+	for _, statement := range []string{
+		"CREATE TABLE IF NOT EXISTS audit (id INTEGER)",
+		"CREATE VIRTUAL TABLE audit_search USING fts5(detail)",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			_, err := parseClientDataSchemaSQL("CREATE TABLE audit (id INTEGER);\n" + statement + ";")
+			if err == nil || !strings.Contains(err.Error(), statement) {
+				t.Fatalf("expected error naming statement %q, got %v", statement, err)
+			}
+		})
 	}
 }
 
@@ -2600,8 +2700,6 @@ func parseClientDataSchema() (map[string][]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("resolve test file path")
 	}
-	// Migrations are read in version order; a later CREATE TABLE of a rebuilt
-	// table replaces its earlier column list.
 	paths, err := filepath.Glob(filepath.Join(
 		filepath.Dir(file), "..", "..", "framework", "store", "schema", "migrations", "*.sql",
 	))
@@ -2617,11 +2715,9 @@ func parseClientDataSchema() (map[string][]string, error) {
 		}
 		sql := strings.ReplaceAll(string(raw), "{{PRINCIPAL}}",
 			schema.PrincipalTableSQL("{{PRIMARY_KEY}}", "principal"))
-		parsed, err := parseClientDataSchemaSQL(sql)
-		if err != nil {
+		if err := applyClientDataSchemaSQL(tables, sql); err != nil {
 			return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
 		}
-		maps.Copy(tables, parsed)
 	}
 	if err := checkExpectedSchemaTables(tables); err != nil {
 		return nil, err
@@ -2630,64 +2726,163 @@ func parseClientDataSchema() (map[string][]string, error) {
 }
 
 func parseClientDataSchemaSQL(raw string) (map[string][]string, error) {
-	lines := strings.Split(raw, "\n")
 	tables := map[string][]string{}
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if line == "" || strings.HasPrefix(line, "--") {
-			continue
-		}
-		rest, ok := trimCreateTablePrefix(line)
-		if !ok {
-			continue
-		}
-		name, rest, ok := readSQLIdentifier(rest)
-		if !ok {
-			return nil, fmt.Errorf("extract table name from CREATE TABLE: %q", line)
-		}
-		if !strings.Contains(rest, "(") {
-			for i++; i < len(lines); i++ {
-				if strings.Contains(lines[i], "(") {
-					break
-				}
-			}
-		}
-		var columns []string
-		for i++; i < len(lines); i++ {
-			colLine := strings.TrimSpace(lines[i])
-			if colLine == ");" {
-				break
-			}
-			if colLine == "" || strings.HasPrefix(colLine, "--") {
-				continue
-			}
-			first, _, ok := readSQLIdentifier(strings.TrimSuffix(colLine, ","))
-			if !ok ||
-				strings.EqualFold(first, "PRIMARY") ||
-				strings.EqualFold(first, "UNIQUE") ||
-				strings.EqualFold(first, "CHECK") ||
-				strings.EqualFold(first, "FOREIGN") {
-				continue
-			}
-			columns = append(columns, first)
-		}
-		tables[name] = columns
+	if err := applyClientDataSchemaSQL(tables, raw); err != nil {
+		return nil, err
 	}
 	return tables, nil
 }
 
-func trimCreateTablePrefix(line string) (string, bool) {
-	const createTable = "CREATE TABLE"
-	upper := strings.ToUpper(line)
-	if !strings.HasPrefix(upper, createTable) {
+func applyClientDataSchemaSQL(tables map[string][]string, raw string) error {
+	for _, statement := range splitClientDataSQL(raw, ';') {
+		if rest, ok := trimSQLKeywords(statement, "CREATE", "TABLE"); ok {
+			if table, ok := trimSQLKeywords(rest, "IF", "NOT", "EXISTS"); ok {
+				rest = table
+			}
+			name, definition, ok := readSQLIdentifier(rest)
+			if !ok {
+				return fmt.Errorf("extract table name from CREATE TABLE: %q", statement)
+			}
+			if _, exists := tables[name]; exists {
+				return fmt.Errorf("table %q already exists: %q", name, statement)
+			}
+			definitions, hasOpen := strings.CutPrefix(definition, "(")
+			end := strings.LastIndexByte(definitions, ')')
+			if !hasOpen || end < 0 {
+				return fmt.Errorf("extract column list from CREATE TABLE: %q", statement)
+			}
+			var columns []string
+			for _, definition := range splitClientDataSQL(definitions[:end], ',') {
+				if column, ok := readSQLColumnName(definition); ok {
+					columns = append(columns, column)
+				}
+			}
+			tables[name] = columns
+		} else if rest, ok := trimSQLKeywords(statement, "ALTER", "TABLE"); ok {
+			name, action, ok := readSQLIdentifier(rest)
+			if !ok {
+				return fmt.Errorf("extract table name from ALTER TABLE: %q", statement)
+			}
+			columns, exists := tables[name]
+			if !exists {
+				return fmt.Errorf("table %q does not exist: %q", name, statement)
+			}
+			if definition, ok := trimSQLKeywords(action, "ADD"); ok {
+				if column, ok := trimSQLKeywords(definition, "COLUMN"); ok {
+					definition = column
+				}
+				if column, ok := readSQLColumnName(definition); ok {
+					tables[name] = append(columns, column)
+					continue
+				}
+			} else if target, ok := trimSQLKeywords(action, "RENAME", "TO"); ok {
+				if newName, tail, ok := readSQLIdentifier(target); ok && tail == "" {
+					delete(tables, name)
+					tables[newName] = columns
+					continue
+				}
+			}
+			return fmt.Errorf("unsupported ALTER TABLE: %q", statement)
+		} else if rest, ok := trimSQLKeywords(statement, "DROP", "TABLE"); ok {
+			if table, ok := trimSQLKeywords(rest, "IF", "EXISTS"); ok {
+				rest = table
+			}
+			name, tail, ok := readSQLIdentifier(rest)
+			if !ok || tail != "" {
+				return fmt.Errorf("unsupported DROP TABLE: %q", statement)
+			}
+			if _, exists := tables[name]; !exists {
+				return fmt.Errorf("table %q does not exist: %q", name, statement)
+			}
+			delete(tables, name)
+		} else if _, ok := trimSQLKeywords(statement, "CREATE", "VIRTUAL", "TABLE"); ok {
+			return fmt.Errorf("unsupported CREATE VIRTUAL TABLE: %q", statement)
+		}
+	}
+	return nil
+}
+
+// splitClientDataSQL separates statements or top-level column definitions.
+func splitClientDataSQL(input string, separator byte) []string {
+	var parts []string
+	var part strings.Builder
+	var quoteEnd byte
+	var depth int
+	for i := 0; i < len(input); i++ {
+		char := input[i]
+		if quoteEnd != 0 {
+			part.WriteByte(char)
+			if char == quoteEnd {
+				quoteEnd = 0
+			}
+			continue
+		}
+		if strings.HasPrefix(input[i:], "--") {
+			end := strings.IndexByte(input[i:], '\n')
+			if end < 0 {
+				break
+			}
+			i += end - 1
+			continue
+		}
+		if strings.HasPrefix(input[i:], "/*") {
+			end := strings.Index(input[i+2:], "*/")
+			if end < 0 {
+				break
+			}
+			part.WriteByte(' ')
+			i += end + 3
+			continue
+		}
+		if char == separator && (separator == ';' || depth == 0) {
+			parts = append(parts, strings.TrimSpace(part.String()))
+			part.Reset()
+			continue
+		}
+		switch char {
+		case '\'', '"', '`':
+			quoteEnd = char
+		case '[':
+			quoteEnd = ']'
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		part.WriteByte(char)
+	}
+	if tail := strings.TrimSpace(part.String()); tail != "" {
+		parts = append(parts, tail)
+	}
+	return parts
+}
+
+func trimSQLKeywords(input string, keywords ...string) (string, bool) {
+	for _, keyword := range keywords {
+		end := strings.IndexAny(input, " \t\r\n(")
+		if end < 0 {
+			end = len(input)
+		}
+		if !strings.EqualFold(input[:end], keyword) {
+			return "", false
+		}
+		input = strings.TrimSpace(input[end:])
+	}
+	return input, true
+}
+
+func readSQLColumnName(definition string) (string, bool) {
+	name, _, ok := readSQLIdentifier(definition)
+	if !ok {
 		return "", false
 	}
-	rest := strings.TrimSpace(line[len(createTable):])
-	const ifNotExists = "IF NOT EXISTS"
-	if strings.HasPrefix(strings.ToUpper(rest), ifNotExists) {
-		rest = strings.TrimSpace(rest[len(ifNotExists):])
+	if !strings.ContainsAny(definition[:1], "\"`[") {
+		switch strings.ToUpper(name) {
+		case "CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN":
+			return "", false
+		}
 	}
-	return rest, true
+	return name, true
 }
 
 func readSQLIdentifier(input string) (string, string, bool) {
@@ -2717,7 +2912,7 @@ func readSQLIdentifier(input string) (string, string, bool) {
 	}
 	end := len(input)
 	for idx, r := range input {
-		if r == '(' || r == ',' || r == ';' || r == ' ' || r == '\t' {
+		if r == '(' || r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\r' || r == '\n' {
 			end = idx
 			break
 		}

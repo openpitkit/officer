@@ -189,6 +189,8 @@ type Source interface {
 	// Add requires a new key; Change requires an existing key; Replace allows
 	// either. A duplicate Add returns domain.ErrLimitExists; a missing Change
 	// returns domain.ErrNotFound. Both leave state unchanged.
+	// It returns the barrier as stored, read back before another writer can
+	// change or remove it. A read-back failure is returned as an error.
 	// missing decides whether an account the barrier names that does not exist yet
 	// is registered or refused. A caller passes none for a barrier that names no
 	// account, as REST does: where a composition fixes one account, the core
@@ -203,9 +205,10 @@ type Source interface {
 		limit domain.LimitRate,
 		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
-	) error
+	) (domain.LimitRate, error)
 	// PutOrderSizeLimit validates and writes the barrier with the given intent;
-	// write and missing follow PutRateLimit. A tighten-only caller (an agent) is
+	// write, missing and the returned barrier follow PutRateLimit.
+	// A tighten-only caller (an agent) is
 	// refused with domain.ErrLoosening a barrier that drops or raises a cap of
 	// the one it replaces or of the asset-tier barrier an account-tier one
 	// overrides, and the policy's first barrier while a rate-limit barrier is
@@ -215,18 +218,20 @@ type Source interface {
 		limit domain.LimitOrderSize,
 		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
-	) error
+	) (domain.LimitOrderSize, error)
 	// PutPositionLimit validates and writes the barrier with the given intent;
-	// write and missing follow PutRateLimit. A tighten-only caller (an agent) is
+	// write, missing and the returned barrier follow PutRateLimit.
+	// A tighten-only caller (an agent) is
 	// refused with domain.ErrLoosening a ceiling above the one it replaces.
 	PutPositionLimit(
 		ctx context.Context,
 		limit domain.LimitPosition,
 		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
-	) error
+	) (domain.LimitPosition, error)
 	// PutSpotFundsPnlBoundsLimit validates the Spot Funds P&L-bounds barrier
-	// and writes it with the given intent; write and missing follow PutRateLimit.
+	// and writes it with the given intent; write, missing and the returned
+	// barrier follow PutRateLimit.
 	// A tighten-only caller (an agent) is refused with domain.ErrLoosening a bound
 	// in another currency than the bound it replaces or takes over from - a new
 	// account_group bound the global one, a new account bound the one that applies
@@ -236,7 +241,7 @@ type Source interface {
 		limit domain.LimitSpotFundsPnlBounds,
 		write domain.LimitWrite,
 		missing domain.MissingAccountPolicy,
-	) error
+	) (domain.LimitSpotFundsPnlBounds, error)
 	// SpotFundsLimitMode returns the global Spot Funds limit mode and the
 	// visible accounts a P&L bound blocks for want of a currency.
 	SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error)
@@ -245,7 +250,9 @@ type Source interface {
 	// strictness it supports enforce, the equally ranked review_with_hold
 	// and review_without_hold, then track_only. The core refuses a
 	// tighten-only switch to a lower rank with domain.ErrLoosening.
-	PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error
+	// It returns the mode as stored, read back before another writer can change
+	// or remove it. A read-back failure is returned as an error.
+	PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error)
 	// ListAudit returns the most recent n audit rows.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
 	// ListAuditFiltered returns the most recent n audit rows matching the filter.
@@ -1108,21 +1115,21 @@ func (s controlPlaneSource) ListLimits(
 func (s controlPlaneSource) PutRateLimit(
 	ctx context.Context, limit domain.LimitRate, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
-) error {
+) (domain.LimitRate, error) {
 	return s.cp.PutRateLimit(ctx, limit, write, missing)
 }
 
 func (s controlPlaneSource) PutOrderSizeLimit(
 	ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
-) error {
+) (domain.LimitOrderSize, error) {
 	return s.cp.PutOrderSizeLimit(ctx, limit, write, missing)
 }
 
 func (s controlPlaneSource) PutPositionLimit(
 	ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
-) error {
+) (domain.LimitPosition, error) {
 	return s.cp.PutPositionLimit(ctx, limit, write, missing)
 }
 
@@ -1131,7 +1138,7 @@ func (s controlPlaneSource) PutSpotFundsPnlBoundsLimit(
 	limit domain.LimitSpotFundsPnlBounds,
 	write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
-) error {
+) (domain.LimitSpotFundsPnlBounds, error) {
 	return s.cp.PutSpotFundsPnlBoundsLimit(ctx, limit, write, missing)
 }
 
@@ -1139,7 +1146,7 @@ func (s controlPlaneSource) SpotFundsLimitMode(ctx context.Context) (domain.Spot
 	return s.cp.SpotFundsLimitMode(ctx)
 }
 
-func (s controlPlaneSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
+func (s controlPlaneSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
 	return s.cp.PutSpotFundsLimitMode(ctx, limit)
 }
 

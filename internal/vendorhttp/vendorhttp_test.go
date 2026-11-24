@@ -69,11 +69,15 @@ func TestDialStream(t *testing.T) {
 		defer cancel()
 		typ, payload, err := conn.Read(ctx)
 		if err != nil {
-			t.Error("read stream frame failed")
+			if t.Context().Err() == nil {
+				t.Error("read stream frame failed")
+			}
 			return
 		}
 		if err := conn.Write(ctx, typ, payload); err != nil {
-			t.Error("echo stream frame failed")
+			if t.Context().Err() == nil {
+				t.Error("echo stream frame failed")
+			}
 		}
 	}))
 	defer server.Close()

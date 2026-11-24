@@ -1530,10 +1530,10 @@ type RealmStore interface {
 	// wrapping domain.ErrInvalid.
 	PutRateLimit(ctx context.Context, limit domain.LimitRate) error
 
-	// DeleteLimit removes the barrier key addresses from the table of its policy.
-	// It returns domain.ErrNotFound when absent, and domain.ErrInvalid for the
-	// zero key or a key of a policy with no barrier table, before any storage
-	// access.
+	// DeleteLimit removes the barrier addressed by key from its policy's table.
+	// It returns domain.ErrNotFound when the barrier is absent. The zero key
+	// or a key of a policy with no barrier table returns an internal error
+	// before any storage access.
 	DeleteLimit(ctx context.Context, key domain.LimitKey) error
 
 	// ListOrderSizeLimits returns every order-size barrier, optionally narrowed to

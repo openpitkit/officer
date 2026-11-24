@@ -172,7 +172,8 @@ func (s *Service) ApplyExecutionReport(
 				Leaves:      event.Payload.LeavesQuantity,
 			}
 			if persistence.OrderStatus == "" {
-				persistence.OrderStatus = targetStatus
+				return domain.ApprovalPayload{}, false,
+					fmt.Errorf("backend: execution report event missing order status")
 			}
 			if event.Payload.FillQuantity != "" || event.Payload.FillPrice != "" {
 				persistence.Trade = &domain.Trade{

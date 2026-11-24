@@ -1,0 +1,101 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# Require Finally before Run on inline chains, local short declarations
+# initialized with asyncengine.Chain, and typed ChainBuilder parameters of
+# functions and methods. Exempt a CheckOrder chain run inline or run directly
+# from its local declaration with no write step called on it before Run.
+# Known misses include reassignments, extra aliases, steps added in another
+# function, and builders returned by helpers, read from struct fields, or
+# received as a function-literal parameter. For
+# split CheckOrder chains, a step in an else, for, switch, or closure body
+# escapes detection. The rule checks the same block and the then-branch of one
+# enclosing if. A Finally that ignores its outcome or fails to escalate a
+# post-commit failure passes the check.
+# This rule has no approval marker or baseline.
+rules:
+  - id: account-chain-finally
+    message: End the account chain with Finally before calling Run.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-not: $RECEIVER.Finally(...).Run(...)
+      - pattern-either:
+          - patterns:
+              - pattern: asyncengine.Chain(...). ... .Run(...)
+              - pattern-not: asyncengine.Chain(...).CheckOrder(...).Run(...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $BUILDER := asyncengine.Chain(...)
+                      ...
+                  - pattern-inside: |
+                      $BUILDER := asyncengine.Chain(...). ... .$TAIL(...)
+                      ...
+                  - patterns:
+                      - pattern-inside: |
+                          func $FUNC(..., $BUILDER $TYPE, ...) { ... }
+                      - metavariable-regex:
+                          metavariable: $TYPE
+                          regex: '^\*asyncengine\.ChainBuilder\['
+              - pattern-not-inside: |
+                  $BUILDER := asyncengine.Chain(...). ... .Finally(...)
+                  ...
+              - pattern-either:
+                  - pattern: $BUILDER. ... .$STEP(...).Run(...)
+                  - patterns:
+                      - pattern: $BUILDER.Run(...)
+                      - pattern-not-inside: |
+                          $BUILDER := asyncengine.Chain(...).CheckOrder(...)
+                          ...
+                  - patterns:
+                      - pattern: $RUNNER.Run(...)
+                      - pattern-either:
+                          - pattern-inside: |
+                              $RUNNER := $BUILDER
+                              ...
+                          - pattern-inside: |
+                              $RUNNER := $BUILDER. ... .$STEP(...)
+                              ...
+                      - pattern-not-inside: |
+                          $RUNNER := $RECEIVER.Finally(...)
+                          ...
+          - patterns:
+              - pattern: $BUILDER.Run(...)
+              - pattern-inside: |
+                  $BUILDER := asyncengine.Chain(...).CheckOrder(...)
+                  ...
+              - pattern-either:
+                  - pattern-inside: |
+                      $BUILDER.$STEP(...)
+                      ...
+                  - pattern-inside: |
+                      if $COND {
+                        ...
+                        $BUILDER.$STEP(...)
+                        ...
+                      }
+                      ...
+              - metavariable-regex:
+                  metavariable: $STEP
+                  regex: '^(?!(Run|CheckOrder|Finally)$)'
+    paths:
+      include:
+        - "/framework/**"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

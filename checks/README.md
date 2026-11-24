@@ -87,6 +87,45 @@ which review still catches:
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
 
+### `account-chain-finally`
+
+`checks/semgrep/account-chain-finally.yml` checks for `Finally` before `Run`
+in production Go under `framework/`. It covers inline chains, local short
+declarations initialized with `asyncengine.Chain`, and typed `ChainBuilder`
+parameters of functions and methods. It exempts a `CheckOrder` chain run inline
+or run directly from its local declaration with no write step called on it
+before `Run`.
+
+Known misses include reassignments, extra aliases, steps added in another
+function, and builders returned by helpers, read from struct fields, or
+received as a function-literal parameter. For
+split `CheckOrder` chains, a step in an `else`, `for`, `switch`, or closure body
+escapes detection. The rule checks the same block and the then-branch of one
+enclosing `if`. A `Finally` that ignores its outcome or fails to escalate a
+post-commit failure passes the check.
+
+Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
+### `error-type-one-form`
+
+`checks/semgrep/error-type-one-form.yml` requires a single probe form for an
+error type. A type switch case that lists both `T` and `*T`, or a function
+that probes both with `errors.As`, can keep a dead path and obscure which
+form the code actually returns. The rule scans production Go across the
+repository, excluding `*_test.go` and `testdata` directories.
+
+The switch check compares type spellings within one case. The `errors.As`
+check looks for addressed local variables with explicit types in one function
+body, in either order. Known misses include type aliases, parenthesised types,
+the two forms in separate cases of one switch, a switch or type assertion in
+one form with `errors.As` in the other, inferred or inline `errors.As` targets,
+targets that are parameters, fields or package variables, and a case list
+whose earlier item contains braces. Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
 ### `store-transaction-helper`
 
 `checks/semgrep/store-transaction-helper.yml` requires SQLite store transactions
@@ -96,6 +135,28 @@ so statement and commit errors receive the same classification. Raw `BeginTx`
 selectors, including method values, are allowed only inside the helper; tests
 and rule fixtures are excluded.
 Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
+### `store-composite-read-snapshot`
+
+`checks/semgrep/store-transaction-helper.yml` requires one read transaction
+when a SQLite `*realmStore` method queries its pool twice or queries it and
+passes it to a helper. It matches Go calls after a local `r.db()` assignment,
+including calls through a `var reader sqlQueryer = pool` alias after that
+declaration. Passing the pool to `beginTx` is allowed. Two hand-offs with no
+direct query are allowed because write methods pass the pool to several
+helpers. The fixtures run through `check-semgrep`.
+
+The rule skips `Prepare*` reads, other receiver types, and free functions. It
+does not follow calls to other methods that open their own pool, or see reads
+in a transaction followed by one pool read after commit. It looks for calls
+in separate statements at method-body level, so it can miss a pair inside a
+single statement, and the `r.db()` assignment and the alias must be direct
+statements of the method body; the alias is only the typed `var` form. It does
+not track control flow or alias reassignment.
+Queries on mutually exclusive paths, or a query paired with a write-only
+helper hand-off, can therefore be flagged.
 
 This rule has no approval marker or baseline.
 
@@ -135,9 +196,10 @@ arguments; keys assigned before indexing and map-literal keys; declaration/new
 zero keys; query-to-DTO handler shapes; formatted SQL columns or predicates
 without scope/axis; other encodings/accessor chains. Package-level value fields
 such as `packageError.ErrCause` still receive the sentinel exemption; parameter
-and receiver qualifiers are checked. Mixed member/parameter
-pairs remain omitted: they need a new member-position/signature product.
-Both misses are pinned with `todoruleid` fixtures.
+and receiver qualifiers are checked. Mixed member/parameter pairs remain
+omitted: they need a new member-position/signature product. The package-level
+sentinel field and the mixed member/parameter pair are pinned with `todoruleid`
+fixtures.
 
 Known rule bugs marked `todook`: early-success/switch proofs on zero-key error
 returns, panel prose templates/concatenations over two axes, and derived Go
@@ -214,6 +276,34 @@ Its fixture runs through `check-semgrep`.
 
 This rule has no approval marker.
 
+### `test-stub-close-guard`
+
+`checks/semgrep/test-stub-close-guard.yml` flags every call named `Error`,
+`Errorf`, `Fatal`, or `Fatalf`, on any receiver, in the failure branch of a
+`Read(ctx)`, `Write(ctx, kind, data)`, or `Close(status, reason)` check. The
+operation is matched by method name and arity on any receiver, in Go HTTP
+test handlers and helpers that take a `*websocket.Conn`.
+
+The rule accepts a nested `if` around the report inside the failure branch.
+Its entire condition must be `t.Context().Err() == nil` on the reporting test
+or `!harness.isClosing()`.
+
+```go
+if err := conn.Close(status, reason); err != nil {
+    if t.Context().Err() == nil { t.Error(err) } }
+```
+
+Known misses include checks without a direct `!= nil` comparison, reports
+routed through another helper, and functions that take neither a
+`*websocket.Conn` nor the HTTP handler parameters.
+
+False positives: an overwritten error can tie the check to an earlier call,
+and `fmt.Errorf`, `log.Fatal` or `err.Error()` in the failure branch counts as
+a report, also inside an accepted guard. Pass `err` with `%v` rather than
+`err.Error()`.
+
+This rule has no approval marker or baseline.
+
 ### `default-domain-status`
 
 `checks/semgrep/default-domain-status.yml` forbids a `default` arm or a map
@@ -231,6 +321,17 @@ Two sites are deliberately not findings:
   runtime status map, which is what that state means.
 
 This rule has no approval marker.
+
+### `empty-order-status-default`
+
+`checks/semgrep/empty-order-status-default.yml` rejects an empty-status guard
+that assigns a replacement to the same status, including a caller-supplied
+variable. It covers `OrderStatus` and `Status` fields and locals bound from
+`domain.OrderStatus(...)`, in either comparison order. Return an explicit
+error for the missing status. Other field names, initialisers, package aliases
+and helper-based emptiness checks are outside this syntactic rule.
+Its fixture runs through `check-semgrep`; tests and fixtures are excluded
+from the production scan. There is no approval marker or baseline.
 
 ### `locale-latin-words`
 

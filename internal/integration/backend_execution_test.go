@@ -21,7 +21,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -164,6 +166,50 @@ func TestService_ApplyExecutionReportForceBypassesTerminalGuard(t *testing.T) {
 	}
 	if len(fn.execReports) != 1 || fn.execReports[0].Order != orderID {
 		t.Fatalf("report not forwarded: %+v", fn.execReports)
+	}
+}
+
+func TestService_ApplyExecutionReportRejectsMissingEventOrderStatus(t *testing.T) {
+	t.Parallel()
+	for _, eventType := range []domain.OrderEventType{
+		domain.OrderEventFill, domain.OrderEventCommission,
+	} {
+		t.Run(string(eventType), func(t *testing.T) {
+			signer := &fakeSigner{}
+			svc, fn := newTestServiceWithSigner(t, signer)
+			tok := mustWorkflow(t, svc)
+			orderID := domain.ExternalID(tok.OrderExternalID)
+			beforeOrder := fn.orders[orderID]
+			beforeEvents := slices.Clone(fn.orderEvents[orderID])
+			beforeSigned := len(signer.signed)
+			fn.omitExecutionReportEventStatus = true
+			report := domain.ExecutionReportInput{
+				Order: orderID, OrderStatus: domain.OrderStatusFilled,
+				LeavesQuantity: "0",
+			}
+			if eventType == domain.OrderEventFill {
+				report.FillQuantity = "10"
+				report.FillPrice = "100"
+			} else {
+				report.Commission = &domain.Commission{
+					Amount: "-0.12", Currency: "USD",
+				}
+			}
+
+			_, att, err := svc.ApplyExecutionReport(systemCtx(), report)
+			if err == nil || !strings.Contains(err.Error(), "execution report event missing order status") {
+				t.Errorf("ApplyExecutionReport error = %v, want missing event order status", err)
+			}
+			if att.SignedAttestation != "" || len(signer.signed) != beforeSigned {
+				t.Error("execution report with missing event order status was signed")
+			}
+			if !reflect.DeepEqual(fn.orders[orderID], beforeOrder) {
+				t.Errorf("order after failed report = %+v, want %+v", fn.orders[orderID], beforeOrder)
+			}
+			if !reflect.DeepEqual(fn.orderEvents[orderID], beforeEvents) {
+				t.Errorf("history after failed report = %+v, want %+v", fn.orderEvents[orderID], beforeEvents)
+			}
+		})
 	}
 }
 

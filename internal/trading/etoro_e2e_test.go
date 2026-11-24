@@ -364,12 +364,17 @@ func (h *etoroRuntimeTest) state(status, executions int) {
 }
 
 func (h *etoroRuntimeTest) push() {
-	etoroOrderPush(h.t, h.ctx, h.stream, "9007199254740993")
+	h.t.Helper()
+	if !etoroOrderPush(h.t, h.ctx, h.stream, "9007199254740993") {
+		h.t.Fatal("failed to push eToro order update")
+	}
 }
 
 func (h *etoroRuntimeTest) streamBarrier() {
 	h.t.Helper()
-	etoroOrderPush(h.t, h.ctx, h.stream, "42")
+	if !etoroOrderPush(h.t, h.ctx, h.stream, "42") {
+		h.t.Fatal("failed to push eToro stream barrier")
+	}
 	waitForTrading(func() bool {
 		h.c.ordersMu.Lock()
 		defer h.c.ordersMu.Unlock()
@@ -548,7 +553,9 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		h.must(<-result)
 		h.waitStatus(order, domain.OrderStatusFilled)
 		for _, status := range []int{3, 5, 1, 3} {
-			etoroPush(t, h.ctx, h.stream, "Trading.OrderForOpen.Update", fmt.Sprintf(`{"OrderID":9007199254740993,"StatusID":%d,"ExecutedUnits":999}`, status))
+			if !etoroPush(t, h.ctx, h.stream, "Trading.OrderForOpen.Update", fmt.Sprintf(`{"OrderID":9007199254740993,"StatusID":%d,"ExecutedUnits":999}`, status)) {
+				t.Fatal("failed to replay eToro order update")
+			}
 		}
 		h.streamBarrier()
 		h.runtime.Stop()
@@ -612,7 +619,9 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		_, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest)
 		h.must(err)
 		h.state(3, 1)
-		etoroPush(t, h.ctx, h.stream, "Trading.OrderForCloseMultiple.Update", `{"OrderID":9007199254740993}`)
+		if !etoroPush(t, h.ctx, h.stream, "Trading.OrderForCloseMultiple.Update", `{"OrderID":9007199254740993}`) {
+			t.Fatal("failed to push eToro close order update")
+		}
 		h.waitStatus(order, domain.OrderStatusFilled)
 		h.assertBooked(order, 1, "1000.6", "9.7", "100")
 		h.mu.Lock()

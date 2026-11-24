@@ -1042,7 +1042,10 @@ function normalizePolicyKind(v: unknown): Policy["kind"] {
     case "spot_funds_limit_mode":
       return v;
     default:
-      return "rate_limit";
+      throw new ApiError(
+        `Policy kind ${JSON.stringify(v)} in the API response is unknown`,
+        "internal",
+      );
   }
 }
 
@@ -4009,7 +4012,13 @@ function normalizeSignedApproval(v: unknown): SignedApproval {
 }
 
 function normalizeSubmitVerdict(v: unknown): SignedApproval["verdict"] {
-  return v === "accept" || v === "reject" || v === "review" ? v : "";
+  if (v === "accept" || v === "reject" || v === "review") {
+    return v;
+  }
+  throw new ApiError(
+    `Submit verdict ${JSON.stringify(v)} in the API response is unknown`,
+    "internal",
+  );
 }
 
 function minimalCreatedOrder(

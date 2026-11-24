@@ -18,20 +18,18 @@
 package httpapi
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"time"
 
-	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
 )
 
 // The DTOs below are the JSON wire shapes of REST's typed limit barriers, with
-// their mapping onto the domain, the read-back of a stored barrier, the answer
-// of a put and the per-policy list of barriers. They are shared here so a
-// second surface can take and answer the same body.
+// their mapping onto the domain, the answer of a put and the per-policy list
+// of barriers. They are shared here so a second surface can take and answer
+// the same body.
 
 // RateLimitDTO is the wire shape of a rate-limit barrier.
 type RateLimitDTO struct {
@@ -328,110 +326,4 @@ func ToPutSpotFundsPnlBoundsLimitResultDTO(
 	default:
 		return PutLimitResultDTO{}, fmt.Errorf("httpapi: unknown Spot Funds P&L axis %q", l.Axis)
 	}
-}
-
-// LimitReader is what reading a stored barrier back needs: the account
-// surfaces the composition offers and the barriers stored for an account.
-// backend.ControlPlane satisfies it.
-type LimitReader interface {
-	AccountFeatures() backend.AccountFeatures
-	ListLimits(ctx context.Context, account domain.AccountID) (node.AccountLimits, error)
-}
-
-// PersistedSpotFundsLimitMode reads back the stored row of the Spot Funds
-// limit-mode meta-policy, global only. It answers domain.ErrNotFound when no
-// mode is stored.
-func PersistedSpotFundsLimitMode(
-	ctx context.Context, svc LimitReader,
-) (domain.LimitSpotFundsLimitMode, error) {
-	limits, err := svc.ListLimits(ctx, "")
-	if err != nil {
-		return domain.LimitSpotFundsLimitMode{}, err
-	}
-	if len(limits.SpotFundsLimitModes) == 0 {
-		return domain.LimitSpotFundsLimitMode{}, domain.ErrNotFound
-	}
-	return limits.SpotFundsLimitModes[0], nil
-}
-
-// storedLimitAccount is the account a barrier put with account is stored
-// under: account itself, except that a scope with an account axis naming none,
-// in a composition that does not offer accounts, is stored under the one
-// account the service's account scope supplied.
-func storedLimitAccount(
-	svc LimitReader, scope domain.LimitScope, account domain.AccountID,
-) domain.AccountID {
-	if scope.HasAccountAxis() {
-		return svc.AccountFeatures().AccountFor(account)
-	}
-	return account
-}
-
-// persistedLimit matches a barrier by domain.LimitKey equality against stored
-// rows. The target must already carry its stored account (storedLimitAccount).
-func persistedLimit[Limit domain.KeyedLimit](
-	ctx context.Context, svc LimitReader,
-	target Limit,
-	slice func(node.AccountLimits) []Limit,
-) (Limit, error) {
-	var zero Limit
-	key, err := target.Key()
-	if err != nil {
-		return zero, err
-	}
-	limits, err := svc.ListLimits(ctx, key.Account())
-	if err != nil {
-		return zero, err
-	}
-	limit, found, err := domain.FindLimit(slice(limits), key)
-	if err != nil {
-		return zero, err
-	}
-	if !found {
-		return zero, domain.ErrNotFound
-	}
-	return limit, nil
-}
-
-// PersistedRateLimit reads back the rate-limit barrier stored at target's
-// address. It answers domain.ErrNotFound when none is stored there.
-func PersistedRateLimit(
-	ctx context.Context, svc LimitReader, target domain.LimitRate,
-) (domain.LimitRate, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	return persistedLimit(ctx, svc, target,
-		func(limits node.AccountLimits) []domain.LimitRate { return limits.RateLimits })
-}
-
-// PersistedOrderSizeLimit reads back the order-size barrier stored at
-// target's address. It answers domain.ErrNotFound when none is stored there.
-func PersistedOrderSizeLimit(
-	ctx context.Context, svc LimitReader, target domain.LimitOrderSize,
-) (domain.LimitOrderSize, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	return persistedLimit(ctx, svc, target,
-		func(limits node.AccountLimits) []domain.LimitOrderSize { return limits.OrderSizeLimits })
-}
-
-// PersistedPositionLimit reads back the addressed barrier, including an account
-// supplied by a single-account composition.
-func PersistedPositionLimit(
-	ctx context.Context, svc LimitReader, target domain.LimitPosition,
-) (domain.LimitPosition, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	return persistedLimit(ctx, svc, target,
-		func(limits node.AccountLimits) []domain.LimitPosition { return limits.PositionLimits })
-}
-
-// PersistedSpotFundsPnlBoundsLimit reads back the SpotFunds P&L-bounds
-// barrier stored at target's address. It answers domain.ErrNotFound when none
-// is stored there.
-func PersistedSpotFundsPnlBoundsLimit(
-	ctx context.Context, svc LimitReader, target domain.LimitSpotFundsPnlBounds,
-) (domain.LimitSpotFundsPnlBounds, error) {
-	target.Account = storedLimitAccount(svc, target.Scope, target.Account)
-	return persistedLimit(ctx, svc, target,
-		func(limits node.AccountLimits) []domain.LimitSpotFundsPnlBounds {
-			return limits.SpotFundsPnlBoundsLimits
-		})
 }

@@ -29,6 +29,7 @@
     "nonNegativeDecimal": "{{kind}} must be a non-negative decimal",
     "decimal": "{{kind}} must be a decimal",
     "mode": "unknown funds limit mode",
+    "notAllowed": "{{kind}} is not allowed for {{policy}}",
     "unknown": "unknown kind {{kind}}"
   },
   "limit": {

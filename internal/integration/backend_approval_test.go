@@ -1721,6 +1721,31 @@ func TestService_ConfirmExecutionSigningFailureFailsClosed(t *testing.T) {
 	}
 }
 
+func TestService_CancelOrderRejectsMissingEventOrderStatus(t *testing.T) {
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(t, signer)
+	tok := mustWorkflow(t, svc)
+	orderID := domain.ExternalID(tok.OrderExternalID)
+	beforeOrder := fn.orders[orderID]
+	beforeEvents := slices.Clone(fn.orderEvents[orderID])
+	beforeSigned := len(signer.signed)
+	fn.omitCancelEventStatus = true
+
+	_, att, err := svc.CancelOrder(systemCtx(), tok.OrderExternalID, "10", "operator")
+	if err == nil || !strings.Contains(err.Error(), "cancel execution report event missing order status") {
+		t.Fatalf("CancelOrder error = %v, want missing cancel event order status", err)
+	}
+	if att.SignedAttestation != "" || len(signer.signed) != beforeSigned {
+		t.Fatal("cancel with missing event order status was signed")
+	}
+	if !reflect.DeepEqual(fn.orders[orderID], beforeOrder) {
+		t.Fatalf("order after failed cancel = %+v, want %+v", fn.orders[orderID], beforeOrder)
+	}
+	if !reflect.DeepEqual(fn.orderEvents[orderID], beforeEvents) {
+		t.Fatalf("history after failed cancel = %+v, want %+v", fn.orderEvents[orderID], beforeEvents)
+	}
+}
+
 func TestService_CancelOrderSigningFailureFailsClosed(t *testing.T) {
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(t, signer)

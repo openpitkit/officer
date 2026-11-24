@@ -32,7 +32,8 @@ import (
 )
 
 // ReviewView presents the recorded review of an order awaiting a decision.
-// Marks are decoded for display only; decision authorization verifies the envelope.
+// Marks are decoded for display only; decision authorization verifies the
+// envelope.
 type ReviewView struct {
 	Held        bool
 	Marks       []domain.ReviewMark
@@ -106,7 +107,8 @@ func OrderReviewView(detail domain.OrderDetail) (*ReviewView, error) {
 // ErrConflict, and missing, unverifiable or inconsistent review approvals with
 // ErrApprovalRequired. Trading orders require a runtime (ErrNotImplemented),
 // their stored binding and venue account (ErrForbidden), and a successful venue
-// pre-check (ErrInvalid for a venue refusal, ErrUpstream for an upstream failure).
+// pre-check (ErrInvalid for a venue refusal, ErrUpstream for an upstream
+// failure).
 // Other domain errors from the venue pre-check, including ErrConflict and
 // ErrNotFound, are returned unchanged.
 // It returns the order as the node recorded the decision and its signed (or

@@ -127,7 +127,9 @@ func coinbasePushFrame(t *testing.T, ctx context.Context, conn *websocket.Conn, 
 		t.Fatal(err)
 	}
 	if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
-		t.Fatal(err)
+		if t.Context().Err() == nil {
+			t.Fatal(err)
+		}
 	}
 }
 

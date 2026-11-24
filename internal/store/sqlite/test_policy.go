@@ -32,13 +32,9 @@ import (
 )
 
 func (r *realmStore) GetTestExecutionPolicy(ctx context.Context, connection domain.ExternalID) (result domain.TestExecutionPolicyState, resultErr error) {
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "test policy")
 	if err != nil {
 		return domain.TestExecutionPolicyState{}, err
-	}
-	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return domain.TestExecutionPolicyState{}, fmt.Errorf("store: begin test policy read: %w", err)
 	}
 	defer rollbackTransaction(ctx, &resultErr, tx)
 	id, class, err := r.executionPolicyConnection(ctx, tx, connection)

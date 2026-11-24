@@ -19,8 +19,11 @@ package httpapi
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+
+	"go.openpit.dev/officer/framework/backup"
 )
 
 const (
@@ -34,6 +37,16 @@ const (
 	// bearerScheme opens the security scheme of the API token.
 	bearerScheme = "\n  securitySchemes:\n    bearerAuth:\n      type: http\n      scheme: bearer\n"
 )
+
+func TestOpenAPIBackupDataContract(t *testing.T) {
+	spec := string(openapiSpec)
+	wantRequired, wantProperties := jsonMembers(reflect.TypeOf(backup.Data{}))
+	gotRequired, gotProperties := openAPISchemaMembers(t, spec, "BackupData")
+	if !reflect.DeepEqual(gotRequired, wantRequired) || !reflect.DeepEqual(gotProperties, wantProperties) {
+		t.Fatalf("OpenAPI BackupData = required %v properties %v, want required %v properties %v as backup.Data encodes",
+			gotRequired, gotProperties, wantRequired, wantProperties)
+	}
+}
 
 func TestOpenAPIOrderSizeModesContract(t *testing.T) {
 	spec := string(openapiSpec)

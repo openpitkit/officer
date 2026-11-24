@@ -178,7 +178,9 @@ func TestDialStreamReadLimit(t *testing.T) {
 				ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 				defer cancel()
 				if err := conn.Write(ctx, websocket.MessageText, payload); err != nil && size <= maxStreamMessageBytes {
-					t.Error("write bounded frame failed")
+					if t.Context().Err() == nil {
+						t.Error("write bounded frame failed")
+					}
 				}
 			}))
 			defer server.Close()
@@ -213,7 +215,9 @@ func TestDialStreamAndSubscribe(t *testing.T) {
 		defer func() { _ = conn.CloseNow() }()
 		typ, p, err := conn.Read(r.Context())
 		if err != nil || typ != websocket.MessageText {
-			t.Error("subscription not received as text")
+			if t.Context().Err() == nil {
+				t.Error("subscription not received as text")
+			}
 			return
 		}
 		frames <- p

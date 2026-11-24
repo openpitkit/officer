@@ -370,49 +370,65 @@ func accountScopeSites() []scopeSite {
 		{
 			name: "PutRateLimit",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				return svc.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
+				_, err := svc.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 					Scope: domain.ScopeAccount, Account: req.account,
 					Window: time.Second, MaxOrders: 10,
 				}, domain.LimitWriteReplace, req.policy)
+				return err
 			},
-			asked:   []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
-			reached: []string{`PutRateLimit "scoped-acc" "reject"`},
+			asked: []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
+			reached: []string{
+				`PutRateLimit "scoped-acc" "reject"`,
+				`ListLimits "scoped-acc"`,
+			},
 		},
 		{
 			name: "PutOrderSizeLimit",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				return svc.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+				_, err := svc.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 					Mode:    domain.RuleModeReject,
 					Scope:   domain.ScopeAccountSettlementAsset,
 					Account: req.account, Asset: "USD", MaxNotional: "1000",
 				}, domain.LimitWriteReplace, req.policy)
+				return err
 			},
-			asked:   []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
-			reached: []string{`PutOrderSizeLimit "scoped-acc" "reject"`},
+			asked: []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
+			reached: []string{
+				`PutOrderSizeLimit "scoped-acc" "reject"`,
+				`ListLimits "scoped-acc"`,
+			},
 		},
 		{
 			name: "PutSpotFundsPnlBoundsLimit/account",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
+				_, err := svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccount, Account: req.account,
 					Currency: "USD", LowerBound: "-1",
 				}, domain.LimitWriteReplace, req.policy)
+				return err
 			},
-			asked:   []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
-			reached: []string{`PutSpotFundsPnlBoundsLimit "scoped-acc" "" "reject"`},
+			asked: []scopeCall{account(scopeClientAccount), policy(scopeClientPolicy)},
+			reached: []string{
+				`PutSpotFundsPnlBoundsLimit "scoped-acc" "" "reject"`,
+				`ListLimits "scoped-acc"`,
+			},
 		},
 		{
 			name: "PutSpotFundsPnlBoundsLimit/account_group",
 			run: func(ctx context.Context, svc *backend.Service, req scopeRequest) error {
-				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
+				_, err := svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeAccountGroup, AccountGroup: scopeClientGroup,
 					Currency: "USD", LowerBound: "-1",
 				}, domain.LimitWriteReplace, req.policy)
+				return err
 			},
-			asked:   []scopeCall{group, policy(scopeClientPolicy)},
-			reached: []string{`PutSpotFundsPnlBoundsLimit "" "client-desk" "reject"`},
+			asked: []scopeCall{group, policy(scopeClientPolicy)},
+			reached: []string{
+				`PutSpotFundsPnlBoundsLimit "" "client-desk" "reject"`,
+				`ListLimits ""`,
+			},
 		},
 		{
 			name: "DeleteLimit/account",
@@ -836,36 +852,39 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		run     func(ctx context.Context, svc *backend.Service) error
-		reached string
+		reached []string
 	}{
 		{
 			name: "PutRateLimit/broker",
 			run: func(ctx context.Context, svc *backend.Service) error {
-				return svc.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
+				_, err := svc.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 					Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 10,
 				}, domain.LimitWriteReplace, "")
+				return err
 			},
-			reached: `PutRateLimit "" "reject"`,
+			reached: []string{`PutRateLimit "" "reject"`, `ListLimits ""`},
 		},
 		{
 			name: "PutOrderSizeLimit/broker",
 			run: func(ctx context.Context, svc *backend.Service) error {
-				return svc.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+				_, err := svc.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 					Mode:  domain.RuleModeReject,
 					Scope: domain.ScopeBroker, MaxQuantity: "10",
 				}, domain.LimitWriteReplace, "")
+				return err
 			},
-			reached: `PutOrderSizeLimit "" "reject"`,
+			reached: []string{`PutOrderSizeLimit "" "reject"`, `ListLimits ""`},
 		},
 		{
 			name: "PutSpotFundsPnlBoundsLimit/global",
 			run: func(ctx context.Context, svc *backend.Service) error {
-				return svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
+				_, err := svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 					Axis:  domain.SpotFundsPnlAxisRealized,
 					Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-1",
 				}, domain.LimitWriteReplace, "")
+				return err
 			},
-			reached: `PutSpotFundsPnlBoundsLimit "" "" "reject"`,
+			reached: []string{`PutSpotFundsPnlBoundsLimit "" "" "reject"`, `ListLimits ""`},
 		},
 		{
 			name: "DeleteLimit/asset",
@@ -875,7 +894,7 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 					Asset: "AAPL",
 				})
 			},
-			reached: `DeleteLimit "" ""`,
+			reached: []string{`DeleteLimit "" ""`},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -892,8 +911,8 @@ func TestService_AccountScopeLeavesAxisFreeLimitsUnowned(t *testing.T) {
 					t.Fatalf("axis-free limit asked the scope for an account: %+v", scope.calls)
 				}
 			}
-			if want := []string{tc.reached}; !reflect.DeepEqual(fn.accountCalls, want) {
-				t.Fatalf("node received %q, want %q", fn.accountCalls, want)
+			if !reflect.DeepEqual(fn.accountCalls, tc.reached) {
+				t.Fatalf("node received %q, want %q", fn.accountCalls, tc.reached)
 			}
 		})
 	}

@@ -29,6 +29,7 @@
     "nonNegativeDecimal": "{{kind}} 必须为非负小数",
     "decimal": "{{kind}} 必须为小数",
     "mode": "未知的资金限额模式",
+    "notAllowed": "策略 {{policy}} 不允许使用 {{kind}}",
     "unknown": "未知类型 {{kind}}"
   },
   "limit": {
