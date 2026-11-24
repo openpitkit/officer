@@ -645,23 +645,14 @@ func TestOrderReview_RealServiceREST(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng.reviews = restReviewMarks()
-	request := func(method, path, body string, status int) map[string]any {
-		t.Helper()
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body)))
-		if rec.Code != status {
-			t.Fatalf("%s %s status=%d, want %d: %s", method, path, rec.Code, status, rec.Body.String())
-		}
-		return bodyMap(t, rec.Result())
-	}
-	submit := request(http.MethodPost, "/orders/submit?missingAccount=reject",
+	submit := serveJSON(t, handler, http.MethodPost, "/orders/submit?missingAccount=reject",
 		`{"id":"real-rest-review","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"hold"}`, http.StatusCreated)
 	if submit["verdict"] != "review" {
 		t.Fatalf("submit=%v", submit)
 	}
 	assertRESTReviewMarks(t, submit["reviews"])
 	path := "/orders/" + submit["id"].(string)
-	detail := request(http.MethodGet, path, "", http.StatusOK)
+	detail := serveJSON(t, handler, http.MethodGet, path, "", http.StatusOK)
 	review := detail["review"].(map[string]any)
 	assertRESTReviewMarks(t, review["marks"])
 	if review["lastConfirm"] != nil || review["destination"] != nil {
@@ -669,12 +660,12 @@ func TestOrderReview_RealServiceREST(t *testing.T) {
 	}
 	eng.reviews = nil
 	eng.rejects = []domain.OrderReject{{Code: "amount_missing", Scope: "order", Policy: "order_validation", Reason: "amount required"}}
-	confirm := request(http.MethodPost, path+"/review/confirm", "", http.StatusOK)
+	confirm := serveJSON(t, handler, http.MethodPost, path+"/review/confirm", "", http.StatusOK)
 	decision := confirm["decision"].(map[string]any)
 	if decision["verdict"] != "reject" || decision["signedApproval"] == "" || decision["signed"] != true {
 		t.Fatalf("confirm=%v", confirm)
 	}
-	detail = request(http.MethodGet, path, "", http.StatusOK)
+	detail = serveJSON(t, handler, http.MethodGet, path, "", http.StatusOK)
 	review = detail["review"].(map[string]any)
 	assertRESTReviewMarks(t, review["marks"])
 	last := review["lastConfirm"].(map[string]any)
@@ -682,11 +673,11 @@ func TestOrderReview_RealServiceREST(t *testing.T) {
 		detail["order"].(map[string]any)["status"] != "awaiting_review" {
 		t.Fatalf("review after rejected confirm=%v", detail)
 	}
-	cancel := request(http.MethodPost, path+"/review/cancel", "", http.StatusOK)
+	cancel := serveJSON(t, handler, http.MethodPost, path+"/review/cancel", "", http.StatusOK)
 	if cancel["order"].(map[string]any)["status"] != "cancelled" || cancel["signedAttestation"] == "" || cancel["signed"] != true {
 		t.Fatalf("cancel=%v", cancel)
 	}
-	detail = request(http.MethodGet, path, "", http.StatusOK)
+	detail = serveJSON(t, handler, http.MethodGet, path, "", http.StatusOK)
 	if _, exists := detail["review"]; exists || detail["order"].(map[string]any)["status"] != "cancelled" {
 		t.Fatalf("cancelled detail=%v", detail)
 	}
@@ -705,16 +696,7 @@ func TestOrderReviewForce_RealServiceREST(t *testing.T) {
 				OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order"},
 				Mode:        domain.RuleModeReviewWithHold,
 			}}
-			request := func(method, path, body string, status int) map[string]any {
-				t.Helper()
-				rec := httptest.NewRecorder()
-				handler.ServeHTTP(rec, httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body)))
-				if rec.Code != status {
-					t.Fatalf("%s %s status=%d, want %d: %s", method, path, rec.Code, status, rec.Body.String())
-				}
-				return bodyMap(t, rec.Result())
-			}
-			submit := request(http.MethodPost, "/orders/submit?missingAccount=reject",
+			submit := serveJSON(t, handler, http.MethodPost, "/orders/submit?missingAccount=reject",
 				`{"id":"real-rest-force","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"hold"}`, http.StatusCreated)
 			if submit["verdict"] != "review" {
 				t.Fatalf("submit=%v", submit)
@@ -734,8 +716,8 @@ func TestOrderReviewForce_RealServiceREST(t *testing.T) {
 				}
 				status = http.StatusConflict
 			}
-			force := request(http.MethodPost, path+"/review/force", "", status)
-			detail := request(http.MethodGet, path, "", http.StatusOK)
+			force := serveJSON(t, handler, http.MethodPost, path+"/review/force", "", status)
+			detail := serveJSON(t, handler, http.MethodGet, path, "", http.StatusOK)
 			if blocked {
 				if force["error"].(map[string]any)["code"] != "conflict" ||
 					detail["order"].(map[string]any)["status"] != "awaiting_review" ||
@@ -761,7 +743,7 @@ func TestOrderReviewForce_RealServiceREST(t *testing.T) {
 			for _, raw := range detail["events"].([]any) {
 				event := raw.(map[string]any)
 				if event["type"] == "pre_trade_accepted" {
-					reproduction := request(http.MethodGet,
+					reproduction := serveJSON(t, handler, http.MethodGet,
 						path+"/events/"+event["id"].(string)+"/reproduction", "", http.StatusOK)
 					if event["signed"] != true || reproduction["requestType"] != "review_force" {
 						t.Fatalf("force event=%v", event)
@@ -791,6 +773,55 @@ func newRealServiceRouterWithEngine(t *testing.T, providers ...trading.Provider)
 	node.Node,
 ) {
 	t.Helper()
+	driver, err := openpit.NewEngineBuilder().
+		AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		Build()
+	if err != nil {
+		t.Fatalf("build chain driver: %v", err)
+	}
+	async, err := asyncengine.NewBuilder(driver).Sharded(1).Build()
+	if err != nil {
+		driver.Stop()
+		t.Fatalf("build async engine: %v", err)
+	}
+	eng := &realGateEngine{
+		running: true,
+		async:   async,
+		driver:  driver,
+		assets:  make(map[string]domain.EngineAssetID),
+		groups:  make(map[string]domain.EngineGroupID),
+	}
+	svc, realm, n := newRealServiceWithEngine(t,
+		func(engine.Snapshot) (engine.Engine, error) { return eng, nil },
+		func(err error) { t.Errorf("unexpected fatal shutdown: %v", err) },
+		nil, providers...,
+	)
+	handler, err := newRouter(svc)
+	if err != nil {
+		t.Fatalf("newRouter: %v", err)
+	}
+	return handler, realm, eng, n
+}
+
+func serveJSON(
+	t *testing.T, handler http.Handler, method, path, body string, status int,
+) map[string]any {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body)))
+	if rec.Code != status {
+		t.Fatalf("%s %s status = %d, want %d: %s", method, path, rec.Code, status, rec.Body.String())
+	}
+	return bodyMap(t, rec.Result())
+}
+
+func newRealServiceWithEngine(
+	t *testing.T, build engine.BuildFunc, fatal func(error),
+	decorateSigner func(fwsigning.Service) fwsigning.Service,
+	providers ...trading.Provider,
+) (*backend.Service, store.RealmStore, node.Node) {
+	t.Helper()
 	ctx := context.Background()
 	// The store seals the signing key generated below under this master key.
 	masterKey, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
@@ -819,28 +850,7 @@ func newRealServiceRouterWithEngine(t *testing.T, providers ...trading.Provider)
 	if err != nil {
 		t.Fatalf("ForRealm: %v", err)
 	}
-	driver, err := openpit.NewEngineBuilder().
-		AccountSync().
-		Builtin(policies.BuildOrderValidation()).
-		Build()
-	if err != nil {
-		t.Fatalf("build chain driver: %v", err)
-	}
-	async, err := asyncengine.NewBuilder(driver).Sharded(1).Build()
-	if err != nil {
-		driver.Stop()
-		t.Fatalf("build async engine: %v", err)
-	}
-	eng := &realGateEngine{
-		running: true,
-		async:   async,
-		driver:  driver,
-		assets:  make(map[string]domain.EngineAssetID),
-		groups:  make(map[string]domain.EngineGroupID),
-	}
-	n, _, err := node.NewLocalNode(ctx, domain.DefaultRealm, st, func(engine.Snapshot) (engine.Engine, error) {
-		return eng, nil
-	}, func(err error) { t.Errorf("unexpected fatal shutdown: %v", err) })
+	n, _, err := node.NewLocalNode(ctx, domain.DefaultRealm, st, build, fatal)
 	if err != nil {
 		t.Fatalf("NewLocalNode: %v", err)
 	}
@@ -852,15 +862,15 @@ func newRealServiceRouterWithEngine(t *testing.T, providers ...trading.Provider)
 	if _, err := signer.GenerateKey(ctx); err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	svc, err := backend.New(n, nil, signer, officerengine.LockSettlementPrice)
+	var serviceSigner fwsigning.Service = signer
+	if decorateSigner != nil {
+		serviceSigner = decorateSigner(signer)
+	}
+	svc, err := backend.New(n, nil, serviceSigner, officerengine.LockSettlementPrice)
 	if err != nil {
 		t.Fatalf("backend.New: %v", err)
 	}
-	handler, err := newRouter(svc)
-	if err != nil {
-		t.Fatalf("newRouter: %v", err)
-	}
-	return handler, realm, eng, n
+	return svc, realm, n
 }
 
 // seedRealAccountAndAssets registers the account and instrument assets the order

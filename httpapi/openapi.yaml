@@ -11694,7 +11694,11 @@ components:
         persisted envelope cannot be decoded, `attestation` is present but
         `request`, `response`, `canonicalApproval` and `publicKey` are `null`,
         `signature` is empty, and `reason` says the envelope could not be
-        decoded. `publicKey` is also `null` and `signature` empty under alg
+        decoded. When the attestation request type is unsupported or an
+        execution-report attestation has no persisted execution report payload,
+        `response` is `null` and `reason` names the case; `attestation`, `request`,
+        `canonicalApproval`, `publicKey` and `signature` remain as for a decodable
+        envelope. `publicKey` is also `null` and `signature` empty under alg
         `none`.
       properties:
         requestType:
@@ -11725,7 +11729,9 @@ components:
           description: >
             The exact type-specific API response the robot received for this
             request (envelope verbatim), or `null` when the event has no
-            attestation or the persisted envelope cannot be decoded.
+            attestation, the persisted envelope cannot be decoded, the
+            attestation request type is unsupported, or an execution-report
+            attestation has no persisted execution report payload.
           oneOf:
             - $ref: "#/components/schemas/EventReproductionResponse"
             - type: "null"
@@ -11768,6 +11774,7 @@ components:
         reason:
           type: string
           description: >
-            Explains a `null` attestation (the event was not attested) or a
-            present attestation whose persisted envelope cannot be decoded;
-            empty otherwise.
+            Explains a `null` attestation (the event was not attested), an
+            undecodable persisted envelope, an unsupported attestation request
+            type, or a missing execution report payload for an execution-report
+            attestation. Empty otherwise.

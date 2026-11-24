@@ -89,42 +89,44 @@ type fakeNode struct {
 	mdInstances                []domain.MarketDataInstance
 	mdInstruments              map[string][]domain.MarketDataInstrument
 
-	backupArchive           backup.Archive
-	backupScope             backup.Scope
-	backupCaller            domain.Caller
-	backupErr               error
-	restoreOpts             backup.RestoreOptions
-	restoreSummary          backup.RestoreSummary
-	restoreSink             marketdata.Sink
-	restoreErr              error
-	resetCaller             domain.Caller
-	resetSink               marketdata.Sink
-	resetErr                error
-	currentSink             marketdata.Sink
-	orders                  map[domain.ExternalID]domain.Order
-	orderReviews            map[domain.ExternalID]domain.OrderReview
-	allOrders               []domain.Order
-	orderEvents             map[domain.ExternalID][]domain.OrderEvent
-	attestations            map[domain.ExternalID]domain.EventAttestation
-	nextOrderSeq            byte
-	nextEventSeq            int
-	submitResult            *fwengine.OrderResult
-	immediateResult         *fwengine.ImmediateResult
-	execReports             []domain.ExecutionReportInput
-	execReportCallers       []domain.Caller
-	submitErr               error
-	confirmErr              error
-	cancelErr               error
-	getOrderErr             error
-	persistAttestationErr   error
-	skipAttestNewEvents     bool
-	cancelNoop              bool
-	execReportNoop          bool
-	confirmCalls            []string
-	cancelCalls             []string
-	persistAttestationCalls []domain.ExternalID
-	auditCalls              []store.AuditEntry
-	auditErr                error
+	backupArchive                  backup.Archive
+	backupScope                    backup.Scope
+	backupCaller                   domain.Caller
+	backupErr                      error
+	restoreOpts                    backup.RestoreOptions
+	restoreSummary                 backup.RestoreSummary
+	restoreSink                    marketdata.Sink
+	restoreErr                     error
+	resetCaller                    domain.Caller
+	resetSink                      marketdata.Sink
+	resetErr                       error
+	currentSink                    marketdata.Sink
+	orders                         map[domain.ExternalID]domain.Order
+	orderReviews                   map[domain.ExternalID]domain.OrderReview
+	allOrders                      []domain.Order
+	orderEvents                    map[domain.ExternalID][]domain.OrderEvent
+	attestations                   map[domain.ExternalID]domain.EventAttestation
+	nextOrderSeq                   byte
+	nextEventSeq                   int
+	submitResult                   *fwengine.OrderResult
+	immediateResult                *fwengine.ImmediateResult
+	execReports                    []domain.ExecutionReportInput
+	execReportCallers              []domain.Caller
+	submitErr                      error
+	confirmErr                     error
+	cancelErr                      error
+	getOrderErr                    error
+	persistAttestationErr          error
+	skipAttestNewEvents            bool
+	cancelNoop                     bool
+	omitCancelEventStatus          bool
+	omitExecutionReportEventStatus bool
+	execReportNoop                 bool
+	confirmCalls                   []string
+	cancelCalls                    []string
+	persistAttestationCalls        []domain.ExternalID
+	auditCalls                     []store.AuditEntry
+	auditErr                       error
 
 	getAccountErr error
 
@@ -1430,9 +1432,13 @@ func (n *fakeNode) CancelOrder(
 	order.Status = domain.OrderStatusCancelled
 	order.Leaves = leavesQuantity
 	n.orders[orderID] = order
+	eventStatus := string(in.OrderStatus)
+	if n.omitCancelEventStatus {
+		eventStatus = ""
+	}
 	n.appendEvent(orderID, domain.OrderEventCancelled, domain.OrderEventPayload{
 		LeavesQuantity:  in.LeavesQuantity,
-		OrderStatus:     string(in.OrderStatus),
+		OrderStatus:     eventStatus,
 		ExecutionReport: request,
 	})
 	persistence := fwengine.ExecutionReportPersistence{
@@ -1497,6 +1503,9 @@ func (n *fakeNode) ApplyExecutionReport(
 			Commission:      in.Commission,
 			ExecutionReport: request,
 		}
+		if n.omitExecutionReportEventStatus {
+			payload.OrderStatus = ""
+		}
 		n.appendEvent(in.Order, domain.OrderEventFill, payload)
 		events = append(events, domain.OrderEvent{
 			Order:   in.Order,
@@ -1510,6 +1519,9 @@ func (n *fakeNode) ApplyExecutionReport(
 			OrderStatus:     string(in.OrderStatus),
 			Commission:      in.Commission,
 			ExecutionReport: request,
+		}
+		if n.omitExecutionReportEventStatus {
+			payload.OrderStatus = ""
 		}
 		n.appendEvent(in.Order, domain.OrderEventCommission, payload)
 		events = append(events, domain.OrderEvent{

@@ -22,6 +22,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -29,11 +31,19 @@ import (
 	"testing"
 	"time"
 
+	officerengine "go.openpit.dev/officer/engine"
+	"go.openpit.dev/officer/framework/auth"
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/node"
 	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/store/schema"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	appsigning "go.openpit.dev/officer/signing"
+	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/pretrade"
 )
 
 // reproSigningStore is a minimal in-memory appsigning.Store for building real
@@ -667,7 +677,50 @@ func TestOrderReproduction_SignedResultFields(t *testing.T) {
 	}
 }
 
-func TestEventReproductionRequestFacets(t *testing.T) {
+func TestOrderReproduction_StoredRequestTypes(t *testing.T) {
+	handler, realm, eng, _ := newRealServiceRouterWithEngine(t)
+	ctx := context.Background()
+	seedRealAccountAndAssets(t, realm, "acc-1")
+	if err := realm.SetSetting(ctx, domain.SettingKeyNoESign, "0"); err != nil {
+		t.Fatal(err)
+	}
+
+	submit := func(handler http.Handler, id string) string {
+		t.Helper()
+		body := fmt.Sprintf(`{"id":%q,"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"hold"}`, id)
+		response := serveJSON(t, handler, http.MethodPost, "/orders/submit?missingAccount=reject", body, http.StatusCreated)
+		return "/orders/" + response["id"].(string)
+	}
+	confirmed := submit(handler, "facet-confirm")
+	serveJSON(t, handler, http.MethodPost, confirmed+"/confirm", "", http.StatusOK)
+	report := serveJSON(t, handler, http.MethodPost, confirmed+"/execution-reports",
+		`{"id":"facet-report","quantity":"1","price":"100","leavesQuantity":"0","status":"filled"}`, http.StatusCreated)
+	cancelService, cancelRealm, cancelNode := newRealServiceWithEngine(t, officerengine.NewOpenPitEngineBuildFunc(), func(err error) {
+		t.Errorf("unexpected fatal shutdown: %v", err)
+	}, nil)
+	seedReproductionAccount(t, cancelNode, cancelRealm)
+	cancelHandler, err := newRouter(cancelService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := submit(cancelHandler, "facet-cancel")
+	serveJSON(t, cancelHandler, http.MethodPost, cancelled+"/cancel",
+		`{"leavesQuantity":"1","reason":"operator cancelled"}`, http.StatusOK)
+
+	eng.reviews = restReviewMarks()
+	reviewCancelled := submit(handler, "facet-review-cancel")
+	serveJSON(t, handler, http.MethodPost, reviewCancelled+"/review/cancel", "", http.StatusOK)
+	reviewConfirmed := submit(handler, "facet-review-confirm")
+	eng.reviews = nil
+	serveJSON(t, handler, http.MethodPost, reviewConfirmed+"/review/confirm", "", http.StatusOK)
+	eng.reviews = []domain.ReviewMark{{
+		OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order"},
+		Mode:        domain.RuleModeReviewWithHold,
+	}}
+	reviewForced := submit(handler, "facet-review-force")
+	eng.reviews = nil
+	serveJSON(t, handler, http.MethodPost, reviewForced+"/review/force", "", http.StatusOK)
+
 	facetsByRequest := map[domain.AttestationRequestType]string{
 		domain.AttestationRequestSubmit:          "submitResponse",
 		domain.AttestationRequestExecutionReport: "executionReport",
@@ -677,41 +730,202 @@ func TestEventReproductionRequestFacets(t *testing.T) {
 		domain.AttestationRequestReviewForce:     "reviewForce",
 		domain.AttestationRequestReviewCancel:    "reviewCancel",
 	}
-	var codes []schema.EnumCodeSeed
-	for _, seed := range schema.EnumDictionarySeeds() {
-		if seed.Table == schema.AttestationRequestTypeTable {
-			codes = seed.Codes
-			break
+	type storedEvent struct {
+		handler http.Handler
+		path    string
+		event   domain.OrderEvent
+	}
+	eventsByRequest := make(map[domain.AttestationRequestType][]storedEvent)
+	for _, path := range []string{confirmed, cancelled, reviewCancelled, reviewConfirmed, reviewForced} {
+		orderRealm, orderHandler := realm, handler
+		if path == cancelled {
+			orderRealm, orderHandler = cancelRealm, cancelHandler
+		}
+		id, err := domain.ParseExternalID(strings.TrimPrefix(path, "/orders/"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		detail, err := orderRealm.GetOrder(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range detail.Events {
+			if event.Attestation != nil {
+				requestType := event.Attestation.RequestType
+				eventsByRequest[requestType] = append(eventsByRequest[requestType], storedEvent{orderHandler, path, event})
+			}
 		}
 	}
-	if len(codes) == 0 {
-		t.Fatal("attestation request type seed is missing or empty")
+	for _, seed := range schema.EnumDictionarySeeds() {
+		if seed.Table != schema.AttestationRequestTypeTable {
+			continue
+		}
+		if len(seed.Codes) == 0 {
+			t.Fatal("attestation request type dictionary is empty")
+		}
+		for _, code := range seed.Codes {
+			t.Run(code.Code, func(t *testing.T) {
+				requestType := domain.AttestationRequestType(code.Code)
+				facet := facetsByRequest[requestType]
+				if facet == "" || len(eventsByRequest[requestType]) == 0 {
+					t.Fatalf("no persisted event or expected facet for %s", requestType)
+				}
+				for _, entry := range eventsByRequest[requestType] {
+					response := reproStoredFacet(t, entry.handler, entry.path, entry.event, facet)
+					if requestType == domain.AttestationRequestExecutionReport && response["id"] != report["id"] {
+						t.Fatalf("reproduced execution report id = %v, want %v", response["id"], report["id"])
+					}
+				}
+			})
+		}
+		return
 	}
-	for _, code := range codes {
-		t.Run(code.Code, func(t *testing.T) {
-			request := domain.AttestationRequestType(code.Code)
-			facet, ok := facetsByRequest[request]
-			if !ok {
-				t.Fatalf("request %s has no reproduction facet", request)
-			}
-			payload := reproPayload(extID("repro-facet"))
-			payload.RequestType = string(request)
-			att := &domain.EventAttestation{RequestType: request, SignedEnvelope: "recorded-envelope"}
-			detail := reproDetail(domain.ExternalID(payload.OrderExternalID), att)
-			response := toEventReproductionResponseDTO(detail.Events[0], detail, att, payload)
-			raw, err := json.Marshal(response)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var facets map[string]json.RawMessage
-			if err := json.Unmarshal(raw, &facets); err != nil {
-				t.Fatal(err)
-			}
-			if len(facets) != 1 || facets[facet] == nil {
-				t.Fatalf("request %s response=%s; want exactly facet %s", request, raw, facet)
-			}
-		})
+	t.Fatal("attestation request type dictionary is missing")
+}
+
+func reproStoredFacet(
+	t *testing.T, handler http.Handler, path string, event domain.OrderEvent, facet string,
+) map[string]any {
+	t.Helper()
+	bundle := serveJSON(t, handler, http.MethodGet,
+		path+"/events/"+event.ExternalID.String()+"/reproduction", "", http.StatusOK)
+	if bundle["requestType"] != string(event.Attestation.RequestType) || bundle["reason"] != "" {
+		t.Fatalf("%s reproduction has requestType %v and reason %q", event.Type, bundle["requestType"], bundle["reason"])
 	}
+	response, _ := bundle["response"].(map[string]any)
+	result, ok := response[facet].(map[string]any)
+	if len(response) != 1 || !ok {
+		t.Fatalf("%s reproduction response = %v, want exactly %s", event.Type, bundle["response"], facet)
+	}
+	return result
+}
+
+type immediateEngineWithoutPersistenceStatus struct {
+	engine.Engine
+}
+
+func (e immediateEngineWithoutPersistenceStatus) SettleImmediate(
+	order domain.Order, prepared engine.ImmediatePreparation, postTrade pretrade.PostTradeResult,
+) (engine.ImmediateResult, error) {
+	result, err := e.Engine.SettleImmediate(order, prepared, postTrade)
+	if err == nil && result.Persistence != nil {
+		result.Persistence.OrderStatus = ""
+	}
+	return result, err
+}
+
+func seedReproductionAccount(t *testing.T, n node.Node, realm store.RealmStore) {
+	t.Helper()
+	ctx := context.Background()
+	if err := realm.SetSetting(ctx, domain.SettingKeyNoESign, "0"); err != nil {
+		t.Fatal(err)
+	}
+	caller := auth.SystemCaller()
+	if _, err := n.CreateAccount(ctx, domain.Account{Code: "acc-1", Currency: "USD"}, caller); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.CreateAsset(ctx, domain.Asset{Code: "AAPL"}, caller); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.ApplyAdjustment(ctx, "acc-1", "", domain.AdjustmentRequest{
+		Type:              domain.AdjustmentTypeDeposit,
+		Asset:             "USD",
+		AverageEntryPrice: "1",
+		RealizedPnl:       "0",
+		Balance:           &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "1000"},
+	}, domain.MissingAccountCreate, caller); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type reproRecordingSigner struct {
+	fwsigning.Service
+	signed []domain.ApprovalPayload
+}
+
+func (s *reproRecordingSigner) Sign(payload domain.ApprovalPayload) (string, error) {
+	s.signed = append(s.signed, payload)
+	return s.Service.Sign(payload)
+}
+
+func TestImmediateSettlementRejectsMissingPersistenceOrderStatus(t *testing.T) {
+	fatal := make(chan error, 2)
+	recording := &reproRecordingSigner{}
+	build := officerengine.NewOpenPitEngineBuildFunc()
+	svc, realm, n := newRealServiceWithEngine(t, func(snap engine.Snapshot) (engine.Engine, error) {
+		eng, err := build(snap)
+		if err != nil {
+			return nil, err
+		}
+		return immediateEngineWithoutPersistenceStatus{eng}, nil
+	}, func(err error) { fatal <- err }, func(signer fwsigning.Service) fwsigning.Service {
+		recording.Service = signer
+		return recording
+	})
+	seedReproductionAccount(t, n, realm)
+	ctx := auth.ContextWithCaller(context.Background(), auth.SystemCaller())
+	const id = "missing-immediate-status"
+	_, err := svc.SubmitOrder(ctx, domain.Order{
+		ExternalID: id, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+		AmountValue: "1", Price: "100",
+	}, backend.SubmitModeImmediate, domain.MissingAccountReject)
+	for _, payload := range recording.signed {
+		if payload.OrderExternalID == id &&
+			payload.RequestType == string(domain.AttestationRequestExecutionReport) {
+			t.Fatal("execution report with missing persistence order status reached signer")
+		}
+	}
+	const reason = "immediate execution report persistence missing order status"
+	if err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("SubmitOrder error = %v, want missing immediate persistence order status", err)
+	}
+	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+		t.Fatalf("SubmitOrder error = %v, want retry-unsafe after engine settlement", err)
+	}
+	if len(fatal) != 1 {
+		t.Fatalf("fatal shutdown calls = %d, want 1", len(fatal))
+	}
+	if shutdown := <-fatal; !strings.Contains(shutdown.Error(), reason) {
+		t.Fatalf("fatal shutdown error = %v, want %q", shutdown, reason)
+	}
+	if _, err := realm.GetOrder(ctx, id); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("order lookup after failed immediate submission = %v, want rolled-back order and history", err)
+	}
+}
+
+func TestOrderReproduction_ImmediateExecutionReport(t *testing.T) {
+	svc, realm, n := newRealServiceWithEngine(t, officerengine.NewOpenPitEngineBuildFunc(), func(err error) {
+		t.Errorf("unexpected fatal shutdown: %v", err)
+	}, nil)
+	seedReproductionAccount(t, n, realm)
+	handler, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "immediate-report-reproduction"
+	const path = "/orders/" + id
+	serveJSON(t, handler, http.MethodPost, "/orders/submit?missingAccount=reject",
+		`{"id":"immediate-report-reproduction","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"immediate"}`, http.StatusCreated)
+	detail, err := realm.GetOrder(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range detail.Events {
+		if event.Type != domain.OrderEventFill {
+			continue
+		}
+		if event.Payload.ExecutionReport == nil || event.Payload.ExecutionReport.ExternalID.IsZero() ||
+			event.Attestation == nil || event.Attestation.RequestType != domain.AttestationRequestExecutionReport {
+			t.Fatalf("immediate fill lacks a persisted execution report or its attestation: %+v", event)
+		}
+		response := reproStoredFacet(t, handler, path, event, "executionReport")
+		if want := event.Payload.ExecutionReport.ExternalID.String(); response["id"] != want {
+			t.Fatalf("reproduced immediate report id = %v, want %s", response["id"], want)
+		}
+		return
+	}
+	t.Fatal("immediate submission stored no fill event")
 }
 
 func TestOrderReproduction_ReviewSubmit(t *testing.T) {
@@ -803,7 +1017,11 @@ func TestOrderReproduction_ReviewConfirm(t *testing.T) {
 				detail.Order.Account, detail.Order.Status, detail.Order.Leaves = "renamed", domain.OrderStatusFilled, "0"
 				detail.Order.CommissionSubtotals = []domain.Commission{{Amount: "1", Currency: "USD"}}
 				detail.DisplayPrice = "150.25"
-				response := toEventReproductionResponseDTO(detail.Events[0], detail, att, payload).ReviewConfirm
+				reproduced, err := toEventReproductionResponseDTO(detail.Events[0], detail, att, payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response := reproduced.ReviewConfirm
 				if response == nil {
 					t.Fatal("missing reviewConfirm facet")
 				}
@@ -844,17 +1062,8 @@ func TestOrderReproduction_ReviewRealService(t *testing.T) {
 			if err := realm.SetSetting(ctx, domain.SettingKeyNoESign, "0"); err != nil {
 				t.Fatal(err)
 			}
-			request := func(method, path, body string, status int) map[string]any {
-				t.Helper()
-				rec := httptest.NewRecorder()
-				handler.ServeHTTP(rec, httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body)))
-				if rec.Code != status {
-					t.Fatalf("%s %s status=%d, want %d: %s", method, path, rec.Code, status, rec.Body.String())
-				}
-				return bodyMap(t, rec.Result())
-			}
 			eng.reviews = restReviewMarks()
-			submit := request(http.MethodPost, "/orders/submit?missingAccount=reject",
+			submit := serveJSON(t, handler, http.MethodPost, "/orders/submit?missingAccount=reject",
 				`{"id":"real-repro-review","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"hold"}`, http.StatusCreated)
 			if submit["verdict"] != "review" {
 				t.Fatalf("submit=%v", submit)
@@ -865,13 +1074,13 @@ func TestOrderReproduction_ReviewRealService(t *testing.T) {
 			if verdict == domain.VerdictReject {
 				eng.rejects = []domain.OrderReject{{Code: "amount_missing", Scope: "order", Policy: "order_validation", Reason: "amount required"}}
 			}
-			confirm := request(http.MethodPost, path+"/review/confirm", "", http.StatusOK)
+			confirm := serveJSON(t, handler, http.MethodPost, path+"/review/confirm", "", http.StatusOK)
 			decision := confirm["decision"].(map[string]any)
 			if decision["verdict"] != string(verdict) {
 				t.Fatalf("confirm=%v", confirm)
 			}
 			if verdict == domain.VerdictReject {
-				request(http.MethodPost, path+"/review/cancel", "", http.StatusOK)
+				serveJSON(t, handler, http.MethodPost, path+"/review/cancel", "", http.StatusOK)
 			}
 			detail, err := realm.GetOrder(ctx, id)
 			if err != nil {
@@ -888,7 +1097,7 @@ func TestOrderReproduction_ReviewRealService(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				bundle := request(http.MethodGet, path+"/events/"+event.ExternalID.String()+"/reproduction", "", http.StatusOK)
+				bundle := serveJSON(t, handler, http.MethodGet, path+"/events/"+event.ExternalID.String()+"/reproduction", "", http.StatusOK)
 				response := bundle["response"].(map[string]any)
 				if event.Attestation.RequestType == domain.AttestationRequestReviewCancel {
 					if env.Approval.Result == nil || env.Approval.Result.OrderStatus != "cancelled" {

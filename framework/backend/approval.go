@@ -790,7 +790,9 @@ func (s *Service) CancelOrder(
 			}
 			status := domain.OrderStatus(event.Payload.OrderStatus)
 			if status == "" {
-				status = domain.OrderStatusCancelled
+				return domain.ApprovalPayload{}, false, fmt.Errorf(
+					"backend: cancel execution report event missing order status",
+				)
 			}
 			persistence := engine.ExecutionReportPersistence{
 				OrderStatus: status,
@@ -1210,11 +1212,13 @@ func (s *Service) buildImmediateSettlementPayload(
 			"backend: immediate execution report persistence missing",
 		)
 	}
+	if persistence.OrderStatus == "" {
+		return domain.ApprovalPayload{}, fmt.Errorf(
+			"backend: immediate execution report persistence missing order status",
+		)
+	}
 	settled := order
 	settled.Status = persistence.OrderStatus
-	if settled.Status == "" {
-		settled.Status = domain.OrderStatusFilled
-	}
 	payload, err := s.buildExecutionReportEventPayload(settled, event, *persistence)
 	if err != nil {
 		return domain.ApprovalPayload{}, err

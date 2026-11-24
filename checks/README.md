@@ -232,6 +232,17 @@ Two sites are deliberately not findings:
 
 This rule has no approval marker.
 
+### `empty-order-status-default`
+
+`checks/semgrep/empty-order-status-default.yml` rejects an empty-status guard
+that assigns a replacement to the same status, including a caller-supplied
+variable. It covers `OrderStatus` and `Status` fields and locals bound from
+`domain.OrderStatus(...)`, in either comparison order. Return an explicit
+error for the missing status. Other field names, initialisers, package aliases
+and helper-based emptiness checks are outside this syntactic rule.
+Its fixture runs through `check-semgrep`; tests and fixtures are excluded
+from the production scan. There is no approval marker or baseline.
+
 ### `locale-latin-words`
 
 `checks/semgrep/locale-latin-words.yml` forbids a Latin-script word inside a
