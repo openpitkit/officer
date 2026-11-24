@@ -51,15 +51,15 @@ func orderAwaitingReviewType(visible func(context.Context, domain.AccountID) (bo
 				MarkCode *string            `json:"markCode"`
 			}
 			if err := json.Unmarshal(raw, &payload); err != nil {
-				return fmt.Errorf("order awaiting review payload: %w: %w", domain.ErrInvalid, err)
+				return fmt.Errorf("order awaiting review payload: %w", err)
 			}
 			if payload.Order == nil || payload.Account == nil || payload.MarkCode == nil || *payload.MarkCode == "" {
-				return fmt.Errorf("order awaiting review requires order, account and markCode: %w", domain.ErrInvalid)
+				return fmt.Errorf("order awaiting review requires order, account and markCode")
 			}
 			if err := domain.ValidateExternalID(payload.Order.String()); err != nil {
-				return err
+				return domain.Internal(err)
 			}
-			return domain.ValidateAccountID(*payload.Account)
+			return domain.Internal(domain.ValidateAccountID(*payload.Account))
 		},
 		Actions: map[string]alerts.Action{
 			"close": {

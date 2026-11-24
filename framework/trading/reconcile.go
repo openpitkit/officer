@@ -35,7 +35,7 @@ const (
 
 func parseVenueDecimal(value, field string, positive, signed bool) (decimal.Decimal, error) {
 	if len(value) == 0 || len(value) > maxVenueDecimalLength {
-		return decimal.Zero, fmt.Errorf("trading: invalid %s length: %w", field, domain.ErrInvalid)
+		return decimal.Zero, fmt.Errorf("trading: invalid %s length", field)
 	}
 	point := false
 	start := 0
@@ -51,12 +51,12 @@ func parseVenueDecimal(value, field string, positive, signed bool) (decimal.Deci
 			continue
 		}
 		if digit < '0' || digit > '9' {
-			return decimal.Zero, fmt.Errorf("trading: %s must be a plain decimal with an allowed sign: %w", field, domain.ErrInvalid)
+			return decimal.Zero, fmt.Errorf("trading: %s must be a plain decimal with an allowed sign", field)
 		}
 	}
 	d, err := decimal.NewFromString(value)
 	if err != nil || (positive && !d.IsPositive()) {
-		return decimal.Zero, fmt.Errorf("trading: invalid %s: %w", field, domain.ErrInvalid)
+		return decimal.Zero, fmt.Errorf("trading: invalid %s", field)
 	}
 	return d, nil
 }
@@ -76,7 +76,7 @@ func cumulative(detail domain.OrderDetail) (decimal.Decimal, error) {
 func positiveDecimal(value, field string) (decimal.Decimal, error) {
 	d, err := decimal.NewFromString(value)
 	if err != nil || !d.IsPositive() {
-		return decimal.Zero, fmt.Errorf("trading: invalid %s: %w", field, domain.ErrInvalid)
+		return decimal.Zero, fmt.Errorf("trading: invalid %s", field)
 	}
 	return d, nil
 }
@@ -98,11 +98,11 @@ func fillQuantities(fill Fill) (qty, cum decimal.Decimal, err error) {
 	}
 	if fill.CommissionLeg != "" {
 		if fill.CommissionLeg != CommissionLegBase && fill.CommissionLeg != CommissionLegQuote {
-			err = fmt.Errorf("trading: fill CommissionLeg %q is invalid: %w", fill.CommissionLeg, domain.ErrInvalid)
+			err = fmt.Errorf("trading: fill CommissionLeg %q is invalid", fill.CommissionLeg)
 			return
 		}
 		if fill.Commission == nil {
-			err = fmt.Errorf("trading: fill CommissionLeg requires Commission: %w", domain.ErrInvalid)
+			err = errors.New("trading: fill CommissionLeg requires Commission")
 			return
 		}
 	}
@@ -111,7 +111,7 @@ func fillQuantities(fill Fill) (qty, cum decimal.Decimal, err error) {
 			return
 		}
 		if fill.Commission.Currency == "" {
-			err = fmt.Errorf("trading: fill commission currency is empty: %w", domain.ErrInvalid)
+			err = errors.New("trading: fill commission currency is empty")
 		}
 	}
 	return
@@ -160,7 +160,7 @@ func (w *worker) handleEvent(event Event) {
 		return
 	}
 	if event.Kind != EventFill && event.Kind != EventOrder {
-		w.log(slog.LevelError, event.Ref.ClientOrderID, "unknown venue event kind", domain.ErrInvalid)
+		w.log(slog.LevelError, event.Ref.ClientOrderID, "unknown venue event kind", fmt.Errorf("trading: unknown venue event kind %q", event.Kind))
 		return
 	}
 	coid := event.Ref.ClientOrderID
@@ -266,7 +266,7 @@ func validateSnapshot(snapshot Snapshot) (decimal.Decimal, error) {
 	switch snapshot.Status {
 	case VenueStatusOpen, VenueStatusFilled, VenueStatusCancelled, VenueStatusReplaced:
 	default:
-		return decimal.Zero, fmt.Errorf("trading: unknown snapshot status: %w", domain.ErrInvalid)
+		return decimal.Zero, fmt.Errorf("trading: unknown snapshot status %q", snapshot.Status)
 	}
 	filled, err := parseVenueDecimal(snapshot.FilledQuantity, "snapshot filled quantity", false, false)
 	if err != nil {

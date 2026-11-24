@@ -941,8 +941,8 @@ func TestMigrateMatchingKeyRefusesSealedDatabaseWithoutSealReport(t *testing.T) 
 
 			reopened := openSQLiteStoreForTest(t, path, WithMasterKey(key))
 			err := reopened.Migrate(ctx)
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("Migrate without a seal report = %v, want ErrInvalid", err)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("Migrate without a seal report = %v, want internal error", err)
 			}
 			for _, want := range []string{strconv.Quote(path), "inconsistent sealing data", "holds no seal report", "must be recreated"} {
 				if !strings.Contains(err.Error(), want) {

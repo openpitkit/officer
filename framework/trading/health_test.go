@@ -155,7 +155,7 @@ func TestConnectionUnavailableDiagnostics(t *testing.T) {
 	}{
 		{"build", health.CodeInvalidProviderConfig, health.DiagKindConfig, domain.ErrUpstream},
 		// Sends check the provider before the worker, as before.
-		{"unsupported", health.CodeUnsupportedProvider, health.DiagKindConfig, domain.ErrInvalid},
+		{"unsupported", health.CodeUnsupportedProvider, health.DiagKindConfig, nil},
 		{"subscribe", health.CodeConnectionError, health.DiagKindEnvironment, domain.ErrUpstream},
 		{"nil_channel", health.CodeInternalError, health.DiagKindProvider, domain.ErrUpstream},
 		{"closed", health.CodeConnectionError, health.DiagKindProvider, domain.ErrUpstream},
@@ -210,11 +210,11 @@ func TestConnectionUnavailableDiagnostics(t *testing.T) {
 				t.Fatalf("%s failure diagnostic = %+v", tc.failure, diag)
 			}
 			dest := domain.TradingDestination{Connection: id, Route: "{}"}
-			if err := f.runtime.PreCheck(testCtx, f.draft("1"), dest); !errors.Is(err, tc.gate) {
+			if err := f.runtime.PreCheck(testCtx, f.draft("1"), dest); (tc.gate == nil && (!internalFailureAnswer(err))) || (tc.gate != nil && !errors.Is(err, tc.gate)) {
 				t.Fatalf("%s failure PreCheck = %v", tc.failure, err)
 			}
 			_, err := f.runtime.Send(testCtx, f.submit("1").ExternalID, dest)
-			if !errors.Is(err, tc.gate) || !errors.Is(err, trading.ErrNotSent) {
+			if (tc.gate == nil && (!internalFailureAnswer(err))) || (tc.gate != nil && !errors.Is(err, tc.gate)) || !errors.Is(err, trading.ErrNotSent) {
 				t.Fatalf("%s failure Send = %v", tc.failure, err)
 			}
 		})

@@ -127,7 +127,7 @@ func appendAudit(
 	if err := validateAuditDecision(
 		entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
 	); err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if err := entry.Detail.Validate(); err != nil {
 		return fmt.Errorf("store: append audit: %w", err)
@@ -150,11 +150,11 @@ func appendAudit(
 	}
 	actionID, err := dictionaries.id(auditActionTable, "audit action", string(entry.Action))
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(entry.Source))
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if _, err := q.ExecContext(
 		ctx,
@@ -433,13 +433,13 @@ func appendAuditCategoryFilter(
 		auditActionTable, "audit action", string(domain.AuditActionSubmitOrder),
 	)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	executionID, err := dictionaries.id(
 		auditActionTable, "audit action", string(domain.AuditActionExecutionReport),
 	)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	switch category {
 	case domain.AuditCategoryControl:

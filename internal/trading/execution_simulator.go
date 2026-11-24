@@ -148,7 +148,7 @@ func (c *testConnector) Send(ctx context.Context, order fwtrading.Order) (fwtrad
 		return fwtrading.Ack{}, err
 	}
 	if order.ClientOrderID == "" {
-		return fwtrading.Ack{}, fmt.Errorf("test: client order id required: %w", domain.ErrInvalid)
+		return fwtrading.Ack{}, fmt.Errorf("test: client order id required")
 	}
 	policy, err := c.store.GetTestExecutionPolicy(ctx, c.connection.ExternalID)
 	if err != nil {

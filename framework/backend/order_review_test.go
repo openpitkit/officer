@@ -537,14 +537,16 @@ func testOrderReviewTradingNotSent(t *testing.T, force bool) {
 }
 
 func TestConfirmOrderReviewTradingRedacts(t *testing.T) {
-	for _, stage := range []string{"precheck", "send", "not_sent", "cancel_failure", "venue_read"} {
+	for _, stage := range []string{"precheck", "precheck_store", "send", "not_sent", "cancel_failure", "venue_read"} {
 		t.Run(stage, func(t *testing.T) {
 			s, n, rt, signer, _ := newTradingReviewTest(t)
 			secretError := errors.New("upstream test-key-value test-secret-value")
 			want := "unknown"
 			switch stage {
-			case "precheck":
+			case "precheck_store":
 				rt.preCheckErr = secretError
+			case "precheck":
+				rt.preCheckErr = fmt.Errorf("%w: %w", secretError, domain.ErrUpstream)
 			case "not_sent", "cancel_failure":
 				rt.sendErr = fmt.Errorf("%w: %w", trading.ErrNotSent, secretError)
 				want = "refused"
@@ -563,8 +565,12 @@ func TestConfirmOrderReviewTradingRedacts(t *testing.T) {
 				t.Fatalf("credentials leaked: %s", text)
 			}
 			if stage == "precheck" {
-				if !errors.Is(err, domain.ErrUpstream) || n.reviewConfirms != 0 || n.order.Status != domain.OrderStatusAwaitingReview {
+				if err == nil || !errors.Is(err, domain.ErrUpstream) || n.reviewConfirms != 0 || n.order.Status != domain.OrderStatusAwaitingReview {
 					t.Fatalf("precheck err=%v decisions=%d order=%+v", err, n.reviewConfirms, n.order)
+				}
+			} else if stage == "precheck_store" {
+				if err == nil || tradingHasDomainSentinel(err) || n.reviewConfirms != 0 {
+					t.Fatalf("store precheck err=%v decisions=%d, want 500 internal", err, n.reviewConfirms)
 				}
 			} else if err != nil || result.Send == nil || result.Send.Status != want {
 				t.Fatalf("redacted send=%+v err=%v", result.Send, err)

@@ -112,7 +112,7 @@ func TestSendNotSentBeforeLink(t *testing.T) {
 					Build: f.venue.build,
 				}))
 				c := f.addConnection("unknown", "unknown", true)
-				dest.Connection, want = c.ExternalID, domain.ErrInvalid
+				dest.Connection, want = c.ExternalID, nil
 			case "worker_unavailable":
 				f.venue.subscribeErr, want = cause, domain.ErrUpstream
 			case "order_read_before_check":
@@ -138,7 +138,7 @@ func TestSendNotSentBeforeLink(t *testing.T) {
 				dest.Connection, want = c.ExternalID, domain.ErrUpstream
 			}
 			_, err = r.Send(testCtx, order.ExternalID, dest)
-			if !errors.Is(err, trading.ErrNotSent) || !errors.Is(err, want) {
+			if !errors.Is(err, trading.ErrNotSent) || (want == nil && !internalFailureAnswer(err)) || (want != nil && !errors.Is(err, want)) {
 				t.Fatalf("send=%v want ErrNotSent and %v", err, want)
 			}
 			_, found, err := f.st.GetVenueOrder(testCtx, order.ExternalID)

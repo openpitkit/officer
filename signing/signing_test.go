@@ -25,6 +25,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,6 +35,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 var _ fwsigning.Service = (*Service)(nil)
@@ -153,9 +155,20 @@ func newServiceWithKey(t *testing.T) (*Service, *fakeStore) {
 	return svc, st
 }
 
+func TestStoredSigningKeyMaterialFailureIsInternal(t *testing.T) {
+	st := newFakeStore()
+	st.keys["corrupt-key"] = domain.SigningKey{
+		KeyID: "corrupt-key", Alg: fwsigning.AlgEd25519, Active: true,
+		PrivateKey: make([]byte, ed25519.SeedSize-1),
+	}
+	if _, err := New(st); !internalFailureAnswer(err) {
+		t.Fatalf("stored private key = %v, want internal error", err)
+	}
+}
+
 func TestNewRejectsNilStore(t *testing.T) {
-	if _, err := New(nil); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("New with nil store = %v, want ErrInvalid", err)
+	if _, err := New(nil); !internalFailureAnswer(err) {
+		t.Fatalf("New with nil store = %v, want internal error", err)
 	}
 }
 
@@ -853,4 +866,12 @@ func TestVerifyOnlyActiveKeyFailsToLoad(t *testing.T) {
 	if _, err := New(st); !errors.Is(err, ErrNoPrivateMaterial) {
 		t.Fatalf("New with active verify-only key = %v, want ErrNoPrivateMaterial", err)
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

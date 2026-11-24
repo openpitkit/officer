@@ -306,8 +306,8 @@ type ControlPlane interface {
 	// ForceOrderReview commits or fills a held waiting order without pre-trade,
 	// then sends a trading order. MCP callers return ErrForbidden; non-waiting,
 	// non-held or node-lane blocked accounts return ErrConflict before writes.
-	// Invalid chain input returns ErrInvalid. Invalid review approvals return
-	// ErrApprovalRequired. Trading requires a runtime (ErrNotImplemented), the
+	// Changed stored chain input returns an internal error. Invalid approvals
+	// return ErrApprovalRequired. Trading requires a runtime (ErrNotImplemented), the
 	// stored binding and venue account (ErrForbidden) and a venue pre-check
 	// (ErrInvalid for refusal, ErrUpstream for upstream failure). Other venue
 	// and node errors pass through unchanged and prevent sending. Missing

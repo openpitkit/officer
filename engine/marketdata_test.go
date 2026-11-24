@@ -577,8 +577,8 @@ func TestOpenPitBuildFunc_FailedRebuildKeepsSharedServiceLive(t *testing.T) {
 	invalid.RateLimits = []domain.LimitRate{
 		rateLimit(domain.ScopeAccount, "missing", "", 1, time.Second),
 	}
-	if _, err := build(invalid); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("failed rebuild: got %v, want domain.ErrInvalid", err)
+	if _, err := build(invalid); !internalFailureAnswer(err) {
+		t.Fatalf("failed rebuild: got %v, want internal error", err)
 	}
 
 	instrument, err := instrumentFrom(

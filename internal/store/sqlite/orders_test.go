@@ -383,8 +383,8 @@ func TestCreateOrderRejectsUnknownDictionaryCode(t *testing.T) {
 	order.Source = domain.Source("unknown")
 
 	_, err := rs.CreateOrder(ctx, order)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("CreateOrder unknown source = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("CreateOrder unknown source = %v, want internal error", err)
 	}
 }
 
@@ -707,8 +707,8 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 	}
 	badAlg := unsigned
 	badAlg.Alg = "bogus"
-	if err := rs.PutEventAttestation(ctx, badAlgEvent.ExternalID, badAlg); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("got %v, want domain.ErrInvalid for the unknown algorithm", err)
+	if err := rs.PutEventAttestation(ctx, badAlgEvent.ExternalID, badAlg); !internalFailureAnswer(err) {
+		t.Fatalf("got %v, want internal error for the unknown algorithm", err)
 	}
 
 	badKeyEvent, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
@@ -2058,8 +2058,8 @@ func TestRecordOrderSettlementRejectsReportWithoutEventsAndRollsBack(t *testing.
 			Source: domain.SourceAPI, Side: created.Side, Quantity: "1", Price: "1",
 		},
 	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("RecordOrderSettlement = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("RecordOrderSettlement = %v, want internal error", err)
 	}
 	if got := countRows(t, ctx, r, "execution_report"); got != wantReports {
 		t.Fatalf("execution reports = %d, want unchanged %d", got, wantReports)
@@ -2760,8 +2760,8 @@ func TestRecordOrderSettlementRejectsMissingOrderHandle(t *testing.T) {
 			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "1000", HeldResult: "100"}},
 		},
 	}
-	if _, err := rs.RecordOrderSettlement(ctx, st); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("RecordOrderSettlement(zero order) = %v, want ErrInvalid", err)
+	if _, err := rs.RecordOrderSettlement(ctx, st); !internalFailureAnswer(err) {
+		t.Fatalf("RecordOrderSettlement(zero order) = %v, want internal error", err)
 	}
 	bal, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD")
 	if !ok {
@@ -3152,11 +3152,11 @@ func TestOrderUnknownFKCodeIsInvalid(t *testing.T) {
 		t.Fatalf("CreateOrder(unknown base asset) = %v, want ErrInvalid", err)
 	}
 
-	// Unknown principal code.
+	// The principal is stamped by the host, so an unknown one is internal.
 	bad = sampleOrder()
 	bad.Principal = "nobody"
-	if _, err := rs.CreateOrder(ctx, bad); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("CreateOrder(unknown principal) = %v, want ErrInvalid", err)
+	if _, err := rs.CreateOrder(ctx, bad); !internalFailureAnswer(err) {
+		t.Fatalf("CreateOrder(unknown principal) = %v, want internal error", err)
 	}
 
 	// A trade naming an unknown order is ErrNotFound (the order is addressed by

@@ -147,16 +147,16 @@ func (n *localNode) runAccountRuntimeChain(
 		}
 		if currency != nil && current.Currency != *currency {
 			state.err = fmt.Errorf(
-				"account %q currency changed from %q to %q: %w",
-				current.Code, *currency, current.Currency, domain.ErrInvalid,
+				"account %q currency changed from %q to %q",
+				current.Code, *currency, current.Currency,
 			)
 			return nil, state.err
 		}
 		if pnl != nil && !pnl.readCurrent && (current.Pnl != pnl.storedValue ||
 			current.PnlHaltReason != pnl.haltReason) {
 			state.err = fmt.Errorf(
-				"account %q pnl state changed before %s: %w",
-				current.Code, operation, domain.ErrInvalid,
+				"account %q pnl state changed before %s",
+				current.Code, operation,
 			)
 			return nil, state.err
 		}
@@ -166,8 +166,8 @@ func (n *localNode) runAccountRuntimeChain(
 			current.BlockCode != block.cause.Code ||
 			current.BlockDetails != block.cause.Details) {
 			state.err = fmt.Errorf(
-				"account %q block state changed before %s: %w",
-				current.Code, operation, domain.ErrInvalid,
+				"account %q block state changed before %s",
+				current.Code, operation,
 			)
 			return nil, state.err
 		}
@@ -447,8 +447,8 @@ func (n *localNode) validateGroupRuntime(
 			)
 		}
 		return param.Asset{}, fmt.Errorf(
-			"deleted group %q reappeared before %s: %w",
-			group.Code, operation, domain.ErrInvalid,
+			"deleted group %q reappeared before %s",
+			group.Code, operation,
 		)
 	}
 	validated := group
@@ -460,15 +460,15 @@ func (n *localNode) validateGroupRuntime(
 	}
 	if found && currency != nil && current.Currency != *currency {
 		return param.Asset{}, fmt.Errorf(
-			"group %q currency changed from %q to %q: %w",
-			current.Code, *currency, current.Currency, domain.ErrInvalid,
+			"group %q currency changed from %q to %q",
+			current.Code, *currency, current.Currency,
 		)
 	}
 	if found && block != nil && (current.Blocked != block.blocked ||
 		current.BlockReason != block.reason) {
 		return param.Asset{}, fmt.Errorf(
-			"group %q block state changed before %s: %w",
-			current.Code, operation, domain.ErrInvalid,
+			"group %q block state changed before %s",
+			current.Code, operation,
 		)
 	}
 	if currency == nil || *currency == "" {
@@ -539,8 +539,8 @@ func (n *localNode) validateGroupMembershipRuntime(
 	}
 	if current.GroupCode != expectedGroup {
 		return fmt.Errorf(
-			"account %q group changed from %q to %q: %w",
-			current.Code, expectedGroup, current.GroupCode, domain.ErrInvalid,
+			"account %q group changed from %q to %q",
+			current.Code, expectedGroup, current.GroupCode,
 		)
 	}
 	for _, group := range groups {
@@ -550,8 +550,8 @@ func (n *localNode) validateGroupMembershipRuntime(
 		}
 		if stored != group.stored {
 			return fmt.Errorf(
-				"group %q persistence changed before account membership: %w",
-				group.group.Code, domain.ErrInvalid,
+				"group %q persistence changed before account membership",
+				group.group.Code,
 			)
 		}
 		validated := group.group

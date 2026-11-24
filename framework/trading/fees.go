@@ -67,7 +67,7 @@ func (w *worker) intakeFees() {
 				return
 			}
 			if fee.ID == "" {
-				w.logFee(fee, "missing fee id or invalid fee status", domain.ErrInvalid)
+				w.logFee(fee, "missing fee id or invalid fee status", errors.New("trading: venue fee has no id"))
 				w.reportFeeSkip(fee, "missing fee id")
 				return
 			}
@@ -84,7 +84,7 @@ func (w *worker) intakeFees() {
 			return
 		}
 		if len(fees) == 0 || next != w.feeCursor {
-			w.log(slog.LevelError, "", "fee pagination did not advance to the last processed id", domain.ErrInvalid)
+			w.log(slog.LevelError, "", "fee pagination did not advance to the last processed id", errors.New("trading: inconsistent venue fee pagination"))
 			return
 		}
 	}
@@ -96,7 +96,7 @@ func (w *worker) intakeFee(ctx context.Context, reader FeeReader, fee Fee, accou
 		return w.reportFeeSkip(fee, fee.Detail)
 	}
 	if fee.Status != FeeExecuted {
-		w.logFee(fee, "missing fee id or invalid fee status", domain.ErrInvalid)
+		w.logFee(fee, "missing fee id or invalid fee status", fmt.Errorf("trading: unknown venue fee status %q", fee.Status))
 		return w.reportFeeSkip(fee, "invalid fee status")
 	}
 	id := domain.ExternalID(domain.TradingRuntimeIDPrefix + w.connection.ExternalID.String() + ":fee:" + fee.ID)
@@ -197,7 +197,7 @@ func (w *worker) feeAsset(ctx context.Context, reader FeeReader, venueAsset stri
 	for asset := range assets {
 		return asset, true, nil
 	}
-	return "", true, domain.ErrInvalid
+	return "", true, errors.New("trading: resolved fee asset disappeared")
 }
 
 func (w *worker) logFee(fee Fee, detail string, err error) {

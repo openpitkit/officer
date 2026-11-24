@@ -123,20 +123,20 @@ type Service struct {
 // Zero concrete business types is valid and produces no synthetic events.
 func New(st Store, types []Type, channels []Channel) (*Service, error) {
 	if st == nil {
-		return nil, fmt.Errorf("alerts: missing store: %w", domain.ErrInvalid)
+		return nil, fmt.Errorf("alerts: missing store")
 	}
 	s := &Service{store: st, types: make(map[string]Type)}
 	for _, typ := range types {
 		if !validName(typ.Name) || typ.Validate == nil || len(typ.Actions) == 0 {
-			return nil, fmt.Errorf("alerts: invalid type registration: %w", domain.ErrInvalid)
+			return nil, fmt.Errorf("alerts: invalid type registration")
 		}
 		if _, exists := s.types[typ.Name]; exists {
-			return nil, fmt.Errorf("alerts: duplicate type %q: %w", typ.Name, domain.ErrInvalid)
+			return nil, fmt.Errorf("alerts: duplicate type %q", typ.Name)
 		}
 		actions := make(map[string]Action, len(typ.Actions))
 		for name, action := range typ.Actions {
 			if !validName(name) || action.Validate == nil || action.Resolve == nil {
-				return nil, fmt.Errorf("alerts: invalid action registration: %w", domain.ErrInvalid)
+				return nil, fmt.Errorf("alerts: invalid action registration")
 			}
 			actions[name] = action
 		}
@@ -147,7 +147,7 @@ func New(st Store, types []Type, channels []Channel) (*Service, error) {
 	seen := map[string]bool{"panel": true}
 	for _, ch := range channels {
 		if !validName(ch.Name) || ch.Deliver == nil || seen[ch.Name] {
-			return nil, fmt.Errorf("alerts: invalid channel registration: %w", domain.ErrInvalid)
+			return nil, fmt.Errorf("alerts: invalid channel registration")
 		}
 		seen[ch.Name] = true
 		s.channels = append(s.channels, ch)
@@ -164,23 +164,23 @@ func personalCaller(ctx context.Context) (domain.Caller, error) {
 		return domain.Caller{}, err
 	}
 	if err := domain.ValidateSource(c.Source); err != nil {
-		return domain.Caller{}, err
+		return domain.Caller{}, domain.Internal(err)
 	}
 	if c.Source == domain.SourceSystem || strings.TrimSpace(c.Principal) == "" {
-		return domain.Caller{}, fmt.Errorf("alerts: trusted user identity required: %w", domain.ErrInvalid)
+		return domain.Caller{}, fmt.Errorf("alerts: trusted user identity required")
 	}
 	return c, nil
 }
 func (s *Service) typ(e Event) (Type, error) {
 	t, ok := s.types[e.Type]
 	if !ok {
-		return Type{}, fmt.Errorf("alerts: unknown type %q: %w", e.Type, domain.ErrInvalid)
+		return Type{}, fmt.Errorf("alerts: unknown type %q", e.Type)
 	}
 	if !json.Valid(e.Payload) {
-		return Type{}, fmt.Errorf("alerts: malformed payload: %w", domain.ErrInvalid)
+		return Type{}, fmt.Errorf("alerts: malformed payload")
 	}
 	if err := t.Validate(e.Payload); err != nil {
-		return Type{}, fmt.Errorf("alerts: invalid payload: %w", errors.Join(domain.ErrInvalid, err))
+		return Type{}, fmt.Errorf("alerts: invalid payload: %w", domain.Internal(err))
 	}
 	return t, nil
 }
@@ -218,19 +218,19 @@ func (s *Service) Publish(ctx context.Context, e Event) error {
 		return err
 	}
 	if err := domain.ValidateSource(caller.Source); err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if caller.Source != domain.SourceSystem && strings.TrimSpace(caller.Principal) == "" {
-		return fmt.Errorf("alerts: missing producer identity: %w", domain.ErrInvalid)
+		return fmt.Errorf("alerts: missing producer identity")
 	}
 	if err := domain.ValidateExternalID(e.ID); err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if e.At.IsZero() {
-		return fmt.Errorf("alerts: missing timestamp: %w", domain.ErrInvalid)
+		return fmt.Errorf("alerts: missing timestamp")
 	}
 	if err := domain.ValidateSource(e.Source); err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if _, err := s.typ(e); err != nil {
 		return err
@@ -360,7 +360,7 @@ func (s *Service) Resolve(ctx context.Context, id, name string, input json.RawMe
 			return Resolution{}, store.AuditEntry{}, err
 		}
 		if !json.Valid(result) {
-			return Resolution{}, store.AuditEntry{}, fmt.Errorf("alerts: invalid handler result: %w", domain.ErrInvalid)
+			return Resolution{}, store.AuditEntry{}, fmt.Errorf("alerts: invalid handler result")
 		}
 		resolution := Resolution{Event: e, At: time.Now().UTC(), Actor: caller.Principal, Source: caller.Source, Action: name, Result: result}
 		audit := store.AuditEntry{Actor: caller.Principal, Source: caller.Source, Action: domain.AuditActionResolveAlert, Detail: domain.NewAuditDetail(domain.AuditDetailResolveAlert, domain.AuditDetailParams{"alert": id, "action": name, "result": string(result)})}

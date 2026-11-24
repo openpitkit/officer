@@ -130,7 +130,11 @@ func readTestExecutionPolicy(ctx context.Context, q sqlQueryer, id int64, connec
 		}
 		return state, fmt.Errorf("store: read test policy: %w", err)
 	}
-	return decodeStoredTestExecutionPolicy(state.Revision, rules)
+	decoded, err := decodeStoredTestExecutionPolicy(state.Revision, rules)
+	if err != nil {
+		return domain.TestExecutionPolicyState{}, domain.Internal(err)
+	}
+	return decoded, nil
 }
 
 func decodeStoredTestExecutionPolicy(revision uint64, rules string) (domain.TestExecutionPolicyState, error) {

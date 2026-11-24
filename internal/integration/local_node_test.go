@@ -57,6 +57,27 @@ func newLocalNodeAt(
 	t *testing.T, path string, build fwengine.BuildFunc, providers ...trading.Provider,
 ) (node.Node, store.RealmStore) {
 	t.Helper()
+	return newLocalNodeAtOnFatal(t, path, build,
+		func(err error) { t.Errorf("unexpected fatal shutdown: %v", err) }, providers...)
+}
+
+// newLocalNodeAtOnFatal is newLocalNodeAt for a test that drives the node into
+// a persistence failure after the engine committed, which shuts the node down;
+// onFatal receives that shutdown.
+func newLocalNodeAtOnFatal(
+	t *testing.T, path string, build fwengine.BuildFunc, onFatal func(error), providers ...trading.Provider,
+) (node.Node, store.RealmStore) {
+	t.Helper()
+	target, realm, _ := newLocalNodeStoreAt(t, path, build, onFatal, providers...)
+	return target, realm
+}
+
+// newLocalNodeStoreAt is newLocalNodeAtOnFatal that also returns the store the
+// node runs over, for a test that composes a component the host builds from it.
+func newLocalNodeStoreAt(
+	t *testing.T, path string, build fwengine.BuildFunc, onFatal func(error), providers ...trading.Provider,
+) (node.Node, store.RealmStore, store.Store) {
+	t.Helper()
 	ctx := systemCtx()
 	masterKey, err := secret.ParseMasterKey("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	if err != nil {
@@ -94,7 +115,7 @@ func newLocalNodeAt(
 		domain.DefaultRealm,
 		st,
 		build,
-		func(err error) { t.Errorf("unexpected fatal shutdown: %v", err) },
+		onFatal,
 	)
 	if err != nil {
 		_ = st.Close()
@@ -105,7 +126,7 @@ func newLocalNodeAt(
 	if err != nil {
 		t.Fatalf("bind the node store to its realm: %v", err)
 	}
-	return target, realm
+	return target, realm, st
 }
 
 func TestLocalNode_RestoreBackupNarrowedGeneralSettingsWithTradingConnection(t *testing.T) {

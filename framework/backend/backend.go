@@ -101,6 +101,8 @@ type TradingRuntime interface {
 	VerifySymbol(context.Context, domain.TradingConnection, string) (trading.SymbolVerification, error)
 	SearchSymbols(context.Context, domain.TradingConnection, string) ([]trading.SymbolMatch, error)
 	ConnectionStatuses() map[domain.ExternalID]trading.ConnectionStatus
+	// PreCheck marks venue request failures with domain.ErrUpstream and
+	// returns internal failures and domain refusals unchanged.
 	PreCheck(context.Context, domain.Order, domain.TradingDestination) error
 	Send(context.Context, domain.ExternalID, domain.TradingDestination) (domain.VenueOrder, error)
 	Restart() error

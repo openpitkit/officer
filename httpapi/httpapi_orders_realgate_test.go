@@ -51,6 +51,7 @@ import (
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	appsigning "go.openpit.dev/officer/signing"
 )
@@ -515,8 +516,10 @@ func TestSubmitOrder_RealStoreRequiresRegisteredCallerPrincipal(t *testing.T) {
 			Principal: missingPrincipal,
 		},
 	)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("missing-principal submission error = %v, want ErrInvalid", err)
+	// The principal is stamped from the authenticated caller, not client
+	// input: an unknown one is a host wiring failure, never bad client input.
+	if !internalFailureAnswer(err) {
+		t.Fatalf("missing-principal submission error = %v, want an internal failure", err)
 	}
 	if _, getErr := realm.GetOrder(ctx, order.ExternalID); !errors.Is(
 		getErr,
@@ -1361,3 +1364,11 @@ func (e *realGateEngine) Stop() {
 type realGateSink struct{}
 
 func (realGateSink) Push(marketdata.QuoteUpdate) error { return nil }
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
+}

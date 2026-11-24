@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,7 @@ import (
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/secret"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/access"
 	sqlitedriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -270,8 +272,8 @@ func TestAccessReplaceToken(t *testing.T) {
 		t.Fatal("ReplaceToken(unknown kind) returned nil")
 	}
 	assertNoAccessSecret(t, err)
-	if err := store.ReplaceToken(ctx, access.TokenAPI, ""); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ReplaceToken(empty value) = %s, want ErrInvalid", redactAccess(t, err))
+	if err := store.ReplaceToken(ctx, access.TokenAPI, ""); !internalFailureAnswer(err) {
+		t.Fatalf("ReplaceToken(empty value) = %s, want internal error", redactAccess(t, err))
 	}
 	assertSnapshot(t, store.Snapshot(), replaced)
 	assertStoredCredential(t, store, apiTokenKind, otherAPIToken)
@@ -1434,4 +1436,12 @@ func assertNoAccessSecret(t *testing.T, err error) {
 			t.Errorf("an access store error carries a secret: %s", redactAccess(t, err))
 		}
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

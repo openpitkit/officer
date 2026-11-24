@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/trading"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 type feeVenue struct {
@@ -165,6 +167,71 @@ func defaultFeeAccountLogs(f *fixture) []string {
 		}
 	}
 	return lines
+}
+
+type inconsistentFeePagination struct{ *feeConnector }
+
+func (c inconsistentFeePagination) Fees(context.Context, time.Time, string) ([]trading.Fee, string, error) {
+	return nil, "unseen-fee", nil
+}
+
+func TestFeeProducerFailuresAreInternal(t *testing.T) {
+	for _, defect := range []string{"missing id", "status", "pagination"} {
+		t.Run(defect, func(t *testing.T) {
+			f, venue := newFeeFixture(t)
+			fee := postedFee("fee", "USD", "-1")
+			switch defect {
+			case "missing id":
+				fee.ID = ""
+			case "status":
+				fee.Status = "unknown"
+			}
+			venue.fees = []trading.Fee{fee}
+			if defect == "pagination" {
+				must(t, f.registry.Register(trading.Provider{
+					Type: "fake", UnlinkedFees: true,
+					Build: func(build trading.BuildContext) (trading.Connector, error) {
+						connector, err := venue.build(build)
+						if err != nil {
+							return nil, err
+						}
+						return inconsistentFeePagination{&feeConnector{fakeConnector: connector.(*fakeConnector), fees: venue}}, nil
+					},
+				}))
+			}
+			captured := make(chan error, 128)
+			logger := slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{
+				Level: slog.LevelDebug,
+				ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+					if attr.Key == "error" {
+						if err, ok := attr.Value.Any().(error); ok {
+							captured <- err
+						}
+					}
+					return attr
+				},
+			}))
+			r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, f.adjustmentSink, f.feeSkipSink, logger)
+			must(t, err)
+			f.runtime = r
+			must(t, r.Start(testCtx))
+			defer r.Stop()
+			f.send(f.submit("1"))
+			f.venue.push(trading.Event{Kind: trading.EventConnected})
+			f.flush()
+			count := len(captured)
+			if count == 0 {
+				t.Fatal("broken venue fee producer produced no error")
+			}
+			for range count {
+				err := <-captured
+				if !internalFailureAnswer(err) {
+					t.Errorf("fee producer error = %v, want internal error", err)
+				}
+			}
+			feeBalance(t, f, "USD", "998")
+		})
+	}
 }
 
 func TestFeeIntakeExactAssetsAndReplay(t *testing.T) {
@@ -478,7 +545,7 @@ func TestAppliedFeeReplayAfterTargetOrMappingRemoval(t *testing.T) {
 func TestRuntimeRequiresFeeSkipSink(t *testing.T) {
 	f := newFixture(t)
 	r, err := trading.NewRuntime(f.registry, f.st, nil, f.sink, f.adjustmentSink, nil, slog.Default())
-	if r != nil || !errors.Is(err, domain.ErrInvalid) {
+	if r != nil || !internalFailureAnswer(err) {
 		t.Fatalf("runtime without fee skip sink = %v, err=%v", r, err)
 	}
 }
@@ -1072,4 +1139,12 @@ func TestVenueEventRequiresClientOrderID(t *testing.T) {
 	if warnings != 2 || unknown != 2 {
 		t.Fatalf("event logs: warnings=%d unknown=%d, want two of each", warnings, unknown)
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

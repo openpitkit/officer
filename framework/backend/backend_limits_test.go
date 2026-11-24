@@ -150,7 +150,7 @@ func TestServiceSpotFundsLimitModeRequiresCaller(t *testing.T) {
 		Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
 	})
 	for _, err := range []error{readErr, writeErr} {
-		if err == nil || err.Error() != wantErr.Error() || !errors.Is(err, domain.ErrInvalid) {
+		if err == nil || err.Error() != wantErr.Error() || errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("error = %v, want auth error %v", err, wantErr)
 		}
 	}

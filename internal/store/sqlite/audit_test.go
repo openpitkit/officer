@@ -24,7 +24,6 @@ package sqlite
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -303,8 +302,8 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 			entry := tc.entry
 			entry.Source = domain.SourcePanel
 			err := rs.AppendAudit(ctx, entry)
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("AppendAudit error = %v, want ErrInvalid", err)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("AppendAudit error = %v, want internal error", err)
 			}
 			rows, listErr := rs.ListAudit(ctx, 10)
 			if listErr != nil {
@@ -337,8 +336,8 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 			Source: domain.SourcePanel,
 		},
 	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("got %v, want domain.ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("got %v, want internal error", err)
 	}
 	rows, listErr := rs.ListAudit(ctx, 10)
 	if listErr != nil {
@@ -365,8 +364,8 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 			Source: domain.SourcePanel,
 		},
 	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("AppendAuditBatch metadata error = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("AppendAuditBatch metadata error = %v, want internal error", err)
 	}
 	rows, listErr = rs.ListAudit(ctx, 10)
 	if listErr != nil {

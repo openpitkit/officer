@@ -210,9 +210,8 @@ func validatePersistedOrderChainInput(
 		return nil
 	}
 	return fmt.Errorf(
-		"store: persisted order %s does not match chain input: %w",
+		"store: persisted order %s does not match chain input",
 		field,
-		domain.ErrInvalid,
 	)
 }
 
@@ -1349,11 +1348,10 @@ func (n *localNode) confirmOrder(
 		}
 		if detail.Order.Account != state.account.Code {
 			state.err = fmt.Errorf(
-				"order %q account changed from %q to %q: %w",
+				"order %q account changed from %q to %q",
 				order,
 				state.account.Code,
 				detail.Order.Account,
-				domain.ErrInvalid,
 			)
 			return state.err
 		}
@@ -1550,7 +1548,7 @@ func (n *localNode) cancelOrderReport(
 		)
 		if err != nil {
 			state.err = fmt.Errorf(
-				"build %s reservation remainder: %w", operation.name, err,
+				"build %s reservation remainder: %w", operation.name, domain.Internal(err),
 			)
 			return nil, state.err
 		}
@@ -1560,7 +1558,7 @@ func (n *localNode) cancelOrderReport(
 		)
 		if err != nil {
 			state.err = fmt.Errorf(
-				"apply %s execution report: %w", operation.name, err,
+				"apply %s execution report: %w", operation.name, domain.Internal(err),
 			)
 			return nil, state.err
 		}
