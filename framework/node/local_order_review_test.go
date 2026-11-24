@@ -736,6 +736,117 @@ func reviewTestAudit(t *testing.T, n *localNode, action domain.AuditAction) []do
 	return rows
 }
 
+func TestLocalNode_ConfirmOrderReviewDecisionPhases(t *testing.T) {
+	testConfirmReviewDecisionPhases(t, domain.SubmitModeHold)
+}
+
+func TestLocalNode_ConfirmImmediateReviewDecisionPhases(t *testing.T) {
+	testConfirmReviewDecisionPhases(t, domain.SubmitModeImmediate)
+}
+
+func testConfirmReviewDecisionPhases(t *testing.T, mode string) {
+	t.Helper()
+	for _, phase := range []string{
+		"uncancelled", "already cancelled", "cancelled before enqueue",
+		"cancelled while queued", "cancelled at decision",
+		"rejected, cancelled at decision",
+	} {
+		t.Run(phase, func(t *testing.T) {
+			n, eng, waiting := newOrderReviewTestNode(t, mode)
+			before := reviewTestDetail(t, n, waiting.ExternalID)
+			n.realm = &cancellationAwareOrderRealm{RealmStore: n.realm}
+			eng.submitOutcomes = []engine.BalanceOutcome{{
+				Asset: "AAPL", Outcome: domain.AdjustmentOutcomeAccepted{
+					IncomingDelta: "1", IncomingResult: "1", BalanceResult: "0", HeldResult: "0",
+				},
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			switch phase {
+			case "already cancelled":
+				cancel()
+			case "cancelled before enqueue":
+				eng.afterOrderModel = cancel
+			case "cancelled at decision":
+				eng.afterSubmitDecision = cancel
+			case "rejected, cancelled at decision":
+				eng.submitReject = &domain.OrderReject{Code: "limit", Scope: "account", Policy: "order-size"}
+				eng.afterSubmitDecision = cancel
+			}
+			var fatalErr error
+			n.fatal = func(err error) { fatalErr = err }
+			var order domain.Order
+			var verdict domain.Verdict
+			var err error
+			run := func() {
+				if mode == domain.SubmitModeHold {
+					var result engine.OrderResult
+					order, result, err = n.ConfirmOrderReview(ctx, waiting.ExternalID, testCaller, nil)
+					verdict = result.Verdict
+				} else {
+					var result engine.ImmediateResult
+					order, result, err = n.ConfirmImmediateReview(ctx, waiting.ExternalID, testCaller, nil)
+					verdict = result.Verdict
+				}
+			}
+			if phase == "cancelled while queued" {
+				runCancelledQueuedDecision(t, eng.fakeEngine, waiting, cancel, run)
+			} else {
+				run()
+			}
+			if fatalErr != nil {
+				t.Fatalf("client cancellation stopped node: %v", fatalErr)
+			}
+			detail := reviewTestDetail(t, n, waiting.ExternalID)
+			rows := reviewTestAudit(t, n, domain.AuditActionConfirmOrderReview)
+			executions := reviewTestAudit(t, n, domain.AuditActionExecutionReport)
+			if phase == "already cancelled" || phase == "cancelled before enqueue" || phase == "cancelled while queued" {
+				if phase == "cancelled before enqueue" && !errors.Is(eng.queueObserver.submitCancellation(), context.Canceled) {
+					t.Fatal("request was not refused by the SDK queue")
+				}
+				if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(before, detail) || len(rows) != 0 || len(executions) != 0 {
+					t.Fatalf("cancelled confirmation: err=%v detail=%+v audit=%+v/%+v", err, detail, rows, executions)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("decision must finish despite client cancellation: %v", err)
+			}
+			if phase == "rejected, cancelled at decision" {
+				if verdict != domain.VerdictReject || order.Status != domain.OrderStatusAwaitingReview || order.Leaves != waiting.Leaves || order.ReservedQuantity != waiting.ReservedQuantity || !reflect.DeepEqual(order, detail.Order) || !reflect.DeepEqual(detail.Review, before.Review) {
+					t.Fatalf("rejected confirmation: order=%+v verdict=%s detail=%+v", order, verdict, detail)
+				}
+				assertDecisionPhaseEvents(t, detail.Events, []domain.OrderEventType{
+					domain.OrderEventSubmitted, domain.OrderEventPreTradeReview,
+					domain.OrderEventPreTradeRejected,
+				})
+				if !reflect.DeepEqual(detail.Events[2].Payload.Rejects, []domain.OrderReject{*eng.submitReject}) || len(rows) != 1 || rows[0].OrderID != waiting.ExternalID.String() || rows[0].Verdict != domain.VerdictReject || rows[0].RejectCode != eng.submitReject.Code || rows[0].Detail.Code != domain.AuditDetailConfirmOrderReviewRejected || len(executions) != 0 {
+					t.Fatalf("rejection history=%+v audit=%+v/%+v", detail.Events, rows, executions)
+				}
+				return
+			}
+			wantStatus := domain.OrderStatusCommitted
+			wantEvents := []domain.OrderEventType{
+				domain.OrderEventSubmitted, domain.OrderEventPreTradeReview,
+				domain.OrderEventPreTradeAccepted, domain.OrderEventCommitted,
+			}
+			wantExecutions := 0
+			if mode == domain.SubmitModeImmediate {
+				wantStatus = domain.OrderStatusFilled
+				wantEvents = append(wantEvents, domain.OrderEventFill)
+				wantExecutions = 1
+			}
+			if order.Status != wantStatus || verdict != domain.VerdictAccept || detail.Review != nil || !reflect.DeepEqual(order, detail.Order) {
+				t.Fatalf("confirmed order=%+v verdict=%s detail=%+v, want %s without review", order, verdict, detail, wantStatus)
+			}
+			assertDecisionPhaseEvents(t, detail.Events, wantEvents)
+			if len(rows) != 1 || rows[0].OrderID != waiting.ExternalID.String() || rows[0].Verdict != domain.VerdictAccept || len(executions) != wantExecutions {
+				t.Fatalf("confirmation audit=%+v execution audit=%+v", rows, executions)
+			}
+		})
+	}
+}
+
 func TestLocalNode_OrderReviewAccept(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate} {

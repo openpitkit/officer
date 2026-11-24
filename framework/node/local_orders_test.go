@@ -273,7 +273,7 @@ func (e *fakeEngine) AsyncEngine() *asyncengine.AsyncEngine {
 	}
 	async, err := asyncengine.NewBuilder(
 		&fakeOrderChainDriver{owner: e, admin: admin, trading: trading},
-	).WithStopUnderlying(func() {
+	).WithObserver(&e.queueObserver).WithStopUnderlying(func() {
 		admin.Stop()
 		trading.Stop()
 	}).Dynamic().MaxQueues(0).Build()
@@ -1075,6 +1075,9 @@ func (e *fakeEngine) OrderModel(
 		}
 		operation.SetPrice(price)
 	}
+	if e.afterOrderModel != nil {
+		e.afterOrderModel()
+	}
 	return order, nil
 }
 
@@ -1423,6 +1426,9 @@ func (e *fakeEngine) recordChainSubmit(o domain.Order) error {
 	if e.submitRelease != nil {
 		<-e.submitRelease
 	}
+	if e.afterSubmitDecision != nil {
+		e.afterSubmitDecision()
+	}
 	return nil
 }
 
@@ -1601,6 +1607,9 @@ func (e *fakeEngine) SettleImmediate(
 	prepared engine.ImmediatePreparation,
 	_ pretrade.PostTradeResult,
 ) (engine.ImmediateResult, error) {
+	if e.settleImmediateErr != nil {
+		return engine.ImmediateResult{}, e.settleImmediateErr
+	}
 	in := prepared.ReportInput
 	request := domain.ExecutionReportRequestFromInput(in)
 	persistence := engine.ExecutionReportPersistence{
@@ -4058,6 +4067,203 @@ func TestLocalNode_CheckOrderCancellationWhileLaneOccupied(t *testing.T) {
 	}
 	if len(eng.checkProbes) != 0 {
 		t.Fatalf("engine dry-runs = %d, want none", len(eng.checkProbes))
+	}
+}
+
+func TestLocalNode_SubmitOrderDecisionPhases(t *testing.T) {
+	testSubmissionDecisionPhases(t, false)
+}
+
+func TestLocalNode_SubmitImmediateDecisionPhases(t *testing.T) {
+	testSubmissionDecisionPhases(t, true)
+}
+
+func testSubmissionDecisionPhases(t *testing.T, immediate bool) {
+	t.Helper()
+	cases := []string{
+		"uncancelled", "already cancelled", "cancelled before enqueue",
+		"cancelled while queued", "cancelled at decision",
+		"rejected, cancelled at decision",
+	}
+	if immediate {
+		cases = append(cases, "execution report failure", "settlement adapter failure")
+	}
+	for _, phase := range cases {
+		t.Run(phase, func(t *testing.T) {
+			eng := newFakeEngine()
+			n, realm := newTestNode(t, eng)
+			n.realm = &cancellationAwareOrderRealm{RealmStore: realm}
+			t.Cleanup(func() { _ = n.Close() })
+			background := context.Background()
+			if _, err := n.CreateAccount(background, testAccount("phase-account"), testCaller); err != nil {
+				t.Fatal(err)
+			}
+			input := domain.Order{
+				ExternalID: "phase-order", Account: "phase-account",
+				BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+				AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",
+			}
+			if !immediate {
+				eng.submitOutcomes = []engine.BalanceOutcome{{
+					Asset: "AAPL", Outcome: domain.AdjustmentOutcomeAccepted{
+						IncomingDelta: "1", IncomingResult: "1", BalanceResult: "0", HeldResult: "0",
+					},
+				}}
+			}
+			ctx, cancel := context.WithCancel(background)
+			defer cancel()
+			switch phase {
+			case "already cancelled":
+				cancel()
+			case "cancelled before enqueue":
+				eng.afterOrderModel = cancel
+			case "cancelled at decision":
+				eng.afterSubmitDecision = cancel
+			case "rejected, cancelled at decision":
+				eng.submitReject = &domain.OrderReject{Code: "limit", Scope: "account", Policy: "order-size"}
+				eng.afterSubmitDecision = cancel
+			case "execution report failure":
+				eng.failExecReport = true
+			case "settlement adapter failure":
+				eng.settleImmediateErr = errors.New("adapter could not materialize applied report")
+			}
+			var fatalErr error
+			n.fatal = func(err error) { fatalErr = err }
+			var order domain.Order
+			var err error
+			run := func() {
+				if immediate {
+					order, _, err = n.SubmitImmediate(ctx, input, domain.MissingAccountReject, testCaller)
+				} else {
+					order, err = n.SubmitOrder(ctx, input, domain.MissingAccountReject, testCaller)
+				}
+			}
+			if phase == "cancelled while queued" {
+				runCancelledQueuedDecision(t, eng, input, cancel, run)
+			} else {
+				run()
+			}
+			failedReport := phase == "settlement adapter failure" || phase == "execution report failure"
+			if failedReport {
+				if fatalErr == nil || !strings.Contains(fatalErr.Error(), "post-engine persistence failure") {
+					t.Fatalf("fatal error = %v, want post-engine persistence failure; returned %v", fatalErr, err)
+				}
+				var fatalMutation internalPostCommitNodeMutationFailure
+				if !errors.As(err, &fatalMutation) || !strings.Contains(err.Error(), "the execution report failed and the fill is unsettled") || !strings.Contains(err.Error(), "manual reconciliation") {
+					t.Fatalf("returned error = %v, want fatal mutation with reconciliation framing", err)
+				}
+				cause := "exec report failed"
+				if eng.settleImmediateErr != nil {
+					cause = eng.settleImmediateErr.Error()
+				}
+				if !strings.Contains(err.Error(), cause) {
+					t.Fatalf("returned error = %v, want cause %q", err, cause)
+				}
+			} else if fatalErr != nil {
+				t.Fatalf("client cancellation stopped node: %v", fatalErr)
+			}
+			detail, readErr := realm.GetOrder(background, input.ExternalID)
+			rows := reviewTestAudit(t, n, domain.AuditActionSubmitOrder)
+			executions := reviewTestAudit(t, n, domain.AuditActionExecutionReport)
+			if phase == "already cancelled" || phase == "cancelled before enqueue" || phase == "cancelled while queued" || failedReport {
+				if phase == "cancelled before enqueue" && !errors.Is(eng.queueObserver.submitCancellation(), context.Canceled) {
+					t.Fatal("request was not refused by the SDK queue")
+				}
+				if !failedReport && !errors.Is(err, context.Canceled) {
+					t.Fatalf("submission error = %v, want cancellation", err)
+				}
+				if !errors.Is(readErr, domain.ErrNotFound) || len(rows) != 0 || len(executions) != 0 {
+					t.Fatalf("unrecorded submission: detail=%+v err=%v audit=%+v/%+v", detail, readErr, rows, executions)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("decision must finish despite client cancellation: %v", err)
+			}
+			if phase == "rejected, cancelled at decision" {
+				if readErr != nil || order.Status != domain.OrderStatusRejected || order.Leaves != "0" || !reflect.DeepEqual(order, detail.Order) {
+					t.Fatalf("rejected submission: order=%+v detail=%+v err=%v", order, detail, readErr)
+				}
+				assertDecisionPhaseEvents(t, detail.Events, []domain.OrderEventType{
+					domain.OrderEventSubmitted, domain.OrderEventPreTradeRejected,
+				})
+				if !reflect.DeepEqual(detail.Events[1].Payload.Rejects, []domain.OrderReject{*eng.submitReject}) || len(rows) != 1 || rows[0].OrderID != input.ExternalID.String() || rows[0].Verdict != domain.VerdictReject || rows[0].RejectCode != eng.submitReject.Code || len(executions) != 0 {
+					t.Fatalf("rejection history=%+v audit=%+v/%+v", detail.Events, rows, executions)
+				}
+				return
+			}
+			wantStatus := domain.OrderStatusCommitted
+			wantEvents := []domain.OrderEventType{
+				domain.OrderEventSubmitted, domain.OrderEventPreTradeAccepted, domain.OrderEventCommitted,
+			}
+			wantExecutions := 0
+			if immediate {
+				wantStatus = domain.OrderStatusFilled
+				wantEvents = append(wantEvents, domain.OrderEventFill)
+				wantExecutions = 1
+			}
+			if readErr != nil || order.Status != wantStatus || !reflect.DeepEqual(order, detail.Order) {
+				t.Fatalf("persisted order = %+v, err=%v; returned %+v, want %s", detail, readErr, order, wantStatus)
+			}
+			assertDecisionPhaseEvents(t, detail.Events, wantEvents)
+			if len(rows) != 1 || rows[0].OrderID != input.ExternalID.String() || rows[0].Verdict != domain.VerdictAccept || len(executions) != wantExecutions {
+				t.Fatalf("decision audit=%+v execution audit=%+v", rows, executions)
+			}
+		})
+	}
+}
+
+// runCancelledQueuedDecision cancels only after the SDK accepted the request.
+func runCancelledQueuedDecision(
+	t *testing.T, eng *fakeEngine, order domain.Order,
+	cancel context.CancelFunc, run func(),
+) {
+	t.Helper()
+	source, err := eng.OrderModel(order, engine.ReviewFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseLane := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseLane()
+	blocker := asyncengine.Chain(source, func(context.Context) (struct{}, error) {
+		close(entered)
+		<-release
+		return struct{}{}, nil
+	}).Run(context.Background(), eng.AsyncEngine())
+	<-entered
+	enqueued := eng.queueObserver.observeNextEnqueue()
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		run()
+	}()
+	select {
+	case <-enqueued:
+	case <-finished:
+		t.Fatal("request returned before being enqueued")
+	}
+	cancel()
+	releaseLane()
+	if _, err := blocker.Await(context.Background()); err != nil {
+		t.Fatalf("blocking chain: %v", err)
+	}
+	<-finished
+	if err := eng.queueObserver.submitCancellation(); err != nil {
+		t.Fatalf("engine queue refused the request before admission: %v", err)
+	}
+}
+
+func assertDecisionPhaseEvents(t *testing.T, events []domain.OrderEvent, want []domain.OrderEventType) {
+	t.Helper()
+	var got []domain.OrderEventType
+	for _, event := range events {
+		got = append(got, event.Type)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("persisted events = %v, want %v", got, want)
 	}
 }
 
