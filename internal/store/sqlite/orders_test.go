@@ -792,8 +792,10 @@ func TestOrderEventsRoundTrip(t *testing.T) {
 }
 
 func TestTradeVenueTradeIDRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, venueTradeID := range []string{"", "venue-trade-42"} {
 		t.Run("venue_trade_id="+venueTradeID, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedOrderFixtures(t)
 			order, err := rs.CreateOrder(ctx, sampleOrder())
 			if err != nil {

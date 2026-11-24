@@ -455,6 +455,7 @@ func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
 }
 
 func TestMigrateTradeVenueTradeID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newRealmStore(t, domain.DefaultRealm)
 	db := rs.(*realmStore).rawDB()

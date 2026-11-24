@@ -73,7 +73,7 @@ func (h *coinbaseRuntimeTest) must(err error) {
 
 func newCoinbaseRuntimeTest(t *testing.T) *coinbaseRuntimeTest {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx := t.Context()
 	h := &coinbaseRuntimeTest{t: t, ctx: ctx, sockets: make(chan *websocket.Conn, 4), ready: true, order: coinbaseRESTOrder(), fills: []any{}}
 	h.order["filled_size"] = "0"
 	server := httptest.NewServer(http.HandlerFunc(h.serve))
@@ -89,7 +89,6 @@ func newCoinbaseRuntimeTest(t *testing.T) *coinbaseRuntimeTest {
 	h.n, _, err = node.NewLocalNode(ctx, domain.DefaultRealm, st, engine.NewOpenPitEngineBuildFunc(), func(err error) { t.Errorf("fatal node shutdown: %v", err) })
 	h.must(err)
 	t.Cleanup(func() {
-		cancel()
 		if h.runtime != nil {
 			h.runtime.Stop()
 		}
@@ -235,12 +234,8 @@ func (h *coinbaseRuntimeTest) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *coinbaseRuntimeTest) nextSocket() {
-	select {
-	case h.stream = <-h.sockets:
-		h.sequence = 1
-	case <-h.ctx.Done():
-		h.t.Fatal("runtime stream missing")
-	}
+	h.stream = <-h.sockets
+	h.sequence = 1
 }
 
 func (h *coinbaseRuntimeTest) submit() domain.Order {
@@ -280,7 +275,7 @@ func (h *coinbaseRuntimeTest) push() {
 
 func (h *coinbaseRuntimeTest) wait(order domain.Order, status domain.OrderStatus, count int) {
 	h.t.Helper()
-	waitForTrading(h.t, "Coinbase runtime booking", func() bool {
+	waitForTrading(func() bool {
 		detail, err := h.realm.GetOrder(h.ctx, order.ExternalID)
 		h.must(err)
 		return detail.Order.Status == status && len(detail.Trades) == count
