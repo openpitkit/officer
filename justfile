@@ -206,11 +206,8 @@ check-semgrep: install-python-tools
     "{{ semgrep }}" --test --config checks/semgrep/ --metrics=off --disable-version-check checks/semgrep/testdata/
 
 # Lint all.
-lint-all: frontend-ci-install _lint-all-parallel
-
-# The install runs before this fan-out: lint-go walks web/node_modules, which npm ci rebuilds.
 [parallel]
-_lint-all-parallel: lint-go lint-js lint-python check-semgrep
+lint-all: lint-go lint-js lint-python check-semgrep
 
 # Lint all against a local Pit checkout.
 lint-all-dev pit_checkout="../pit": (lint-all-release-dev pit_checkout)

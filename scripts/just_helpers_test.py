@@ -21,15 +21,19 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import errno
 import io
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import types
 import unittest
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
@@ -708,6 +712,15 @@ class RecipeTestCase(unittest.TestCase):
 
 
 class FrontendRecipeTests(RecipeTestCase):
+    def test_parallel_lints_keep_npm_output_out_of_go_package_discovery(self) -> None:
+        recipes = self.recipes()
+        self.assertIn("parallel", recipes["lint-all"]["attributes"])
+        self.assertTrue({"lint-go", "lint-js"} <= self.reachable(recipes, "lint-all"))
+        self.assertIn(
+            "ignore ./web/node_modules",
+            (helpers.ROOT / "go.mod").read_text(encoding="utf-8").splitlines(),
+        )
+
     # A whole word: the helper subcommand ensure-node is not the node binary.
     FRONTEND_TOOLCHAIN = re.compile(r"(?<![\w-])(?:npm|npx|node)(?![\w-])")
     INSTALL_RECIPE = "frontend-ci-install"
@@ -1062,6 +1075,7 @@ class CIRecipeTests(RecipeTestCase):
 
 class FrontendInstallTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.helper_source = Path(helpers.__file__).resolve()
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -1094,17 +1108,24 @@ class FrontendInstallTests(unittest.TestCase):
             args.func(args)
         return run
 
-    def npm_ci(self, command: list[str], cwd: Path | None = None) -> None:
+    def npm_ci(
+        self, command: list[str], cwd: Path | None = None, *, pass_fds: tuple = ()
+    ) -> None:
         self.assertEqual(command[1:], ["ci"])
         self.assertTrue(Path(command[0]).samefile(self.npm), command[0])
         (self.web / "node_modules").mkdir(exist_ok=True)
+        (self.web / "node_modules" / ".package-lock.json").write_text(
+            '{"lockfileVersion": 3, "packages": {}}\n', encoding="utf-8"
+        )
 
     def assert_npm_ci_ran(self, run: Mock) -> None:
         run.assert_called_once()
         command, options = run.call_args
         self.assertEqual(command[0][1:], ["ci"])
         self.assertTrue(Path(command[0][0]).samefile(self.npm), command[0][0])
-        self.assertEqual(options, {"cwd": self.web})
+        self.assertEqual(options["cwd"], self.web)
+        self.assertEqual(len(options["pass_fds"]), 0 if helpers.is_windows() else 1)
+        self.assertEqual(set(options), {"cwd", "pass_fds"})
 
     def test_nothing_installed_runs_npm_ci_in_web_then_skips_the_next_call(
         self,
@@ -1141,10 +1162,38 @@ class FrontendInstallTests(unittest.TestCase):
 
         self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
 
+    def test_changed_installed_tree_runs_npm_ci_again(self) -> None:
+        self.install(side_effect=self.npm_ci)
+        (self.web / "node_modules" / ".package-lock.json").write_text(
+            '{"lockfileVersion": 3, "packages": {"extra": {}}}\n', encoding="utf-8"
+        )
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_missing_hidden_lockfile_runs_npm_ci_again(self) -> None:
+        self.install(side_effect=self.npm_ci)
+        (self.web / "node_modules" / ".package-lock.json").unlink()
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_successful_npm_ci_without_hidden_lockfile_fails_without_a_stamp(
+        self,
+    ) -> None:
+        def missing_lockfile(command: list[str], **options: object) -> None:
+            self.npm_ci(command, **options)
+            (self.web / "node_modules" / ".package-lock.json").unlink()
+
+        hidden_lockfile = self.web / "node_modules" / ".package-lock.json"
+        with self.assertRaisesRegex(SystemExit, re.escape(str(hidden_lockfile))):
+            self.install(side_effect=missing_lockfile)
+        self.assertFalse(
+            (self.web / "node_modules" / helpers.FRONTEND_INSTALL_STAMP).exists()
+        )
+
     def test_failed_npm_ci_propagates_and_records_no_install(self) -> None:
         failure = subprocess.CalledProcessError(1, [str(self.npm), "ci"])
 
-        def fail(command: list[str], cwd: Path | None = None) -> None:
+        def fail(command: list[str], **options: object) -> None:
             (self.web / "node_modules").mkdir(exist_ok=True)
             raise failure
 
@@ -1162,6 +1211,204 @@ class FrontendInstallTests(unittest.TestCase):
         ):
             self.install()
         self.assertFalse((self.web / "node_modules").exists())
+
+    def test_windows_lock_errors_propagate(self) -> None:
+        for failures in (
+            [OSError(errno.EBADF, "bad descriptor")],
+            [OSError(errno.EACCES, "busy"), OSError(errno.EINVAL, "invalid lock")],
+        ):
+            with self.subTest(failures=failures):
+                locking = Mock(side_effect=failures)
+                msvcrt = types.SimpleNamespace(
+                    locking=locking, LK_NBLCK=1, LK_LOCK=2, LK_UNLCK=3
+                )
+                with (
+                    patch.object(helpers, "ROOT", self.root),
+                    patch.object(helpers, "is_windows", return_value=True),
+                    patch.object(errno, "EDEADLOCK", 36, create=True),
+                    patch.dict(sys.modules, {"msvcrt": msvcrt}),
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                    self.assertRaises(OSError) as raised,
+                    helpers.frontend_install_lock(),
+                ):
+                    self.fail("invalid lock acquired")
+                self.assertIs(raised.exception, failures[-1])
+                self.assertEqual(locking.call_count, len(failures))
+                if len(failures) == 1:
+                    self.assertEqual(output.getvalue(), "")
+
+    def test_windows_lock_retries_contention(self) -> None:
+        locking = Mock(
+            side_effect=[
+                OSError(errno.EACCES, "busy"),
+                OSError(36, "busy"),
+                None,
+                None,
+            ]
+        )
+        msvcrt = types.SimpleNamespace(
+            locking=locking, LK_NBLCK=1, LK_LOCK=2, LK_UNLCK=3
+        )
+        with (
+            patch.object(helpers, "ROOT", self.root),
+            patch.object(helpers, "is_windows", return_value=True),
+            patch.object(errno, "EDEADLOCK", 36, create=True),
+            patch.dict(sys.modules, {"msvcrt": msvcrt}),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            helpers.frontend_install_lock() as fd,
+        ):
+            self.assertGreaterEqual(fd, 0)
+        self.assertIn("Waiting for another frontend install", output.getvalue())
+        self.assertEqual(
+            [call.args[1] for call in locking.call_args_list], [1, 2, 2, 3]
+        )
+
+    def test_concurrent_processes_install_once_and_stamp_the_complete_tree(
+        self,
+    ) -> None:
+        self.concurrent_install(kill_helper=False)
+
+    @unittest.skipIf(
+        helpers.is_windows(), "Windows byte-range locks do not survive the helper"
+    )
+    def test_orphaned_npm_keeps_lock_until_install_finishes(self) -> None:
+        self.concurrent_install(kill_helper=True)
+
+    @unittest.skipIf(
+        helpers.is_windows(), "Windows byte-range locks do not survive the helper"
+    )
+    def test_npm_grandchild_keeps_lock_after_helper_unwinds(self) -> None:
+        self.concurrent_install(kill_helper=False, orphan_grandchild=True)
+
+    def concurrent_install(
+        self, *, kill_helper: bool, orphan_grandchild: bool = False
+    ) -> None:
+        script = self.root / "scripts" / "just_helpers.py"
+        script.parent.mkdir()
+        shutil.copyfile(self.helper_source, script)
+        fake = self.node_bin_dir / "fake_npm.py"
+        fake.write_text(
+            f"#!{sys.executable}\n"
+            "import os, pathlib, shutil, time\n"
+            "web = pathlib.Path.cwd()\n"
+            "log = web / 'invocations.log'\n"
+            "number = (len(log.read_text().splitlines()) // 2 + 1\n"
+            "          if log.exists() else 1)\n"
+            "with log.open('a') as output:\n"
+            "    output.write(f'start {number}\\n')\n"
+            "print('npm rebuilding', flush=True)\n"
+            f"if {orphan_grandchild!r} and number == 1:\n"
+            "    ready, notify = os.pipe()\n"
+            "    if os.fork():\n"
+            "        os.close(notify)\n"
+            "        os.read(ready, 1)\n"
+            "        os._exit(1)\n"
+            "    os.close(ready)\n"
+            "    os.write(notify, b'1')\n"
+            "    os.close(notify)\n"
+            "while not (web / 'continue-install').exists():\n"
+            "    time.sleep(0.01)\n"
+            "modules = web / 'node_modules'\n"
+            "if modules.exists():\n"
+            "    shutil.rmtree(modules)\n"
+            "modules.mkdir()\n"
+            "for index in range(8):\n"
+            "    (modules / f'part-{index}').write_text(str(index))\n"
+            "(modules / '.package-lock.json').write_text('{}\\n')\n"
+            "with log.open('a') as output:\n"
+            "    output.write(f'end {number}\\n')\n",
+            encoding="utf-8",
+        )
+        if helpers.is_windows():
+            self.npm.write_text(f'@"{sys.executable}" "{fake}" %*\n')
+        else:
+            shutil.copyfile(fake, self.npm)
+            self.npm.chmod(0o755)
+        command = [
+            sys.executable,
+            str(script),
+            "frontend-ci-install",
+            str(self.node_dir),
+        ]
+        processes = []
+        readers = []
+        outputs = []
+        release = self.web / "continue-install"
+        log = self.web / "invocations.log"
+
+        def start() -> queue.Queue[str]:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            processes.append(process)
+            lines = queue.Queue()
+
+            def read() -> None:
+                for line in process.stdout:
+                    outputs.append(line)
+                    lines.put(line)
+
+            reader = threading.Thread(target=read, daemon=True)
+            reader.start()
+            readers.append(reader)
+            return lines
+
+        try:
+            first = start()
+            self.assertEqual(first.get(timeout=30), "npm rebuilding\n")
+            if kill_helper:
+                processes[0].kill()
+                processes[0].wait(timeout=30)
+            elif orphan_grandchild:
+                self.assertNotEqual(processes[0].wait(timeout=30), 0)
+            second = start()
+            self.assertEqual(
+                second.get(timeout=30),
+                "Waiting for another frontend install to finish ...\n",
+            )
+            self.assertEqual(log.read_text().splitlines(), ["start 1"])
+            release.touch()
+            for index, process in enumerate(processes):
+                process.wait(timeout=30)
+                if not ((kill_helper or orphan_grandchild) and index == 0):
+                    self.assertEqual(process.returncode, 0, "".join(outputs))
+        finally:
+            release.touch()
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=30)
+            for reader in readers:
+                reader.join(timeout=30)
+                self.assertFalse(reader.is_alive(), "npm did not finish")
+            for process in processes:
+                process.stdout.close()
+
+        expected_log = ["start 1", "end 1"]
+        if kill_helper or orphan_grandchild:
+            expected_log += ["start 2", "end 2"]
+        self.assertEqual(log.read_text().splitlines(), expected_log)
+        for index in range(8):
+            self.assertEqual(
+                (self.web / "node_modules" / f"part-{index}").read_text(), str(index)
+            )
+        hidden_lockfile = self.web / "node_modules" / ".package-lock.json"
+        stamp = self.web / "node_modules" / helpers.FRONTEND_INSTALL_STAMP
+        expected = "\n".join(
+            [
+                helpers.sha256_file(self.web / "package.json"),
+                helpers.sha256_file(self.lockfile),
+                "22.1.0",
+                f"{sys.platform} {helpers.platform.machine()}",
+                helpers.sha256_file(hidden_lockfile),
+            ]
+        )
+        self.assertEqual(stamp.read_text(), expected)
+        self.assertIn("Waiting for another frontend install", "".join(outputs))
+        self.install(side_effect=self.npm_ci).assert_not_called()
 
 
 if __name__ == "__main__":

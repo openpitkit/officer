@@ -2,6 +2,10 @@ module go.openpit.dev/officer
 
 go 1.26.11
 
+// npm output can ship Go sources. Keep lint-go's go mod tidy out of the tree
+// npm ci in lint-js rebuilds while lint-all runs both in parallel.
+ignore ./web/node_modules
+
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/go-chi/chi/v5 v5.4.0

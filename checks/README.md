@@ -506,12 +506,15 @@ rule needs narrowing, not a marker.
 
 `checks/public-packages.txt` is the sorted allowlist of importable packages
 and commands, one import path per line. The gate lists the module with
-`go list ./...` from the module root, drops `web/node_modules/` (npm install
-output, never committed) and every path with an `internal` element, and fails
-on any difference in either direction, printing each offending path. A path
+`go list ./...` from the module root, drops every path with an `internal`
+element, and fails on any difference in either direction, printing each
+offending path. A path
 `./...` does not match - see `go help packages`; a directory whose Go files are
 all excluded by build constraints is skipped too - is neither listed nor
 checked.
+
+The module's `go.mod` ignore directive keeps npm's `web/node_modules` tree out
+of `go list ./...`.
 
 It runs right after the gofmt check in `lint-go`, `lint-go-debug-dev`, and
 `lint-go-release-dev`, so every gate that lints Go runs it, CI included.
