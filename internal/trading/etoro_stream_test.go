@@ -44,7 +44,9 @@ func etoroReadRequest(t *testing.T, ctx context.Context, conn *websocket.Conn, o
 	t.Helper()
 	kind, raw, err := conn.Read(ctx)
 	if err != nil {
-		t.Error("eToro control frame missing")
+		if t.Context().Err() == nil {
+			t.Error("eToro control frame missing")
+		}
 		return ""
 	}
 	var frame struct {
@@ -83,30 +85,32 @@ func etoroHandshake(t *testing.T, ctx context.Context, conn *websocket.Conn) boo
 		return false
 	}
 	sub := etoroReadRequest(t, ctx, conn, "Subscribe")
-	if sub == "" || sub == auth {
+	if sub == "" {
+		return false
+	}
+	if sub == auth {
 		t.Error("Subscribe must have a fresh UUID")
 		return false
 	}
 	return etoroAck(t, ctx, conn, sub, "Subscribe")
 }
 
-func etoroPush(t *testing.T, ctx context.Context, conn *websocket.Conn, typ, content string) {
+func etoroPush(t *testing.T, ctx context.Context, conn *websocket.Conn, typ, content string) bool {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{"messages": []any{map[string]string{
 		"topic": "private:demo", "type": typ, "id": uuid.NewString(), "content": content,
 	}}})
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return false
 	}
-	if !sendFrame(t, ctx, conn, websocket.MessageText, string(raw)) {
-		t.Fatal("could not push eToro update")
-	}
+	return sendFrame(t, ctx, conn, websocket.MessageText, string(raw))
 }
 
-func etoroOrderPush(t *testing.T, ctx context.Context, conn *websocket.Conn, id string) {
+func etoroOrderPush(t *testing.T, ctx context.Context, conn *websocket.Conn, id string) bool {
 	t.Helper()
 	// Deliberately false stream fill fields: only REST may supply executions.
-	etoroPush(t, ctx, conn, "Trading.OrderForOpen.Update",
+	return etoroPush(t, ctx, conn, "Trading.OrderForOpen.Update",
 		`{"OrderID":`+id+`,"RequestGuid":"unrelated","StatusID":3,"ExecutedUnits":999,"EndRate":999}`)
 }
 
@@ -149,8 +153,8 @@ func etoroAssertOrderEvent(t *testing.T, event fwtrading.Event, client, venue st
 func TestEtoroStreamTopicsAndReconnect(t *testing.T) {
 	for _, demo := range []bool{true, false} {
 		t.Run(fmt.Sprint(demo), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			t.Cleanup(cancel)
 			var mu sync.Mutex
 			seen := make(map[string]bool)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +164,9 @@ func TestEtoroStreamTopicsAndReconnect(t *testing.T) {
 				}
 				defer func() { _ = conn.CloseNow() }()
 				auth := etoroReadRequest(t, ctx, conn, "Authenticate")
+				if auth == "" {
+					return
+				}
 				mu.Lock()
 				if seen[auth] {
 					t.Error("Authenticate reused a UUID on reconnect")
@@ -171,7 +178,9 @@ func TestEtoroStreamTopicsAndReconnect(t *testing.T) {
 				}
 				_, raw, err := conn.Read(ctx)
 				if err != nil {
-					t.Error("Subscribe missing")
+					if t.Context().Err() == nil {
+						t.Error("Subscribe missing")
+					}
 					return
 				}
 				var sub struct {
@@ -200,7 +209,6 @@ func TestEtoroStreamTopicsAndReconnect(t *testing.T) {
 					t.Fatal("EventConnected missing on reconnect")
 				}
 			}
-			c.Close()
 		})
 	}
 }
@@ -220,8 +228,8 @@ func TestEtoroStreamAcknowledgements(t *testing.T) {
 		{"subscribe-mismatch", "Subscribe", `{"id":%q,"operation":"Authenticate","success":true}`, "acknowledgement mismatch", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			t.Cleanup(cancel)
 			closed := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(closed)
@@ -231,11 +239,17 @@ func TestEtoroStreamAcknowledgements(t *testing.T) {
 				}
 				defer func() { _ = conn.CloseNow() }()
 				id := etoroReadRequest(t, ctx, conn, "Authenticate")
+				if id == "" {
+					return
+				}
 				if tc.operation == "Subscribe" {
 					if !etoroAck(t, ctx, conn, id, "Authenticate") {
 						return
 					}
 					id = etoroReadRequest(t, ctx, conn, "Subscribe")
+					if id == "" {
+						return
+					}
 				}
 				sendFrame(t, ctx, conn, websocket.MessageText, fmt.Sprintf(tc.response, id))
 				if _, _, err := conn.Read(ctx); err == nil {
@@ -256,8 +270,8 @@ func TestEtoroStreamAcknowledgements(t *testing.T) {
 func TestEtoroStreamCorrelation(t *testing.T) {
 	for _, install := range []string{"send-before", "send-after", "lookup-after"} {
 		t.Run(install, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			t.Cleanup(cancel)
 			streams := make(chan *websocket.Conn, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/stream" {
@@ -307,14 +321,18 @@ func TestEtoroStreamCorrelation(t *testing.T) {
 				mapOrder()
 			}
 			for range 3 {
-				etoroOrderPush(t, ctx, conn, "9007199254740993")
+				if !etoroOrderPush(t, ctx, conn, "9007199254740993") {
+					t.Fatal("failed to push eToro order update")
+				}
 				if install == "send-before" {
 					etoroAssertOrderEvent(t, nextEvent(t, events), etoroTestCOID, "9007199254740993")
 				}
 			}
 			if install != "send-before" {
 				// A following diagnostic is a barrier after all three frames.
-				etoroPush(t, ctx, conn, "barrier", "{}")
+				if !etoroPush(t, ctx, conn, "barrier", "{}") {
+					t.Fatal("failed to push eToro correlation barrier")
+				}
 				select {
 				case <-diag:
 				case <-ctx.Done():
@@ -329,16 +347,17 @@ func TestEtoroStreamCorrelation(t *testing.T) {
 				etoroAssertOrderEvent(t, nextEvent(t, events), etoroTestCOID, "9007199254740993")
 			}
 			c.mapOrder("42", "barrier")
-			etoroOrderPush(t, ctx, conn, "42")
+			if !etoroOrderPush(t, ctx, conn, "42") {
+				t.Fatal("failed to push eToro order update for barrier")
+			}
 			etoroAssertOrderEvent(t, nextEvent(t, events), "barrier", "42")
-			c.Close()
 		})
 	}
 }
 
 func TestEtoroStreamReconnectBackoff(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
 	attempts := make(chan time.Time, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts <- time.Now()
@@ -374,14 +393,13 @@ func TestEtoroStreamReconnectBackoff(t *testing.T) {
 		}
 		previous = at
 	}
-	c.Close()
 }
 
 func TestEtoroStreamHealthyAfterOrder(t *testing.T) {
 	for _, order := range []bool{false, true} {
 		t.Run(fmt.Sprint(order), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			t.Cleanup(cancel)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn := acceptAlpaca(t, w, r)
 				if conn == nil {
@@ -529,8 +547,8 @@ func TestEtoroStreamFinishedBound(t *testing.T) {
 }
 
 func TestEtoroStreamUnknownPushOrderID(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn := acceptAlpaca(t, w, r)
 		if conn == nil {
@@ -541,9 +559,13 @@ func TestEtoroStreamUnknownPushOrderID(t *testing.T) {
 			return
 		}
 		for _, content := range []string{"{}", "secret value", `{"OrderID":0}`, `{"OrderID":42}`} {
-			etoroPush(t, ctx, conn, "future-type", content)
+			if !etoroPush(t, ctx, conn, "future-type", content) {
+				return
+			}
 		}
-		etoroOrderPush(t, ctx, conn, "43")
+		if !etoroOrderPush(t, ctx, conn, "43") {
+			return
+		}
 		_, _, _ = conn.Read(ctx)
 	}))
 	defer server.Close()
@@ -562,8 +584,8 @@ func TestEtoroStreamUnknownPushOrderID(t *testing.T) {
 }
 
 func TestEtoroStreamHeldBound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
 	streams := make(chan *websocket.Conn, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn := acceptAlpaca(t, w, r)
@@ -583,7 +605,9 @@ func TestEtoroStreamHeldBound(t *testing.T) {
 	events := etoroSubscribe(t, ctx, c)
 	conn := <-streams
 	for i := 1; i <= etoroHeldLimit+2; i++ {
-		etoroOrderPush(t, ctx, conn, fmt.Sprint(i))
+		if !etoroOrderPush(t, ctx, conn, fmt.Sprint(i)) {
+			t.Fatal("failed to push eToro order update")
+		}
 	}
 	for range 2 {
 		select {
@@ -610,12 +634,11 @@ func TestEtoroStreamHeldBound(t *testing.T) {
 	c.mapOrder("1", "evicted")
 	c.mapOrder("3", "retained")
 	etoroAssertOrderEvent(t, nextEvent(t, events), "retained", "3")
-	c.Close()
 }
 
 func TestEtoroStreamDiagnosticsAndHeartbeat(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn := acceptAlpaca(t, w, r)
 		if conn == nil {
@@ -627,17 +650,26 @@ func TestEtoroStreamDiagnosticsAndHeartbeat(t *testing.T) {
 		}
 		sendFrame(t, ctx, conn, websocket.MessageBinary, "\x01")
 		for _, typ := range []string{"Trading.Position.Opened", "Trading.Position.Closed"} {
-			etoroPush(t, ctx, conn, typ, "{}")
+			if !etoroPush(t, ctx, conn, typ, "{}") {
+				return
+			}
 		}
-		etoroPush(t, ctx, conn, "future-type", "secret value")
-		etoroPush(t, ctx, conn, "future-type", "secret value")
+		for range 2 {
+			if !etoroPush(t, ctx, conn, "future-type", "secret value") {
+				return
+			}
+		}
 		for _, content := range []string{"{", `{"OrderID":0}`, `{"OrderID":"bad"}`, "null"} {
-			etoroPush(t, ctx, conn, "Trading.OrderForOpen.Update", content)
+			if !etoroPush(t, ctx, conn, "Trading.OrderForOpen.Update", content) {
+				return
+			}
 		}
 		for _, raw := range []string{`{}`, `{"messages":null}`, `{"messages":[{"type":"future"}]}`} {
 			sendFrame(t, ctx, conn, websocket.MessageText, raw)
 		}
-		etoroPush(t, ctx, conn, "Trading.OrderForCloseMultiple.Update", `{"OrderID":42}`)
+		if !etoroPush(t, ctx, conn, "Trading.OrderForCloseMultiple.Update", `{"OrderID":42}`) {
+			return
+		}
 		_, _, _ = conn.Read(ctx)
 	}))
 	defer server.Close()
@@ -688,8 +720,8 @@ func TestEtoroStreamRedaction(t *testing.T) {
 	leak := strings.Join(spellings, " | ")
 	for _, site := range []string{"ack-error", "close-error", "diagnostic", "invalid-envelope", "dial-error"} {
 		t.Run(site, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			t.Cleanup(cancel)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn := acceptAlpaca(t, w, r)
 				if conn == nil {
@@ -698,6 +730,9 @@ func TestEtoroStreamRedaction(t *testing.T) {
 				defer func() { _ = conn.CloseNow() }()
 				if site == "ack-error" {
 					id := etoroReadRequest(t, ctx, conn, "Authenticate")
+					if id == "" {
+						return
+					}
 					raw, _ := json.Marshal(map[string]any{"id": id, "operation": "Authenticate", "success": false, "errorCode": leak, "errorMessage": leak})
 					sendFrame(t, ctx, conn, websocket.MessageText, string(raw))
 					_, _, _ = conn.Read(ctx)
@@ -710,10 +745,14 @@ func TestEtoroStreamRedaction(t *testing.T) {
 				case "close-error":
 					// One spelling fits the websocket close reason limit.
 					if err := conn.Close(websocket.StatusPolicyViolation, spellings[0]); err != nil {
-						t.Error(err)
+						if t.Context().Err() == nil {
+							t.Error(err)
+						}
 					}
 				case "diagnostic":
-					etoroPush(t, ctx, conn, leak, leak)
+					if !etoroPush(t, ctx, conn, leak, leak) {
+						return
+					}
 				case "invalid-envelope":
 					sendFrame(t, ctx, conn, websocket.MessageText, "{"+leak)
 				}
@@ -767,7 +806,6 @@ func TestEtoroStreamRedaction(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("stream error or diagnostic missing")
 			}
-			c.Close()
 		})
 	}
 }
@@ -776,8 +814,8 @@ func TestEtoroStreamShutdown(t *testing.T) {
 	for _, stage := range []string{"authenticate", "subscribe", "read", "publish", "backoff"} {
 		for _, action := range []string{"close", "cancel"} {
 			t.Run(stage+"/"+action, func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				t.Cleanup(cancel)
 				reached := make(chan struct{})
 				serverDone := make(chan struct{})
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -788,6 +826,9 @@ func TestEtoroStreamShutdown(t *testing.T) {
 					}
 					defer func() { _ = conn.CloseNow() }()
 					id := etoroReadRequest(t, ctx, conn, "Authenticate")
+					if id == "" {
+						return
+					}
 					if stage == "authenticate" {
 						close(reached)
 						_, _, _ = conn.Read(ctx)
@@ -801,6 +842,9 @@ func TestEtoroStreamShutdown(t *testing.T) {
 						return
 					}
 					id = etoroReadRequest(t, ctx, conn, "Subscribe")
+					if id == "" {
+						return
+					}
 					if stage != "subscribe" {
 						etoroAck(t, ctx, conn, id, "Subscribe")
 					}

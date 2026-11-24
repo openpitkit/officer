@@ -164,8 +164,10 @@ func newTradingE2E(t *testing.T, sealed bool, providers ...fwtrading.Provider) *
 				case "unauthorized":
 					sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":"unauthorized","action":"authenticate"}}`)
 				case "close":
-					if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil && !f.isClosing() {
-						t.Error(err)
+					if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil {
+						if !f.isClosing() {
+							t.Error(err)
+						}
 					}
 				default:
 					t.Errorf("unknown stream fault %q", fault)

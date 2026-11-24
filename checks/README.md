@@ -236,6 +236,34 @@ Its fixture runs through `check-semgrep`.
 
 This rule has no approval marker.
 
+### `test-stub-close-guard`
+
+`checks/semgrep/test-stub-close-guard.yml` flags every call named `Error`,
+`Errorf`, `Fatal`, or `Fatalf`, on any receiver, in the failure branch of a
+`Read(ctx)`, `Write(ctx, kind, data)`, or `Close(status, reason)` check. The
+operation is matched by method name and arity on any receiver, in Go HTTP
+test handlers and helpers that take a `*websocket.Conn`.
+
+The rule accepts a nested `if` around the report inside the failure branch.
+Its entire condition must be `t.Context().Err() == nil` on the reporting test
+or `!harness.isClosing()`.
+
+```go
+if err := conn.Close(status, reason); err != nil {
+    if t.Context().Err() == nil { t.Error(err) } }
+```
+
+Known misses include checks without a direct `!= nil` comparison, reports
+routed through another helper, and functions that take neither a
+`*websocket.Conn` nor the HTTP handler parameters.
+
+False positives: an overwritten error can tie the check to an earlier call,
+and `fmt.Errorf`, `log.Fatal` or `err.Error()` in the failure branch counts as
+a report, also inside an accepted guard. Pass `err` with `%v` rather than
+`err.Error()`.
+
+This rule has no approval marker or baseline.
+
 ### `default-domain-status`
 
 `checks/semgrep/default-domain-status.yml` forbids a `default` arm or a map
