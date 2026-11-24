@@ -15,10 +15,11 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import type { InputHTMLAttributes, Ref } from "react";
+import type { InputHTMLAttributes, ReactNode, Ref } from "react";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 
 /** A labelled text or password field with an optional error under it. */
 export function TextField({
@@ -29,10 +30,12 @@ export function TextField({
   value,
   placeholder,
   disabled,
+  required,
   onChange,
   error,
   autoComplete,
   verbatim = false,
+  action,
 }: {
   /** The input element, for a caller that moves the focus to it. */
   ref?: Ref<HTMLInputElement>;
@@ -42,6 +45,7 @@ export function TextField({
   value: string;
   placeholder?: string;
   disabled: boolean;
+  required?: boolean;
   onChange: (value: string) => void;
   /** A message under the input that marks the value invalid. */
   error?: string;
@@ -53,27 +57,43 @@ export function TextField({
    * autocapitalisation.
    */
   verbatim?: boolean;
+  /** A control beside the input, such as a Show/Hide toggle. */
+  action?: ReactNode;
 }) {
   const errorId = `${id}-error`;
+  const input = (
+    <Input
+      ref={ref}
+      id={id}
+      type={type}
+      value={value}
+      placeholder={placeholder}
+      autoComplete={autoComplete}
+      spellCheck={verbatim ? false : undefined}
+      autoCorrect={verbatim ? "off" : undefined}
+      autoCapitalize={verbatim ? "off" : undefined}
+      aria-invalid={error === undefined ? undefined : true}
+      aria-describedby={error === undefined ? undefined : errorId}
+      className={cn(
+        action !== undefined && "min-w-0 flex-1",
+        error !== undefined && "border-[var(--danger)]",
+      )}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      required={required}
+    />
+  );
   return (
     <div className="flex flex-col gap-y-2">
       <Label htmlFor={id}>{label}</Label>
-      <Input
-        ref={ref}
-        id={id}
-        type={type}
-        value={value}
-        placeholder={placeholder}
-        autoComplete={autoComplete}
-        spellCheck={verbatim ? false : undefined}
-        autoCorrect={verbatim ? "off" : undefined}
-        autoCapitalize={verbatim ? "off" : undefined}
-        aria-invalid={error === undefined ? undefined : true}
-        aria-describedby={error === undefined ? undefined : errorId}
-        className={error === undefined ? undefined : "border-[var(--danger)]"}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-      />
+      {action === undefined ? (
+        input
+      ) : (
+        <div className="flex items-center gap-2">
+          {input}
+          {action}
+        </div>
+      )}
       {error !== undefined && (
         <p id={errorId} className="text-xs text-[var(--danger)]">
           {error}

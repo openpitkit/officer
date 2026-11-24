@@ -34,7 +34,11 @@ type Provider struct {
 	Title           string
 	VenueAccounts   bool
 	// UnlinkedFees means fees arrive without an order link and need a fee account.
-	UnlinkedFees    bool
+	UnlinkedFees bool
+	// LiveOnly means the provider supports live mode only; zero allows both modes.
+	// Create refuses paper for such a provider, and its Build must also refuse a paper
+	// connection because restored or stored connections do not pass through create.
+	LiveOnly        bool
 	VerifiesSymbols bool
 	SearchesSymbols bool
 	Build           func(BuildContext) (Connector, error)

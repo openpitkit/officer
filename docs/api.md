@@ -273,6 +273,17 @@ for the generic host contract.
 Money and size values cross the wire as exact decimal strings, not as IEEE 754
 floats.
 
+A Trade's optional `venueTradeId` is the venue's identifier of the fill. Only
+Coinbase connections record it today. It is omitted on trades of other
+connections and whenever it is empty, and execution-report callers cannot
+set it. The trade's `id` remains Officer's own public handle.
+
+The trades CSV columns are `id`, `order_id`, `at`, `account_code`, `source`,
+`principal`, `base_asset`, `quote_asset`, `side`, `quantity`, `price`,
+`lock_price`, `commission_amount`, `commission_currency`, and `venue_trade_id`.
+The last column is populated only for Coinbase connections and is empty for
+other connections.
+
 The order, trade, account and group lists bound their filter values, in REST
 and in the MCP list tools alike; a character here is a Unicode code point. A
 decimal bound is written in at most 64 characters and must be representable in
@@ -634,9 +645,9 @@ second account, needs the fee account there and is refused with
 `fee_account_required` without one.
 
 Paper and live sends require `destination.route`, a JSON object. The built-in
-Alpaca, Binance, IB, eToro and OKX providers require `amountKind: "quantity"`
-and support only the `timeInForce` route field. Values are case-sensitive and
-are never normalized:
+Alpaca, Binance, Coinbase, IB, eToro and OKX providers require
+`amountKind: "quantity"` and support only the `timeInForce` route field. Values
+are case-sensitive and are never normalized:
 
 - Alpaca requires `day`, `gtc`, `opg`, `cls`, `ioc` or `fok`. Good till cancelled
   is `{"timeInForce":"gtc"}`; uppercase `GTC` is refused locally with the
@@ -644,6 +655,8 @@ are never normalized:
   sent to the venue. Crypto allows only `gtc` or `ioc`; a fractional equity
   quantity requires a fractionable asset and `day`.
 - Binance requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
+  `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
+- Coinbase requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
   `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
 - OKX requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
   `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
@@ -672,6 +685,24 @@ on: `www.okx.com` for global accounts, `my.okx.com` for EEA accounts or
 `site` under `settings`, never API key, API secret or passphrase values. Paper
 mode uses OKX demo trading with demo API keys; live mode uses live trading. Only
 spot cash trading is supported, with no venue account binding.
+
+The `coinbase` provider trades spot through Coinbase Advanced Trade in live
+mode only. Creating a paper connection is refused with `422` at `/mode`.
+Its credentials are `{apiKeyId, apiKeySecret}`: the CDP API key ID
+`organizations/{org}/apiKeys/{id}` and its Secret, an EC P-256 private key as an
+unencrypted SEC1 PEM (`-----BEGIN EC PRIVATE KEY-----`), with line breaks or
+with the `\n` escapes the Coinbase key dialog shows.
+Both are secret; the connection status returns only whether
+each is present. Requests use ES256 JWT authentication, the only key type
+Advanced Trade accepts, so Ed25519 keys are refused. One CDP key trades one
+portfolio; there is no venue account. The route is
+`{"timeInForce":"GTC"|"IOC"|"FOK"}` for a limit order and `{}` for a market
+order. Symbol verification reads `GET /api/v3/brokerage/products/{symbol}`;
+search reads the SPOT catalogue from `GET /api/v3/brokerage/products`.
+Commissions arrive with fills, in the product's quote currency. When
+reconciliation needs history that Coinbase gates behind an SCA proof token,
+the order stays pending and the connection shows a diagnostic. It never
+treats the order as missing and never infers a fill.
 
 Execution Simulator (provider `test`) is a paper-only venue that takes credentials
 `{}` and sends no requests to external venues.

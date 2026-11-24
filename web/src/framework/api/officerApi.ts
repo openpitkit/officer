@@ -1561,6 +1561,12 @@ function normalizeTradingProvider(v: unknown): TradingProvider {
       "internal",
     );
   }
+  if (typeof o.liveOnly !== "boolean") {
+    throw new ApiError(
+      "Invalid or missing trading provider liveOnly in the API response",
+      "internal",
+    );
+  }
   return {
     executionPolicy: normalizeExecutionPolicySupport(o.executionPolicy),
     type: asString(o.type),
@@ -1569,6 +1575,7 @@ function normalizeTradingProvider(v: unknown): TradingProvider {
     verifiesSymbols: asBool(o.verifiesSymbols),
     searchesSymbols: asBool(o.searchesSymbols),
     unlinkedFees: o.unlinkedFees,
+    liveOnly: o.liveOnly,
   };
 }
 

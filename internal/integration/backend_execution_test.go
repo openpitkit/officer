@@ -18,6 +18,8 @@
 package integration_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -25,6 +27,81 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 )
+
+func TestService_ExecutionReportVenueTradeIDReachesStoredTrade(t *testing.T) {
+	t.Parallel()
+	ctx := systemCtx()
+	service, src, _ := reportFillChain(t)
+	if _, err := service.ApplyAdjustment(ctx, "desk-1", domain.ExternalID(""),
+		sampleAdjustmentRequest(), domain.MissingAccountReject); err != nil {
+		t.Fatal(err)
+	}
+	for _, venueTradeID := range []string{"", "venue-trade-42"} {
+		submitted := callSubmitOrder(t, src, submitOrderInput{
+			Account: "desk-1", BaseAsset: "AAPL", QuoteAsset: "USD", Side: "buy",
+			AmountKind: "quantity", AmountValue: "1", Price: "50", Mode: "hold",
+			MissingAccount: "reject",
+		})
+		if submitted.IsError || submitted.StructuredContent.Verdict != "accept" {
+			t.Fatalf("submit: %+v", submitted)
+		}
+		orderID := submitted.StructuredContent.OrderExternalID
+		_, att, err := service.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+			Order: domain.ExternalID(orderID), VenueTradeID: venueTradeID,
+			FillQuantity: "1", FillPrice: "50", LeavesQuantity: "0",
+			OrderStatus: domain.OrderStatusFilled,
+		})
+		if err != nil || !att.Signed {
+			t.Fatalf("report: att=%+v err=%v", att, err)
+		}
+		detail, err := service.GetOrder(ctx, orderID)
+		if err != nil || len(detail.Trades) != 1 || detail.Trades[0].VenueTradeID != venueTradeID {
+			t.Fatalf("stored trades = %+v, want venue trade id %q; err=%v", detail.Trades, venueTradeID, err)
+		}
+	}
+}
+
+func TestService_ExecutionReportVenueTradeIDLeavesSignedPayloadUnchanged(t *testing.T) {
+	t.Parallel()
+	var wantPayload []byte
+	var wantEvent []byte
+	for _, venueTradeID := range []string{"", "venue-trade-42"} {
+		signer := &fakeSigner{}
+		service, fn := newTestServiceWithSigner(t, signer)
+		orderID := mdID("order-report")
+		fn.orders[orderID] = domain.Order{
+			ExternalID: orderID, Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Side: domain.OrderSideBuy, Status: domain.OrderStatusAccepted,
+		}
+		_, _, err := service.ApplyExecutionReport(systemCtx(), domain.ExecutionReportInput{
+			ExternalID: mdID("report-1"), Order: orderID, VenueTradeID: venueTradeID,
+			FillQuantity: "1", FillPrice: "100", LeavesQuantity: "0",
+			OrderStatus: domain.OrderStatusFilled,
+		})
+		if err != nil || len(signer.signed) != 1 || len(fn.execReports) != 1 {
+			t.Fatalf("report: signed=%+v reports=%+v err=%v", signer.signed, fn.execReports, err)
+		}
+		if fn.execReports[0].VenueTradeID != venueTradeID {
+			t.Fatalf("backend lost venue trade id: %+v", fn.execReports[0])
+		}
+		payload := signer.signed[0]
+		// Only per-issuance randomness differs between these identical reports.
+		payload.ApprovalID, payload.Nonce, payload.IssuedAt, payload.EventExternalID = "", "", "", ""
+		wire, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := json.Marshal(fn.orderEvents[orderID][0].Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if venueTradeID == "" {
+			wantPayload, wantEvent = wire, event
+		} else if !bytes.Equal(wantPayload, wire) || !bytes.Equal(wantEvent, event) {
+			t.Fatalf("venue trade id changed signed payload or event:\npayload=%s\nevent=%s", wire, event)
+		}
+	}
+}
 
 func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
 	t.Parallel()

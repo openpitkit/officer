@@ -56,9 +56,15 @@ rules:
     message: Use PasswordPairFields for new passwords; keep validation timing in the form.
     severity: ERROR
     languages: [typescript]
-    pattern-either:
-      - pattern: <TextField ... autoComplete="new-password" ... />
-      - pattern: <SecretInput ... autoComplete="new-password" ... />
+    patterns:
+      - pattern-either:
+          - pattern: <TextField ... autoComplete="new-password" ... />
+          - pattern: <SecretInput ... autoComplete="new-password" ... />
+      # A venue credential is a secret the venue issued, not a password the
+      # operator chooses: it takes no repeat field, and new-password only
+      # keeps a saved panel password out of it.
+      - pattern-not-inside: |
+          function CredentialField(...) { ... }
     paths:
       include: ["/web/src/**"]
       exclude:

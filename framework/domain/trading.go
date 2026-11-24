@@ -41,6 +41,9 @@ const TradingProviderAlpaca = "alpaca"
 // TradingProviderBinance is the Binance trading-provider discriminator.
 const TradingProviderBinance = "binance"
 
+// TradingProviderCoinbase is the Coinbase trading-provider discriminator.
+const TradingProviderCoinbase = "coinbase"
+
 // TradingProviderIB is the Interactive Brokers trading-provider discriminator.
 const TradingProviderIB = "ib"
 

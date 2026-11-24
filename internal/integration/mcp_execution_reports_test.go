@@ -21,7 +21,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -90,6 +93,33 @@ const reportResultBody = `{"blocks":[{"account":"desk-1","policy":"spot_funds_pn
 // reportFillInputs holds a valid report_fill input.
 var reportFillInputs = map[string]map[string]any{
 	"report_fill": {"order": "ord-1", "status": "filled", "quantity": "1", "price": "160", "leavesQuantity": "0"},
+}
+
+// TestReportFillRejectsVenueTradeID refuses a caller-supplied venue trade
+// identifier before the execution report reaches the source.
+func TestReportFillRejectsVenueTradeID(t *testing.T) {
+	t.Parallel()
+	src, _, recorder := reportsAttestedBy(signedReportAttestation)()
+	session, closeSession := officerSession(t, testCtx(t), src)
+	defer closeSession()
+	res, err := session.CallTool(testCtx(t), &sdkmcp.CallToolParams{
+		Name: "report_fill", Arguments: map[string]any{
+			"order": "order-1", "status": "filled", "quantity": "1", "price": "100",
+			"leavesQuantity": "0", "venueTradeId": "forged-venue-trade-id",
+		},
+	})
+	if err == nil && !res.IsError {
+		t.Fatalf("venueTradeId was accepted: %+v", res)
+	}
+	if len(recorder.calls) != 0 {
+		t.Fatalf("refused report reached source: %v", recorder.calls)
+	}
+	if err != nil && !strings.Contains(err.Error(), "venueTradeId") {
+		t.Fatalf("unexpected protocol refusal: %v", err)
+	}
+	if err == nil && !strings.Contains(textContent(res.Content), "venueTradeId") {
+		t.Fatalf("unexpected tool refusal: %s", textContent(res.Content))
+	}
 }
 
 // TestReportFillSuccess covers report_fill's success: every argument reaches

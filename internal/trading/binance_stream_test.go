@@ -687,14 +687,14 @@ func TestBinanceFillParityRandomized(t *testing.T) {
 						case binance.ExchangeInfoPath:
 							writeBinanceSymbol(t, w, binanceTestSymbol())
 						case "/api/v3/order":
-							writeBinanceJSON(t, w, binanceLookupOrder(
+							writeJSON(t, w, binanceLookupOrder(
 								"FILLED", total.String(), total.String()))
 						case "/api/v3/myTrades":
 							reversed := append([]binanceTrade(nil), trades...)
 							for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
 								reversed[i], reversed[j] = reversed[j], reversed[i]
 							}
-							writeBinanceJSON(t, w, reversed)
+							writeJSON(t, w, reversed)
 						case "/stream":
 							conn, id := binanceAccept(t, w, r)
 							if conn == nil {
@@ -762,7 +762,7 @@ func TestBinanceRedaction(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/stream" {
 				w.WriteHeader(400)
-				writeBinanceJSON(t, w, map[string]any{
+				writeJSON(t, w, map[string]any{
 					"code": -1013, "msg": message,
 				})
 				return

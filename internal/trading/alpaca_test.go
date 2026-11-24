@@ -62,10 +62,23 @@ func testOrder() fwtrading.Order {
 
 func TestProvidersAndEndpoints(t *testing.T) {
 	providers := FirstPartyProviders()
-	if len(providers) != 6 || providers[3].Type != domain.TradingProviderEtoro || providers[4].Type != domain.TradingProviderOKX || providers[5].Type != "test" {
-		t.Fatal("expected Alpaca, Binance, IB, eToro OKX and Test providers")
+	want := []string{domain.TradingProviderAlpaca, domain.TradingProviderBinance, domain.TradingProviderCoinbase, domain.TradingProviderIB, domain.TradingProviderEtoro, domain.TradingProviderOKX, "test"}
+	if len(providers) != len(want) {
+		t.Fatalf("got %d providers, want %d", len(providers), len(want))
 	}
-	ib := providers[2]
+	for i, provider := range providers {
+		if provider.Type != want[i] || provider.LiveOnly != (provider.Type == domain.TradingProviderCoinbase) {
+			t.Fatalf("provider %d: type = %q, liveOnly = %t", i, provider.Type, provider.LiveOnly)
+		}
+	}
+	coinbase := providers[2]
+	if coinbase.Title != "Coinbase" || coinbase.VenueAccounts || !coinbase.VerifiesSymbols || !coinbase.SearchesSymbols || coinbase.UnlinkedFees || coinbase.Build == nil {
+		t.Fatal("Coinbase provider contract differs")
+	}
+	if _, err := coinbase.Build(fwtrading.BuildContext{Connection: domain.TradingConnection{Mode: domain.TradingModePaper, Credentials: "{}"}}); !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/mode" {
+		t.Fatalf("Coinbase paper error = %v, want /mode validation error", err)
+	}
+	ib := providers[3]
 	if ib.Type != domain.TradingProviderIB || ib.Title != "Interactive Brokers" || !ib.VenueAccounts || !ib.VerifiesSymbols || !ib.SearchesSymbols || ib.UnlinkedFees || ib.Build == nil {
 		t.Fatal("IB provider contract differs")
 	}

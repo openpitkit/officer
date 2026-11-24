@@ -388,7 +388,7 @@
       },
       "trades": {
         "description": "Um negócio por linha.",
-        "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
+        "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency,venue_trade_id"
       }
     },
     "entities": {

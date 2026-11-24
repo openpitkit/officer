@@ -1157,6 +1157,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"trade": {
 		backup: map[string]string{
+			"venue_trade_id":      "VenueTradeID",
 			"external_id":         "ExternalID",
 			"order_id":            "Order",
 			"account_id":          "Account",
@@ -1187,6 +1188,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"lock_price":          "lock_price",
 			"commission_amount":   "commission_amount",
 			"commission_currency": "commission_currency",
+			"venue_trade_id":      "venue_trade_id",
 		},
 	},
 	"audit": {
@@ -1863,17 +1865,18 @@ func seedClientDataDriftRealm(
 		},
 	))
 	if _, err := rs.CreateTrade(ctx, domain.Trade{
-		Order:      order.ExternalID,
-		Account:    "acc-1",
-		BaseAsset:  "AAPL",
-		QuoteAsset: "USD",
-		Principal:  "operator",
-		Source:     domain.SourcePanel,
-		Side:       domain.OrderSideBuy,
-		Quantity:   "7.00",
-		Price:      "151.25",
-		LockPrice:  "151.00",
-		Commission: &domain.Commission{Amount: "-0.42", Currency: "USD"},
+		VenueTradeID: "venue-trade-sentinel-1",
+		Order:        order.ExternalID,
+		Account:      "acc-1",
+		BaseAsset:    "AAPL",
+		QuoteAsset:   "USD",
+		Principal:    "operator",
+		Source:       domain.SourcePanel,
+		Side:         domain.OrderSideBuy,
+		Quantity:     "7.00",
+		Price:        "151.25",
+		LockPrice:    "151.00",
+		Commission:   &domain.Commission{Amount: "-0.42", Currency: "USD"},
 	}); err != nil {
 		t.Fatalf("CreateTrade: %v", err)
 	}

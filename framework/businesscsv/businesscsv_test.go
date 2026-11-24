@@ -20,6 +20,7 @@ package businesscsv_test
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/csv"
 	"errors"
 	"strings"
 	"testing"
@@ -127,6 +128,28 @@ func TestEncodeOrdersFailsOnLockPriceError(t *testing.T) {
 	})
 	if !errors.Is(err, errUnreadableLock) || body != nil {
 		t.Fatalf("EncodeOrders = %q, %v; want no body and the lock price error", body, err)
+	}
+}
+
+func TestEncodeTradesVenueTradeIDLastColumn(t *testing.T) {
+	t.Parallel()
+	for _, venueTradeID := range []string{"", "venue,trade-42"} {
+		body, err := businesscsv.EncodeTrades([]domain.Trade{{
+			VenueTradeID: venueTradeID,
+			Commission:   &domain.Commission{Amount: "-0.12", Currency: "USD"},
+		}}, businesscsv.DelimiterComma)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := csv.NewReader(bytes.NewReader(body)).ReadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantHeader := "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency,venue_trade_id"
+		if len(rows) != 2 || strings.Join(rows[0], ",") != wantHeader ||
+			len(rows[1]) != 15 || rows[1][12] != "-0.12" || rows[1][13] != "USD" || rows[1][14] != venueTradeID {
+			t.Fatalf("trades CSV = %q", rows)
+		}
 	}
 }
 

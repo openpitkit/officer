@@ -188,12 +188,12 @@ rules:
       - pattern: '$M["passphrase"]'
       - pattern: '$X == "passphrase"'
       - pattern: '$X != "passphrase"'
-      - pattern: '$M["keyName"]'
-      - pattern: '$X == "keyName"'
-      - pattern: '$X != "keyName"'
-      - pattern: '$M["privateKey"]'
-      - pattern: '$X == "privateKey"'
-      - pattern: '$X != "privateKey"'
+      - pattern: '$M["apiKeyId"]'
+      - pattern: '$X == "apiKeyId"'
+      - pattern: '$X != "apiKeyId"'
+      - pattern: '$M["apiKeySecret"]'
+      - pattern: '$X == "apiKeySecret"'
+      - pattern: '$X != "apiKeySecret"'
       - patterns:
           - pattern: |
               switch $X {
@@ -202,7 +202,7 @@ rules:
               }
           - metavariable-regex:
               metavariable: $KEY
-              regex: '^"(apiKey|apiSecret|passphrase|keyName|privateKey)"$'
+              regex: '^"(apiKey|apiSecret|passphrase|apiKeyId|apiKeySecret)"$'
           - focus-metavariable: $KEY
       - patterns:
           - pattern-inside: |

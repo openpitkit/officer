@@ -99,6 +99,7 @@ func TestSendFillsAndCoreBalances(t *testing.T) {
 		t.Fatalf("client id length = %d", len(link.ClientOrderID))
 	}
 	partial := makeFill("3", "3", "9.25", false)
+	partial.VenueTradeID = "venue-trade-42"
 	partial.Price = "1.5"
 	final := makeFill("7", "10", "0.000", true)
 	f.fill(link, partial)
@@ -114,6 +115,9 @@ func TestSendFillsAndCoreBalances(t *testing.T) {
 		t.Fatalf("final order = %+v", detail.Order)
 	}
 	assertTrades(t, detail, []trading.Fill{partial, final})
+	if detail.Trades[0].VenueTradeID != partial.VenueTradeID || detail.Trades[1].VenueTradeID != "" {
+		t.Fatalf("trade venue identifiers = %+v", detail.Trades)
+	}
 	usd, found, err := f.n.GetBalance(testCtx, "desk", "USD")
 	must(t, err)
 	if !found {
