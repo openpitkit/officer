@@ -752,7 +752,7 @@ export interface SignedApproval {
   signedApproval: string;
   keyId: string;
   id: string;
-  verdict: "accept" | "reject" | "review" | "";
+  verdict: "accept" | "reject" | "review";
   reasons: CheckReject[];
   reviews: ReviewMark[];
 }
@@ -1414,7 +1414,7 @@ export interface SignedApprovalResponse {
   /** The order's opaque public handle. */
   id: string;
   /** Signed pre-trade verdict. */
-  verdict: "accept" | "reject" | "review" | "";
+  verdict: "accept" | "reject" | "review";
   /** Structured reject reasons; empty on accept. */
   reasons: CheckReject[];
   /** Ordered review marks; empty when no review is required. */

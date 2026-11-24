@@ -603,6 +603,22 @@ interface OrderInitialValues {
   venueMode?: TradingMode;
 }
 
+function orderInitialValues(
+  order: Order,
+  venueConnection: string | undefined,
+): OrderInitialValues {
+  return {
+    account: order.account,
+    baseAsset: order.baseAsset,
+    quoteAsset: order.quoteAsset,
+    side: order.side,
+    amountKind: order.amountKind,
+    amountValue: order.amountValue,
+    price: order.price === "0" ? "" : order.price,
+    venueConnection,
+  };
+}
+
 interface SubmitOrderDialogProps {
   open: boolean;
   onClose: () => void;
@@ -1003,6 +1019,18 @@ function SubmitOrderDialog({
     }
   }
 
+  function refreshAfterSubmitDecodeFailure(err: unknown, signal: AbortSignal) {
+    if (
+      !signal.aborted &&
+      err instanceof ApiError &&
+      err.code === "internal" &&
+      err.status === undefined
+    ) {
+      // The API may have recorded the order before response decoding failed.
+      onCreated();
+    }
+  }
+
   async function sendToSelectedVenue() {
     if (
       !account.trim() ||
@@ -1072,7 +1100,6 @@ function SubmitOrderDialog({
           );
           break;
         default:
-          onCreated();
           throw new ApiError("Missing trading decision verdict", "internal");
       }
       if (result.alertFailure) {
@@ -1086,6 +1113,7 @@ function SubmitOrderDialog({
       onClose();
       onOpenDetail(result.id, banner);
     } catch (err) {
+      refreshAfterSubmitDecodeFailure(err, controller.signal);
       setError(
         mutationErrorMessage(
           err,
@@ -1181,24 +1209,41 @@ function SubmitOrderDialog({
       ]
         .filter(Boolean)
         .join(" ");
+      const verdict = result.approval?.verdict;
+      let banner: DetailBanner | undefined;
+      switch (verdict) {
+        case "reject":
+          banner = {
+            tone: "danger",
+            text: [t("addOrder.preTradeRejected"), warning]
+              .filter(Boolean)
+              .join(" "),
+          };
+          break;
+        case "review":
+          banner = {
+            text: warning
+              ? t("addOrder.addedAwaitingReviewWithWarning", { warning })
+              : t("addOrder.addedAwaitingReview"),
+            tone: "warn",
+          };
+          break;
+        case "accept":
+        case undefined:
+          if (warning) {
+            banner = { text: warning, tone: alertFailure ? "warn" : "ok" };
+          }
+          break;
+        default:
+          throw new ApiError(
+            `Unexpected submit verdict ${JSON.stringify(verdict)}`,
+            "internal",
+          );
+      }
       onCreated();
       reset();
       onClose();
-      onOpenDetail(
-        result.order.id,
-        result.approval?.verdict === "review"
-          ? {
-              text: warning
-                ? t("addOrder.addedAwaitingReviewWithWarning", {
-                    warning,
-                  })
-                : t("addOrder.addedAwaitingReview"),
-              tone: "warn",
-            }
-          : warning
-            ? { text: warning, tone: alertFailure ? "warn" : "ok" }
-            : undefined,
-      );
+      onOpenDetail(result.order.id, banner);
     } catch (err) {
       if (controller.signal.aborted) {
         return;
@@ -1212,6 +1257,7 @@ function SubmitOrderDialog({
         setMissingAccountConfirmOpen(true);
         return;
       }
+      refreshAfterSubmitDecodeFailure(err, controller.signal);
       setError(errMessage(err));
     } finally {
       if (submitAbortRef.current === controller) {
@@ -3083,7 +3129,7 @@ function OrderDetailDialog({
       >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className="truncate pr-8">
               {t("detail.dialog.title", { orderExternalId })}
             </DialogTitle>
             <DialogDescription>
@@ -3492,19 +3538,12 @@ function OrderDetailDialog({
                                 orderExternalId,
                               })}
                               onClick={() => {
-                                onCloneOrder({
-                                  account: state.order.account,
-                                  baseAsset: state.order.baseAsset,
-                                  quoteAsset: state.order.quoteAsset,
-                                  side: state.order.side,
-                                  amountKind: state.order.amountKind,
-                                  amountValue: state.order.amountValue,
-                                  price:
-                                    state.order.price === "0"
-                                      ? ""
-                                      : state.order.price,
-                                  venueConnection: state.venueOrder?.connection,
-                                });
+                                onCloneOrder(
+                                  orderInitialValues(
+                                    state.order,
+                                    state.venueOrder?.connection,
+                                  ),
+                                );
                                 onClose();
                               }}
                             >
@@ -3627,7 +3666,7 @@ function OrderDetailDialog({
                           key={trade.id}
                           className="hover:bg-transparent"
                         >
-                          <TableCell className="nums text-xs text-muted-lt">
+                          <TableCell className="nums max-w-64 text-xs text-muted-lt">
                             <IdCell
                               value={trade.id}
                               copyTitle={t("common:rowActions.copyId")}
@@ -3789,17 +3828,12 @@ function OrderDetailDialog({
                     size="sm"
                     aria-label={t("clone.orderAriaLabel", { orderExternalId })}
                     onClick={() => {
-                      onCloneOrder({
-                        account: state.order.account,
-                        baseAsset: state.order.baseAsset,
-                        quoteAsset: state.order.quoteAsset,
-                        side: state.order.side,
-                        amountKind: state.order.amountKind,
-                        amountValue: state.order.amountValue,
-                        price:
-                          state.order.price === "0" ? "" : state.order.price,
-                        venueConnection: state.venueOrder?.connection,
-                      });
+                      onCloneOrder(
+                        orderInitialValues(
+                          state.order,
+                          state.venueOrder?.connection,
+                        ),
+                      );
                       onClose();
                     }}
                   >
@@ -4036,7 +4070,7 @@ function OrdersTable({
             onFocus={() => setSelectedIndex(index)}
             onKeyDown={(event) => onRowKeyDown(event, index, order)}
           >
-            <TableCell className="text-muted-lt">
+            <TableCell className="max-w-64 text-muted-lt">
               <div className="flex min-w-0 items-center gap-1">
                 <IdCell
                   value={order.id}
@@ -4159,16 +4193,7 @@ function OrdersTable({
                     orderExternalId: order.id,
                   })}
                   onClick={() =>
-                    onClone({
-                      account: order.account,
-                      baseAsset: order.baseAsset,
-                      quoteAsset: order.quoteAsset,
-                      side: order.side,
-                      amountKind: order.amountKind,
-                      amountValue: order.amountValue,
-                      price: order.price === "0" ? "" : order.price,
-                      venueConnection: order.venueConnection,
-                    })
+                    onClone(orderInitialValues(order, order.venueConnection))
                   }
                 />
               </RowActions>
@@ -4379,14 +4404,14 @@ function TradesTable({
             onFocus={() => setSelectedIndex(index)}
             onKeyDown={(event) => onRowKeyDown(event, index, trade)}
           >
-            <TableCell className="text-muted-lt">
+            <TableCell className="max-w-64 text-muted-lt">
               <IdCell
                 value={trade.id}
                 copyTitle={t("common:rowActions.copyId")}
                 copiedTitle={t("common:rowActions.copiedId")}
               />
             </TableCell>
-            <TableCell>
+            <TableCell className="max-w-64">
               <IdCell
                 value={trade.order}
                 copyTitle={t("common:rowActions.copyId")}

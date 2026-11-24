@@ -41,9 +41,13 @@ import {
 } from "@/api/spotFundsLimitMode";
 import type { PollingResult } from "@/api/usePolling";
 import { SidebarProvider } from "@/components/SidebarContext";
-import { renderWithApi as render } from "@/test/apiClient";
+import {
+  jsonResponse,
+  makeApi,
+  renderWithApi as render,
+} from "@/test/apiClient";
 import { shareLinkParams, skeletonColumns } from "@/test/pageHelpers";
-import { ApiError } from "@/framework";
+import { ApiError, type OfficerApi } from "@/framework";
 import i18n from "@/i18n";
 import { setAccountScope } from "@/lib/accountScope";
 import { LimitDialog } from "@/pages/LimitDialog";
@@ -229,7 +233,11 @@ function latestPolicyFiltersMatching(
 
 function renderLimits(
   initialEntry = "/policies",
-  options: { includeGroupsApi?: boolean; putLimit?: typeof putLimitMock } = {},
+  options: {
+    includeGroupsApi?: boolean;
+    putLimit?: typeof putLimitMock;
+    api?: Pick<OfficerApi, "fetchPoliciesPage" | "deleteLimit">;
+  } = {},
 ) {
   render(
     <I18nextProvider i18n={i18n}>
@@ -254,6 +262,7 @@ function renderLimits(
         putLimit: options.putLimit ?? putLimitMock,
         deleteLimit: deleteLimitMock,
         ...(options.includeGroupsApi ? { fetchGroups: fetchGroupsMock } : {}),
+        ...options.api,
       },
     },
   );
@@ -306,6 +315,43 @@ beforeEach(async () => {
   addLimitMock.mockResolvedValue(undefined);
   putLimitMock.mockResolvedValue(undefined);
   deleteLimitMock.mockResolvedValue(undefined);
+});
+
+it("reports an unknown policy kind in the list response", async () => {
+  const { useLimitsPage: useActualLimitsPage } =
+    await vi.importActual<typeof import("@/api/useLimits")>("@/api/useLimits");
+  useLimitsMock.mockImplementation(useActualLimitsPage);
+  const rate = {
+    kind: "rate_limit",
+    mode: "reject",
+    scope: "account",
+    account: "desk-alpha",
+    asset: "",
+    values: { rate: { windowMs: 60000, maxOrders: 20 } },
+  };
+  const unknown = {
+    ...rate,
+    kind: "exposure_limit",
+    values: { exposure: { maxNotional: "10000" } },
+  };
+  const fetchStub = vi.fn<typeof fetch>(async (input, init) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname !== "/app/api/v1/limits" || init?.method !== "GET") {
+      throw new Error(`Unexpected ${init?.method} ${url.pathname}`);
+    }
+    const policy = url.searchParams.get("policy");
+    const policies =
+      policy === null ? [rate, unknown] : policy === "rate" ? [rate] : [];
+    return jsonResponse({ policies, total: policies.length });
+  });
+  renderLimits("/policies", { api: makeApi(fetchStub) });
+
+  expect(await screen.findByText(/exposure_limit/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+  expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  expect(fetchStub.mock.calls.map(([, init]) => init?.method)).not.toContain(
+    "DELETE",
+  );
 });
 
 /** The global funds limit mode policy row as GET /limits lists it. */

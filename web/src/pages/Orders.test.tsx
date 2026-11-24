@@ -24,7 +24,11 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { renderWithApi as render } from "@/test/apiClient";
+import {
+  jsonResponse,
+  makeApi,
+  renderWithApi as render,
+} from "@/test/apiClient";
 import { filterSetShare, shareLinkParams } from "@/test/pageHelpers";
 import { holdPolling } from "@/test/polling";
 import { I18nextProvider } from "react-i18next";
@@ -45,7 +49,7 @@ import type {
   VenueOrder,
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
-import { ApiError, type ApiErrorCode } from "@/framework";
+import { ApiError, type ApiErrorCode, type OfficerApi } from "@/framework";
 import { badgeVariants } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { SidebarProvider } from "@/components/SidebarContext";
@@ -343,7 +347,11 @@ function setStoredPreference(key: string, value: string) {
   document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)}; Path=/; SameSite=Lax`;
 }
 
-function renderOrders(initialEntry: string, navigation?: ReactNode) {
+function renderOrders(
+  initialEntry: string,
+  navigation?: ReactNode,
+  apiOverrides?: Partial<OfficerApi>,
+) {
   render(
     <I18nextProvider i18n={i18n}>
       <ThemeProvider storageKey="pit-test-theme" defaultMode="light">
@@ -379,6 +387,7 @@ function renderOrders(initialEntry: string, navigation?: ReactNode) {
         cancelOrderReview: cancelOrderReviewMock,
         sendPaperOrder: sendPaperOrderMock,
         sendLiveOrder: sendLiveOrderMock,
+        ...apiOverrides,
       },
     },
   );
@@ -1029,6 +1038,7 @@ describe("Orders submit mode", () => {
     const detail = await screen.findByRole("dialog", {
       name: `Order ${sampleOrder.id}`,
     });
+    expect(within(detail).getByText("Order added")).toBeVisible();
     await within(detail).findByText("Account");
     await user.click(
       within(detail).getAllByRole("button", { name: "Close" })[0],
@@ -5850,6 +5860,102 @@ describe("Order review panel", () => {
       }
     },
   );
+
+  it("reports a rejected submit as rejected when opening order detail", async () => {
+    const user = userEvent.setup();
+    const order = { ...sampleOrder, status: "rejected" };
+    createOrderMock.mockResolvedValue({
+      order,
+      approval: {
+        verdict: "reject",
+        reasons: [
+          {
+            code: "policy_reject",
+            scope: "account",
+            policy: "order_size",
+            reason: "Order quantity exceeds the limit",
+            details: "10 > 5",
+          },
+        ],
+        reviews: [],
+      },
+    });
+    fetchOrderDetailMock.mockResolvedValue({ order, events: [], trades: [] });
+    renderOrders("/orders");
+    const submit = await openDialog(user, false);
+    await user.click(
+      within(submit).getByRole("tab", { name: "Submit and wait" }),
+    );
+    await fillOrderFields(user, submit);
+    await user.click(within(submit).getByRole("button", { name: "Add Order" }));
+
+    const detail = await screen.findByRole("dialog", {
+      name: `Order ${order.id}`,
+    });
+    expect(within(detail).queryByText("Order added")).not.toBeInTheDocument();
+    expect(
+      within(detail).getByText("Pre-trade checks rejected the order."),
+    ).toBeVisible();
+    expect(await within(detail).findByText("Rejected")).toBeVisible();
+  });
+
+  it("shows an unknown submit verdict and refreshes the orders list", async () => {
+    const { useOrdersPage: useActualOrdersPage } =
+      await vi.importActual<typeof import("@/api/useOrders")>(
+        "@/api/useOrders",
+      );
+    useOrdersMock.mockImplementation(useActualOrdersPage);
+    const polling = holdPolling();
+    const order = { ...sampleOrder, amountValue: "10", leavesQuantity: "10" };
+    let recorded = false;
+    const api = makeApi(async (input, init) => {
+      const { pathname } = new URL(String(input), "http://localhost");
+      if (pathname === "/app/api/v1/orders" && init?.method === "GET") {
+        return jsonResponse({
+          orders: recorded ? [order] : [],
+          total: recorded ? 1 : 0,
+        });
+      }
+      if (pathname === "/app/api/v1/orders/submit" && init?.method === "POST") {
+        recorded = true;
+        return jsonResponse(
+          {
+            id: order.id,
+            signedApproval: "approval-envelope",
+            keyId: "key-1",
+            verdict: "deferred",
+            reasons: [],
+            reviews: [],
+          },
+          201,
+        );
+      }
+      throw new Error(`Unexpected ${init?.method} ${pathname}`);
+    });
+
+    try {
+      const user = userEvent.setup();
+      renderOrders("/orders", undefined, {
+        createOrder: api.createOrder,
+        fetchOrdersPage: api.fetchOrdersPage,
+      });
+      const submit = await openDialog(user, false);
+      await user.click(
+        within(submit).getByRole("tab", { name: "Submit and wait" }),
+      );
+      await fillOrderFields(user, submit);
+      await user.click(
+        within(submit).getByRole("button", { name: "Add Order" }),
+      );
+
+      expect(
+        await within(submit).findByText(/verdict "deferred"/),
+      ).toBeVisible();
+      expect(await screen.findByText(order.id)).toBeVisible();
+    } finally {
+      polling.restore();
+    }
+  });
 
   it("shows review marks and every mode with a Confirm action", async () => {
     const dialog = await openSampleOrderDetail(userEvent.setup(), {
