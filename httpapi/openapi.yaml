@@ -10139,7 +10139,8 @@ components:
       description: >
         Provider credentials, accepted only on input. Never returned.
         Alpaca uses {apiKey, apiSecret}; IB uses {host, port, clientId?};
-        eToro uses {apiKey, userKey}.
+        eToro uses {apiKey, userKey}; Bybit uses {apiKey, apiSecret}, an HMAC
+        key pair.
         OKX uses {apiKey, apiSecret, passphrase, site}, all required.
         site is the OKX site the account is registered on: www.okx.com for
         global accounts, my.okx.com for EEA accounts or app.okx.com for US and
@@ -11338,7 +11339,9 @@ components:
                     (IB accepts day, gtc or ioc); Binance requires timeInForce
                     GTC, IOC or FOK for a limit order and an empty object for a
                     market order; eToro uses {} for market or {"timeInForce":"ioc"}
-                    for an IOC limit buy.
+                    for an IOC limit buy; Bybit requires timeInForce GTC, IOC
+                    or FOK for a limit order and an empty object for a market
+                    order.
                     OKX requires timeInForce GTC, IOC or FOK for a limit order
                     and an empty object for a market order.
                   additionalProperties: true

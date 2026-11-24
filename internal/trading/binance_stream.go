@@ -281,11 +281,11 @@ func (c *binanceConnector) parseBinanceExecution(ctx context.Context,
 		return event, true, venueStreamUnparsable(health.DiagWarn,
 			binanceFillUntimed, venueStreamReconciled)
 	}
-	qty, qtyErr := parseVenueDecimal(update.Original, true)
-	cum, cumErr := parseVenueDecimal(update.Cumulative, false)
-	_, amountErr := parseVenueDecimal(update.Quantity, true)
-	_, priceErr := parseVenueDecimal(update.Price, true)
-	_, commissionErr := parseVenueDecimal(update.Commission, false)
+	qty, qtyErr := parsePlainDecimal(update.Original, true)
+	cum, cumErr := parsePlainDecimal(update.Cumulative, false)
+	_, amountErr := parsePlainDecimal(update.Quantity, true)
+	_, priceErr := parsePlainDecimal(update.Price, true)
+	_, commissionErr := parsePlainDecimal(update.Commission, false)
 	if qtyErr != nil || cumErr != nil || amountErr != nil ||
 		priceErr != nil || commissionErr != nil {
 		return event, true, venueStreamUnparsable(health.DiagWarn,

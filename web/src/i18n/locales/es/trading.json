@@ -159,6 +159,17 @@
         "restrictKey": "Haga clic en {{editRestrictions}}, seleccione {{trustedIPs}} e introduzca la dirección IPv4 pública del equipo en el que se ejecuta Officer: sin esa restricción, una clave generada por el sistema solo permite lectura. Después marque {{spotTrading}} para que Officer pueda enviar órdenes y no habilite otros permisos."
       }
     },
+    "bybit": {
+      "openTestnet": "Abra la red de pruebas de Bybit y regístrese o inicie sesión.",
+      "openTestnetSite": "Abrir la red de pruebas de Bybit",
+      "generateKeys": "Abra la gestión de claves de API en la red de pruebas de Bybit y cree una clave de API generada por el sistema - Officer firma las solicitudes con HMAC-SHA256. Otorgue a la clave acceso de lectura y escritura y permiso para negociar al contado, y copie la API key y la clave secreta. Las conexiones simuladas utilizan la red de pruebas; las claves de prueba solo funcionan allí.",
+      "openApiManagement": "Abrir la gestión de claves de API de prueba",
+      "keepPageOpen": "Mantenga la página abierta - los campos de abajo piden ambos valores.",
+      "live": {
+        "createKey": "Abra la gestión de claves de API en el sitio de negociación real de Bybit y cree una clave de API generada por el sistema - Officer firma las solicitudes con HMAC-SHA256. Otorgue a la clave acceso de lectura y escritura y permiso para negociar al contado, y copie la API key y la clave secreta.",
+        "openApiManagement": "Abrir la gestión de claves de API reales"
+      }
+    },
     "etoro": {
       "logInAccount": "Inicie sesión en su cuenta de eToro.",
       "logIn": "Iniciar sesión en eToro",

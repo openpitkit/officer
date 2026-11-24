@@ -130,6 +130,14 @@ func TestDialStreamTLSVerification(t *testing.T) {
 	}
 }
 
+func TestSignHex(t *testing.T) {
+	// RFC 4231, section 4.3, test case 2.
+	const want = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+	if got := vendorhttp.SignHex("what do ya want for nothing?", "Jefe"); got != want {
+		t.Fatalf("published signature = %q, want %q", got, want)
+	}
+}
+
 func TestCopyClient(t *testing.T) {
 	for _, name := range []string{"nil", "default policy", "caller policy"} {
 		t.Run(name, func(t *testing.T) {

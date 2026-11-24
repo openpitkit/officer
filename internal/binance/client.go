@@ -21,9 +21,6 @@ package binance
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,12 +102,6 @@ func NewClient(baseURL string, credentials Credentials,
 	}
 }
 
-func sign(payload, secret string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(payload))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
 func (c *Client) wrap(operation string, err error,
 	signedRedactor *strings.Replacer,
 ) error {
@@ -153,7 +144,7 @@ func (c *Client) Signed(ctx context.Context, method, path string,
 	}
 	query.Set("timestamp", strconv.FormatInt(c.now().UnixMilli(), 10))
 	payload := query.Encode()
-	signature := sign(payload, c.credentials.APISecret)
+	signature := vendorhttp.SignHex(payload, c.credentials.APISecret)
 	signedQuery := payload + "&signature=" + signature
 	signedRedactor := strings.NewReplacer(
 		signedQuery, "[redacted]", signature, "[redacted]",

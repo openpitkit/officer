@@ -199,6 +199,13 @@ const BINANCE_KEEP_PAGE_OPEN: TradingGuideStep = {
   textKey: "create.binance.keepPageOpen",
   links: [],
 };
+const BYBIT_TESTNET_URL = "https://testnet.bybit.com/";
+const BYBIT_TESTNET_API_MANAGEMENT_URL =
+  "https://testnet.bybit.com/app/user/api-management";
+const BYBIT_KEEP_PAGE_OPEN: TradingGuideStep = {
+  textKey: "create.bybit.keepPageOpen",
+  links: [],
+};
 const ETORO_DOCS_URL =
   "https://api-portal.etoro.com/core/getting-started/authentication";
 const ETORO_LOG_IN: TradingGuideStep = {
@@ -410,6 +417,48 @@ const TRADING_PROVIDER_GUIDES: Record<
       ],
     },
   },
+  bybit: {
+    siteUrl: "https://www.bybit.com",
+    docsUrl: {
+      paper: BYBIT_TESTNET_API_MANAGEMENT_URL,
+      live: "https://bybit-exchange.github.io/docs/v5/guide",
+    },
+    steps: {
+      paper: [
+        {
+          textKey: "create.bybit.openTestnet",
+          links: [
+            {
+              labelKey: "create.bybit.openTestnetSite",
+              href: BYBIT_TESTNET_URL,
+            },
+          ],
+        },
+        {
+          textKey: "create.bybit.generateKeys",
+          links: [
+            {
+              labelKey: "create.bybit.openApiManagement",
+              href: BYBIT_TESTNET_API_MANAGEMENT_URL,
+            },
+          ],
+        },
+        BYBIT_KEEP_PAGE_OPEN,
+      ],
+      live: [
+        {
+          textKey: "create.bybit.live.createKey",
+          links: [
+            {
+              labelKey: "create.bybit.live.openApiManagement",
+              href: "https://www.bybit.com/app/user/api-management",
+            },
+          ],
+        },
+        BYBIT_KEEP_PAGE_OPEN,
+      ],
+    },
+  },
   okx: {
     siteUrl: "https://www.okx.com",
     docsUrl: { paper: OKX_PAPER_DOCS_URL, live: OKX_LIVE_DOCS_URL },
@@ -461,7 +510,8 @@ type TradingCredentialField = {
   notSetKey: string;
 };
 
-// Alpaca and Binance take an {apiKey, apiSecret} pair; OKX adds a passphrase.
+// Alpaca, Binance and Bybit take an {apiKey, apiSecret} pair.
+// OKX also requires a passphrase.
 const API_KEY_SECRET_FIELDS: TradingCredentialField[] = [
   {
     key: "apiKey",
@@ -486,6 +536,7 @@ const TRADING_PROVIDER_CREDENTIAL_FIELDS = new Map<
   ["test", []],
   ["alpaca", API_KEY_SECRET_FIELDS],
   ["binance", API_KEY_SECRET_FIELDS],
+  ["bybit", API_KEY_SECRET_FIELDS],
   [
     "okx",
     [

@@ -25,6 +25,39 @@ import (
 	fwtrading "go.openpit.dev/officer/framework/trading"
 )
 
+// parseSpotRoute reads a spot route: a limit order's timeInForce, which must
+// be GTC, IOC or FOK, or "" for a market order, whose route must be an empty
+// object. It refuses JSON that is not an object, null and any other field;
+// venue only names the venue in the JSON and unknown-field messages.
+func parseSpotRoute(raw, venue string, limit bool) (string, error) {
+	var route map[string]string
+	if json.Unmarshal([]byte(raw), &route) != nil || route == nil {
+		return "", fmt.Errorf("%w: invalid %s route JSON",
+			fwtrading.ErrRejected, venue)
+	}
+	for field := range route {
+		if field != "timeInForce" {
+			return "", fmt.Errorf("%w: unknown %s route field",
+				fwtrading.ErrRejected, venue)
+		}
+	}
+	tif, present := route["timeInForce"]
+	if !limit {
+		if present {
+			return "", fmt.Errorf("%w: market route must be empty",
+				fwtrading.ErrRejected)
+		}
+		return "", nil
+	}
+	switch tif {
+	case "GTC", "IOC", "FOK":
+		return tif, nil
+	default:
+		return "", fmt.Errorf("%w: limit timeInForce must be GTC, IOC or FOK",
+			fwtrading.ErrRejected)
+	}
+}
+
 // parseTimeInForceRoute validates a venue's timeInForce route.
 func parseTimeInForceRoute(raw, venue string, allowed ...string) (string, error) {
 	var route map[string]string

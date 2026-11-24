@@ -268,6 +268,52 @@ func TestLookupUsesCurrentInstrument(t *testing.T) {
 	}
 }
 
+func TestLookupUsesLinkCreatedAt(t *testing.T) {
+	for _, acknowledged := range []bool{true, false} {
+		name := "acknowledged"
+		if !acknowledged {
+			name = "unacknowledged"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			if !acknowledged {
+				f.venue.sendErr = errors.New("venue request timed out")
+			}
+			f.start()
+			order := f.submit("10")
+			link, err := f.runtime.Send(testCtx, order.ExternalID, f.dest)
+			if acknowledged {
+				must(t, err)
+			} else if !errors.Is(err, domain.ErrUpstream) {
+				t.Fatalf("unknown send = %v", err)
+			}
+			stored, found, err := f.st.FindVenueOrderByClientID(testCtx,
+				f.connection.ExternalID, link.ClientOrderID)
+			must(t, err)
+			if !found || stored.CreatedAt.IsZero() {
+				t.Fatalf("stored venue link missing creation time: %+v, found=%v", stored, found)
+			}
+			if (stored.VenueOrderID != "") != acknowledged {
+				t.Fatalf("stored venue order id = %q, acknowledged=%v", stored.VenueOrderID, acknowledged)
+			}
+			f.venue.setSnapshot(stored, trading.VenueStatusOpen, "0")
+			f.orderEvent(stored)
+			f.flush()
+			f.venue.mu.Lock()
+			refs := append([]trading.OrderRef(nil), f.venue.lookupRefs...)
+			f.venue.mu.Unlock()
+			if len(refs) == 0 {
+				t.Fatal("creation time lookup never reached connector")
+			}
+			for _, ref := range refs {
+				if !ref.CreatedAt.Equal(stored.CreatedAt) {
+					t.Fatalf("lookup CreatedAt = %v, want stored link CreatedAt %v", ref.CreatedAt, stored.CreatedAt)
+				}
+			}
+		})
+	}
+}
+
 func TestLookupInstrumentStoreError(t *testing.T) {
 	f := newFixture(t)
 	f.start()

@@ -351,6 +351,15 @@ Its fixture runs through `check-semgrep`.
 
 These rules have no approval marker.
 
+### Vendor HMAC signing
+
+`checks/semgrep/vendor-http-sign.yml` keeps the hex HMAC-SHA256 vendor
+signature in `vendorhttp.SignHex`. Under `internal/`, outside
+`internal/vendorhttp/` and Go tests, it rejects `hex.EncodeToString` or
+`fmt.Sprintf("%x", ...)` over the `Sum` of an `hmac.New(sha256.New, ...)`
+declared with `:=` or `var`, directly or through a variable. A base64 HMAC
+signature is allowed. Its fixture runs through `check-semgrep`.
+
 ### Approval marker
 
 `unapproved-entity-autocreate` is not an absolute prohibition. The construct

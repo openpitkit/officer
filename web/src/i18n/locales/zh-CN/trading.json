@@ -159,6 +159,17 @@
         "restrictKey": "点击 {{editRestrictions}}，选择 {{trustedIPs}}，并输入运行 Officer 的计算机的公网 IPv4 地址：未设置该限制时，系统生成的密钥只能读取。然后勾选 {{spotTrading}}，以便 Officer 下单，且不要启用其他权限。"
       }
     },
+    "bybit": {
+      "openTestnet": "请打开 Bybit 测试网，并注册或登录账户。",
+      "openTestnetSite": "打开 Bybit 测试网",
+      "generateKeys": "请在 Bybit 测试网上打开 API 密钥管理页面，并创建系统生成的 API 密钥 - Officer 使用 HMAC-SHA256 签名请求。请授予密钥读写权限和现货交易权限，然后复制 API key 和 API secret。模拟交易连接使用测试网；测试网密钥仅适用于该测试网。",
+      "openApiManagement": "打开测试网 API 密钥管理页面",
+      "keepPageOpen": "请保持页面打开 - 下方字段需要填写这两个值。",
+      "live": {
+        "createKey": "请在 Bybit 实盘网站上打开 API 密钥管理页面，并创建系统生成的 API 密钥 - Officer 使用 HMAC-SHA256 签名请求。请授予密钥读写权限和现货交易权限，然后复制 API key 和 API secret。",
+        "openApiManagement": "打开实盘 API 密钥管理页面"
+      }
+    },
     "etoro": {
       "logInAccount": "请登录您的 eToro 账户。",
       "logIn": "登录 eToro",

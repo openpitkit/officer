@@ -231,6 +231,13 @@ const VENUE_ORDER_OPTIONS: Record<
     },
     docsUrl: "https://developers.binance.com/docs/binance-spot-api-docs/enums",
   },
+  bybit: {
+    timeInForce: {
+      limit: ["GTC", "IOC", "FOK"],
+      market: [],
+    },
+    docsUrl: "https://bybit-exchange.github.io/docs/v5/enum#timeinforce",
+  },
   etoro: {
     timeInForce: {
       limit: ["ioc"],

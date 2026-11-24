@@ -159,6 +159,17 @@
         "restrictKey": "Click {{editRestrictions}}, select {{trustedIPs}} and enter the public IPv4 address of the machine running Officer: without that restriction, a system-generated key can only read. Then check {{spotTrading}} so Officer can place orders, and enable no other permission."
       }
     },
+    "bybit": {
+      "openTestnet": "Open the Bybit testnet and sign up or log in.",
+      "openTestnetSite": "Open Bybit testnet",
+      "generateKeys": "Open API management on the Bybit testnet and create a system-generated API key - Officer signs requests with HMAC-SHA256. Give the key read-write access and permission to trade spot, then copy the API key and the API secret. Paper connections use the testnet; testnet keys work only there.",
+      "openApiManagement": "Open testnet API management",
+      "keepPageOpen": "Keep the page open - the fields below ask for both values.",
+      "live": {
+        "createKey": "Open API management on the Bybit live site and create a system-generated API key - Officer signs requests with HMAC-SHA256. Give the key read-write access and permission to trade spot, then copy the API key and the API secret.",
+        "openApiManagement": "Open live API management"
+      }
+    },
     "etoro": {
       "logInAccount": "Log in to your eToro account.",
       "logIn": "Log in at eToro",

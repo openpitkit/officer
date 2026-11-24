@@ -31,6 +31,11 @@ import (
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 )
 
+type bybitOpRequest struct {
+	Op   string   `json:"op"`
+	Args []string `json:"args,omitempty"`
+}
+
 func TestNormalizeBybitSubscriptions(t *testing.T) {
 	t.Parallel()
 

@@ -318,7 +318,8 @@ func (w *worker) reconcile(link domain.VenueOrder) error {
 	if err != nil {
 		return err
 	}
-	ref := OrderRef{ClientOrderID: link.ClientOrderID, VenueOrderID: link.VenueOrderID, Side: detail.Order.Side}
+	ref := OrderRef{ClientOrderID: link.ClientOrderID, VenueOrderID: link.VenueOrderID,
+		Side: detail.Order.Side, CreatedAt: link.CreatedAt}
 	if mapped {
 		ref.Symbol = instrument.ExternalSymbol
 	}
