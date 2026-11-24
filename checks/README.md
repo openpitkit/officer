@@ -87,6 +87,27 @@ which review still catches:
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
 
+### `account-chain-finally`
+
+`checks/semgrep/account-chain-finally.yml` checks for `Finally` before `Run`
+in production Go under `framework/`. It covers inline chains, local short
+declarations initialized with `asyncengine.Chain`, and typed `ChainBuilder`
+parameters of functions and methods. It exempts a `CheckOrder` chain run inline
+or run directly from its local declaration with no write step called on it
+before `Run`.
+
+Known misses include reassignments, extra aliases, steps added in another
+function, and builders returned by helpers, read from struct fields, or
+received as a function-literal parameter. For
+split `CheckOrder` chains, a step in an `else`, `for`, `switch`, or closure body
+escapes detection. The rule checks the same block and the then-branch of one
+enclosing `if`. A `Finally` that ignores its outcome or fails to escalate a
+post-commit failure passes the check.
+
+Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
 ### `store-transaction-helper`
 
 `checks/semgrep/store-transaction-helper.yml` requires SQLite store transactions

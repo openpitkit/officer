@@ -598,13 +598,20 @@ func (n *localNode) CancelOrderReview(
 			state.err = fmt.Errorf("record order review cancellation: %w", err)
 			return state.err
 		}
+		state.persistenceCompleted = true
 		state.order.Status = domain.OrderStatusCancelled
 		state.order.Leaves = "0"
+		return nil
+	}).Then(func(_ context.Context, state *orderReviewChainState) error {
 		if err := n.audit(ctx, caller, reviewActionAudit(state.order, state.account.EngineAccountID,
 			domain.AuditActionCancelOrderReview, domain.AuditDetailCancelOrderReview)); err != nil {
 			state.err = n.fatalPostCommitAudit("audit order review cancellation", state.order.Account, err)
 		}
 		return state.err
+	}).Finally(func(_ context.Context, state *orderReviewChainState, outcome asyncengine.ChainOutcome) error {
+		state.err = n.accountChainTerminalError("cancel order review", state.order.Account,
+			state.err, state.persistenceCompleted, state.persistenceCompleted, outcome)
+		return nil
 	})
 	_, chainErr := runner.Run(ctx, eng.AsyncEngine()).Await(context.Background())
 	if err := accountChainRunError("cancel order review", state.err, chainErr); err != nil {

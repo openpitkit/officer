@@ -25,12 +25,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.openpit.dev/openpit/pretrade"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/signing"
 )
 
 func TestStoredHeldReservationQuantity(t *testing.T) {
@@ -1423,11 +1425,13 @@ type panicOrderReviewRealm struct {
 	audit bool
 }
 
-func (r *panicOrderReviewRealm) RecordOrderSettlement(ctx context.Context, settlement domain.OrderSettlement) (domain.ExternalID, error) {
+func (r *panicOrderReviewRealm) RecordOrderSettlementWithAttestation(
+	ctx context.Context, settlement domain.OrderSettlement, attest store.EventAttestor,
+) (domain.ExternalID, error) {
 	if !r.audit {
 		panic("review settlement panic")
 	}
-	return r.RealmStore.RecordOrderSettlement(ctx, settlement)
+	return r.RealmStore.RecordOrderSettlementWithAttestation(ctx, settlement, attest)
 }
 
 func (r *panicOrderReviewRealm) AppendAudit(ctx context.Context, entry store.AuditEntry) error {
@@ -1439,7 +1443,7 @@ func (r *panicOrderReviewRealm) AppendAudit(ctx context.Context, entry store.Aud
 
 func TestLocalNode_OrderReviewPostCommitPanic(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate, "force", "cancel_held"} {
+	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate, "force", "cancel_held", "cancel_unheld"} {
 		for _, step := range []string{"settlement", "audit"} {
 			if mode == "force" && step == "settlement" {
 				continue
@@ -1447,31 +1451,90 @@ func TestLocalNode_OrderReviewPostCommitPanic(t *testing.T) {
 			t.Run(mode+"/"+step, func(t *testing.T) {
 				t.Parallel()
 				submitMode := mode
-				if mode == "force" || mode == "cancel_held" {
+				if mode == "force" || strings.HasPrefix(mode, "cancel_") {
 					submitMode = domain.SubmitModeHold
 				}
 				n, eng, waiting := newOrderReviewTestNode(t, submitMode, mode == "force" || mode == "cancel_held")
 				before := reviewTestDetail(t, n, waiting.ExternalID)
 				original := n.realm
+				ctx := context.Background()
+				signer, err := signing.New(original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := signer.GenerateKey(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				attestFor := func(request domain.AttestationRequestType) store.EventAttestor {
+					return func(_ context.Context, event domain.OrderEvent) (domain.EventAttestation, bool, error) {
+						if request == domain.AttestationRequestReviewCancel {
+							if event.Type != domain.OrderEventCancelled {
+								return domain.EventAttestation{}, false, nil
+							}
+						} else {
+							switch event.Type {
+							case domain.OrderEventSubmitted, domain.OrderEventPreTradeAccepted,
+								domain.OrderEventPreTradeRejected, domain.OrderEventPreTradeReview,
+								domain.OrderEventCommitted:
+								// These decision events are signed in both modes.
+							case domain.OrderEventFill, domain.OrderEventCommission:
+								if submitMode != domain.SubmitModeImmediate {
+									return domain.EventAttestation{}, false, nil
+								}
+							default:
+								return domain.EventAttestation{}, false, nil
+							}
+						}
+						issuedAt := time.Now().UTC().Format(time.RFC3339Nano)
+						envelope, err := signer.Sign(domain.ApprovalPayload{
+							Version: 1, RequestType: string(request), Mode: submitMode,
+							OrderExternalID: event.Order.String(), EventExternalID: event.ExternalID.String(),
+							Principal: event.Principal, IssuedAt: issuedAt,
+							KeyID: key.KeyID, Alg: key.Alg,
+						})
+						if err != nil {
+							return domain.EventAttestation{}, false, err
+						}
+						return domain.EventAttestation{
+							SignedEnvelope: envelope, KeyID: key.KeyID, Alg: key.Alg,
+							RequestType: request, Mode: submitMode, IssuedAt: issuedAt,
+						}, true, nil
+					}
+				}
 				n.realm = &panicOrderReviewRealm{RealmStore: original, audit: step == "audit"}
 				var fatals []error
 				n.fatal = func(err error) { fatals = append(fatals, err) }
-				var err error
 				switch mode {
 				case "force":
-					_, _, err = n.ForceOrderReview(context.Background(), waiting.ExternalID, testCaller, nil)
+					_, _, err = n.ForceOrderReview(ctx, waiting.ExternalID, testCaller,
+						func(domain.Order, engine.OrderResult) store.EventAttestor {
+							return attestFor(domain.AttestationRequestReviewForce)
+						})
 				case "cancel_held":
 					eng.execReportOutcomes = heldReviewCancelOutcomes()
-					_, err = n.CancelOrderReview(context.Background(), waiting.ExternalID, testCaller, nil)
+					fallthrough
+				case "cancel_unheld":
+					_, err = n.CancelOrderReview(ctx, waiting.ExternalID, testCaller,
+						attestFor(domain.AttestationRequestReviewCancel))
 				default:
-					_, _, err = confirmReviewForTest(n, mode, waiting.ExternalID, nil)
+					_, _, err = confirmReviewForTest(n, mode, waiting.ExternalID,
+						attestFor(domain.AttestationRequestReviewConfirm))
 				}
-				if len(fatals) != 1 {
+				unheldSettlement := mode == "cancel_unheld" && step == "settlement"
+				if unheldSettlement {
+					if len(fatals) != 0 {
+						t.Fatalf("fatal calls = %d, want none before unheld cancel commits; err=%v", len(fatals), err)
+					}
+				} else if len(fatals) != 1 {
 					t.Fatalf("fatal calls = %d, want exactly one; err=%v", len(fatals), err)
 				}
 				cause := "review " + step + " panic"
-				if err == nil || !strings.Contains(err.Error(), cause) || !strings.Contains(fatals[0].Error(), cause) {
-					t.Fatalf("panic error=%v fatal=%v, want %q", err, fatals[0], cause)
+				if err == nil || !strings.Contains(err.Error(), cause) {
+					t.Fatalf("panic error = %v, want %q", err, cause)
+				}
+				if !unheldSettlement && !strings.Contains(fatals[0].Error(), cause) {
+					t.Fatalf("panic fatal = %v, want %q", fatals[0], cause)
 				}
 				n.realm = original
 				after := reviewTestDetail(t, n, waiting.ExternalID)
@@ -1479,7 +1542,7 @@ func TestLocalNode_OrderReviewPostCommitPanic(t *testing.T) {
 					if !reflect.DeepEqual(before, after) || after.Order.Status != domain.OrderStatusAwaitingReview || after.Review == nil {
 						t.Fatalf("settlement panic changed waiting order: %+v", after)
 					}
-					if !strings.Contains(fatals[0].Error(), "post-engine persistence failure") {
+					if !unheldSettlement && !strings.Contains(fatals[0].Error(), "post-engine persistence failure") {
 						t.Fatalf("settlement panic fatal = %v, want persistence failure", fatals[0])
 					}
 				} else {
