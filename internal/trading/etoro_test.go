@@ -445,8 +445,12 @@ func TestEtoroLookupResponseErrors(t *testing.T) {
 				}
 				var diagnostics []health.Diagnostic
 				c.reportDiag = func(d health.Diagnostic) { diagnostics = append(diagnostics, d) }
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
+				ctx := t.Context()
+				if tc.name == "body-deadline" {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, time.Second)
+					defer cancel()
+				}
 				_, found, err := c.Lookup(ctx, site.ref)
 				if !found || err == nil {
 					t.Fatalf("response failure must leave the order pending: found=%t err=%v", found, err)

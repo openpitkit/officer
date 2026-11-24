@@ -196,24 +196,10 @@ func subscribeIB(t *testing.T, c *ibConnector) <-chan fwtrading.Event {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event := nextIBEvent(t, events); event.Kind != fwtrading.EventConnected {
+	if event := nextEvent(t, events); event.Kind != fwtrading.EventConnected {
 		t.Fatalf("first event = %v", event)
 	}
 	return events
-}
-
-func nextIBEvent(t *testing.T, events <-chan fwtrading.Event) fwtrading.Event {
-	t.Helper()
-	select {
-	case event, ok := <-events:
-		if !ok {
-			t.Fatal("event stream closed")
-		}
-		return event
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for IB event")
-		return fwtrading.Event{}
-	}
 }
 
 func ibTestOrder() fwtrading.Order {
@@ -311,12 +297,23 @@ func TestIBSend(t *testing.T) {
 				}
 			}
 			c := testIBConnector(t, v)
+			if kind == "timeout" || kind == "ambiguous" {
+				// The caller's deadline is the only one that can end the request.
+				c.timeout = time.Hour
+			}
 			if kind != "not-ready" {
 				subscribeIB(t, c)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-			defer cancel()
+			ctx := t.Context()
+			if kind == "timeout" || kind == "ambiguous" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 25*time.Millisecond)
+				defer cancel()
+			}
 			ack, err := c.Send(ctx, ibTestOrder())
+			if (kind == "timeout" || kind == "ambiguous") && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.Fatal("Send returned before its deadline")
+			}
 			switch kind {
 			case "ack", "ack-before-reject":
 				if err != nil || ack.VenueOrderID != "12345" {

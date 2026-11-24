@@ -40,6 +40,7 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/signing"
 )
@@ -275,7 +276,7 @@ func (h *coinbaseRuntimeTest) push() {
 
 func (h *coinbaseRuntimeTest) wait(order domain.Order, status domain.OrderStatus, count int) {
 	h.t.Helper()
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		detail, err := h.realm.GetOrder(h.ctx, order.ExternalID)
 		h.must(err)
 		return detail.Order.Status == status && len(detail.Trades) == count

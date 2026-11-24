@@ -385,7 +385,8 @@ var (
 
 // serveWithin answers one GET of list.path?query against a fresh fake service
 // and fails t unless the answer comes within a second, so a bound that sizes
-// work by its exponent fails instead of stalling the suite.
+// work by its exponent fails after the answer returns. A call that never
+// returns is left to go test's -timeout.
 func serveWithin(t *testing.T, list boundsList, query string) (*httptest.ResponseRecorder, *fakeService) {
 	t.Helper()
 	svc := &fakeService{}
@@ -399,19 +400,15 @@ func serveWithin(t *testing.T, list boundsList, query string) (*httptest.Respons
 
 // serveWithinASecond answers req on h and fails t unless the answer comes
 // within a second, so a value that sizes work by its exponent fails the test
-// instead of stalling the suite.
+// after the answer returns. A call that never returns is left to go test's
+// -timeout.
 func serveWithinASecond(t *testing.T, h http.Handler, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		h.ServeHTTP(rec, req)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("%s %.80s did not answer within a second", req.Method, req.URL.RequestURI())
+	start := time.Now()
+	h.ServeHTTP(rec, req)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("%s %.80s took %v, want under a second", req.Method, req.URL.RequestURI(), elapsed)
 	}
 	return rec
 }

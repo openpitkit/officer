@@ -81,13 +81,7 @@ func TestStopDuringClaim(t *testing.T) {
 					t.Errorf("cleanup Stop: %v", err)
 				}
 			})
-			timer := time.NewTimer(5 * time.Second)
-			defer timer.Stop()
-			select {
-			case <-store.entered:
-			case <-timer.C:
-				t.Fatal("scheduler did not enter Claim")
-			}
+			<-store.entered // Worker enters the store claim.
 			if err := worker.Stop(); !errors.Is(err, test.want) {
 				t.Fatalf("Stop: got %v, want %v", err, test.want)
 			}

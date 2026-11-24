@@ -449,24 +449,18 @@ func TestHostConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Subscribe: %v", err)
 			}
-			waitCtx, stopWaiting := context.WithTimeout(t.Context(), time.Second)
-			defer stopWaiting()
-			select {
-			case update, ok := <-updates:
-				if !ok {
-					t.Fatal("subscription channel closed before its update")
-				}
-				if update.Base != base || update.Quote != quote {
-					t.Fatalf(
-						"update asset ids = %d/%d, want %d/%d",
-						update.Base,
-						update.Quote,
-						base,
-						quote,
-					)
-				}
-			case <-waitCtx.Done():
-				t.Fatal("timed out waiting for subscription update")
+			update, ok := <-updates // Subscription delivers its first quote.
+			if !ok {
+				t.Fatal("subscription channel closed before its update")
+			}
+			if update.Base != base || update.Quote != quote {
+				t.Fatalf(
+					"update asset ids = %d/%d, want %d/%d",
+					update.Base,
+					update.Quote,
+					base,
+					quote,
+				)
 			}
 			select {
 			case _, ok := <-updates:
@@ -477,18 +471,8 @@ func TestHostConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
 			default:
 			}
 			test.stop(connector, cancel)
-			closeWaitCtx, stopCloseWait := context.WithTimeout(
-				t.Context(),
-				time.Second,
-			)
-			defer stopCloseWait()
-			select {
-			case _, ok := <-updates:
-				if ok {
-					t.Fatal("subscription channel remained open after stop")
-				}
-			case <-closeWaitCtx.Done():
-				t.Fatal("timed out waiting for subscription channel close")
+			if _, ok := <-updates; ok { // Subscription closes after stop.
+				t.Fatal("subscription channel remained open after stop")
 			}
 		})
 	}

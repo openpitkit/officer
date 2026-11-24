@@ -41,6 +41,7 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/signing"
 )
@@ -375,7 +376,7 @@ func (h *etoroRuntimeTest) streamBarrier() {
 	if !etoroOrderPush(h.t, h.ctx, h.stream, "42") {
 		h.t.Fatal("failed to push eToro stream barrier")
 	}
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		h.c.ordersMu.Lock()
 		defer h.c.ordersMu.Unlock()
 		return slices.Equal(h.c.held, []string{"42"})
@@ -384,7 +385,7 @@ func (h *etoroRuntimeTest) streamBarrier() {
 
 func (h *etoroRuntimeTest) waitStatus(order domain.Order, status domain.OrderStatus) {
 	h.t.Helper()
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		return h.detail(order).Order.Status == status
 	}) // wait for the requested order status
 }
@@ -544,7 +545,7 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		for range 3 {
 			h.push()
 		}
-		waitForTrading(func() bool {
+		polltest.Until(func() bool {
 			h.c.ordersMu.Lock()
 			defer h.c.ordersMu.Unlock()
 			return len(h.c.held) == 1
@@ -581,7 +582,7 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		before := len(h.lookups)
 		h.mu.Unlock()
 		h.push()
-		waitForTrading(func() bool {
+		polltest.Until(func() bool {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			return len(h.lookups) > before

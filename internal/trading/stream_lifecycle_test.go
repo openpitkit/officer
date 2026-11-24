@@ -129,9 +129,6 @@ func TestStreamLifecycleSubscribe(t *testing.T) {
 }
 
 func TestStreamLifecycleCloseWaits(t *testing.T) {
-	// A blocked mutex prevents synctest.Wait and fake time from advancing.
-	timeout := time.NewTimer(5 * time.Second)
-	defer timeout.Stop()
 	synctest.Test(t, func(t *testing.T) {
 		var s streamLifecycle
 		ctx, cancel := context.WithCancel(context.Background())
@@ -185,15 +182,11 @@ func TestStreamLifecycleCloseWaits(t *testing.T) {
 				func(message string) string { return message })
 			close(subscribed)
 		}()
-		select {
-		case <-subscribed:
-			synctest.Wait()
-			const want = "test: connector is closed"
-			if subscribeOut != nil || subscribeErr == nil || subscribeErr.Error() != want {
-				t.Errorf("Subscribe = (%v, %v), want (nil, %q)", subscribeOut, subscribeErr, want)
-			}
-		case <-timeout.C:
-			t.Error("Subscribe blocked while Close waited for the stream loop")
+		<-subscribed // Subscribe returns while Close waits for the stream loop.
+		synctest.Wait()
+		const want = "test: connector is closed"
+		if subscribeOut != nil || subscribeErr == nil || subscribeErr.Error() != want {
+			t.Errorf("Subscribe = (%v, %v), want (nil, %q)", subscribeOut, subscribeErr, want)
 		}
 		close(release)
 		<-closed

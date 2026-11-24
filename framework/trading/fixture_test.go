@@ -40,6 +40,7 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/signing"
 )
@@ -393,23 +394,12 @@ func (f *fixture) detail(order domain.Order) domain.OrderDetail {
 	must(f.t, err)
 	return detail
 }
-func waitFor(t *testing.T, check func() bool, what string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if check() {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
 func (f *fixture) flush() {
 	f.t.Helper()
 	f.quiet++
 	marker := fmt.Sprintf("quiet-%d", f.quiet)
 	f.venue.push(trading.Event{Kind: trading.EventOrder, Ref: trading.OrderRef{ClientOrderID: marker}})
-	waitFor(f.t, func() bool { return strings.Contains(f.logs.text(), "\"client_order_id\":\""+marker+"\"") }, "worker queue barrier")
+	polltest.Until(func() bool { return strings.Contains(f.logs.text(), "\"client_order_id\":\""+marker+"\"") }) // Worker log records the queue barrier.
 }
 func (f *fixture) fill(link domain.VenueOrder, fill trading.Fill) {
 	f.venue.push(trading.Event{Kind: trading.EventFill,

@@ -306,8 +306,6 @@ func TestLocalNode_ConcurrentLimitAdds(t *testing.T) {
 			case <-realm.firstRead:
 			case r := <-results:
 				t.Fatalf("first Add returned before its barrier read: %v", r.err)
-			case <-time.After(10 * time.Second):
-				t.Fatal("first Add never reached its barrier read")
 			}
 			go func() {
 				ctx := context.WithValue(context.Background(), limitWriteContextKey{}, 1)

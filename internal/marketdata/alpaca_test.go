@@ -470,7 +470,7 @@ func TestAlpacaDialRefusesRedirect(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	conn, err := newTestAlpacaConnector(t).dial(ctx, server.URL)
 	if err == nil {

@@ -28,6 +28,7 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 type blockingStatusMarketDataRuntime struct {
@@ -258,10 +259,7 @@ func TestService_ListMarketDataKeepsManagerSnapshotAfterEngineRebuild(t *testing
 		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"),
 		Mark: "185", AsOf: now,
 	}
-	deadline := time.Now().Add(time.Second)
-	for len(manager.QuoteSnapshots()) != 1 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
+	polltest.Until(func() bool { return len(manager.QuoteSnapshots()) == 1 })
 	if snapshots := manager.QuoteSnapshots(); len(snapshots) != 1 {
 		t.Fatalf("accepted quote snapshots = %+v, want one", snapshots)
 	}
@@ -329,10 +327,7 @@ func TestService_ListMarketDataKeepsManagerSnapshotWhileManagerStopped(t *testin
 		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"),
 		Mark: "185", AsOf: now,
 	}
-	deadline := time.Now().Add(time.Second)
-	for len(manager.QuoteSnapshots()) != 1 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
+	polltest.Until(func() bool { return len(manager.QuoteSnapshots()) == 1 })
 	if snapshots := manager.QuoteSnapshots(); len(snapshots) != 1 {
 		t.Fatalf("accepted quote snapshots = %+v, want one", snapshots)
 	}

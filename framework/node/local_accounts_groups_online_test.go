@@ -1157,8 +1157,7 @@ func TestLocalNode_GroupOperationsWaitForLaneWork(t *testing.T) {
 			if err := <-done; err != nil {
 				t.Fatalf("operation after the lane freed: %v", err)
 			}
-			waitCtx, cancel := context.WithTimeout(ctx, time.Second)
-			defer cancel()
+			waitCtx := t.Context()
 			if _, err := held.Await(waitCtx); err != nil {
 				t.Fatalf("lane task: %v", err)
 			}

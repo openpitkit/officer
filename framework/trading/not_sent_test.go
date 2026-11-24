@@ -24,7 +24,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/trading"
@@ -214,11 +213,7 @@ func TestSendNotSentAfterClaimCleanup(t *testing.T) {
 				}
 				if deleteFails {
 					st.deleteFail.Store(false)
-					select {
-					case <-st.deleted:
-					case <-time.After(20 * time.Second):
-						t.Fatal("failed delete did not leave the link pending for reconciliation")
-					}
+					<-st.deleted
 					_, found, err := f.st.GetVenueOrder(testCtx, order.ExternalID)
 					must(t, err)
 					if found {

@@ -29,7 +29,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -322,8 +321,7 @@ func TestHandlerRejectsSessionReuseByDifferentCaller(t *testing.T) {
 	transport := &principalTransport{principal: "session-owner"}
 	session := connectHTTPClient(t, httpServer.URL, transport)
 	transport.setPrincipal("intruder")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	if _, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: "caller"}); err == nil {
 		t.Fatal("tool call under a different caller succeeded")
 	}
@@ -344,8 +342,7 @@ func TestHandlerEndsSessionOpenedUnderOtherAccountFeatures(t *testing.T) {
 	httpServer := httptest.NewServer(newCallerHTTPHandler(t, src))
 	defer httpServer.Close()
 	transport := &principalTransport{principal: "agent"}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 
 	stale := connectHTTPClient(t, httpServer.URL, transport)
 	src.set(backend.AccountFeatures{Account: "default"})

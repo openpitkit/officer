@@ -38,6 +38,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func etoroReadRequest(t *testing.T, ctx context.Context, conn *websocket.Conn, operation string) string {
@@ -153,7 +154,7 @@ func etoroAssertOrderEvent(t *testing.T, event fwtrading.Event, client, venue st
 func TestEtoroStreamTopicsAndReconnect(t *testing.T) {
 	for _, demo := range []bool{true, false} {
 		t.Run(fmt.Sprint(demo), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			var mu sync.Mutex
 			seen := make(map[string]bool)
@@ -228,7 +229,7 @@ func TestEtoroStreamAcknowledgements(t *testing.T) {
 		{"subscribe-mismatch", "Subscribe", `{"id":%q,"operation":"Authenticate","success":true}`, "acknowledgement mismatch", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			closed := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +271,7 @@ func TestEtoroStreamAcknowledgements(t *testing.T) {
 func TestEtoroStreamCorrelation(t *testing.T) {
 	for _, install := range []string{"send-before", "send-after", "lookup-after"} {
 		t.Run(install, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			streams := make(chan *websocket.Conn, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -333,16 +334,12 @@ func TestEtoroStreamCorrelation(t *testing.T) {
 				if !etoroPush(t, ctx, conn, "barrier", "{}") {
 					t.Fatal("failed to push eToro correlation barrier")
 				}
-				select {
-				case <-diag:
-				case <-ctx.Done():
-					t.Fatal("stream did not reach correlation barrier")
-				}
-				waitForTrading(func() bool {
+				<-diag // Stream reaches the correlation barrier.
+				polltest.Until(func() bool {
 					c.ordersMu.Lock()
 					defer c.ordersMu.Unlock()
 					return len(c.held) == 1
-				}) // held update
+				}) // Correlation queue holds the pending update.
 				mapOrder()
 				etoroAssertOrderEvent(t, nextEvent(t, events), etoroTestCOID, "9007199254740993")
 			}
@@ -356,7 +353,7 @@ func TestEtoroStreamCorrelation(t *testing.T) {
 }
 
 func TestEtoroStreamReconnectBackoff(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	attempts := make(chan time.Time, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -379,12 +376,7 @@ func TestEtoroStreamReconnectBackoff(t *testing.T) {
 		if nextEvent(t, events).Kind != fwtrading.EventConnected {
 			t.Fatal("Subscribe acknowledgement did not connect")
 		}
-		var at time.Time
-		select {
-		case at = <-attempts:
-		case <-ctx.Done():
-			t.Fatal("dial timestamp missing")
-		}
+		at := <-attempts // Connection attempt records its timestamp.
 		if i > 0 {
 			minimum := etoroReconnectMin * time.Duration(1<<(i-1))
 			if elapsed := at.Sub(previous); elapsed < minimum-25*time.Millisecond {
@@ -398,7 +390,7 @@ func TestEtoroStreamReconnectBackoff(t *testing.T) {
 func TestEtoroStreamHealthyAfterOrder(t *testing.T) {
 	for _, order := range []bool{false, true} {
 		t.Run(fmt.Sprint(order), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn := acceptAlpaca(t, w, r)
@@ -431,7 +423,7 @@ func TestEtoroStreamHealthyAfterOrder(t *testing.T) {
 func TestEtoroStreamTerminalLookupForgetsOrder(t *testing.T) {
 	for _, status := range []string{"3", "4"} {
 		t.Run(status, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
@@ -485,7 +477,7 @@ func TestEtoroStreamTerminalLookupForgetsOrder(t *testing.T) {
 }
 
 func TestEtoroStreamFinishedBound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -547,7 +539,7 @@ func TestEtoroStreamFinishedBound(t *testing.T) {
 }
 
 func TestEtoroStreamUnknownPushOrderID(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn := acceptAlpaca(t, w, r)
@@ -584,7 +576,7 @@ func TestEtoroStreamUnknownPushOrderID(t *testing.T) {
 }
 
 func TestEtoroStreamHeldBound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	streams := make(chan *websocket.Conn, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -610,19 +602,15 @@ func TestEtoroStreamHeldBound(t *testing.T) {
 		}
 	}
 	for range 2 {
-		select {
-		case d := <-diagnostics:
-			want := health.Diagnostic{
-				Code: health.CodeInternalError, Kind: health.DiagKindProvider, Level: health.DiagWarn,
-				Title: "The correlation queue for stream updates is full", Detail: etoroHeldEvicted,
-				Remediation: "Updates for orders placed outside Officer can fill this queue. " +
-					"An affected Officer order is resolved at the next stream reconnect or restart.",
-			}
-			if !reflect.DeepEqual(d, want) {
-				t.Fatalf("eviction must report a correlation queue warning with reconnect recovery: got %+v, want %+v", d, want)
-			}
-		case <-ctx.Done():
-			t.Fatal("held update eviction was silent")
+		d := <-diagnostics // Stream reports the held update eviction.
+		want := health.Diagnostic{
+			Code: health.CodeInternalError, Kind: health.DiagKindProvider, Level: health.DiagWarn,
+			Title: "The correlation queue for stream updates is full", Detail: etoroHeldEvicted,
+			Remediation: "Updates for orders placed outside Officer can fill this queue. " +
+				"An affected Officer order is resolved at the next stream reconnect or restart.",
+		}
+		if !reflect.DeepEqual(d, want) {
+			t.Fatalf("eviction must report a correlation queue warning with reconnect recovery: got %+v, want %+v", d, want)
 		}
 	}
 	c.ordersMu.Lock()
@@ -637,7 +625,7 @@ func TestEtoroStreamHeldBound(t *testing.T) {
 }
 
 func TestEtoroStreamDiagnosticsAndHeartbeat(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn := acceptAlpaca(t, w, r)
@@ -720,7 +708,7 @@ func TestEtoroStreamRedaction(t *testing.T) {
 	leak := strings.Join(spellings, " | ")
 	for _, site := range []string{"ack-error", "close-error", "diagnostic", "invalid-envelope", "dial-error"} {
 		t.Run(site, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn := acceptAlpaca(t, w, r)
@@ -798,13 +786,9 @@ func TestEtoroStreamRedaction(t *testing.T) {
 					t.Fatal("missing connected event")
 				}
 			}
-			select {
-			case message := <-observed:
-				if message == "" {
-					t.Fatal("stream failure was silent")
-				}
-			case <-ctx.Done():
-				t.Fatal("stream error or diagnostic missing")
+			message := <-observed // Stream reports its error or diagnostic.
+			if message == "" {
+				t.Fatal("stream failure was silent")
 			}
 		})
 	}
@@ -814,7 +798,7 @@ func TestEtoroStreamShutdown(t *testing.T) {
 	for _, stage := range []string{"authenticate", "subscribe", "read", "publish", "backoff"} {
 		for _, action := range []string{"close", "cancel"} {
 			t.Run(stage+"/"+action, func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
 				reached := make(chan struct{})
 				serverDone := make(chan struct{})
@@ -873,11 +857,7 @@ func TestEtoroStreamShutdown(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				select {
-				case <-reached:
-				case <-ctx.Done():
-					t.Fatal("stream did not reach shutdown stage")
-				}
+				<-reached // Stream reaches the shutdown stage.
 				if stage == "read" {
 					_ = nextEvent(t, events)
 				}
@@ -891,23 +871,11 @@ func TestEtoroStreamShutdown(t *testing.T) {
 					}
 					close(ended)
 				}()
-				select {
-				case <-ended:
-				case <-time.After(time.Second):
-					t.Fatal("stream goroutine did not end on Close or context cancellation")
-				}
-				select {
-				case <-c.lifecycle.done:
-				case <-time.After(time.Second):
-					t.Fatal("Close returned before the stream goroutine ended")
-				}
+				<-ended            // Stream goroutine ends.
+				<-c.lifecycle.done // Stream lifecycle completes.
 				for range events {
 				}
-				select {
-				case <-serverDone:
-				case <-time.After(time.Second):
-					t.Fatal("stream reader did not release the socket")
-				}
+				<-serverDone // Stream reader releases the socket.
 				c.Close()
 				if _, err := c.Subscribe(context.Background()); err == nil {
 					t.Fatal("closed connector subscribed again")

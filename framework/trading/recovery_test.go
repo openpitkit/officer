@@ -24,10 +24,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 type failingStore struct {
@@ -146,11 +146,7 @@ func TestPostClaimRecovery(t *testing.T) {
 					if activity == "read-failure" {
 						resolved = cancelled
 					}
-					select {
-					case <-resolved:
-					case <-time.After(20 * time.Second):
-						t.Fatal("post-claim order was not pending for automatic reconciliation")
-					}
+					<-resolved
 				}
 				detail := f.detail(order)
 				doneID := domain.ExternalID("trading:" + link.ClientOrderID + ":done")
@@ -299,14 +295,10 @@ func TestPendingRetryRetainsUnknownSendAfterPartialEvent(t *testing.T) {
 	}
 	// No further event: the pending unknown send must still be reconciled.
 	f.venue.setSnapshot(link, trading.VenueStatusCancelled, "5", a, b)
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) && f.detail(order).Order.Status != domain.OrderStatusCancelled {
-		time.Sleep(25 * time.Millisecond)
-	}
+	polltest.Until(func() bool {
+		return f.detail(order).Order.Status == domain.OrderStatusCancelled
+	})
 	detail := f.detail(order)
-	if detail.Order.Status != domain.OrderStatusCancelled {
-		t.Fatalf("retry status=%s", detail.Order.Status)
-	}
 	assertTrades(t, detail, []trading.Fill{a, b})
 	stored, _, err := f.st.GetVenueOrder(testCtx, order.ExternalID)
 	must(t, err)

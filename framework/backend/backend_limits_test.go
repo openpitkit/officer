@@ -1159,11 +1159,7 @@ func TestServiceLimitWriteAnswersBeforeCompetingWriter(t *testing.T) {
 			default:
 				t.Fatalf("unknown first write %q", tc.first)
 			}
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("competing writer did not finish after the first write")
-			}
+			<-done
 			if competingErr != nil {
 				t.Fatalf("competing writer: %v", competingErr)
 			}

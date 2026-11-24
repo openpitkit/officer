@@ -28,6 +28,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
 	"go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func TestConnectionStreamFailureDegrades(t *testing.T) {
@@ -195,9 +196,9 @@ func TestConnectionUnavailableDiagnostics(t *testing.T) {
 				connector := f.venue.current
 				f.venue.mu.Unlock()
 				connector.closeEvents()
-				waitFor(t, func() bool {
+				polltest.Until(func() bool {
 					return f.runtime.ConnectionStatuses()[id].State == trading.ConnectionUnavailable
-				}, "closed event stream status")
+				}) // Connection status records the closed event stream.
 			}
 			status := f.runtime.ConnectionStatuses()[id]
 			if status.State != trading.ConnectionUnavailable || len(status.Diagnostics) != 1 {

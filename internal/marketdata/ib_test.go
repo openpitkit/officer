@@ -294,13 +294,8 @@ func TestIBWrapperTickPriceClearsNoQuoteAndReportsNoData(t *testing.T) {
 	if update := <-out; update.Ask != "" {
 		t.Fatalf("no-data ask update = %+v, want cleared ask", update)
 	}
-	select {
-	case diag := <-diags:
-		if diag.Code != health.CodeNoData || diag.Instrument != "AAPL" {
-			t.Fatalf("diag = %+v", diag)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for no-data diagnostic")
+	if diag := <-diags; diag.Code != health.CodeNoData || diag.Instrument != "AAPL" { // Diagnostic arrives.
+		t.Fatalf("diag = %+v", diag)
 	}
 	wrapper.TickPrice(1, ibapi.ASK, -1, ibapi.TickAttrib{})
 	select {
@@ -403,13 +398,8 @@ func TestIBConnectorSubscribesThroughClient(t *testing.T) {
 	}
 
 	go client.wrapper.TickPrice(1, ibapi.LAST, 181.12, ibapi.TickAttrib{})
-	select {
-	case update := <-ch:
-		if update.Mark != "181.12" || update.Base != testMarketDataAssetID("AAPL") || update.Quote != testMarketDataAssetID("USD") {
-			t.Fatalf("update = %+v", update)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for quote update")
+	if update := <-ch; update.Mark != "181.12" || update.Base != testMarketDataAssetID("AAPL") || update.Quote != testMarketDataAssetID("USD") { // Quote or channel closure arrives.
+		t.Fatalf("update = %+v", update)
 	}
 	connector.Close()
 }
@@ -477,13 +467,8 @@ func TestIBConnectorReconnectsAndResubscribes(t *testing.T) {
 		t.Fatal("first client disconnect count = 0, want cleanup after reconnect")
 	}
 	go second.wrapper.TickPrice(1, ibapi.LAST, 181.12, ibapi.TickAttrib{})
-	select {
-	case update := <-ch:
-		if update.Mark != "181.12" {
-			t.Fatalf("update = %+v", update)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for quote after reconnect")
+	if update := <-ch; update.Mark != "181.12" { // Quote or channel closure arrives.
+		t.Fatalf("update = %+v", update)
 	}
 	connector.Close()
 }
@@ -524,13 +509,9 @@ func TestIBConnectorResetsBackoffAfterDelivery(t *testing.T) {
 		client := <-clients
 		client.waitRequests(t, 1)
 		go client.wrapper.TickPrice(1, ibapi.LAST, price, ibapi.TickAttrib{})
-		select {
-		case update := <-ch:
-			if want := strconv.FormatFloat(price, 'f', -1, 64); update.Mark != want {
-				t.Fatalf("update[%d] = %+v, want mark %s", i, update, want)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for quote on connection %d", i+1)
+		update := <-ch // Quote arrives.
+		if want := strconv.FormatFloat(price, 'f', -1, 64); update.Mark != want {
+			t.Fatalf("update[%d] = %+v, want mark %s", i, update, want)
 		}
 		client.wrapper.ConnectionClosed()
 	}
@@ -580,13 +561,8 @@ func TestIBConnectorCloseStopsSubscription(t *testing.T) {
 	if client.cancelCount() == 0 {
 		t.Fatal("cancel count = 0, want market-data cancel on Close")
 	}
-	select {
-	case _, ok := <-ch:
-		if ok {
-			t.Fatal("subscription channel still open after Close")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for channel close")
+	if _, ok := <-ch; ok { // Quote or channel closure arrives.
+		t.Fatal("subscription channel still open after Close")
 	}
 }
 
@@ -621,13 +597,8 @@ func TestIBConnectorConnectErrorDisconnectsAndRetries(t *testing.T) {
 	}
 
 	go second.wrapper.TickPrice(1, ibapi.LAST, 181.12, ibapi.TickAttrib{})
-	select {
-	case update := <-ch:
-		if update.Mark != "181.12" {
-			t.Fatalf("update = %+v", update)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for quote after connect retry")
+	if update := <-ch; update.Mark != "181.12" { // Quote or channel closure arrives.
+		t.Fatalf("update = %+v", update)
 	}
 	connector.Close()
 }
@@ -683,11 +654,7 @@ func TestIBConnectorConnectTimeoutDrainsResultWhenDisconnectFails(t *testing.T) 
 		)
 	}()
 
-	select {
-	case <-client.connectBlock:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for disconnect after connect timeout")
-	}
+	<-client.connectBlock // Disconnect releases the blocked connection.
 	select {
 	case err := <-result:
 		t.Fatalf("connectClient returned before Connect completed: %v", err)
@@ -695,16 +662,12 @@ func TestIBConnectorConnectTimeoutDrainsResultWhenDisconnectFails(t *testing.T) 
 	}
 
 	releaseConnect()
-	select {
-	case err := <-result:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("connectClient error = %v, want context deadline exceeded", err)
-		}
-		if !errors.Is(err, client.disconnectErr) {
-			t.Fatalf("connectClient error = %v, want disconnect failure", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("connectClient did not return after Connect completed")
+	err := <-result // Request completes.
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("connectClient error = %v, want context deadline exceeded", err)
+	}
+	if !errors.Is(err, client.disconnectErr) {
+		t.Fatalf("connectClient error = %v, want disconnect failure", err)
 	}
 }
 
@@ -736,14 +699,10 @@ func TestIBWrapperReportsContractErrorDiagnostic(t *testing.T) {
 
 	wrapper.Error(1, 0, 200, "No security definition has been found", "")
 
-	select {
-	case diag := <-diags:
-		if diag.Code != health.CodeUnknownSymbol || diag.Kind != health.DiagKindConfig ||
-			diag.Instrument != "AAPL" {
-			t.Fatalf("diag = %+v", diag)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for diagnostic")
+	diag := <-diags // Diagnostic arrives.
+	if diag.Code != health.CodeUnknownSymbol || diag.Kind != health.DiagKindConfig ||
+		diag.Instrument != "AAPL" {
+		t.Fatalf("diag = %+v", diag)
 	}
 }
 
@@ -831,13 +790,8 @@ func TestIBWrapperClassifiesIBErrorDiagnostics(t *testing.T) {
 	}
 
 	wrapper.Error(-1, 0, 502, "Couldn't connect to TWS", "")
-	select {
-	case err := <-wrapper.lost:
-		if err == nil {
-			t.Fatal("fatal error lost err = nil")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for fatal lost signal")
+	if err := <-wrapper.lost; err == nil { // Lost signal arrives.
+		t.Fatal("fatal error lost err = nil")
 	}
 }
 
@@ -851,13 +805,8 @@ func TestIBWrapperSignalsLostOnce(t *testing.T) {
 	wrapper.ConnectionClosed()
 	wrapper.Error(-1, 0, 502, "Couldn't connect to TWS", "")
 
-	select {
-	case err := <-wrapper.lost:
-		if err == nil {
-			t.Fatal("lost err = nil")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for first lost signal")
+	if err := <-wrapper.lost; err == nil { // Lost signal arrives.
+		t.Fatal("lost err = nil")
 	}
 	select {
 	case err := <-wrapper.lost:
@@ -1434,8 +1383,6 @@ func TestLiveIBClientConnectTimeoutClosesPartialHandshake(t *testing.T) {
 		_ = conn.Close()
 	case err := <-acceptErr:
 		t.Fatalf("Accept: %v", err)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for accepted connection")
 	}
 }
 
@@ -1461,7 +1408,7 @@ func TestIBConnectorLiveConnect(t *testing.T) {
 		statuses <- errMsg
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	if _, err := connector.Subscribe(ctx, []fwmarketdata.Subscription{
 		{
@@ -1665,11 +1612,7 @@ func (c *fakeIBClient) waitRequests(t *testing.T, want int) {
 		if got >= want {
 			return
 		}
-		select {
-		case <-c.reqCh:
-		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for %d requests", want)
-		}
+		<-c.reqCh // Request arrives.
 	}
 }
 

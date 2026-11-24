@@ -526,11 +526,7 @@ func TestInvalidCommissionPendingRetry(t *testing.T) {
 			}
 			fill.Commission = &domain.Commission{Amount: "-0.5", Currency: "USD"}
 			f.venue.setSnapshot(link, trading.VenueStatusOpen, "3", fill)
-			select {
-			case <-applied:
-			case <-time.After(20 * time.Second):
-				t.Fatal("invalid commission order was not pending for automatic reconciliation")
-			}
+			<-applied
 			detail := f.detail(order)
 			assertTrades(t, detail, []trading.Fill{fill})
 			if detail.Order.Status != domain.OrderStatusPartiallyFilled {
@@ -572,8 +568,6 @@ func TestPreCheckUsesCallerContext(t *testing.T) {
 			case <-entered:
 			case err := <-result:
 				t.Fatalf("pre-check failed before cancellation: %v", err)
-			case <-time.After(2 * time.Second):
-				t.Fatal("pre-check did not reach connector")
 			}
 			stopDone := make(chan struct{})
 			if cancelRuntime {
@@ -584,39 +578,21 @@ func TestPreCheckUsesCallerContext(t *testing.T) {
 			} else {
 				cancel()
 			}
-			select {
-			case <-abandoned:
-			case <-time.After(2 * time.Second):
-				t.Fatal("pre-check connector did not observe cancellation")
-			}
+			<-abandoned
 			if cancelRuntime {
 				select {
 				case <-stopDone:
 					t.Fatal("Stop returned before the in-flight pre-check finished")
 				default:
 				}
-				select {
-				case err := <-result:
-					if !errors.Is(err, domain.ErrConflict) {
-						t.Fatalf("cancelled pre-check: got %v, want %v", err, domain.ErrConflict)
-					}
-				case <-time.After(2 * time.Second):
-					t.Fatal("cancelled pre-check did not return promptly")
+				if err := <-result; !errors.Is(err, domain.ErrConflict) {
+					t.Fatalf("cancelled pre-check: got %v, want %v", err, domain.ErrConflict)
 				}
 				release()
-				select {
-				case <-stopDone:
-				case <-time.After(2 * time.Second):
-					t.Fatal("Stop did not return promptly after pre-check abandonment")
-				}
+				<-stopDone
 			} else {
-				select {
-				case err := <-result:
-					if !errors.Is(err, context.Canceled) {
-						t.Fatalf("cancelled pre-check: got %v, want %v", err, context.Canceled)
-					}
-				case <-time.After(2 * time.Second):
-					t.Fatal("cancelled pre-check did not return promptly")
+				if err := <-result; !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled pre-check: got %v, want %v", err, context.Canceled)
 				}
 			}
 		})
@@ -647,23 +623,15 @@ func TestPreCheckStoreReadsUseCallerContext(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- r.PreCheck(ctx, f.draft("1"), f.dest) }()
-	select {
-	case readCtx := <-st.readContext:
-		if readCtx.Value(contextKey{}) != "caller" {
-			t.Fatal("pre-check store read lost caller context value")
-		}
-		if deadline, ok := readCtx.Deadline(); !ok || time.Until(deadline) > 30*time.Second {
-			t.Fatal("pre-check store read lacks connector timeout")
-		}
-		cancel()
-		select {
-		case <-readCtx.Done():
-		case <-time.After(2 * time.Second):
-			t.Fatal("pre-check store read did not observe caller cancellation")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("pre-check did not reach store read")
+	readCtx := <-st.readContext
+	if readCtx.Value(contextKey{}) != "caller" {
+		t.Fatal("pre-check store read lost caller context value")
 	}
+	if deadline, ok := readCtx.Deadline(); !ok || time.Until(deadline) > 30*time.Second {
+		t.Fatal("pre-check store read lacks connector timeout")
+	}
+	cancel()
+	<-readCtx.Done()
 	if err := <-result; !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled pre-check = %v", err)
 	}

@@ -28,7 +28,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -196,8 +195,7 @@ func policyCanonicalJSON(t *testing.T, value any) []byte {
 }
 
 func TestTestPolicyRESTMCPParityI10(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	service := newTestPolicyService(t)
 	router, err := newRouter(service)
 	if err != nil {

@@ -3862,13 +3862,8 @@ func TestLocalNode_SubmitOrderDifferentAccountsProceedConcurrently(t *testing.T)
 		t.Fatalf("first entered account = %s, want acc-1", got)
 	}
 	go submit("acc-2", errs)
-	select {
-	case got := <-entered:
-		if got != "acc-2" {
-			t.Fatalf("second entered account = %s, want acc-2", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("second account did not enter SubmitOrder while first account was in-flight")
+	if got := <-entered; got != "acc-2" {
+		t.Fatalf("second entered account = %s, want acc-2", got)
 	}
 	close(release)
 	for i := 0; i < 2; i++ {
@@ -3947,13 +3942,8 @@ func occupyOrderChainLane(
 		)
 		result <- err
 	}()
-	select {
-	case account := <-entered:
-		if account != "acc-1" {
-			t.Fatalf("occupied lane account = %s, want acc-1", account)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("first submission did not occupy the account lane")
+	if account := <-entered; account != "acc-1" {
+		t.Fatalf("occupied lane account = %s, want acc-1", account)
 	}
 	return releaseLane, result
 }

@@ -225,8 +225,34 @@ This rule has no approval marker or baseline.
 
 ### `integration-test-wall-clock-deadline`
 
-The liveness deadline rule covers integration tests, SQLite store tests, and
-trading e2e tests. It allows short windows that prove an event did not happen.
+The liveness deadline rule covers every Go test in the module. Waits receive
+an event or use `polltest.Until` for state; requests use `testCtx(t)` in
+`internal/integration` and `t.Context()` elsewhere. A real hang is caught by
+`go test -timeout`, which prints every goroutine's stack.
+
+Short windows proving an event did not happen, fake or injected clocks, and
+timestamps used as data are exempt. A deadline that is the input under test
+stays: `context.WithTimeout` or `context.WithDeadline` inside a function
+referencing `context.DeadlineExceeded` is exempt structurally. Success paths
+in such a function still use `t.Context()`; only paths asserting expiry keep
+the short deadline. Production timeouts and backoffs remain unchanged.
+
+The rule catches request deadlines, clock failure arms in selects (including
+timers, deadline channels, and multiple event cases), and wall-clock polling
+bounds. Clock arms are checked for failure calls at any statement position and
+for error construction with `errors.New` or `fmt.Errorf`; all rule branches
+exempt virtual time inside `synctest.Test` bubbles. Its fixtures run through
+`check-semgrep`, with no baseline.
+
+### `test-deferred-receive-after-consumed`
+
+`checks/semgrep/integration-test-wall-clock-deadline.yml` also flags a select
+arm that consumes a channel value needed by a receive in `defer` or
+`t.Cleanup` and then calls `Fatal`, `Fatalf`, `Error` or `Errorf`. Send the
+consumed value back before failing so the deferred receive does not hang until
+`go test -timeout`. Channels closed anywhere in the enclosing function,
+including a nested function or goroutine, are exempt because receiving does
+not consume closure. Its fixtures run through `check-semgrep`, with no approval marker or baseline.
 
 ### `sqlite-test-parallel`
 

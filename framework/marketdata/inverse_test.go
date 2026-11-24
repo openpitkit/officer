@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func TestInvertQuoteUsesMarketConvention(t *testing.T) {
@@ -173,7 +174,7 @@ func TestManagerDeliversOriginalAndSyntheticAndStoresOnlyOriginal(t *testing.T) 
 	mustPush(t, connector, QuoteUpdate{
 		Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "2", Bid: "4", Ask: "8",
 	})
-	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
+	polltest.Until(func() bool { return sink.count() == 2 })
 	got := sink.snapshot()
 	if got[0].Base != testMarketDataAssetID("EUR") || got[1].Base != testMarketDataAssetID("USD") ||
 		got[1].Mark != "0.5" || got[1].Bid != "0.125" || got[1].Ask != "0.25" {
@@ -183,7 +184,7 @@ func TestManagerDeliversOriginalAndSyntheticAndStoresOnlyOriginal(t *testing.T) 
 	mustPush(t, connector, QuoteUpdate{
 		Base: testMarketDataAssetID("EUR"), Quote: testMarketDataAssetID("USD"), Mark: "100000000000000000",
 	})
-	waitFor(t, time.Second, func() bool { return sink.count() == 4 })
+	polltest.Until(func() bool { return sink.count() == 4 })
 	got = sink.snapshot()
 	if got[3].Mark != "0.00000000000000001" {
 		t.Fatalf("huge-price synthetic mark = %q, want non-zero reciprocal", got[3].Mark)
@@ -245,7 +246,7 @@ func TestManagerConfiguredReverseSuppressesUntilRemovalAndRestart(t *testing.T) 
 	if err := manager.PushManual(context.Background(), instanceID.String(), manual); err != nil {
 		t.Fatalf("PushManual: %v", err)
 	}
-	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
+	polltest.Until(func() bool { return sink.count() == 1 })
 	if manager.AppliedConfig()[instanceID.String()].Subscriptions[0].SyntheticInverse {
 		t.Fatal("synthetic inverse active with configured reverse pair")
 	}
@@ -257,7 +258,7 @@ func TestManagerConfiguredReverseSuppressesUntilRemovalAndRestart(t *testing.T) 
 	if err := manager.PushManual(context.Background(), instanceID.String(), manual); err != nil {
 		t.Fatalf("PushManual after Restart: %v", err)
 	}
-	waitFor(t, time.Second, func() bool { return sink.count() == 3 })
+	polltest.Until(func() bool { return sink.count() == 3 })
 	got := sink.snapshot()
 	if got[1].Mark != "2" || got[2].Base != testMarketDataAssetID("USD") || got[2].Quote != testMarketDataAssetID("EUR") ||
 		got[2].Mark != "0.5" {
@@ -303,7 +304,7 @@ func TestManagerDoesNotEmitEmptySyntheticQuote(t *testing.T) {
 
 	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B")})
 	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("A"), Quote: testMarketDataAssetID("B"), Mark: "0", Bid: "bad"})
-	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
+	polltest.Until(func() bool { return sink.count() == 2 })
 	if got := sink.snapshot(); got[0].Base != testMarketDataAssetID("A") || got[1].Base != testMarketDataAssetID("A") {
 		t.Fatalf("sink updates = %+v, want originals only", got)
 	}

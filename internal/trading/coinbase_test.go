@@ -498,7 +498,7 @@ func TestCoinbaseLookupMoneyRules(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, f := newCoinbaseLookupTest(t)
 			ref := tc.change(f, coinbaseTestRef())
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			s, found, err := c.Lookup(ctx, ref)
 			if err == nil || !strings.Contains(err.Error(), tc.want) || found || len(s.Fills) != 0 {
@@ -583,7 +583,7 @@ func TestCoinbaseLookupPagesAndProof(t *testing.T) {
 			})
 			ref := coinbaseTestRef()
 			ref.VenueOrderID = ""
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			_, found, err := c.Lookup(ctx, ref)
 			if !errors.Is(err, domain.ErrUpstream) || found || !strings.Contains(err.Error(), tc.want) {
