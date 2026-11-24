@@ -49,6 +49,7 @@ func seedAuditFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 }
 
 func TestAuditDetailFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 
 	detail := domain.NewAuditDetail(domain.AuditDetailSetLimit,
@@ -81,6 +82,7 @@ func TestAuditDetailFieldsRoundTrip(t *testing.T) {
 }
 
 func TestAuditAppendListAndExternalID(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 
 	orderDetail := domain.NewAuditDetail(domain.AuditDetailSubmitOrderRejected, domain.AuditDetailParams{
@@ -181,6 +183,7 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 }
 
 func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
+	t.Parallel()
 	valid := []struct {
 		name  string
 		entry fwstore.AuditEntry
@@ -219,6 +222,7 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 	}
 	for _, tc := range valid {
 		t.Run("valid "+tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedAuditFixtures(t)
 			entry := tc.entry
 			entry.Source = domain.SourcePanel
@@ -293,6 +297,7 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 	}
 	for _, tc := range invalid {
 		t.Run("invalid "+tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedAuditFixtures(t)
 			// The source is valid so the rejection is the decision rule's.
 			entry := tc.entry
@@ -313,6 +318,7 @@ func TestAppendAuditValidatesDecisionMetadata(t *testing.T) {
 }
 
 func TestAppendAuditBatchIsAtomic(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 
 	err := rs.AppendAuditBatch(ctx, []fwstore.AuditEntry{
@@ -390,6 +396,7 @@ func TestAppendAuditBatchIsAtomic(t *testing.T) {
 }
 
 func TestAuditAppendUnknownRefIsSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
@@ -413,6 +420,7 @@ func TestAuditAppendUnknownRefIsSnapshot(t *testing.T) {
 // entry that carries non-empty account/actor titles persists them as given, and
 // ListAudit reads them back unchanged - no lookup is consulted.
 func TestAuditTitleSnapshotPersistedVerbatim(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
@@ -445,6 +453,7 @@ func TestAuditTitleSnapshotPersistedVerbatim(t *testing.T) {
 // entry with empty titles but codes matching live account/principal rows
 // backfills both titles from those rows at write time.
 func TestAuditTitleBackfilledFromLiveRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{
@@ -483,6 +492,7 @@ func TestAuditTitleBackfilledFromLiveRows(t *testing.T) {
 }
 
 func TestAuditFiltered(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
 		t.Fatalf("CreateAccount(acc-2): %v", err)
@@ -561,6 +571,7 @@ func TestAuditFiltered(t *testing.T) {
 // adjustment row and the asset create/update/delete rows are filterable by the
 // asset code they recorded, and rows with no asset are excluded.
 func TestAuditAssetFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 	mustAppend := func(entry fwstore.AuditEntry) {
 		t.Helper()
@@ -632,6 +643,7 @@ func TestAuditAssetFilter(t *testing.T) {
 }
 
 func TestAuditAccountFilterUsesImmutableCodeSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 	if err := rs.AppendAudit(ctx, fwstore.AuditEntry{
 		Action:  domain.AuditActionBlock,
@@ -678,6 +690,7 @@ func TestAuditAccountFilterUsesImmutableCodeSnapshot(t *testing.T) {
 }
 
 func TestAuditListRowsKeysetPageFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
 		t.Fatalf("CreateAccount(acc-2): %v", err)
@@ -786,6 +799,7 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 // without an account restriction) and the restricted filtered query are
 // satisfied by an index and never trigger a full TEMP B-TREE sort.
 func TestAuditListUsesIndexNoTempSort(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 	r := rs.(*realmStore)
 	dictionaries, err := r.dictionaries()
@@ -918,6 +932,7 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 // updates nor deletes its immutable audit snapshots, which remain selectable by
 // the recorded account code. The same holds for a deleted actor principal.
 func TestAuditTrailPreservedOnAccountDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAuditFixtures(t)
 
 	blocked := domain.NewAuditDetail(

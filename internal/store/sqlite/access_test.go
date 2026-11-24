@@ -66,6 +66,7 @@ var accessSecrets = []string{
 var accessTestStart = time.Date(2026, time.October, 16, 12, 0, 0, 0, time.UTC)
 
 func TestAccessCleanDatabaseStartsSetup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newAccessStore(t)
 
@@ -79,6 +80,7 @@ func TestAccessCleanDatabaseStartsSetup(t *testing.T) {
 }
 
 func TestAccessMigrateRefusesDatabaseWithoutAccessState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	store := openSQLiteStoreForTest(t, path)
@@ -103,6 +105,7 @@ func TestAccessMigrateRefusesDatabaseWithoutAccessState(t *testing.T) {
 }
 
 func TestAccessWritesRefuseInOpenModeAndChangeNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	session := testSession("open-mode-session", accessTestStart)
@@ -132,6 +135,7 @@ func TestAccessWritesRefuseInOpenModeAndChangeNothing(t *testing.T) {
 }
 
 func TestAccessEnableTokenModeRefusesInTokenModeAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	enableTokenModeForTest(t, store, testSession("first-session", accessTestStart))
@@ -158,6 +162,7 @@ func TestAccessEnableTokenModeRefusesInTokenModeAndChangesNothing(t *testing.T) 
 }
 
 func TestAccessEnableTokenModeCommitsAllOrNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	store := openSQLiteStoreForTest(t, path)
@@ -204,6 +209,7 @@ func TestAccessEnableTokenModeCommitsAllOrNothing(t *testing.T) {
 }
 
 func TestAccessDisableTokenModeClearsCredentialsAndSessions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	enableTokenModeForTest(t, store, testSession("enable-session", accessTestStart))
@@ -233,6 +239,7 @@ func TestAccessDisableTokenModeClearsCredentialsAndSessions(t *testing.T) {
 }
 
 func TestAccessReplaceToken(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	enableTokenModeForTest(t, store, testSession("enable-session", accessTestStart))
@@ -271,6 +278,7 @@ func TestAccessReplaceToken(t *testing.T) {
 }
 
 func TestAccessReplacePasswordKeepsOnlyTheNamedSession(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	first := testSession("first-session", accessTestStart)
@@ -299,6 +307,7 @@ func TestAccessReplacePasswordKeepsOnlyTheNamedSession(t *testing.T) {
 }
 
 func TestAccessResetPasswordReplacesHashAndEverySession(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	first := testSession("first-session", accessTestStart)
@@ -328,6 +337,7 @@ func TestAccessResetPasswordReplacesHashAndEverySession(t *testing.T) {
 }
 
 func TestAccessSessionsReadTouchAndDelete(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	session := testSession("browser-session", accessTestStart)
@@ -374,6 +384,7 @@ func TestAccessSessionsReadTouchAndDelete(t *testing.T) {
 }
 
 func TestAccessCountSessionsFiltersByExpiryAndLastSeen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	session := func(name string, expiresIn, seenIn time.Duration) access.Session {
@@ -408,6 +419,7 @@ func TestAccessCountSessionsFiltersByExpiryAndLastSeen(t *testing.T) {
 }
 
 func TestAccessCreateSessionDeletesExpiredSessions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	session := func(name string, createdIn, expiresIn time.Duration) access.Session {
@@ -441,6 +453,7 @@ func TestAccessCreateSessionDeletesExpiredSessions(t *testing.T) {
 }
 
 func TestAccessCredentialsSealedOnlyWithMasterKey(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		opts   []Option
@@ -454,6 +467,7 @@ func TestAccessCredentialsSealedOnlyWithMasterKey(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "officer.db")
 			store := openSQLiteStoreForTest(t, path, test.opts...)
@@ -579,6 +593,7 @@ func TestAccessSealingExistingDatabaseSealsAndCountsAccessCredentials(t *testing
 }
 
 func TestSealReportAbsentUntilSealed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	plaintextStore := openSQLiteStoreForTest(t, path)
@@ -609,6 +624,7 @@ func TestSealReportAbsentUntilSealed(t *testing.T) {
 }
 
 func TestAccessResetReturnsToSetupMode(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	enableTokenModeForTest(t, store, testSession("enable-session", accessTestStart))
@@ -628,6 +644,7 @@ func TestAccessResetReturnsToSetupMode(t *testing.T) {
 }
 
 func TestAccessFailedResetKeepsSnapshotAndData(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newOpenAccessStore(t)
 	session := testSession("enable-session", accessTestStart)
@@ -657,11 +674,13 @@ func TestAccessFailedResetKeepsSnapshotAndData(t *testing.T) {
 // hold, which the final comparison of the published snapshot with the stored
 // one catches.
 func TestAccessSnapshotMatchesDatabaseAfterConcurrentWritesAndReset(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const rounds = 20
 	const writers = 3
 	for _, operation := range []string{"mode switches", "complete open", "complete token"} {
 		t.Run(operation, func(t *testing.T) {
+			t.Parallel()
 			var store *sqliteStore
 			if operation == "mode switches" {
 				store = newAccessStore(t)
@@ -750,6 +769,7 @@ func TestAccessSnapshotMatchesDatabaseAfterConcurrentWritesAndReset(t *testing.T
 }
 
 func TestAccessStateStaysOutOfBackups(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	source := newOpenAccessStore(t)
 	sourceRealm, err := source.ForRealm(ctx, domain.DefaultRealm)
@@ -843,6 +863,7 @@ func TestAccessStateStaysOutOfBackups(t *testing.T) {
 }
 
 func TestAccessSetupStateStartsAtWelcome(t *testing.T) {
+	t.Parallel()
 	store := newAccessStore(t)
 	state, err := store.SetupState(context.Background())
 	assertNoAccessSecret(t, err)
@@ -856,6 +877,7 @@ func TestAccessSetupStateStartsAtWelcome(t *testing.T) {
 }
 
 func TestAccessSetSetupStepRoundTrips(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newAccessStore(t)
 	for _, step := range []access.SetupStep{
@@ -885,6 +907,7 @@ func TestAccessSetSetupStepRoundTrips(t *testing.T) {
 }
 
 func TestAccessSetSetupStepRefusesUnknownStep(t *testing.T) {
+	t.Parallel()
 	store := newAccessStore(t)
 	err := store.SetSetupStep(context.Background(), access.SetupStep(testAPIToken))
 	assertNoAccessSecret(t, err)
@@ -895,6 +918,7 @@ func TestAccessSetSetupStepRefusesUnknownStep(t *testing.T) {
 }
 
 func TestAccessDeclineEncryptionKeepsFirstTime(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newAccessStore(t)
 	first := accessTestStart.Add(123456789 * time.Nanosecond).
@@ -920,6 +944,7 @@ func TestAccessDeclineEncryptionKeepsFirstTime(t *testing.T) {
 }
 
 func TestAccessCompleteSetupOpen(t *testing.T) {
+	t.Parallel()
 	store := newAccessStore(t)
 	completedAt := accessTestStart.Add(time.Hour + 123456789*time.Nanosecond)
 	err := store.CompleteSetupOpen(context.Background(), completedAt)
@@ -932,6 +957,7 @@ func TestAccessCompleteSetupOpen(t *testing.T) {
 }
 
 func TestAccessCompleteSetupTokenStoresCredentialsAndSession(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		opts   []Option
@@ -945,6 +971,7 @@ func TestAccessCompleteSetupTokenStoresCredentialsAndSession(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := newAccessStore(t, test.opts...)
 			session := testSession("setup-session", accessTestStart)
 			completedAt := accessTestStart.Add(time.Hour)
@@ -969,8 +996,10 @@ func TestAccessCompleteSetupTokenStoresCredentialsAndSession(t *testing.T) {
 }
 
 func TestAccessSetupMethodsRefuseInOpenAndTokenModesAndChangeNothing(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []access.Mode{access.ModeOpen, access.ModeToken} {
 		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
 			store := newOpenAccessStore(t)
 			if mode == access.ModeToken {
 				enableTokenModeForTest(t, store, testSession("setup-session", accessTestStart))
@@ -981,6 +1010,7 @@ func TestAccessSetupMethodsRefuseInOpenAndTokenModesAndChangeNothing(t *testing.
 }
 
 func TestAccessEnableTokenModeRefusesInSetupAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	store := newAccessStore(t)
 	err := store.EnableTokenMode(context.Background(), testCredentials(),
 		testSession("setup-session", accessTestStart))
@@ -996,6 +1026,7 @@ func TestAccessEnableTokenModeRefusesInSetupAndChangesNothing(t *testing.T) {
 }
 
 func TestAccessCompleteSetupTokenCommitsAllOrNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newAccessStore(t)
 	session := testSession("setup-session", accessTestStart)
@@ -1375,6 +1406,7 @@ func redactAccess(t *testing.T, err error) string {
 }
 
 func TestRedactAccessErrorDiagnostics(t *testing.T) {
+	t.Parallel()
 	if redactAccess(t, nil) != "<nil>" {
 		t.Fatal("nil error diagnostics changed")
 	}

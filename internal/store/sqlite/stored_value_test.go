@@ -53,6 +53,7 @@ func corruptStoredID(t *testing.T, ctx context.Context, rs fwstore.RealmStore, q
 }
 
 func TestStoredExternalIDFaults(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		query     string
@@ -157,6 +158,7 @@ func TestStoredExternalIDFaults(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			_, order := seedTradingBackupState(t, ctx, rs)
@@ -167,6 +169,7 @@ func TestStoredExternalIDFaults(t *testing.T) {
 }
 
 func TestBackupStoredExternalIDFaults(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		query     string
@@ -183,6 +186,7 @@ func TestBackupStoredExternalIDFaults(t *testing.T) {
 		{"prune_market_data", `UPDATE market_data_instance SET external_id = X''`, "prune md instrument external id", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			seedTradingBackupState(t, ctx, rs)
@@ -213,6 +217,7 @@ func TestBackupStoredExternalIDFaults(t *testing.T) {
 }
 
 func TestRestoreStoredTradingIDFault(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	seedTradingBackupState(t, ctx, rs)
@@ -234,8 +239,10 @@ func TestRestoreStoredTradingIDFault(t *testing.T) {
 }
 
 func TestSealingStoredExternalIDFaults(t *testing.T) {
+	t.Parallel()
 	for _, table := range []string{"market_data_instance", "trading_connection"} {
 		t.Run(table, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "officer.db")
 			plain := openSQLiteStoreForTest(t, path)

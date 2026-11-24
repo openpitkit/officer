@@ -49,12 +49,14 @@ func submitReviewOrder(t *testing.T, ctx context.Context, rs fwstore.RealmStore,
 }
 
 func TestOrderReviewSettlement(t *testing.T) {
+	t.Parallel()
 	for _, trading := range []bool{false, true} {
 		name := "gateway"
 		if trading {
 			name = "trading"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs, connection := seedTradingFixtures(t)
 			review := domain.OrderReview{Mode: "hold"}
 			if trading {
@@ -97,8 +99,10 @@ func TestOrderReviewSettlement(t *testing.T) {
 }
 
 func TestOrderReviewHeldRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, held := range []bool{false, true} {
 		t.Run(fmt.Sprintf("held=%t", held), func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedOrderFixtures(t)
 			review := domain.OrderReview{Mode: "hold", Held: held}
 			order := submitReviewOrder(t, ctx, rs, review)
@@ -111,6 +115,7 @@ func TestOrderReviewHeldRoundTrip(t *testing.T) {
 }
 
 func TestOrderReviewInvalidSettlementRollsBack(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		waiting bool
@@ -126,6 +131,7 @@ func TestOrderReviewInvalidSettlementRollsBack(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedOrderFixtures(t)
 			var order domain.Order
 			if tc.waiting {
@@ -157,8 +163,10 @@ func TestOrderReviewInvalidSettlementRollsBack(t *testing.T) {
 }
 
 func TestOrderReviewInvalidDestinationRollsBack(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{" {}", "[]"} {
 		t.Run(route, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs, connection := seedTradingFixtures(t)
 			order, err := rs.CreateOrder(ctx, sampleOrder())
 			if err != nil {
@@ -188,6 +196,7 @@ func TestOrderReviewInvalidDestinationRollsBack(t *testing.T) {
 }
 
 func TestOrderReviewInvalidSubmissionRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	order := sampleOrder()
 	order.ExternalID = "failed-review-submission"
@@ -209,6 +218,7 @@ func TestOrderReviewInvalidSubmissionRollsBack(t *testing.T) {
 }
 
 func TestOrderReviewDirectStatusWritesRefused(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	order := sampleOrder()
 	order.Status = domain.OrderStatusAwaitingReview
@@ -237,6 +247,7 @@ func TestOrderReviewDirectStatusWritesRefused(t *testing.T) {
 }
 
 func TestOrderReviewActiveOrders(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	order := submitReviewOrder(t, ctx, rs, domain.OrderReview{Mode: "hold"})
 	if count, err := rs.CountActiveOrders(ctx, domain.AccountRestriction{Account: order.Account}); err != nil || count != 1 {
@@ -278,6 +289,7 @@ func TestOrderReviewActiveOrders(t *testing.T) {
 }
 
 func TestOrderReviewConnectionDeletion(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	if err := rs.SetTradingConnectionEnabled(ctx, connection.ExternalID, false); err != nil {
 		t.Fatal(err)
@@ -300,6 +312,7 @@ func TestOrderReviewConnectionDeletion(t *testing.T) {
 }
 
 func TestOrderReviewBackupRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, source, connection := seedTradingFixtures(t)
 	for _, review := range []domain.OrderReview{
 		{Mode: "hold"},
@@ -329,6 +342,7 @@ func TestOrderReviewBackupRoundTrip(t *testing.T) {
 	archive = cloneBackupArchive(t, archive)
 	for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
 			_, target := newRealmStore(t, "review-target")
 			for range 2 {
 				if _, err := target.RestoreBackup(ctx, archive, backup.RestoreOptions{Scope: backup.Scope{All: true}, Mode: mode}); err != nil {
@@ -390,6 +404,7 @@ func TestOrderReviewBackupRoundTrip(t *testing.T) {
 }
 
 func TestOrderReviewBackupInvalidRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx, source := seedOrderFixtures(t)
 	submitReviewOrder(t, ctx, source, domain.OrderReview{Mode: "hold"})
 	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
@@ -415,6 +430,7 @@ func TestOrderReviewBackupInvalidRollsBack(t *testing.T) {
 	} {
 		for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 			t.Run(tc.name+"/"+string(mode), func(t *testing.T) {
+				t.Parallel()
 				_, target := seedOrderFixtures(t)
 				if tc.name == "missing order" {
 					order := sampleOrder()
@@ -446,6 +462,7 @@ func TestOrderReviewBackupInvalidRollsBack(t *testing.T) {
 }
 
 func TestOrderReviewBackupNarrowedTradingPreservesGatewayReview(t *testing.T) {
+	t.Parallel()
 	ctx, source := seedOrderFixtures(t)
 	archive, err := source.ExportBackup(ctx, backup.Scope{
 		Sections: []backup.Section{backup.SectionTrading},
@@ -491,6 +508,7 @@ func TestOrderReviewBackupNarrowedTradingPreservesGatewayReview(t *testing.T) {
 }
 
 func TestOrderReviewBackupScope(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	first := submitReviewOrder(t, ctx, rs, domain.OrderReview{Mode: "hold"})
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
@@ -516,6 +534,7 @@ func TestOrderReviewBackupScope(t *testing.T) {
 }
 
 func TestOrderReviewDictionarySeedsOpen(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	order := submitReviewOrder(t, ctx, rs, domain.OrderReview{Mode: "hold"})
 	requests := []domain.AttestationRequestType{

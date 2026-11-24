@@ -84,7 +84,7 @@ func (h *etoroRuntimeTest) must(err error) {
 
 func newEtoroRuntimeTest(t *testing.T) *etoroRuntimeTest {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	h := &etoroRuntimeTest{
 		t: t, ctx: ctx, caller: domain.Caller{Principal: domain.PrincipalOperator, Source: domain.SourceAPI},
@@ -177,11 +177,7 @@ func (h *etoroRuntimeTest) start() {
 		}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	h.must(err)
 	h.must(h.runtime.Start(auth.ContextWithCaller(h.ctx, h.caller)))
-	select {
-	case h.stream = <-h.streams:
-	case <-h.ctx.Done():
-		h.t.Fatal("eToro runtime stream did not connect")
-	}
+	h.stream = <-h.streams // eToro runtime stream connected.
 	base, found, err := h.realm.GetAsset(h.ctx, "AAPL")
 	h.must(err)
 	if !found {
@@ -374,16 +370,18 @@ func (h *etoroRuntimeTest) push() {
 func (h *etoroRuntimeTest) streamBarrier() {
 	h.t.Helper()
 	etoroOrderPush(h.t, h.ctx, h.stream, "42")
-	waitForTrading(h.t, "stream event delivery barrier", func() bool {
+	waitForTrading(func() bool {
 		h.c.ordersMu.Lock()
 		defer h.c.ordersMu.Unlock()
 		return slices.Equal(h.c.held, []string{"42"})
-	})
+	}) // stream event delivery barrier
 }
 
 func (h *etoroRuntimeTest) waitStatus(order domain.Order, status domain.OrderStatus) {
 	h.t.Helper()
-	waitForTrading(h.t, string(status), func() bool { return h.detail(order).Order.Status == status })
+	waitForTrading(func() bool {
+		return h.detail(order).Order.Status == status
+	}) // wait for the requested order status
 }
 
 func (h *etoroRuntimeTest) assertBooked(order domain.Order, count int, usd, base, eur string) {
@@ -537,19 +535,15 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 			_, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest)
 			result <- err
 		}()
-		select {
-		case <-accepted:
-		case <-h.ctx.Done():
-			t.Fatal("POST was not accepted")
-		}
+		<-accepted // Venue accepted the POST.
 		for range 3 {
 			h.push()
 		}
-		waitForTrading(t, "update held before POST response", func() bool {
+		waitForTrading(func() bool {
 			h.c.ordersMu.Lock()
 			defer h.c.ordersMu.Unlock()
 			return len(h.c.held) == 1
-		})
+		}) // update held before POST response
 		close(release)
 		h.must(<-result)
 		h.waitStatus(order, domain.OrderStatusFilled)
@@ -580,11 +574,11 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		before := len(h.lookups)
 		h.mu.Unlock()
 		h.push()
-		waitForTrading(t, "partial replay lookup", func() bool {
+		waitForTrading(func() bool {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			return len(h.lookups) > before
-		})
+		}) // partial replay lookup
 		h.state(3, 2)
 		h.push()
 		h.waitStatus(order, domain.OrderStatusFilled)

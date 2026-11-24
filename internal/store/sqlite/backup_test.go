@@ -47,6 +47,7 @@ import (
 )
 
 func TestBackupOrderReviewHeldRequired(t *testing.T) {
+	t.Parallel()
 	ctx, source := seedOrderFixtures(t)
 	submitReviewOrder(t, ctx, source, domain.OrderReview{Mode: "hold"})
 	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
@@ -59,6 +60,7 @@ func TestBackupOrderReviewHeldRequired(t *testing.T) {
 	for _, value := range []string{"missing", "null"} {
 		for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 			t.Run(value+"/"+string(mode), func(t *testing.T) {
+				t.Parallel()
 				invalid := cloneBackupArchive(t, archive)
 				raw, err := json.Marshal(invalid.Data.OrderReviews[0])
 				if err != nil {
@@ -107,6 +109,7 @@ func newRealmStore(t *testing.T, realm domain.RealmID) (fwstore.Store, fwstore.R
 }
 
 func TestBackupSnapshotRetainsTradingClassifier(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := New(filepath.Join(t.TempDir(), "classifier.db"), domain.DefaultRealm)
 	if err != nil {
@@ -500,6 +503,7 @@ func signingKeyForBackup(
 }
 
 func TestBackupExportPreservesCredentialFormAndExcludesSigningPrivateKey(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		sealed bool
@@ -508,6 +512,7 @@ func TestBackupExportPreservesCredentialFormAndExcludesSigningPrivateKey(t *test
 		{name: "sealed", sealed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			var opts []Option
 			if test.sealed {
@@ -605,6 +610,7 @@ func TestBackupExportPreservesCredentialFormAndExcludesSigningPrivateKey(t *test
 }
 
 func TestBackupSnapshotAccessorsRejectMovedSealedCredentials(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const firstCredentials = `{"token":"first"}`
 	const secondCredentials = `{"token":"second"}`
@@ -670,6 +676,7 @@ func TestBackupSnapshotAccessorsRejectMovedSealedCredentials(t *testing.T) {
 }
 
 func TestBackupRestoreSealedCredentialsWithSameKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x52)
 	_, src := newRealmStoreWithOptions(
@@ -801,6 +808,7 @@ func TestBackupRestoreUnavailableSealedCredentialsDisablesNamedInstance(t *testi
 }
 
 func TestBackupRestorePlaintextCredentialsIntoSealedDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newTestStore(t)
 	credentials := `{"token":"plaintext-transfer"}`
@@ -844,6 +852,7 @@ func TestBackupRestorePlaintextCredentialsIntoSealedDatabase(t *testing.T) {
 }
 
 func TestBackupRestoreProviderValidationMatchesCredentialForm(t *testing.T) {
+	t.Parallel()
 	const credentials = `{"token":"registry-reject"}`
 	for _, test := range []struct {
 		name   string
@@ -853,6 +862,7 @@ func TestBackupRestoreProviderValidationMatchesCredentialForm(t *testing.T) {
 		{name: "sealed", sealed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			key := mustStoreMasterKey(t, 0x76)
 			var sourceOpts []Option
@@ -900,8 +910,10 @@ func TestBackupRestoreProviderValidationMatchesCredentialForm(t *testing.T) {
 }
 
 func TestBackupRestoreRejectsMissingOrUnknownCredentialForm(t *testing.T) {
+	t.Parallel()
 	for _, form := range []string{"", "future"} {
 		t.Run(form, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, dst := newTestStore(t)
 			archive := backup.NewArchive(
@@ -918,6 +930,7 @@ func TestBackupRestoreRejectsMissingOrUnknownCredentialForm(t *testing.T) {
 }
 
 func TestBackupRestoreSigningKeyIsVerifyOnlyAndInactive(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x29)))
 	seed := bytes.Repeat([]byte{0x29}, ed25519.SeedSize)
@@ -972,6 +985,7 @@ func TestBackupRestoreSigningKeyIsVerifyOnlyAndInactive(t *testing.T) {
 }
 
 func TestBackupRestoreSigningKeyWithoutMasterKeyStaysVerifyOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	store := openSQLiteStoreForTest(t, path)
@@ -1013,11 +1027,13 @@ func TestBackupRestoreSigningKeyWithoutMasterKeyStaysVerifyOnly(t *testing.T) {
 }
 
 func TestBackupRestoreSelfPreservesActiveSigningKey(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []backup.RestoreMode{
 		backup.RestoreModeOverwrite,
 		backup.RestoreModeReplaceAll,
 	} {
 		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x2b)))
 			seed := bytes.Repeat([]byte{0x2c}, ed25519.SeedSize)
@@ -1067,6 +1083,7 @@ func TestBackupRestoreSelfPreservesActiveSigningKey(t *testing.T) {
 }
 
 func TestBackupRestoreKeepsTargetActiveWhenArchiveAddsActiveKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x33)))
 	target := signingKeyForBackup(t, "existing-active", 0x31, true)
@@ -1102,6 +1119,7 @@ func TestBackupRestoreKeepsTargetActiveWhenArchiveAddsActiveKey(t *testing.T) {
 }
 
 func TestBackupRestoreRejectsSigningKeyIdentityConflict(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x43)))
 	target := signingKeyForBackup(t, "shared-id", 0x41, true)
@@ -1156,6 +1174,7 @@ func seedGroupCurrencies(t *testing.T, ctx context.Context, rs fwstore.RealmStor
 }
 
 func TestBackupExportIncludesGroupCurrencies(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedGroupCurrencies(t, ctx, src)
@@ -1183,6 +1202,7 @@ func TestBackupExportIncludesGroupCurrencies(t *testing.T) {
 }
 
 func TestBackupExportIncludesAccountCurrency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	mustCreateAsset(t, ctx, src, domain.Asset{Code: "JPY"})
@@ -1208,6 +1228,7 @@ func TestBackupExportIncludesAccountCurrency(t *testing.T) {
 }
 
 func TestBackupArchiveRoundTripCarriesNoRuntimeIdentifiers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -1313,6 +1334,7 @@ func runtimeIDType(valueType reflect.Type) bool {
 }
 
 func TestBackupExportUsesOneSQLiteSnapshotAcrossSettlementWrites(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -1387,6 +1409,7 @@ func TestBackupExportUsesOneSQLiteSnapshotAcrossSettlementWrites(t *testing.T) {
 }
 
 func TestBackupRestorePreservesGroupCurrencies(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedGroupCurrencies(t, ctx, src)
@@ -1437,6 +1460,7 @@ func TestBackupRestorePreservesGroupCurrencies(t *testing.T) {
 }
 
 func TestBackupRestorePreservesAccountCurrency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	mustCreateAsset(t, ctx, src, domain.Asset{Code: "JPY"})
@@ -1510,6 +1534,7 @@ func TestBackupRestorePreservesEmptyHaltedAccountPnl(t *testing.T) {
 }
 
 func TestBackupRestoreOverwriteClearsDefaultGroupCurrency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	mustCreateAsset(t, ctx, src, domain.Asset{Code: "EUR", Title: "Euro"})
@@ -1551,6 +1576,7 @@ func TestBackupRestoreOverwriteClearsDefaultGroupCurrency(t *testing.T) {
 }
 
 func TestBackupRestoreEmptyDefaultGroupCurrencyDoesNotCreateDefaultRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	mustCreateAsset(t, ctx, src, domain.Asset{Code: "EUR", Title: "Euro"})
@@ -1584,6 +1610,7 @@ func TestBackupRestoreEmptyDefaultGroupCurrencyDoesNotCreateDefaultRow(t *testin
 // into a fresh isolated single-realm database, asserting public identity is
 // preserved across every section and engine ids are freshly, validly assigned.
 func TestBackupRoundTripIntoIsolatedRealm(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	orderXID := seedRealm(t, ctx, src)
@@ -1645,6 +1672,7 @@ func TestBackupRoundTripIntoIsolatedRealm(t *testing.T) {
 }
 
 func TestBackupRoundTripPreservesExecutionReportIdentityAndEventLinks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -1750,6 +1778,7 @@ func TestBackupRoundTripPreservesExecutionReportIdentityAndEventLinks(t *testing
 }
 
 func TestBackupRestoreOverwritePreservesTargetOnlyExecutionReportLinks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	orderID := seedRealm(t, ctx, src)
@@ -1872,6 +1901,7 @@ func TestBackupRestoreOverwritePreservesTargetOnlyExecutionReportLinks(t *testin
 }
 
 func TestBackupRestoreRejectsCrossOrderExecutionReportLink(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	firstOrderID := seedRealm(t, ctx, src)
@@ -1939,6 +1969,7 @@ func TestBackupRestoreRejectsCrossOrderExecutionReportLink(t *testing.T) {
 }
 
 func TestBackupRestoreOverwriteReconcilesReparentedReportLinks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	reportID := domain.ExternalID("reparented-report")
 
@@ -2026,6 +2057,7 @@ func TestBackupRestoreOverwriteReconcilesReparentedReportLinks(t *testing.T) {
 }
 
 func TestRestoreExecutionReportEventMissingReportIsNotFound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, realm := newRealmStore(t, domain.DefaultRealm)
 	r := realm.(*realmStore)
@@ -2058,6 +2090,7 @@ func TestRestoreExecutionReportEventMissingReportIsNotFound(t *testing.T) {
 // collision and that the destination engine ids do not collide with the rows
 // already present (they continue the destination's own sequence).
 func TestBackupMoveIsolatedToShared(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Source isolated realm.
@@ -2114,6 +2147,7 @@ func TestBackupMoveIsolatedToShared(t *testing.T) {
 // into a fresh isolated DB, completing the isolated <-> shared round-trip, and
 // asserts the public identity survived both hops unchanged.
 func TestBackupMoveSharedToIsolated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	_, origin := newRealmStore(t, domain.DefaultRealm)
@@ -2166,6 +2200,7 @@ func TestBackupMoveSharedToIsolated(t *testing.T) {
 // TestBackupRestoreInsertMissingSkipsExisting asserts the insert-missing mode
 // skips rows whose portable identity is already present and reports the skip.
 func TestBackupRestoreInsertMissingSkipsExisting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -2197,6 +2232,7 @@ func TestBackupRestoreInsertMissingSkipsExisting(t *testing.T) {
 // TestBackupRestoreOverwriteUpdatesExisting asserts overwrite updates a row that
 // shares the portable identity rather than skipping it.
 func TestBackupRestoreOverwriteUpdatesExisting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -2225,6 +2261,7 @@ func TestBackupRestoreOverwriteUpdatesExisting(t *testing.T) {
 }
 
 func TestBackupRestoreReplaceAllPrunesActivityBeforeSigningKeys(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	seedSigningKey(t, ctx, rs, "key-prune")
 	order, err := rs.CreateOrder(ctx, sampleOrder())
@@ -2283,6 +2320,7 @@ func TestBackupRestoreReplaceAllPrunesActivityBeforeSigningKeys(t *testing.T) {
 }
 
 func TestBackupRestoreReplaceAllUsesArchiveGroupForActivityPrune(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "AAPL", Title: "Apple"})
@@ -2384,6 +2422,7 @@ func TestRestoreRejectsUnknownAccountBlockCodeBeforeCommit(t *testing.T) {
 // data, so without this a hand-crafted file could plant a code carrying a NUL,
 // a newline, or an unbounded length straight into the dictionaries.
 func TestRestoreValidatesDictionaryCodes(t *testing.T) {
+	t.Parallel()
 	longCode := strings.Repeat("x", 10_000)
 	cases := []struct {
 		name string
@@ -2439,6 +2478,7 @@ func TestRestoreValidatesDictionaryCodes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			archive := backup.NewArchive(
@@ -2464,6 +2504,7 @@ func TestRestoreValidatesDictionaryCodes(t *testing.T) {
 // source is rejected like any other write: the restore fails with ErrInvalid
 // naming the record kind and rolls back, leaving the audit log empty.
 func TestBackupRestoreRejectsRowWithoutSource(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	archive := backup.NewArchive(
@@ -2495,6 +2536,7 @@ func TestBackupRestoreRejectsRowWithoutSource(t *testing.T) {
 // provenance: a zero record time is rejected with ErrInvalid naming the record
 // kind, never replaced by the restore's own clock.
 func TestBackupRestoreRejectsRowWithoutAt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	archive := backup.NewArchive(
@@ -2527,6 +2569,7 @@ func TestBackupRestoreRejectsRowWithoutAt(t *testing.T) {
 // without a known type fails restore on every path: a new row, and a row
 // insert-missing would otherwise skip as already present.
 func TestBackupRestoreRejectsAdjustmentWithoutType(t *testing.T) {
+	t.Parallel()
 	existingID := domain.ExternalID("adj-existing")
 	tests := []struct {
 		name string
@@ -2557,6 +2600,7 @@ func TestBackupRestoreRejectsAdjustmentWithoutType(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedAdjustmentFixtures(t)
 			existing := sampleAdjustment()
 			existing.ExternalID = existingID
@@ -2610,6 +2654,7 @@ func TestBackupRestoreRejectsAdjustmentWithoutType(t *testing.T) {
 // the same second, the earlier one with fewer significant fractional digits
 // (the case a trimmed-zeros text form misorders), list newest first.
 func TestListAuditOrdersSameSecondRowsOfDifferentPrecisionNewestFirst(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	base := time.Date(2026, time.September, 15, 10, 0, 0, 0, time.UTC)
@@ -2651,6 +2696,7 @@ func TestListAuditOrdersSameSecondRowsOfDifferentPrecisionNewestFirst(t *testing
 }
 
 func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
+	t.Parallel()
 	scope := backup.Scope{Sections: []backup.Section{backup.SectionRiskLimits}}
 	cases := []struct {
 		name string
@@ -2696,6 +2742,7 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			mustCreateAsset(t, ctx, rs, domain.Asset{Code: "USD"})
@@ -2728,6 +2775,7 @@ func TestBackupRestoreRejectsInvalidLimitsWithContext(t *testing.T) {
 }
 
 func TestBackupRestoreRejectsInvalidBalanceAndRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "AAPL"})
@@ -2772,6 +2820,7 @@ func TestBackupRestoreRejectsInvalidBalanceAndRollsBack(t *testing.T) {
 }
 
 func TestBackupRestoreRejectsNonCanonicalMarketDataStringsAndRollsBack(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		wantField string
@@ -2830,6 +2879,7 @@ func TestBackupRestoreRejectsNonCanonicalMarketDataStringsAndRollsBack(t *testin
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			mustCreateAsset(t, ctx, rs, domain.Asset{Code: "AAPL"})
@@ -2895,6 +2945,7 @@ func TestBackupRestoreRejectsNonCanonicalMarketDataStringsAndRollsBack(t *testin
 }
 
 func TestBackupRestoreRejectsZeroMarketDataInstanceIDAndRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	before := snapshotBackupData(t, ctx, rs)
@@ -2938,6 +2989,7 @@ func TestBackupRestoreRejectsZeroMarketDataInstanceIDAndRollsBack(t *testing.T) 
 }
 
 func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	before := snapshotBackupData(t, ctx, rs)
 	firstID := mustExternalID(t)
@@ -2993,6 +3045,7 @@ func TestBackupRestoreRejectsInvalidOrderLeavesAndRollsBack(t *testing.T) {
 }
 
 func TestBackupRestorePreservesReservationSeparatelyFromReportedLeaves(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	input := sampleOrder()
 	input.Status = domain.OrderStatusCommitted
@@ -3037,6 +3090,7 @@ func TestBackupRestorePreservesReservationSeparatelyFromReportedLeaves(t *testin
 }
 
 func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		want string
@@ -3073,6 +3127,7 @@ func TestBackupRestoreRejectsInvalidSigningKeysAndRollsBack(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			before := snapshotBackupData(t, ctx, rs)
@@ -3122,6 +3177,7 @@ func TestBackupRestoreRejectsInvalidSpotFundsLimitModeAndRollsBack(t *testing.T)
 	} {
 		for _, value := range []string{"garbage", "", " track_only", "ENFORCE"} {
 			t.Run(string(mode)+"/"+value, func(t *testing.T) {
+				t.Parallel()
 				ctx := context.Background()
 				_, realm := newTestStore(t)
 				if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "track_only"); err != nil {
@@ -3166,6 +3222,7 @@ func TestBackupRestoreValidSpotFundsLimitModeAndOtherSettings(t *testing.T) {
 	t.Parallel()
 	for _, value := range []string{"enforce", "review_with_hold", "review_without_hold", "track_only"} {
 		t.Run(value, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, realm := newTestStore(t)
 			if err := realm.SetSetting(ctx, domain.SettingKeySpotFundsLimitMode, "enforce"); err != nil {
@@ -3198,6 +3255,7 @@ func TestBackupRestoreValidSpotFundsLimitModeAndOtherSettings(t *testing.T) {
 }
 
 func TestBackupRestoreReplaceAllKeepsLiveOnlyAccountInSelectedGroup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "AAPL", Title: "Apple"})
@@ -3252,6 +3310,7 @@ func TestBackupRestoreReplaceAllKeepsLiveOnlyAccountInSelectedGroup(t *testing.T
 }
 
 func TestBackupRestoreOverwriteKeepsTargetOnlyOrderChildren(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	orderXID := seedRealm(t, ctx, src)
@@ -3300,6 +3359,7 @@ func TestBackupRestoreOverwriteKeepsTargetOnlyOrderChildren(t *testing.T) {
 // of row (dictionary, position, limit, activity, audit, market data, settings).
 // overwrite and insert_missing leave such a row in place.
 func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -3444,6 +3504,7 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 // external_id/code while assigning fresh, valid engine ids, and leaves no
 // dangling foreign key (the order children resolve after the cascade).
 func TestBackupRestoreReplaceAllPreservesIdentityReassignsEngineIDs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	orderXID := seedRealm(t, ctx, src)
@@ -3494,6 +3555,7 @@ func TestBackupRestoreReplaceAllPreservesIdentityReassignsEngineIDs(t *testing.T
 // present before the restore survives, while the selected account's rows become
 // exactly what the archive carries.
 func TestBackupRestoreReplaceAllScopedToSelectedAccounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -3528,6 +3590,7 @@ func TestBackupRestoreReplaceAllScopedToSelectedAccounts(t *testing.T) {
 func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 	t *testing.T,
 ) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	if _, err := src.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
@@ -3601,6 +3664,7 @@ func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 // asserts the store leaves restart classification to the node and does not pull
 // in the account-addressed sections.
 func TestBackupRestoreSelectorSubset(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -3636,6 +3700,7 @@ func TestBackupRestoreSelectorSubset(t *testing.T) {
 // TestBackupRestoreUnknownModeRejected asserts an empty/unknown mode is rejected
 // with ErrInvalid and writes nothing.
 func TestBackupRestoreUnknownModeRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -3656,6 +3721,7 @@ func TestBackupRestoreUnknownModeRejected(t *testing.T) {
 // machine records reference dictionaries, asserting the dictionary-first order
 // lets every cross-row link resolve (no dangling foreign key).
 func TestBackupRestoreResolvesForeignKeysDictionaryFirst(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	orderXID := seedRealm(t, ctx, src)
@@ -3760,6 +3826,7 @@ var backupExcludedTables = map[string]bool{
 }
 
 func TestBackupPositionLimitsRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -3805,6 +3872,7 @@ func TestBackupPositionLimitsRoundTrip(t *testing.T) {
 }
 
 func TestBackupPositionLimitsRestoreModesAndSelectors(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -3846,6 +3914,7 @@ func TestBackupPositionLimitsRestoreModesAndSelectors(t *testing.T) {
 		{backup.RestoreModeReplaceAll, "10.00000001", false},
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
+			t.Parallel()
 			_, dst := newRealmStore(t, domain.DefaultRealm)
 			for _, code := range []string{"EXTRA", "USD", "AAPL"} {
 				mustCreateAsset(t, ctx, dst, domain.Asset{Code: code})
@@ -3888,6 +3957,7 @@ func TestBackupPositionLimitsRestoreModesAndSelectors(t *testing.T) {
 }
 
 func TestBackupPositionLimitsRejectInvalidAndUnknownAxes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name  string
@@ -3899,6 +3969,7 @@ func TestBackupPositionLimitsRejectInvalidAndUnknownAxes(t *testing.T) {
 		{"unknown asset", domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "missing", MaxPosition: "1"}, "missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, rs := newRealmStore(t, domain.DefaultRealm)
 			seedRealm(t, ctx, rs)
 			before := snapshotBackupData(t, ctx, rs)
@@ -3926,6 +3997,7 @@ func TestBackupPositionLimitsRejectInvalidAndUnknownAxes(t *testing.T) {
 // asserts each is either exported by the backup or on the explicit exclusion
 // allowlist, so a newly added table cannot silently escape the backup.
 func TestBackupCompleteness(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newRealmStore(t, domain.DefaultRealm)
 	r := rs.(*realmStore)
@@ -3956,6 +4028,7 @@ func TestBackupCompleteness(t *testing.T) {
 }
 
 func TestBackupTradingRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		sealed bool
@@ -3964,6 +4037,7 @@ func TestBackupTradingRoundTrip(t *testing.T) {
 		{name: "sealed", sealed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			var opts []Option
 			if test.sealed {
@@ -4020,6 +4094,7 @@ func TestBackupTradingRoundTrip(t *testing.T) {
 }
 
 func TestBackupRestoreDisablesTradingForNonRelease(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, source := newRealmStoreWithOptions(t, "non-release-source",
 		WithMasterKey(mustStoreMasterKey(t, 0x71)))
@@ -4043,6 +4118,7 @@ func TestBackupRestoreDisablesTradingForNonRelease(t *testing.T) {
 		{name: "release preserves disabled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			keyByte := byte(0x71)
 			if tc.unavailable {
 				keyByte = 0x72
@@ -4127,6 +4203,7 @@ func TestBackupRestoreUnavailableSealedTradingCredentials(t *testing.T) {
 // TestBackupRestoreLiveTrading asserts a live connection restores like a paper
 // one - enabled, with its credentials - whether or not the databases seal them.
 func TestBackupRestoreLiveTrading(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		sealed bool
@@ -4135,6 +4212,7 @@ func TestBackupRestoreLiveTrading(t *testing.T) {
 		{name: "sealed", sealed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			var opts []Option
 			if test.sealed {
@@ -4169,6 +4247,7 @@ func TestBackupRestoreLiveTrading(t *testing.T) {
 }
 
 func TestBackupTradingScopeRefusals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	narrowedAccounts := backup.Scope{
 		Sections: []backup.Section{backup.SectionAccountsGroups},
@@ -4180,6 +4259,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	}
 
 	t.Run("export with account selector", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-narrow-export")
 		seedTradingBackupState(t, ctx, source)
 		_, err := source.ExportBackup(ctx, narrowedTrading)
@@ -4187,6 +4267,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	})
 
 	t.Run("export all sections with account selector", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-all-narrow-export")
 		seedTradingBackupState(t, ctx, source)
 		_, err := source.ExportBackup(ctx, backup.Scope{
@@ -4197,6 +4278,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	})
 
 	t.Run("export non-trading section with account selector", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-narrow-settings-export")
 		seedTradingBackupState(t, ctx, source)
 		archive, err := source.ExportBackup(ctx, backup.Scope{
@@ -4214,6 +4296,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	})
 
 	t.Run("restore trading archive with account selector", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-narrow-archive")
 		seedTradingBackupState(t, ctx, source)
 		archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
@@ -4228,6 +4311,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	})
 
 	t.Run("restore into target with venue-order links and account selector", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-narrow-empty-source")
 		seedRealm(t, ctx, source)
 		archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
@@ -4243,6 +4327,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	})
 
 	t.Run("replace accounts without trading section", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-prune-source")
 		seedRealm(t, ctx, source)
 		archive, err := source.ExportBackup(ctx, backup.Scope{
@@ -4266,6 +4351,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	})
 
 	t.Run("restore activity from archive without trading section", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-missing-section-source")
 		seedRealm(t, ctx, source)
 		archive, err := source.ExportBackup(ctx, backup.Scope{
@@ -4290,6 +4376,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	})
 
 	t.Run("overwrite activity without trading section preserves connection", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-missing-section-overwrite-source")
 		order := seedRealm(t, ctx, source)
 		archive, err := source.ExportBackup(ctx, backup.Scope{
@@ -4336,6 +4423,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 	})
 
 	t.Run("narrowed replace all including trading", func(t *testing.T) {
+		t.Parallel()
 		_, source := newRealmStore(t, "trading-narrow-replace-source")
 		archive, err := source.ExportBackup(ctx, backup.Scope{
 			Sections: []backup.Section{backup.SectionTrading},
@@ -4362,6 +4450,7 @@ func TestBackupTradingScopeRefusals(t *testing.T) {
 }
 
 func TestBackupTradingMissingReferencesAreRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, source := newRealmStore(t, "trading-missing-reference-source")
 	seedTradingBackupState(t, ctx, source)
@@ -4411,6 +4500,7 @@ func TestBackupTradingMissingReferencesAreRefused(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			archive := cloneBackupArchive(t, valid)
 			identity := test.mutate(&archive)
 			_, target := newRealmStore(t, domain.RealmID("trading-missing-"+strings.ReplaceAll(test.name, " ", "-")))
@@ -4426,6 +4516,7 @@ func TestBackupTradingMissingReferencesAreRefused(t *testing.T) {
 }
 
 func TestBackupTradingRestoreModes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, source := newRealmStore(t, "trading-modes-source")
 	connection, order := seedTradingBackupState(t, ctx, source)
@@ -4477,6 +4568,7 @@ func TestBackupTradingRestoreModes(t *testing.T) {
 }
 
 func TestBackupTradingReplaceAllPrunesDependenciesFirst(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, source := newRealmStore(t, "trading-replace-source")
 	wantConnection, wantOrder := seedTradingBackupState(t, ctx, source)
@@ -4526,6 +4618,7 @@ func TestBackupTradingReplaceAllPrunesDependenciesFirst(t *testing.T) {
 }
 
 func TestBackupTradingGroupAccessRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, source := newRealmStore(t, "trading-group-source")
 	connection, _ := seedTradingBackupState(t, ctx, source)
@@ -4632,6 +4725,7 @@ func feeAccountLookup(required bool, err error) func(string) (bool, error) {
 // Restoring with insert_missing keeps the existing connection and re-inserts
 // the extra grant, so the rule and the provider lookup decide the outcome.
 func TestBackupRestoreGrantNeedsFeeAccount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	errLookup := errors.New("test provider lookup failure")
 	// notAsked fails the restore, and so the test, when it is asked at all.
@@ -4701,6 +4795,7 @@ func TestBackupRestoreGrantNeedsFeeAccount(t *testing.T) {
 			},
 		} {
 			t.Run(extra.name+": "+test.name, func(t *testing.T) {
+				t.Parallel()
 				_, rs := newRealmStore(t, "trading-grant-fee")
 				connection, _ := seedTradingBackupState(t, ctx, rs)
 				access := extra.access
@@ -4801,6 +4896,7 @@ func TestBackupRestoreGrantNeedsFeeAccount(t *testing.T) {
 // holding two grants each. The lookup allows the connection whose label sorts
 // first and refuses the other.
 func TestBackupRestoreChecksEveryFeeLessConnection(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newRealmStore(t, "trading-fee-less-connections")
 	allowed, _ := seedTradingBackupState(t, ctx, rs)
@@ -4871,6 +4967,7 @@ func TestBackupRestoreChecksEveryFeeLessConnection(t *testing.T) {
 }
 
 func TestResetClearsTradingState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, realm := newRealmStore(t, "trading-reset")
 	_, order := seedTradingBackupState(t, ctx, realm)
@@ -4887,6 +4984,7 @@ func TestResetClearsTradingState(t *testing.T) {
 }
 
 func TestBackupExportRestoreAndResetWithoutTradingState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, source := newRealmStore(t, "no-trading-source")
 	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
@@ -4909,6 +5007,7 @@ func TestBackupExportRestoreAndResetWithoutTradingState(t *testing.T) {
 // and asserts the whole transaction rolls back: the prune that replace_all runs
 // first is undone, so a pre-existing account survives untouched.
 func TestBackupRestoreAtomicityLeavesRealmUnchanged(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, dst := newRealmStore(t, domain.DefaultRealm)
 	if _, err := dst.CreateAccount(ctx, domain.Account{Code: "keep-acc", Title: "Keep"}); err != nil {
@@ -4967,6 +5066,7 @@ func TestBackupRestoreAtomicityLeavesRealmUnchanged(t *testing.T) {
 // persists nothing, mirroring the CreateTrade write-time guard. Without it the
 // bad row would land and later break the whole-page CommissionSubtotals rollup.
 func TestBackupRestoreRejectsInvalidCommission(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		commission *domain.Commission
@@ -4977,6 +5077,7 @@ func TestBackupRestoreRejectsInvalidCommission(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, dst := seedOrderFixtures(t)
 			orderXID := mustExternalID(t)
 			scope := backup.Scope{
@@ -5030,6 +5131,7 @@ func TestBackupRestoreRejectsInvalidCommission(t *testing.T) {
 }
 
 func TestBackupRestoreRejectsUnknownOrderStatusAndRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	before := snapshotBackupData(t, ctx, rs)
 	firstID := mustExternalID(t)
@@ -5097,6 +5199,7 @@ func TestBackupRestoreRejectsUnknownOrderStatusAndRollsBack(t *testing.T) {
 }
 
 func TestBackupRestoreRejectsInvalidAuditActionAndRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	before := snapshotBackupData(t, ctx, rs)
@@ -5145,6 +5248,7 @@ func TestBackupRestoreRejectsInvalidAuditActionAndRollsBack(t *testing.T) {
 }
 
 func TestBackupRestoreRejectsInvalidAuditDecisionAndRollsBack(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		action     domain.AuditAction
@@ -5190,6 +5294,7 @@ func TestBackupRestoreRejectsInvalidAuditDecisionAndRollsBack(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			before := snapshotBackupData(t, ctx, rs)
@@ -5254,6 +5359,7 @@ func TestBackupRestoreRejectsInvalidAuditDecisionAndRollsBack(t *testing.T) {
 }
 
 func TestBackupRestoreAcceptsValidAuditDecisionMetadata(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		entry domain.AuditRow
@@ -5290,6 +5396,7 @@ func TestBackupRestoreAcceptsValidAuditDecisionMetadata(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			entry := tc.entry
@@ -5342,6 +5449,7 @@ func TestBackupRestoreAcceptsValidAuditDecisionMetadata(t *testing.T) {
 // (RESTRICT) must be force-included via the parent general-settings section, so
 // the foreign key resolves with no error.
 func TestBackupRestoreActivityOnlyForceIncludesSigningKey(t *testing.T) {
+	t.Parallel()
 	ctx, src := seedOrderFixtures(t)
 	seedSigningKey(t, ctx, src, "key-activity")
 	order, err := src.CreateOrder(ctx, sampleOrder())
@@ -5402,6 +5510,7 @@ func TestBackupRestoreActivityOnlyForceIncludesSigningKey(t *testing.T) {
 func TestBackupRestoreAuditOnlyForceIncludedGroupDefersRestartClassification(
 	t *testing.T,
 ) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -5433,6 +5542,7 @@ func TestBackupRestoreAuditOnlyForceIncludedGroupDefersRestartClassification(
 // written. The signal must follow the rows actually applied, not the mere
 // presence of the force-included section.
 func TestBackupRestoreAuditOnlyNoNewGroupStaysObservational(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -5463,6 +5573,7 @@ func TestBackupRestoreAuditOnlyNoNewGroupStaysObservational(t *testing.T) {
 }
 
 func TestBackupRestoreValidatesManifestRealmCodeBeforeTransaction(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		code string
@@ -5472,6 +5583,7 @@ func TestBackupRestoreValidatesManifestRealmCodeBeforeTransaction(t *testing.T) 
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, dst := newRealmStore(t, domain.DefaultRealm)
 			if err := dst.SetMcpAccess(ctx, "submit_order", true); err != nil {
@@ -5519,6 +5631,7 @@ func TestBackupRestoreValidatesManifestRealmCodeBeforeTransaction(t *testing.T) 
 }
 
 func TestBackupOrderSizeMode(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		version int
@@ -5534,6 +5647,7 @@ func TestBackupOrderSizeMode(t *testing.T) {
 		{"v7_review", 7, domain.RuleModeReviewWithoutHold, domain.RuleModeReviewWithoutHold, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, src := seedLimitFixtures(t)
 			limit := domain.LimitOrderSize{
 				Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset,
@@ -5594,12 +5708,14 @@ func TestBackupOrderSizeMode(t *testing.T) {
 }
 
 func TestBackupOrderSizeModeKey(t *testing.T) {
+	t.Parallel()
 	for _, archiveMode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold, domain.RuleModeReviewWithHold} {
 		for _, restoreMode := range []backup.RestoreMode{
 			backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing, backup.RestoreModeReplaceAll,
 		} {
 			for _, existing := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s/existing_%t", archiveMode, restoreMode, existing), func(t *testing.T) {
+					t.Parallel()
 					ctx, src := seedLimitFixtures(t)
 					archived := domain.LimitOrderSize{
 						Mode: archiveMode, Scope: domain.ScopeAccountUnderlyingAsset,
@@ -5657,6 +5773,7 @@ func TestBackupOrderSizeModeKey(t *testing.T) {
 // TestBackupRestoreFormatVersionRejected asserts unsupported archive versions
 // are rejected with ErrInvalid and write nothing.
 func TestBackupRestoreFormatVersionRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -5666,9 +5783,11 @@ func TestBackupRestoreFormatVersionRejected(t *testing.T) {
 	}
 	for _, version := range []int{5, backup.FormatVersion + 1} {
 		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
-			archive.Manifest.FormatVersion = version
+			t.Parallel()
+			invalid := archive
+			invalid.Manifest.FormatVersion = version
 			_, dst := newRealmStore(t, domain.DefaultRealm)
-			if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			if _, err := dst.RestoreBackup(ctx, invalid, backup.RestoreOptions{
 				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
 			}); !errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("RestoreBackup(formatVersion=%d) error = %v, want ErrInvalid", version, err)

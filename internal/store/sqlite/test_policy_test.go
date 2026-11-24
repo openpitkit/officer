@@ -47,6 +47,7 @@ func newClassifierStore(t *testing.T) store.Store {
 }
 
 func TestTradingProviderClassifierBinding(t *testing.T) {
+	t.Parallel()
 	st := newClassifierStore(t)
 	if err := st.BindExecutionPolicyProviders(nil); err == nil {
 		t.Fatal("nil classifier accepted")
@@ -61,6 +62,7 @@ func TestTradingProviderClassifierBinding(t *testing.T) {
 }
 
 func TestTestExecutionPolicyClassificationAcrossHandles(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := newClassifierStore(t)
 	before, err := st.ForRealm(ctx, domain.DefaultRealm)
@@ -127,6 +129,7 @@ func TestTestExecutionPolicyClassificationAcrossHandles(t *testing.T) {
 }
 
 func TestDecodeTestExecutionPolicy(t *testing.T) {
+	t.Parallel()
 	valid := `[{"mask":{"baseAsset":"*","quoteAsset":"USD"},"mode":"execute","priceVariant":"normal"}]`
 	for _, tc := range []struct {
 		name      string
@@ -149,6 +152,7 @@ func TestDecodeTestExecutionPolicy(t *testing.T) {
 		{"valid rule", valid, "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			policy, err := decodeTestExecutionPolicy(tc.rules)
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantError) {

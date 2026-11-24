@@ -161,6 +161,27 @@ with other tests that log or capture logs. Its fixture runs through
 
 This rule has no approval marker or baseline.
 
+### `integration-test-wall-clock-deadline`
+
+The liveness deadline rule covers integration tests, SQLite store tests, and
+trading e2e tests. It allows short windows that prove an event did not happen.
+
+### `sqlite-test-parallel`
+
+`checks/semgrep/sqlite-test-parallel.yml` requires SQLite tests to start with
+`t.Parallel()` so the race run stays within the package timeout. Tests that
+change the process environment, working directory, umask, or default logger
+run serially. The companion rule `sqlite-test-parallel-global-state` flags
+parallel tests that make one of those changes, including inside a subtest.
+Their fixtures run through `check-semgrep`.
+
+Known misses include global mutations one helper call deeper than the listed
+names, indirect mutations through code under test, and global mutations in
+serial tests with parallel subtests. The companion rule looks for
+`t.Parallel()` only among the top-level test's own statements.
+
+These rules have no approval marker or baseline.
+
 ### `discarded-error`
 
 `checks/semgrep/discarded-error.yml` forbids all-blank call assignments in

@@ -791,11 +791,7 @@ func TestOKXStreamMissedFillsReconciledOnce(t *testing.T) {
 		"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 		"balance": map[string]any{"mode": "absolute", "value": "1000"},
 	}, http.StatusCreated)
-	select {
-	case <-connected:
-	case <-f.ctx.Done():
-		t.Fatal("first connection")
-	}
+	<-connected // First connection.
 	input := tradingE2ESendInput(id)
 	input["destination"] = map[string]any{
 		"connection": id, "route": map[string]any{"timeInForce": "GTC"},
@@ -813,32 +809,24 @@ func TestOKXStreamMissedFillsReconciledOnce(t *testing.T) {
 	if !okxWSWrite(t, f.ctx, conn, okxWSData(row)) {
 		t.Fatal("first fill write")
 	}
-	f.wait("first OKX fill", func() bool {
+	waitForTrading(func() bool {
 		d, e := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 		tradingE2EMust(t, e)
 		return len(d.Trades) == 1
-	})
+	}) // first OKX fill
 	mu.Lock()
 	broken = true
 	mu.Unlock()
 	if !okxWSWrite(t, f.ctx, conn, map[string]string{"event": "notice", "code": "64008"}) {
 		t.Fatal("break notice")
 	}
-	select {
-	case <-connected:
-	case <-f.ctx.Done():
-		t.Fatal("reconnect")
-	}
-	select {
-	case <-replayed:
-	case <-f.ctx.Done():
-		t.Fatal("replay")
-	}
-	f.wait("OKX recovered fills and cancellation", func() bool {
+	<-connected // Reconnect.
+	<-replayed  // Replay.
+	waitForTrading(func() bool {
 		d, e := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 		tradingE2EMust(t, e)
 		return len(d.Trades) == 3 && d.Order.Status == domain.OrderStatusCancelled
-	})
+	}) // OKX recovered fills and cancellation
 	f.close()
 	mu.Lock()
 	gotPosts, gotLookups := posts, lookups
@@ -848,11 +836,7 @@ func TestOKXStreamMissedFillsReconciledOnce(t *testing.T) {
 	}
 	// After restart, duplicates must not change the three booked trades.
 	f.start()
-	select {
-	case <-connected:
-	case <-f.ctx.Done():
-		t.Fatal("connection after restart")
-	}
+	<-connected // Connection after restart.
 	detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 	tradingE2EMust(t, err)
 	if len(detail.Trades) != 3 {

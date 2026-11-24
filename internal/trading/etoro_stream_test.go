@@ -320,11 +320,11 @@ func TestEtoroStreamCorrelation(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal("stream did not reach correlation barrier")
 				}
-				waitForTrading(t, "held update", func() bool {
+				waitForTrading(func() bool {
 					c.ordersMu.Lock()
 					defer c.ordersMu.Unlock()
 					return len(c.held) == 1
-				})
+				}) // held update
 				mapOrder()
 				etoroAssertOrderEvent(t, nextEvent(t, events), etoroTestCOID, "9007199254740993")
 			}

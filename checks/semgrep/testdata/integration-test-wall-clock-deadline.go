@@ -55,6 +55,29 @@ func waitUnderFormattedBudget(t *testing.T, entered chan struct{}) {
 	}
 }
 
+func receiveUnderBudget(t *testing.T, result <-chan error) {
+	// ruleid: integration-test-wall-clock-deadline
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not receive result")
+	}
+}
+
+func assignUnderBudget(t *testing.T, result <-chan error) {
+	var err error
+	// ruleid: integration-test-wall-clock-deadline
+	select {
+	case err = <-result:
+		t.Log(err)
+	case <-time.After(time.Second):
+		t.Fatalf("did not receive result in %s", time.Second)
+	}
+}
+
 func requestUnderTest(t *testing.T) {
 	// ok: integration-test-wall-clock-deadline
 	ctx, cancel := context.WithCancel(t.Context())
@@ -73,5 +96,37 @@ func proveAbsence(t *testing.T, entered chan struct{}) {
 	case <-entered:
 		t.Fatal("entered too early")
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func pollUnderBudget(check func() bool) {
+	// ruleid: integration-test-wall-clock-deadline
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if check() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func pollUnderTest(check func() bool) {
+	// ok: integration-test-wall-clock-deadline
+	for !check() {
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func pollForPastStart(t *testing.T, check func(time.Time) bool) {
+	// ok: integration-test-wall-clock-deadline
+	start := time.Now().Add(-time.Hour)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for !check(start) {
+		select {
+		case <-ticker.C:
+		case <-t.Context().Done():
+			return
+		}
 	}
 }

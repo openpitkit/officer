@@ -106,6 +106,7 @@ func scheduledTick(t *testing.T, runtime *scheduler.Scheduler, at time.Time) sch
 }
 
 func TestSchedulerOneDefinitionForHundredRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	var calls int
@@ -148,6 +149,7 @@ func TestSchedulerOneDefinitionForHundredRuns(t *testing.T) {
 }
 
 func TestSchedulerIndependentJobsAndTypedFactory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	runtime, _ := newScheduledTestRuntime(t, st, func(context.Context, scheduler.Run) (json.RawMessage, error) { return nil, nil })
@@ -176,6 +178,7 @@ func TestSchedulerIndependentJobsAndTypedFactory(t *testing.T) {
 }
 
 func TestSchedulerPendingJobsSurviveStoreRestart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	var calls int
@@ -220,6 +223,7 @@ func TestSchedulerPendingJobsSurviveStoreRestart(t *testing.T) {
 }
 
 func TestSchedulerUntilStartBoundary(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name                 string
 		tick                 time.Time
@@ -229,6 +233,7 @@ func TestSchedulerUntilStartBoundary(t *testing.T) {
 		{"after end cannot start", schedulerBase.Add(time.Hour + time.Nanosecond), 0, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			st, _ := newTestStore(t)
 			var calls int64
 			runtime, _ := newScheduledTestRuntime(t, st, func(context.Context, scheduler.Run) (json.RawMessage, error) { calls++; return nil, nil })
@@ -247,6 +252,7 @@ func TestSchedulerUntilStartBoundary(t *testing.T) {
 }
 
 func TestSchedulerClaimsExcludeConcurrentCallbacksAndEdits(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -297,6 +303,7 @@ func TestSchedulerClaimsExcludeConcurrentCallbacksAndEdits(t *testing.T) {
 }
 
 func TestSchedulerInterruptedClaimNeverReplaysWithoutDecision(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	var gotRun scheduler.Run
@@ -337,6 +344,7 @@ func TestSchedulerInterruptedClaimNeverReplaysWithoutDecision(t *testing.T) {
 }
 
 func TestSchedulerFailedPartialResultDoesNotCountOrRetry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	var calls int
@@ -362,6 +370,7 @@ func TestSchedulerFailedPartialResultDoesNotCountOrRetry(t *testing.T) {
 }
 
 func TestSchedulerBackupRoundTripAndRunningRestoreGuard(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, realm := newTestStore(t)
 	task := scheduledTestTask(func(context.Context, scheduler.Run) (json.RawMessage, error) {
@@ -418,6 +427,7 @@ func TestSchedulerBackupRoundTripAndRunningRestoreGuard(t *testing.T) {
 }
 
 func TestSchedulerDailyGapSkipsAndOverlapDoesNotRepeat(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, test := range []struct {
 		name, clock, start, tick, second string
@@ -428,6 +438,7 @@ func TestSchedulerDailyGapSkipsAndOverlapDoesNotRepeat(t *testing.T) {
 		{"overlap", "01:30", "2030-11-03T04:00:00Z", "2030-11-03T05:30:00Z", "2030-11-03T06:30:00Z", 1, scheduler.Succeeded},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			st, _ := newTestStore(t)
 			calls := 0
 			runtime, _ := newScheduledTestRuntime(t, st, func(context.Context, scheduler.Run) (json.RawMessage, error) { calls++; return nil, nil })
@@ -470,6 +481,7 @@ func (failedSchedulerCompletion) Finish(context.Context, scheduler.Job, schedule
 }
 
 func TestSchedulerPostEffectPersistenceFailureStaysUncertain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	calls := 0
@@ -499,6 +511,7 @@ func TestSchedulerPostEffectPersistenceFailureStaysUncertain(t *testing.T) {
 }
 
 func TestSchedulerStopJoinsCancelledCallback(t *testing.T) {
+	t.Parallel()
 	st, _ := newTestStore(t)
 	entered, exited := make(chan struct{}), make(chan struct{})
 	cancelled, release := make(chan struct{}), make(chan struct{})
@@ -512,11 +525,11 @@ func TestSchedulerStopJoinsCancelledCallback(t *testing.T) {
 	})
 	spec := scheduledSpec(scheduler.Once, scheduler.Termination{})
 	spec.Schedule.StartAt = time.Now().Add(-time.Hour)
-	job, err := runtime.Add(context.Background(), spec, scheduler.Ready)
+	job, err := runtime.Add(t.Context(), spec, scheduler.Ready)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.Start(context.Background()); err != nil {
+	if err := runtime.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = runtime.Stop() })
@@ -527,11 +540,7 @@ func TestSchedulerStopJoinsCancelledCallback(t *testing.T) {
 			close(release)
 		}
 	})
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not start")
-	}
+	<-entered // Worker started.
 	stopped := make(chan error, 1)
 	go func() { stopped <- runtime.Stop() }()
 	<-cancelled
@@ -555,6 +564,7 @@ func TestSchedulerStopJoinsCancelledCallback(t *testing.T) {
 }
 
 func TestSchedulerUpdateRetainsCountTermination(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	runtime, _ := newScheduledTestRuntime(t, st, func(context.Context, scheduler.Run) (json.RawMessage, error) { return nil, nil })
@@ -580,6 +590,7 @@ func TestSchedulerUpdateRetainsCountTermination(t *testing.T) {
 }
 
 func TestSchedulerCompletedDefinitionsSurviveReopenAndRestore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := newTestStore(t)
 	calls := 0

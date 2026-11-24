@@ -32,6 +32,7 @@ import (
 )
 
 func TestAccountVenueCountSortPagesEffectiveDistinctConnections(t *testing.T) {
+	t.Parallel()
 	ctx, rs, first := seedTradingFixtures(t)
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
 		t.Fatal(err)
@@ -89,6 +90,7 @@ func TestAccountVenueCountSortPagesEffectiveDistinctConnections(t *testing.T) {
 }
 
 func TestAccountBlockFirstCauseWinsAndUnblockClears(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
@@ -154,6 +156,7 @@ func TestAccountBlockFirstCauseWinsAndUnblockClears(t *testing.T) {
 }
 
 func TestSetAccountBlockedReplacesOperatorReason(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
@@ -176,6 +179,7 @@ func TestSetAccountBlockedReplacesOperatorReason(t *testing.T) {
 }
 
 func TestCreateAccountRejectsInvalidTypedCauseBeforeInsert(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		account domain.Account
@@ -211,6 +215,7 @@ func TestCreateAccountRejectsInvalidTypedCauseBeforeInsert(t *testing.T) {
 	}
 	for i, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			_, rs := newTestStore(t)
 			test.account.Code = domain.AccountID(fmt.Sprintf("acc-%d", i))
@@ -226,6 +231,7 @@ func TestCreateAccountRejectsInvalidTypedCauseBeforeInsert(t *testing.T) {
 }
 
 func TestSetAccountBlockRejectsMalformedTextBeforeUpdate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
@@ -247,6 +253,7 @@ func TestSetAccountBlockRejectsMalformedTextBeforeUpdate(t *testing.T) {
 }
 
 func TestSetAccountPnl(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{
@@ -313,6 +320,7 @@ func TestSetAccountPnl(t *testing.T) {
 }
 
 func TestSetAccountPnlRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
@@ -337,6 +345,7 @@ func TestSetAccountPnlRejectsInvalidInput(t *testing.T) {
 }
 
 func TestUpdateAccountPreservesStableIdentityAndDependents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	for _, asset := range []string{"AAPL", "USD"} {
@@ -404,6 +413,7 @@ func TestUpdateAccountPreservesStableIdentityAndDependents(t *testing.T) {
 }
 
 func TestDeleteAccountReportsAndCascadesTradingAccess(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	if err := rs.PutTradingAccess(ctx, domain.TradingAccess{
 		Account: "acc-1", Connection: connection.ExternalID,
@@ -435,6 +445,7 @@ func TestDeleteAccountReportsAndCascadesTradingAccess(t *testing.T) {
 }
 
 func TestDeleteAssetReportsAndCascadesTradingInstrument(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
 		Connection:     connection.ExternalID,

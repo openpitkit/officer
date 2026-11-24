@@ -174,6 +174,7 @@ func (d *transactionBeginDriver) BeginTx(context.Context, driver.TxOptions) (dri
 }
 
 func TestBeginTxClassifiesCancellation(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		code     int
@@ -185,6 +186,7 @@ func TestBeginTxClassifiesCancellation(t *testing.T) {
 		{"canceled_busy", sqlite3.SQLITE_BUSY, true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			original := &transactionCodeError{code: test.code}
@@ -223,11 +225,13 @@ func TestBeginTxClassifiesCancellation(t *testing.T) {
 }
 
 func TestClassifyTxCancel(t *testing.T) {
+	t.Parallel()
 	interrupt := &transactionCodeError{code: sqlite3.SQLITE_INTERRUPT}
 	for _, canceled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("canceled=%t", canceled), func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			t.Cleanup(cancel)
 			if canceled {
 				cancel()
 			}
@@ -249,6 +253,7 @@ func TestClassifyTxCancel(t *testing.T) {
 				{"nil", nil, false},
 			} {
 				t.Run(test.name, func(t *testing.T) {
+					t.Parallel()
 					got := classifyTxCancel(ctx, test.err)
 					if !canceled || !test.classify {
 						if got != test.err {
@@ -274,6 +279,7 @@ func TestClassifyTxCancel(t *testing.T) {
 }
 
 func TestRollbackTransactionClassifiesCancellation(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		canceled bool
@@ -285,6 +291,7 @@ func TestRollbackTransactionClassifiesCancellation(t *testing.T) {
 		{"live_tx_done", false, sql.ErrTxDone, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			_, realm := newTestStore(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -313,6 +320,7 @@ func TestRollbackTransactionClassifiesCancellation(t *testing.T) {
 }
 
 func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := openSQLiteStoreForTest(t, filepath.Join(t.TempDir(), "mode-migration.db"))
 	source := schema.NewEmbeddedMigrationSource(store.dialect)
@@ -365,6 +373,7 @@ func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
 }
 
 func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, rs := newTestStore(t)
 
@@ -409,6 +418,7 @@ func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 }
 
 func TestEnumDictionariesCoverDomainCodes(t *testing.T) {
+	t.Parallel()
 	s, _ := newTestStore(t)
 	dictionaries, err := s.(*sqliteStore).enumDictionaries()
 	if err != nil {
@@ -532,6 +542,7 @@ func domainEnumCodes(t *testing.T, typeName string) []string {
 }
 
 func TestNewLoadsEnumDictionaries(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	s, err := New(path, domain.DefaultRealm)
@@ -560,6 +571,7 @@ func TestNewLoadsEnumDictionaries(t *testing.T) {
 }
 
 func TestNewOpensEnumDictionariesWithMissingCodes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 	sq := s.(*sqliteStore)
@@ -619,8 +631,10 @@ func TestNewOpensEnumDictionariesWithMissingCodes(t *testing.T) {
 }
 
 func TestNewRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
+	t.Parallel()
 	for _, missingCode := range []bool{false, true} {
 		t.Run(fmt.Sprintf("missing_code=%t", missingCode), func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			s, _ := newTestStore(t)
 			sq := s.(*sqliteStore)
@@ -655,6 +669,7 @@ func TestNewRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
 }
 
 func TestNewRejectsMissingEnumDictionaryCodeWithOccupiedStableID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 	sq := s.(*sqliteStore)
@@ -688,6 +703,7 @@ func TestNewRejectsMissingEnumDictionaryCodeWithOccupiedStableID(t *testing.T) {
 }
 
 func TestMigrateRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 	sq := s.(*sqliteStore)
@@ -713,9 +729,11 @@ func TestMigrateRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
 }
 
 func TestMigrateRefusesIncompleteBookkeeping(t *testing.T) {
+	t.Parallel()
 	for _, recorded := range []string{"shared", "app"} {
 		for _, emptyOther := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/empty_other=%t", recorded, emptyOther), func(t *testing.T) {
+				t.Parallel()
 				ctx := context.Background()
 				path := filepath.Join(t.TempDir(), "officer.db")
 				setup := openSQLiteStoreForTest(t, path)
@@ -789,9 +807,11 @@ func TestMigrateRefusesIncompleteBookkeeping(t *testing.T) {
 }
 
 func TestMigrateFreshBookkeeping(t *testing.T) {
+	t.Parallel()
 	for _, emptyShared := range []bool{false, true} {
 		for _, emptyApp := range []bool{false, true} {
 			t.Run(fmt.Sprintf("empty_shared=%t/empty_app=%t", emptyShared, emptyApp), func(t *testing.T) {
+				t.Parallel()
 				ctx := context.Background()
 				store := openSQLiteStoreForTest(t, filepath.Join(t.TempDir(), "officer.db"))
 				for _, cfg := range []struct {
@@ -826,6 +846,7 @@ func TestMigrateFreshBookkeeping(t *testing.T) {
 }
 
 func TestMigrateCurrentDatabaseRestarts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	store := openSQLiteStoreForTest(t, path)
@@ -873,6 +894,7 @@ func assertMigrationBookkeeping(t *testing.T, store *sqliteStore) {
 // transaction-opening method are all exercised because they reach the pool
 // through different call shapes.
 func TestRealmDataOpAfterCloseReturnsClosedError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	s, err := New(path, domain.DefaultRealm)
@@ -917,6 +939,7 @@ func TestRealmDataOpAfterCloseReturnsClosedError(t *testing.T) {
 }
 
 func TestForRealmSingleRealmEnforcement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 
@@ -933,6 +956,7 @@ func TestForRealmSingleRealmEnforcement(t *testing.T) {
 }
 
 func TestNewRejectsEmptyRealm(t *testing.T) {
+	t.Parallel()
 	s, err := New(filepath.Join(t.TempDir(), "officer.db"), "")
 	if s != nil {
 		_ = s.Close()
@@ -943,6 +967,7 @@ func TestNewRejectsEmptyRealm(t *testing.T) {
 }
 
 func TestForRealmNonDefaultBoundRealm(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	s, err := New(path, domain.RealmID("desk-a"))
@@ -968,6 +993,7 @@ func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 // nothing: the target table's row count is unchanged after the call. The store
 // never attributes a record to the system on the caller's behalf.
 func TestWritesRejectEmptySource(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	realm := rs.(*realmStore)
 	order, err := rs.CreateOrder(ctx, sampleOrder())
@@ -1043,6 +1069,7 @@ func TestWritesRejectEmptySource(t *testing.T) {
 // format to strings of one length whose text order is their chronological
 // order, and the parse sites, which keep time.RFC3339Nano, recover the instant.
 func TestTimeStrTextOrderIsChronological(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, time.September, 15, 10, 0, 0, 0, time.UTC)
 	earlier := base.Add(123450 * time.Microsecond)
 	later := base.Add(123456 * time.Microsecond)
@@ -1074,6 +1101,7 @@ func TestTimeStrTextOrderIsChronological(t *testing.T) {
 // at Migrate and at ForRealm alike, while reopening it under the original realm
 // still works.
 func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	// open migrates and binds the database as realm; migrateErr reports what
@@ -1130,6 +1158,7 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 // row is absent, and exactly one row remains. A direct second insert is refused
 // by the schema's single-row constraint itself.
 func TestForRealmConcurrentOpensLeaveOneRealmRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	s, err := New(path, domain.DefaultRealm)
@@ -1200,6 +1229,7 @@ func TestForRealmConcurrentOpensLeaveOneRealmRow(t *testing.T) {
 }
 
 func TestResetUpdatesOpenDatabaseAndPersistsNewContents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, rs := newTestStore(t)
 	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
@@ -1241,6 +1271,7 @@ func TestResetUpdatesOpenDatabaseAndPersistsNewContents(t *testing.T) {
 }
 
 func TestResetCanceledContextPreservesContents(t *testing.T) {
+	t.Parallel()
 	s, rs := newTestStore(t)
 	if _, err := rs.CreateAsset(context.Background(), domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
@@ -1263,9 +1294,11 @@ func TestResetCanceledContextPreservesContents(t *testing.T) {
 }
 
 func TestResetCleanupFailureReportsCommitState(t *testing.T) {
+	t.Parallel()
 	for _, committed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("committed=%t", committed), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			t.Parallel()
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			s, rs := newTestStore(t)
 			accessStore := s.(*sqliteStore)
@@ -1289,14 +1322,8 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 
 			// Reset waits for the live connection only after closing the migrated
 			// temporary database. Block its cleanup without changing that database.
-			ticker := time.NewTicker(time.Millisecond)
-			defer ticker.Stop()
-			for db.Stats().WaitCount == waitCount {
-				select {
-				case <-ctx.Done():
-					t.Fatalf("Reset did not reach connection acquisition: %v", ctx.Err())
-				case <-ticker.C:
-				}
+			for db.Stats().WaitCount == waitCount { // Reset queued for a connection.
+				time.Sleep(time.Millisecond)
 			}
 			temporary, err := filepath.Glob(s.Path() + ".reset-*.db")
 			if err != nil || len(temporary) != 1 {
@@ -1316,12 +1343,7 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 			} else {
 				cancel()
 			}
-			var resetErr error
-			select {
-			case resetErr = <-result:
-			case <-time.After(10 * time.Second):
-				t.Fatal("Reset did not return")
-			}
+			resetErr := <-result // Reset returned.
 			if !committed {
 				if err := conn.Close(); err != nil {
 					t.Fatalf("close held SQLite connection: %v", err)
@@ -1358,6 +1380,7 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 }
 
 func TestResetDoesNotExposeNilOrUnmigratedDBToReaders(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, rs := newTestStore(t)
 
@@ -1424,6 +1447,7 @@ func TestResetDoesNotExposeNilOrUnmigratedDBToReaders(t *testing.T) {
 }
 
 func TestExternalIDHelperRoundTrip(t *testing.T) {
+	t.Parallel()
 	id, err := newExternalID()
 	if err != nil {
 		t.Fatalf("newExternalID: %v", err)
@@ -1454,6 +1478,7 @@ func TestExternalIDHelperRoundTrip(t *testing.T) {
 }
 
 func TestAssetRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1558,6 +1583,7 @@ func TestAssetRoundTrip(t *testing.T) {
 }
 
 func TestUpdateAssetAllowsCurrencyRenameWithReferences(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, store := newTestStore(t)
 	if _, err := store.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
@@ -1593,6 +1619,7 @@ func TestUpdateAssetAllowsCurrencyRenameWithReferences(t *testing.T) {
 }
 
 func TestAssetClassRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1649,6 +1676,7 @@ func TestAssetClassRoundTrip(t *testing.T) {
 }
 
 func TestAssetClassLinkIsForeignKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1708,6 +1736,7 @@ func TestAssetClassLinkIsForeignKey(t *testing.T) {
 }
 
 func TestAssetClassListFiltersAndCounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1760,6 +1789,7 @@ func TestAssetClassListFiltersAndCounts(t *testing.T) {
 }
 
 func TestAssetListFilters(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1809,6 +1839,7 @@ func TestAssetListFilters(t *testing.T) {
 }
 
 func TestPrincipalRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1846,6 +1877,7 @@ func TestPrincipalRoundTrip(t *testing.T) {
 }
 
 func TestGroupRoundTripAndEngineID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1909,6 +1941,7 @@ func TestGroupRoundTripAndEngineID(t *testing.T) {
 }
 
 func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2043,6 +2076,7 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 }
 
 func TestDeleteGroupDetachesMemberAccount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2067,6 +2101,7 @@ func TestDeleteGroupDetachesMemberAccount(t *testing.T) {
 }
 
 func TestListAccountRowsFiltersAndCounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2176,6 +2211,7 @@ func TestListAccountRowsFiltersAndCounts(t *testing.T) {
 // account status axis must resolve the group tier too: a member of a blocked
 // group is blocked, not active.
 func TestListAccountRowsStatusFilterIsEffective(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2229,6 +2265,7 @@ func TestListAccountRowsStatusFilterIsEffective(t *testing.T) {
 // reason for a group-blocked member, so a filter on that exact text must return
 // the row that displays it.
 func TestListAccountRowsBlockReasonFilterIsEffective(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2274,6 +2311,7 @@ func TestListAccountRowsBlockReasonFilterIsEffective(t *testing.T) {
 }
 
 func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2354,6 +2392,7 @@ func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
 }
 
 func TestListGroupRowsFiltersAndCounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	zero := 0
@@ -2498,6 +2537,7 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 }
 
 func TestListGroupRowsSortAndPage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2588,6 +2628,7 @@ func TestListGroupRowsSortAndPage(t *testing.T) {
 // or its current group's, and a group's own grant. A grant on a disabled
 // connection still counts.
 func TestListRowsVenueAccess(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 

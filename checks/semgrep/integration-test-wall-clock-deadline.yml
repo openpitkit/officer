@@ -15,15 +15,16 @@
 #
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
-# No wall-clock deadline on a wait in the integration tests (Go).
+# No wall-clock deadline on a wait in integration, SQLite, or trading e2e tests (Go).
 #
 # A deadline armed in a test runs while the machine runs everything else: under
 # `-race` and several parallel gates the process can be descheduled for longer
 # than the deadline, which then expires before the awaited call even runs, and
 # the test fails without a defect ("context deadline exceeded").
 #
-# The test waits for the state instead. A request runs under testCtx(t), which
-# ends with the test; an awaited goroutine is received from without a budget.
+# A request runs under testCtx(t) in internal/integration, which carries the
+# system caller, and under t.Context() elsewhere. Use a plain receive for an
+# awaited goroutine.
 # A wait that really hangs is caught by go test's -timeout, which also prints
 # every goroutine's stack. A short window that proves something does NOT
 # happen is not this rule's business: load cannot turn it red.
@@ -31,27 +32,49 @@
 rules:
   - id: integration-test-wall-clock-deadline
     message: >-
-      An integration test bounds a wait by wall-clock time, which a loaded
-      machine can spend before the awaited call runs. Use testCtx(t) for a
-      request and a plain receive for an awaited goroutine; go test's -timeout
-      catches a real hang.
+      A test bounds a wait by wall-clock time, which a loaded machine can spend
+      before the awaited call runs. Use testCtx(t) for requests in
+      internal/integration to carry the system caller, and t.Context()
+      elsewhere. Use a plain receive to await a goroutine. go test's -timeout
+      catches a hang.
     severity: ERROR
     languages: [go]
     pattern-either:
       - pattern: context.WithTimeout(...)
       - pattern: context.WithDeadline(...)
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  select {
+                  case <-$CH:
+                  case <-time.After($D):
+                    $T.$FAIL(...)
+                  }
+              - pattern: |
+                  select {
+                  case $X := <-$CH:
+                    ...
+                  case <-time.After($D):
+                    $T.$FAIL(...)
+                  }
+              - pattern: |
+                  select {
+                  case $X = <-$CH:
+                    ...
+                  case <-time.After($D):
+                    $T.$FAIL(...)
+                  }
+          - metavariable-regex:
+              metavariable: $FAIL
+              regex: ^Fatalf?$
       - pattern: |
-          select {
-          case <-$CH:
-          case <-time.After($D):
-            $T.Fatal(...)
-          }
-      - pattern: |
-          select {
-          case <-$CH:
-          case <-time.After($D):
-            $T.Fatalf(...)
+          $DEADLINE := time.Now().Add(...)
+          ...
+          for time.Now().Before($DEADLINE) {
+            ...
           }
     paths:
       include:
         - "/internal/integration/**/*_test.go"
+        - "/internal/store/sqlite/**/*_test.go"
+        - "/internal/trading/*e2e_test.go"

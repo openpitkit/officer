@@ -52,6 +52,7 @@ func seedBalanceFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 }
 
 func TestCurrencyChangeReasonsPreserveEveryBlockingFact(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	if err := rs.UpsertBalance(ctx, domain.Balance{
 		Account: "acc-1", Asset: "AAPL", Available: "1.000000000000000001",
@@ -120,8 +121,10 @@ func TestCurrencyChangeReasonsPreserveEveryBlockingFact(t *testing.T) {
 }
 
 func TestCurrencyChangeReasonsDistinguishPnlModes(t *testing.T) {
+	t.Parallel()
 	for _, axis := range domain.SpotFundsPnlAxes {
 		t.Run(string(axis), func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedBalanceFixtures(t)
 			for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
 				if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
@@ -147,6 +150,7 @@ func TestCurrencyChangeReasonsDistinguishPnlModes(t *testing.T) {
 }
 
 func TestBalanceUpsertGetDeleteRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	bal := domain.Balance{
@@ -206,6 +210,7 @@ func TestBalanceUpsertGetDeleteRoundTrip(t *testing.T) {
 }
 
 func TestBalanceUpsertOverwritesRealizedPnlAbsolute(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	// First upsert with realized_pnl = "10".
@@ -233,6 +238,7 @@ func TestBalanceUpsertOverwritesRealizedPnlAbsolute(t *testing.T) {
 }
 
 func TestBalanceSettlePersistsEngineRealizedPnlAbsolute(t *testing.T) {
+	t.Parallel()
 	// This test exercises the SDK absolute through RecordOrderSettlement, which
 	// calls settleBalanceTx internally.
 	ctx, rs := seedBalanceFixtures(t)
@@ -290,6 +296,7 @@ func TestBalanceSettlePersistsEngineRealizedPnlAbsolute(t *testing.T) {
 }
 
 func TestBalanceListFilters(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	if err := rs.UpsertBalance(ctx, domain.Balance{
@@ -341,6 +348,7 @@ func TestBalanceListFilters(t *testing.T) {
 }
 
 func TestListAccountsBlockingCurrencyChangeIncludesBalanceRowsAndAccountPnl(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
@@ -421,6 +429,7 @@ func TestListAccountsBlockingCurrencyChangeIncludesBalanceRowsAndAccountPnl(t *t
 }
 
 func TestListAccountsBlockingCurrencyChangeIncludesRetainedBalanceHalt(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	for _, account := range []domain.Account{
@@ -481,7 +490,9 @@ func TestListAccountsBlockingCurrencyChangeIncludesRetainedBalanceHalt(t *testin
 }
 
 func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
+	t.Parallel()
 	t.Run("active orders block and terminal orders do not", func(t *testing.T) {
+		t.Parallel()
 		ctx, rs := seedOrderFixtures(t)
 		for _, status := range domain.OrderStatusesEligibleForFill() {
 			order := sampleOrder()
@@ -567,6 +578,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedBalanceFixtures(t)
 			if tc.seed != nil {
 				tc.seed(ctx, rs)
@@ -590,6 +602,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 	}
 
 	t.Run("P&L bounds and economic state are independent", func(t *testing.T) {
+		t.Parallel()
 		ctx, rs := seedBalanceFixtures(t)
 		if err := rs.UpsertBalance(ctx, domain.Balance{
 			Account: "acc-1", Asset: "AAPL", Available: "1",
@@ -612,6 +625,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 	})
 
 	t.Run("default group P&L bounds do not match an ungrouped account", func(t *testing.T) {
+		t.Parallel()
 		ctx, rs := seedBalanceFixtures(t)
 		sqliteRealm := rs.(*realmStore)
 		db, err := sqliteRealm.db()
@@ -640,6 +654,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 	})
 
 	t.Run("rate and order size limits are not denominated", func(t *testing.T) {
+		t.Parallel()
 		ctx, rs := seedBalanceFixtures(t)
 		if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccount, Account: "acc-1",
@@ -663,6 +678,7 @@ func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
 	})
 
 	t.Run("absent and exact zero values do not block", func(t *testing.T) {
+		t.Parallel()
 		ctx, rs := seedBalanceFixtures(t)
 		if err := rs.SetAccountPnl(ctx, "acc-1", "-0.000", ""); err != nil {
 			t.Fatalf("SetAccountPnl: %v", err)
@@ -692,6 +708,7 @@ func accountIDsToStrings(blockers []fwstore.CurrencyChangeBlocker) []string {
 }
 
 func TestBalanceListRowsSortFilterPageOrdersDecimalsNumerically(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
@@ -766,6 +783,7 @@ func TestBalanceListRowsSortFilterPageOrdersDecimalsNumerically(t *testing.T) {
 }
 
 func TestBalanceCascadeOnAccountDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	if err := rs.UpsertBalance(ctx, domain.Balance{
@@ -792,6 +810,7 @@ func TestBalanceCascadeOnAccountDelete(t *testing.T) {
 }
 
 func TestBalanceCascadeOnAssetDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	if err := rs.UpsertBalance(ctx, domain.Balance{
@@ -815,6 +834,7 @@ func TestBalanceCascadeOnAssetDelete(t *testing.T) {
 }
 
 func TestBalanceUnknownAccountIsInvalid(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	err := rs.UpsertBalance(ctx, domain.Balance{
@@ -826,6 +846,7 @@ func TestBalanceUnknownAccountIsInvalid(t *testing.T) {
 }
 
 func TestBalanceUnknownAssetIsInvalid(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	err := rs.UpsertBalance(ctx, domain.Balance{
@@ -840,6 +861,7 @@ func TestBalanceUnknownAssetIsInvalid(t *testing.T) {
 // account currency, which the account itself may inherit. Every tier of the
 // cascade must denominate the row exactly as a directly assigned currency does.
 func TestBalanceAccountCurrencyResolvesEveryCascadeTier(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR", Title: "Euro"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
@@ -907,6 +929,7 @@ func TestBalanceAccountCurrencyResolvesEveryCascadeTier(t *testing.T) {
 // compared against a row denominated in the other, so the currency the
 // threshold names selects which rows the numeric bounds even apply to.
 func TestBalanceListRowsComparesOnlyWithinNamedCurrency(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR", Title: "Euro"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
@@ -1008,6 +1031,7 @@ func TestBalanceListRowsComparesOnlyWithinNamedCurrency(t *testing.T) {
 }
 
 func TestBalanceListRowsRejectsDenominatedRangeWithoutCurrency(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	min := "50"
 	_, err := rs.ListBalanceRows(ctx, fwstore.BalanceListFilter{
@@ -1021,6 +1045,7 @@ func TestBalanceListRowsRejectsDenominatedRangeWithoutCurrency(t *testing.T) {
 }
 
 func TestBalanceListRowsSortsRealizedPnlWithinCurrency(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
@@ -1086,6 +1111,7 @@ func TestBalanceListRowsSortsRealizedPnlWithinCurrency(t *testing.T) {
 }
 
 func TestBalanceListRowsRealizedPnlSortPreservesUnsetAcrossCurrencies(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
@@ -1139,6 +1165,7 @@ func TestBalanceListRowsRealizedPnlSortPreservesUnsetAcrossCurrencies(t *testing
 // does, so a threshold must reach rows whose account never names a currency of
 // its own.
 func TestBalanceListRowsComparesAgainstInheritedCurrency(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "grp-1"}); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
@@ -1176,6 +1203,7 @@ func TestBalanceListRowsComparesAgainstInheritedCurrency(t *testing.T) {
 }
 
 func TestBalanceListRowsUsesEveryCurrencyCascadeTier(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 	for _, code := range []string{"EUR", "GBP"} {
 		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
@@ -1236,6 +1264,7 @@ func TestBalanceListRowsUsesEveryCurrencyCascadeTier(t *testing.T) {
 }
 
 func TestBalanceEmptyAmountsDefaultToZero(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedBalanceFixtures(t)
 
 	// Quantity amounts default to zero; an unreported realized P&L stays absent.

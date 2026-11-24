@@ -64,6 +64,7 @@ func selectionFixture(t *testing.T) (context.Context, fwstore.RealmStore, []doma
 // This finite property enumerates every union over three accounts and two
 // groups, intersected with every legacy exact-account restriction and page.
 func TestSelectionUnionIntersectionBeforePageAndCount(t *testing.T) {
+	t.Parallel()
 	ctx, rs, accounts, groups := selectionFixture(t)
 	for mask := range 32 {
 		selection := &domain.AccountSelection{}
@@ -110,6 +111,7 @@ func TestSelectionUnionIntersectionBeforePageAndCount(t *testing.T) {
 }
 
 func TestSelectionGroupsKeepAssignedEmptyAndCountVisibleMembers(t *testing.T) {
+	t.Parallel()
 	ctx, rs, accounts, groups := selectionFixture(t)
 	page, err := rs.ListGroupRows(ctx, fwstore.GroupListFilter{Restriction: domain.AccountRestriction{Selection: &domain.AccountSelection{
 		Accounts:      []domain.EngineAccountID{accounts[0].EngineAccountID},
@@ -124,6 +126,7 @@ func TestSelectionGroupsKeepAssignedEmptyAndCountVisibleMembers(t *testing.T) {
 }
 
 func TestSelectionCannotFollowRecreatedAccountOrGroupCode(t *testing.T) {
+	t.Parallel()
 	ctx, rs, accounts, groups := selectionFixture(t)
 	selection := &domain.AccountSelection{Accounts: []domain.EngineAccountID{accounts[2].EngineAccountID}, AccountGroups: []domain.EngineGroupID{groups[2].EngineGroupID}}
 	if err := rs.DeleteAccount(ctx, "c", true); err != nil {
@@ -165,6 +168,7 @@ func selectionAudit(t *testing.T, ctx context.Context, rs fwstore.RealmStore, en
 }
 
 func TestSelectionAuditUsesCurrentMembershipAndActualGroupIdentity(t *testing.T) {
+	t.Parallel()
 	ctx, rs, accounts, groups := selectionFixture(t)
 	selectionAudit(t, ctx, rs, fwstore.AuditEntry{Account: "a", AccountIdentity: accounts[0].EngineAccountID, GroupIdentity: groups[0].EngineGroupID})
 	selectionAudit(t, ctx, rs, fwstore.AuditEntry{Group: groups[0].Code, GroupIdentity: groups[0].EngineGroupID})
@@ -200,6 +204,7 @@ func TestSelectionAuditUsesCurrentMembershipAndActualGroupIdentity(t *testing.T)
 }
 
 func TestSelectionAuditUnavailableFailsBeforeCountAndPage(t *testing.T) {
+	t.Parallel()
 	ctx, rs, accounts, _ := selectionFixture(t)
 	selectionAudit(t, ctx, rs, fwstore.AuditEntry{Account: "a"})
 	selectionAudit(t, ctx, rs, fwstore.AuditEntry{Account: "b", AccountIdentity: accounts[1].EngineAccountID})

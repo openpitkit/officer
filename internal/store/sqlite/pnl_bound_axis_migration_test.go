@@ -143,6 +143,7 @@ func pnlBoundAxes(t *testing.T, db *sql.DB) map[string]string {
 }
 
 func TestPnlBoundAxisMigrationKeepsV1BoundsRealized(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := pnlBoundV1Fixture(t)
 	st := preMigrationStore(t, path, sqlite.WithPreMigrationCopy())

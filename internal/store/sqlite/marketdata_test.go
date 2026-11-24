@@ -60,6 +60,7 @@ func sampleInstance() domain.MarketDataInstance {
 // TestMDInstanceCreateGetRoundTrip checks that an instance round-trips with
 // all fields preserved and the assigned external id has the correct length.
 func TestMDInstanceCreateGetRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst := sampleInstance()
@@ -113,6 +114,7 @@ func TestMDInstanceCreateGetRoundTrip(t *testing.T) {
 // TestMDInstanceExternalIDOpacity verifies that no surrogate integer id leaks
 // through the ListMarketDataInstances result.
 func TestMDInstanceExternalIDOpacity(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst := sampleInstance()
@@ -136,6 +138,7 @@ func TestMDInstanceExternalIDOpacity(t *testing.T) {
 // TestMDInstanceLabelNOCASEUniqueness confirms that a duplicate label with
 // different casing is rejected with domain.ErrAlreadyExists.
 func TestMDInstanceLabelNOCASEUniqueness(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst := sampleInstance()
@@ -155,6 +158,7 @@ func TestMDInstanceLabelNOCASEUniqueness(t *testing.T) {
 // TestMDInstanceCredentialsOpaqueRoundTrip verifies the credentials blob is
 // returned byte-for-byte without any interpretation.
 func TestMDInstanceCredentialsOpaqueRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	raw := `{"user":"alice","pass":"p@ss word","nested":{"x":1}}`
@@ -178,6 +182,7 @@ func TestMDInstanceCredentialsOpaqueRoundTrip(t *testing.T) {
 
 // TestMDInstanceListAll covers ListMarketDataInstances ordering.
 func TestMDInstanceListAll(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	// Create two instances.
@@ -214,6 +219,7 @@ func TestMDInstanceListAll(t *testing.T) {
 
 // TestMDInstanceSetEnabled toggles the enabled flag.
 func TestMDInstanceSetEnabled(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	created, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -259,6 +265,7 @@ func TestMDInstanceSetEnabled(t *testing.T) {
 
 // TestMDInstanceSetEnabledNotFound confirms ErrNotFound for a missing instance.
 func TestMDInstanceSetEnabledNotFound(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	ghost, _ := newExternalID()
@@ -270,6 +277,7 @@ func TestMDInstanceSetEnabledNotFound(t *testing.T) {
 
 // TestMDInstanceUpdateSettings replaces label and credentials.
 func TestMDInstanceUpdateSettings(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	created, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -307,6 +315,7 @@ func TestMDInstanceUpdateSettings(t *testing.T) {
 // TestMDInstanceUpdateSettingsLabelConflict checks that a duplicate label on
 // update returns ErrAlreadyExists.
 func TestMDInstanceUpdateSettingsLabelConflict(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	a, err := rs.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
@@ -343,6 +352,7 @@ func TestMDInstanceUpdateSettingsLabelConflict(t *testing.T) {
 // TestMDInstanceUpdateSettingsNotFound confirms ErrNotFound for a missing
 // instance.
 func TestMDInstanceUpdateSettingsNotFound(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	ghost, _ := newExternalID()
@@ -354,6 +364,7 @@ func TestMDInstanceUpdateSettingsNotFound(t *testing.T) {
 
 // TestMDInstanceDelete removes an instance and verifies absence.
 func TestMDInstanceDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	created, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -395,6 +406,7 @@ func sampleInstrument(instance domain.ExternalID) domain.MarketDataInstrument {
 
 // TestMDInstrumentUpsertAndList verifies basic upsert and list round-trip.
 func TestMDInstrumentUpsertAndList(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -452,6 +464,7 @@ func TestMDInstrumentUpsertAndList(t *testing.T) {
 // TestMDInstrumentUpsertReplaceOnConflict confirms that upserting the same
 // (instance, externalSymbol) key replaces the mutable columns.
 func TestMDInstrumentUpsertReplaceOnConflict(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	// Add a second base asset to replace with.
@@ -500,6 +513,7 @@ func TestMDInstrumentUpsertReplaceOnConflict(t *testing.T) {
 // TestMDInstrumentUpsertUnknownAsset confirms ErrInvalid for an unknown asset
 // code.
 func TestMDInstrumentUpsertUnknownAsset(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -522,6 +536,7 @@ func TestMDInstrumentUpsertUnknownAsset(t *testing.T) {
 // TestMDInstrumentSetEnabled toggles the enabled flag and checks the enabled
 // filter.
 func TestMDInstrumentSetEnabled(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -568,6 +583,7 @@ func TestMDInstrumentSetEnabled(t *testing.T) {
 // TestMDInstrumentSetEnabledNotFound confirms ErrNotFound for a missing
 // instrument.
 func TestMDInstrumentSetEnabledNotFound(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -584,6 +600,7 @@ func TestMDInstrumentSetEnabledNotFound(t *testing.T) {
 // TestMDInstrumentDelete removes one instrument and verifies it is gone while
 // the instance remains.
 func TestMDInstrumentDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -620,6 +637,7 @@ func TestMDInstrumentDelete(t *testing.T) {
 // TestMDCascadeDeleteInstance confirms that deleting an instance removes its
 // instruments without removing their global assets.
 func TestMDCascadeDeleteInstance(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -658,6 +676,7 @@ func TestMDCascadeDeleteInstance(t *testing.T) {
 // TestMDListInstrumentsEmptyInstance confirms a non-nil empty slice when the
 // instance has no instruments.
 func TestMDListInstrumentsEmptyInstance(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst, err := rs.CreateMarketDataInstance(ctx, sampleInstance())
@@ -681,6 +700,7 @@ func TestMDListInstrumentsEmptyInstance(t *testing.T) {
 // external id is written verbatim: the returned id equals the supplied one and
 // the row is addressable by it.
 func TestMDInstanceSuppliedExternalIDUsedVerbatim(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	supplied := domain.ExternalID("caller-market-data-1")
@@ -711,6 +731,7 @@ func TestMDInstanceSuppliedExternalIDUsedVerbatim(t *testing.T) {
 // domain.ErrAlreadyExists naming the id (not the label, even when the labels
 // differ), and that no second row is written.
 func TestMDInstanceDuplicateSuppliedExternalIDConflicts(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 	r := rs.(*realmStore)
 
@@ -743,6 +764,7 @@ func TestMDInstanceDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 // TestMDInstanceGeneratesExternalIDWhenAbsent verifies that a zero supplied id
 // is replaced by a freshly generated 22-char external id.
 func TestMDInstanceGeneratesExternalIDWhenAbsent(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedMDFixtures(t)
 
 	inst := sampleInstance()
