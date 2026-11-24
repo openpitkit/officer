@@ -407,7 +407,9 @@ func putEventAttestationTx(
 
 // GetOrder returns the order addressed by external id together with its events
 // (each carrying its 1:1 signed attestation when one was issued) and trades.
-// A waiting order's review is read consistently with its status.
+// The order row, review, events and trades are read in one read-only
+// transaction, so the answer, including commission subtotals derived from those
+// trades and events, describes one moment of the store.
 // Returns domain.ErrNotFound when the order is absent.
 //
 // Each event's attestation is persisted in event_attestation (written by
@@ -442,18 +444,18 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
+	events, err := r.queryOrderEvents(ctx, tx, id)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
+	trades, err := r.queryTradesByOrder(ctx, tx, id)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return domain.OrderDetail{}, fmt.Errorf("store: finish order read: %w", err)
 	}
 
-	events, err := r.ListOrderEvents(ctx, id)
-	if err != nil {
-		return domain.OrderDetail{}, err
-	}
-	trades, err := r.listTradesByOrder(ctx, id)
-	if err != nil {
-		return domain.OrderDetail{}, err
-	}
 	o.CommissionSubtotals, err = commissionSubtotals(id, trades, events)
 	if err != nil {
 		return domain.OrderDetail{}, err
@@ -940,16 +942,22 @@ func (r *realmStore) AppendOrderEvent(
 // oldest first by (at, id).
 func (r *realmStore) ListOrderEvents(
 	ctx context.Context, order domain.ExternalID,
-) (value []domain.OrderEvent, resultErr error) {
+) ([]domain.OrderEvent, error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
 	}
+	return r.queryOrderEvents(ctx, db, order)
+}
+
+func (r *realmStore) queryOrderEvents(
+	ctx context.Context, q sqlQueryer, order domain.ExternalID,
+) (value []domain.OrderEvent, resultErr error) {
 	dictionaries, err := r.dictionaries()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(
+	rows, err := q.QueryContext(
 		ctx,
 		orderEventSelect+`
 		 JOIN order_record o ON o.id = e.order_id
@@ -1427,16 +1435,12 @@ func (r *realmStore) listTrades(
 	return scanTrades(dictionaries, rows)
 }
 
-// listTradesByOrder returns all trade for one order (addressed by its external
-// id), oldest first by (at, id). It backs GetOrder's trade list.
-func (r *realmStore) listTradesByOrder(
-	ctx context.Context, order domain.ExternalID,
+// queryTradesByOrder returns all trades for one order (addressed by its
+// external id), oldest first by (at, id).
+func (r *realmStore) queryTradesByOrder(
+	ctx context.Context, q sqlQueryer, order domain.ExternalID,
 ) (result []domain.Trade, resultErr error) {
-	db, err := r.db()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := db.QueryContext(
+	rows, err := q.QueryContext(
 		ctx,
 		tradeSelect+` WHERE o.external_id = ? ORDER BY t.at ASC, t.id ASC`,
 		order.Bytes(),

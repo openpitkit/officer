@@ -27,6 +27,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -178,6 +179,143 @@ func sampleOrder() domain.Order {
 		DropCopy:         true,
 		Lock:             []byte{0x00, 0x01, 0x02, 0xff, 0x10},
 	}
+}
+
+func TestGetOrderReadsOneSnapshotDuringFill(t *testing.T) {
+	t.Parallel()
+	_, rs := seedOrderFixtures(t)
+	ctx := t.Context()
+	writer := rs.(*realmStore)
+	writerDB := writer.rawDB()
+	// WAL allows the fill to commit while the reader holds its snapshot.
+	var journalMode string
+	if err := writerDB.QueryRowContext(ctx, `PRAGMA journal_mode = WAL`).Scan(&journalMode); err != nil {
+		t.Fatalf("enable WAL: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal mode = %q, want wal", journalMode)
+	}
+
+	order := sampleOrder()
+	order.Lock = nil
+	order.Leaves = order.AmountValue
+	created, err := writer.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	id := created.ExternalID
+	if _, err := writer.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: id, At: created.At, Type: domain.OrderEventSubmitted, Source: created.Source,
+	}); err != nil {
+		t.Fatalf("AppendOrderEvent: %v", err)
+	}
+
+	fillAt := created.At.Add(time.Second)
+	commission := domain.Commission{Amount: "-1", Currency: created.QuoteAsset}
+	report := domain.ExecutionReportRequest{
+		Order: id, Account: created.Account, Side: created.Side,
+		BaseAsset: created.BaseAsset, QuoteAsset: created.QuoteAsset,
+		FillQuantity: created.AmountValue, FillPrice: created.Price,
+		LeavesQuantity: "0", OrderStatus: domain.OrderStatusFilled, Commission: &commission,
+	}
+	settlement := domain.OrderSettlement{
+		Order: id, Account: report.Account, OrderStatus: report.OrderStatus,
+		Leaves: report.LeavesQuantity, AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		ReportID: &report.ExternalID,
+		Trade: &domain.Trade{
+			Order: id, Account: report.Account, At: fillAt, Source: domain.SourceAPI,
+			BaseAsset: report.BaseAsset, QuoteAsset: report.QuoteAsset, Side: report.Side,
+			Quantity: report.FillQuantity, Price: report.FillPrice, Commission: &commission,
+		},
+		Events: []domain.OrderEvent{{
+			Order: id, At: fillAt, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+			Payload: domain.OrderEventPayload{
+				FillQuantity: report.FillQuantity, FillPrice: report.FillPrice,
+				LeavesQuantity: report.LeavesQuantity, OrderStatus: string(report.OrderStatus),
+				Commission: &commission, ExecutionReport: &report,
+			},
+		}},
+	}
+
+	readerDB := sql.OpenDB(orderSnapshotConnector{
+		driver: writerDB.Driver(),
+		dsn:    sqliteDSN(writer.store.path),
+		beforeEvents: func(ctx context.Context) error {
+			_, err := writer.RecordOrderSettlement(ctx, settlement)
+			return err
+		},
+	})
+	t.Cleanup(func() {
+		if err := readerDB.Close(); err != nil {
+			t.Errorf("close order snapshot reader: %v", err)
+		}
+	})
+	readerStore := &sqliteStore{}
+	readerStore.db.Store(readerDB)
+	readerStore.enumCodes.Store(writer.store.enumCodes.Load())
+	reader := &realmStore{store: readerStore}
+
+	snapshot, err := reader.GetOrder(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOrder during fill: %v", err)
+	}
+	if snapshot.Order.Status != domain.OrderStatusSubmitted ||
+		len(snapshot.Events) != 1 || snapshot.Events[0].Type != domain.OrderEventSubmitted ||
+		len(snapshot.Trades) != 0 || len(snapshot.Order.CommissionSubtotals) != 0 {
+		t.Fatalf("order snapshot has status %q, %d events, %d trades, commissions %v "+
+			"(want submitted, one submission event, no trades or commissions)",
+			snapshot.Order.Status, len(snapshot.Events), len(snapshot.Trades),
+			snapshot.Order.CommissionSubtotals)
+	}
+
+	latest, err := writer.GetOrder(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOrder after fill: %v", err)
+	}
+	if latest.Order.Status != domain.OrderStatusFilled ||
+		len(latest.Events) != 2 || latest.Events[1].Type != domain.OrderEventFill ||
+		len(latest.Trades) != 1 ||
+		!commissionsEqual(latest.Order.CommissionSubtotals, []domain.Commission{commission}) {
+		t.Fatalf("filled order has status %q, %d events, %d trades, commissions %v",
+			latest.Order.Status, len(latest.Events), len(latest.Trades),
+			latest.Order.CommissionSubtotals)
+	}
+}
+
+type orderSnapshotConnector struct {
+	driver       driver.Driver
+	dsn          string
+	beforeEvents func(context.Context) error
+}
+
+func (c orderSnapshotConnector) Driver() driver.Driver { return c.driver }
+
+func (c orderSnapshotConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := c.driver.Open(c.dsn)
+	if err != nil {
+		return nil, err
+	}
+	return orderSnapshotConn{Conn: conn, beforeEvents: c.beforeEvents}, nil
+}
+
+type orderSnapshotConn struct {
+	driver.Conn
+	beforeEvents func(context.Context) error
+}
+
+func (c orderSnapshotConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+}
+
+func (c orderSnapshotConn) QueryContext(
+	ctx context.Context, query string, args []driver.NamedValue,
+) (driver.Rows, error) {
+	if strings.Contains(query, "FROM order_event ") {
+		if err := c.beforeEvents(ctx); err != nil {
+			return nil, fmt.Errorf("commit fill before reading order events: %w", err)
+		}
+	}
+	return c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
 }
 
 func TestCreateOrderGetListRoundTrip(t *testing.T) {
