@@ -769,8 +769,8 @@ def command_go_tool_dev(args: argparse.Namespace) -> None:
 def reset_serve_database(init_config: str, sqlite_path: str | None = None) -> None:
     """Move a stopped dev database aside before initialization.
 
-    With sqlite_path, the database is exactly that file, as the binary opens an
-    explicit path. Otherwise it is this checkout's per-commit file next to the
+    With sqlite_path, the database is the file before its query parameters.
+    Otherwise it is this checkout's per-commit file next to the
     path from PIT_OFFICER_SQLITE_PATH (default pit-officer.db). A relative path
     is relative to the checkout.
     """
@@ -780,7 +780,11 @@ def reset_serve_database(init_config: str, sqlite_path: str | None = None) -> No
         configured = os.environ.get("PIT_OFFICER_SQLITE_PATH", "")
         path = Path(configured if configured else "pit-officer.db")
     else:
-        path = Path(sqlite_path)
+        # Mirror sqlite.DatabaseFilePath, including its non-file refusals.
+        name = sqlite_path.partition("?")[0]
+        if name == "" or name == ":memory:" or name.startswith("file:"):
+            raise SystemExit(f"database path {sqlite_path!r} is not a file path")
+        path = Path(name)
     if not path.is_absolute():
         path = ROOT / path
     # The per-commit file is opened only by a non-release build; an explicit path

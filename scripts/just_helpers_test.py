@@ -540,6 +540,77 @@ class ResetServeTests(unittest.TestCase):
                 self.assertEqual(chosen.read_bytes(), b"chosen data")
                 self.assertEqual(list(directory.glob("*.backup-*")), [])
 
+    def test_explicit_database_query_resets_the_file_and_preserves_launch_path(
+        self,
+    ) -> None:
+        chosen = self.root / "chosen.db"
+        original = f"{chosen}?cache=private"
+        suffixes = ("", "-wal", "-shm", "-journal")
+        backup = Path(f"{chosen}.backup-20261113T141516.123456+0200")
+        for suffix in suffixes:
+            Path(f"{chosen}{suffix}").write_bytes(f"chosen{suffix}".encode())
+
+        def run(command: list[str], **_: object):
+            self.assertEqual(
+                command[1:],
+                ["serve", "-sqlite-path", original, "-init", str(self.config)],
+            )
+            for suffix in suffixes:
+                self.assertFalse(Path(f"{chosen}{suffix}").exists())
+                self.assertEqual(
+                    Path(f"{backup}{suffix}").read_bytes(),
+                    f"chosen{suffix}".encode(),
+                )
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            patch.object(helpers, "datetime") as clock,
+            patch.object(helpers, "run", side_effect=run) as launch,
+        ):
+            clock.now.return_value.astimezone.return_value = self.timestamp
+            self.command(
+                "run-officer",
+                "--reset-init",
+                str(self.config),
+                "serve",
+                "-sqlite-path",
+                original,
+            )
+            launch.assert_called_once()
+        self.assertEqual(self.release.read_bytes(), b"release data")
+
+    def test_explicit_non_file_paths_refuse_before_moving_or_launching(self) -> None:
+        self.database.write_bytes(b"per-commit data")
+        for original in (
+            "",
+            "?cache=private",
+            ":memory:",
+            ":memory:?cache=private",
+            "file:chosen.db",
+            "file:chosen.db?cache=private",
+        ):
+            with self.subTest(path=original), patch.object(helpers, "run") as run:
+                with self.assertRaisesRegex(
+                    SystemExit,
+                    f"database path {re.escape(repr(original))} is not a file path",
+                ):
+                    if original == "":
+                        with patch.object(helpers, "ROOT", self.root):
+                            helpers.reset_serve_database(str(self.config), original)
+                    else:
+                        self.command(
+                            "run-officer",
+                            "--reset-init",
+                            str(self.config),
+                            "serve",
+                            "-sqlite-path",
+                            original,
+                        )
+                run.assert_not_called()
+                self.assertEqual(self.release.read_bytes(), b"release data")
+                self.assertEqual(self.database.read_bytes(), b"per-commit data")
+                self.assertEqual(list(self.root.glob("*.backup-*")), [])
+
     def test_unsupported_serve_arguments_are_refused_before_moving_anything(
         self,
     ) -> None:
