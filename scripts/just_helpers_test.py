@@ -631,9 +631,9 @@ class RecipeTestCase(unittest.TestCase):
     def recipes(self) -> dict[str, dict[str, object]]:
         return self.dump()["recipes"]
 
-    def reachable(self, recipes: dict[str, dict[str, object]], *roots: str) -> set[str]:
+    def reachable(self, recipes: dict[str, dict[str, object]], name: str) -> set[str]:
         seen: set[str] = set()
-        pending = list(roots)
+        pending = [name]
         while pending:
             current = pending.pop()
             if current in seen:
@@ -651,11 +651,17 @@ class RecipeTestCase(unittest.TestCase):
         )
 
     def body_commands(self, recipe: dict[str, object]) -> Iterator[list]:
+        punctuation = ";&|()"
         for line in recipe["body"]:
             expressions = {}
             text = ""
             for part in line:
                 if isinstance(part, str):
+                    if "\\" in part:
+                        raise ValueError(
+                            f"{recipe['name']}: cannot lex a literal backslash "
+                            "in a recipe body with POSIX shlex"
+                        )
                     text += part
                 else:
                     # Keep each Just expression intact while splitting shell words.
@@ -664,7 +670,7 @@ class RecipeTestCase(unittest.TestCase):
                     expressions[token] = expression
                     text += token
 
-            lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|")
+            lexer = shlex.shlex(text, posix=True, punctuation_chars=punctuation)
             lexer.whitespace_split = True
             try:
                 words = list(lexer)
@@ -672,7 +678,7 @@ class RecipeTestCase(unittest.TestCase):
                 raise ValueError(f"{recipe['name']}: {error}") from error
             command = []
             for word in words:
-                if word and not word.strip(";&|"):
+                if word and not word.strip(punctuation):
                     if command:
                         yield command
                         command = []
@@ -705,6 +711,7 @@ class FrontendRecipeTests(RecipeTestCase):
     # A whole word: the helper subcommand ensure-node is not the node binary.
     FRONTEND_TOOLCHAIN = re.compile(r"(?<![\w-])(?:npm|npx|node)(?![\w-])")
     INSTALL_RECIPE = "frontend-ci-install"
+    MANUAL_LOCKFILE_REWRITERS = frozenset({"frontend-install"})
     # npm 11.19.1 docs: configuring-npm/package-lock-json.md and commands/npm-*.md.
     LOCKFILE_WRITING_SUBCOMMANDS = {
         "add",
@@ -742,25 +749,59 @@ class FrontendRecipeTests(RecipeTestCase):
         "version",
     }
 
-    def rewrites_lockfile(self, command: list) -> bool:
+    @staticmethod
+    def executable_name(word: str) -> str:
+        return word.replace("\\", "/").rsplit("/", 1)[-1]
+
+    def rewrites_lockfile(self, command: list, recipe_name: str) -> bool:
         while (
             command
             and isinstance(command[0], str)
             and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", command[0])
         ):
             command = command[1:]
-        if command and command[0] in ("npx", "npx.cmd"):
-            command = command[1:]
-            if command and command[0] in ("-y", "--yes"):
-                command = command[1:]
-        if not command or command[0] not in ("npm", "npm.cmd"):
+        if not command or not isinstance(command[0], str):
             return False
+
+        executable = self.executable_name(command[0])
         command = command[1:]
+        if executable in ("npx", "npx.cmd"):
+            while (
+                command and isinstance(command[0], str) and command[0].startswith("-")
+            ):
+                option = command[0]
+                if option in ("-y", "--yes") or option.startswith("--package="):
+                    command = command[1:]
+                elif option in ("-p", "--package"):
+                    command = command[2:]
+                else:
+                    self.fail(
+                        f"{recipe_name}: unrecognised npx option {option!r}. "
+                        "The parser must learn it."
+                    )
+            if not command or not isinstance(command[0], str):
+                return False
+            executable = self.executable_name(command[0])
+            if re.fullmatch(r"npm@.+", executable):
+                executable = "npm"
+            command = command[1:]
+
+        if executable not in ("npm", "npm.cmd"):
+            return False
         while command and isinstance(command[0], str) and command[0].startswith("-"):
             option = command[0]
-            command = command[2:] if option in ("--prefix", "-C") else command[1:]
             if option == "--":
+                command = command[1:]
                 break
+            if option in ("--prefix", "-C"):
+                command = command[2:]
+            elif option.startswith("--prefix="):
+                command = command[1:]
+            else:
+                self.fail(
+                    f"{recipe_name}: unrecognised npm option {option!r}. "
+                    "The parser must learn it."
+                )
         return (
             bool(command)
             and isinstance(command[0], str)
@@ -774,20 +815,22 @@ class FrontendRecipeTests(RecipeTestCase):
         return {
             name
             for name, recipe in recipes.items()
-            if any(
-                self.rewrites_lockfile(command)
-                for command in self.body_commands(recipe)
-            )
+            for command in self.body_commands(recipe)
+            if self.rewrites_lockfile(command, name)
         }
 
     def test_lockfile_rewriting_install_is_only_invoked_by_name(self) -> None:
         recipes = self.recipes()
-        rewriters = self.lockfile_rewriters(recipes)
-        self.assertTrue(rewriters, "no recipe rewrites the frontend lockfile")
-        for name in sorted(recipes.keys() - rewriters):
+        manual_rewriters = self.MANUAL_LOCKFILE_REWRITERS
+        self.assertSetEqual(
+            self.lockfile_rewriters(recipes),
+            manual_rewriters,
+            "only manual install recipes may rewrite the frontend lockfile",
+        )
+        for name in sorted(recipes.keys() - manual_rewriters):
             with self.subTest(recipe=name):
                 dependencies = self.reachable(recipes, name) - {name}
-                installers = sorted(dependencies & rewriters)
+                installers = sorted(dependencies & manual_rewriters)
                 self.assertFalse(
                     installers,
                     f"{name} depends on {', '.join(installers)}, "
@@ -801,7 +844,7 @@ class FrontendRecipeTests(RecipeTestCase):
                     ):
                         self.assertNotIn(
                             command[1],
-                            rewriters,
+                            manual_rewriters,
                             f"{name} invokes {command[1]}, "
                             "which may rewrite the frontend lockfile",
                         )
@@ -811,11 +854,10 @@ class FrontendRecipeTests(RecipeTestCase):
     ) -> None:
         recipes = self.recipes()
         self.assertIn(self.INSTALL_RECIPE, recipes)
-        rewriters = self.lockfile_rewriters(recipes)
         users = [
             name
             for name, recipe in recipes.items()
-            if name not in rewriters
+            if name not in self.MANUAL_LOCKFILE_REWRITERS
             and self.FRONTEND_TOOLCHAIN.search(self.body_text(recipe))
         ]
         self.assertTrue(users, "no recipe runs the frontend toolchain")
