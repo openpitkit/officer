@@ -162,6 +162,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { ClearableInput } from "@/components/ClearableInput";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   Dialog,
   DialogContent,
@@ -1716,36 +1717,18 @@ function SubmitOrderDialog({
           </DialogFooter>
         </div>
       </DialogContent>
-      <AlertDialog
+      <ConfirmDialog
         open={dropCopyConfirmOpen}
         onOpenChange={setDropCopyConfirmOpen}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-[var(--danger)]">
-              {t("addOrder.dialog.dropCopyConfirmTitle")}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("addOrder.dialog.dropCopyConfirmDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>
-              {tc("actions.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="danger"
-              disabled={busy}
-              onClick={() => {
-                setDropCopyConfirmOpen(false);
-                void submit();
-              }}
-            >
-              {t("addOrder.dialog.submitDropCopy")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title={t("addOrder.dialog.dropCopyConfirmTitle")}
+        description={t("addOrder.dialog.dropCopyConfirmDescription")}
+        confirmLabel={t("addOrder.dialog.submitDropCopy")}
+        busy={busy}
+        onConfirm={() => {
+          setDropCopyConfirmOpen(false);
+          void submit();
+        }}
+      />
       <AlertDialog
         open={missingAccountConfirmOpen}
         onOpenChange={setMissingAccountConfirmOpen}
@@ -2591,50 +2574,6 @@ function ReviewMarkList({ marks }: { marks: ReviewMark[] }) {
 
 type ReviewAction = "confirm" | "cancel" | "force";
 
-function ReviewDecisionAlert({
-  open,
-  onOpenChange,
-  title,
-  description,
-  confirmLabel,
-  busy,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  description: string;
-  confirmLabel: string;
-  busy: boolean;
-  onConfirm: () => void;
-}) {
-  const { t: tc } = useTranslation();
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle className="text-[var(--danger)]">
-            {title}
-          </AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
-            {tc("actions.cancel")}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            variant="danger"
-            disabled={busy}
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
 function OrderReviewSection({
   review,
   connectionLabel,
@@ -2752,24 +2691,30 @@ function OrderReviewSection({
         )}
       </div>
       {review.held && (
-        <ReviewDecisionAlert
+        <ConfirmDialog
           open={forceOpen}
           onOpenChange={setForceOpen}
           title={t("detail.dialog.review.forceTitle")}
           description={t("detail.dialog.review.forceDescription")}
           confirmLabel={t("detail.dialog.review.force")}
           busy={action !== null}
-          onConfirm={() => onDecision("force")}
+          onConfirm={() => {
+            setForceOpen(false);
+            onDecision("force");
+          }}
         />
       )}
-      <ReviewDecisionAlert
+      <ConfirmDialog
         open={cancelOpen}
         onOpenChange={setCancelOpen}
         title={t("detail.dialog.review.cancelTitle")}
         description={t("detail.dialog.review.cancelDescription")}
         confirmLabel={t("detail.dialog.workflow.cancel")}
         busy={action !== null}
-        onConfirm={() => onDecision("cancel")}
+        onConfirm={() => {
+          setCancelOpen(false);
+          onDecision("cancel");
+        }}
       />
     </section>
   );
