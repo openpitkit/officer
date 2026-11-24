@@ -49,16 +49,22 @@ func (s *Service) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimit
 
 // PutSpotFundsLimitMode sets the Spot Funds limit-mode meta-policy under the
 // context's caller. The meta-policy is global only and has no axis, so there
-// is no account to resolve or scope.
-func (s *Service) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
+// is no account to resolve or scope. It returns the stored barrier before
+// another barrier writer can change it.
+func (s *Service) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
-		return err
+		return domain.LimitSpotFundsLimitMode{}, err
 	}
 	if err := limit.Validate(); err != nil {
-		return err
+		return domain.LimitSpotFundsLimitMode{}, err
 	}
-	return s.node.SetSpotFundsLimitMode(ctx, limit.Mode, caller)
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+	if err := s.node.SetSpotFundsLimitMode(ctx, limit.Mode, caller); err != nil {
+		return domain.LimitSpotFundsLimitMode{}, err
+	}
+	return persistedSpotFundsLimitMode(ctx, s.node)
 }
 
 // ListLimits returns the typed barriers that reference account. An empty
@@ -136,34 +142,38 @@ func (s *Service) ListPolicyRows(
 func (s *Service) PutRateLimit(
 	ctx context.Context, limit domain.LimitRate, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
-) error {
+) (domain.LimitRate, error) {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
-		return err
+		return domain.LimitRate{}, err
 	}
 	scoped := limit
 	scoped.Account, err = s.scopeLimitSubject(caller, limit.Scope, limit.Account, "")
 	if err != nil {
-		return err
+		return domain.LimitRate{}, err
 	}
 	scopedMissing, err := s.scope.MissingAccount(caller, missing)
 	if err != nil {
-		return err
+		return domain.LimitRate{}, err
 	}
 	if err := write.Validate(); err != nil {
-		return err
+		return domain.LimitRate{}, err
 	}
 	if err := scoped.Validate(); err != nil {
-		return err
+		return domain.LimitRate{}, err
 	}
 	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
-		return err
+		return domain.LimitRate{}, err
 	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
 	sink, err := n.PutRateLimit(ctx, scoped, write, scopedMissing, caller)
-	return s.finishLimitChangeLocked(sink, err)
+	if err := s.finishLimitChangeLocked(sink, err); err != nil {
+		return domain.LimitRate{}, err
+	}
+	return persistedLimit(ctx, n, scoped,
+		func(limits node.AccountLimits) []domain.LimitRate { return limits.RateLimits })
 }
 
 // PutOrderSizeLimit validates and writes with the given intent. missing
@@ -173,34 +183,38 @@ func (s *Service) PutOrderSizeLimit(
 	limit domain.LimitOrderSize,
 	write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
-) error {
+) (domain.LimitOrderSize, error) {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
-		return err
+		return domain.LimitOrderSize{}, err
 	}
 	scoped := limit
 	scoped.Account, err = s.scopeLimitSubject(caller, limit.Scope, limit.Account, "")
 	if err != nil {
-		return err
+		return domain.LimitOrderSize{}, err
 	}
 	scopedMissing, err := s.scope.MissingAccount(caller, missing)
 	if err != nil {
-		return err
+		return domain.LimitOrderSize{}, err
 	}
 	if err := write.Validate(); err != nil {
-		return err
+		return domain.LimitOrderSize{}, err
 	}
 	if err := scoped.Validate(); err != nil {
-		return err
+		return domain.LimitOrderSize{}, err
 	}
 	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
-		return err
+		return domain.LimitOrderSize{}, err
 	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
 	sink, err := n.PutOrderSizeLimit(ctx, scoped, write, scopedMissing, caller)
-	return s.finishLimitChangeLocked(sink, err)
+	if err := s.finishLimitChangeLocked(sink, err); err != nil {
+		return domain.LimitOrderSize{}, err
+	}
+	return persistedLimit(ctx, n, scoped,
+		func(limits node.AccountLimits) []domain.LimitOrderSize { return limits.OrderSizeLimits })
 }
 
 // PutPositionLimit validates and writes the SDK's account-asset ceiling with
@@ -211,34 +225,38 @@ func (s *Service) PutPositionLimit(
 	limit domain.LimitPosition,
 	write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
-) error {
+) (domain.LimitPosition, error) {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
-		return err
+		return domain.LimitPosition{}, err
 	}
 	scoped := limit
 	scoped.Account, err = s.scopeLimitSubject(caller, limit.Scope, limit.Account, "")
 	if err != nil {
-		return err
+		return domain.LimitPosition{}, err
 	}
 	scopedMissing, err := s.scope.MissingAccount(caller, missing)
 	if err != nil {
-		return err
+		return domain.LimitPosition{}, err
 	}
 	if err := write.Validate(); err != nil {
-		return err
+		return domain.LimitPosition{}, err
 	}
 	if err := scoped.Validate(); err != nil {
-		return err
+		return domain.LimitPosition{}, err
 	}
 	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
-		return err
+		return domain.LimitPosition{}, err
 	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n := s.node
 	sink, err := n.PutPositionLimit(ctx, scoped, write, scopedMissing, caller)
-	return s.finishLimitChangeLocked(sink, err)
+	if err := s.finishLimitChangeLocked(sink, err); err != nil {
+		return domain.LimitPosition{}, err
+	}
+	return persistedLimit(ctx, n, scoped,
+		func(limits node.AccountLimits) []domain.LimitPosition { return limits.PositionLimits })
 }
 
 // PutSpotFundsPnlBoundsLimit validates the SpotFunds P&L-bounds barrier and
@@ -248,33 +266,33 @@ func (s *Service) PutSpotFundsPnlBoundsLimit(
 	limit domain.LimitSpotFundsPnlBounds,
 	write domain.LimitWrite,
 	missing domain.MissingAccountPolicy,
-) error {
+) (domain.LimitSpotFundsPnlBounds, error) {
 	caller, err := auth.CallerFromContext(ctx)
 	if err != nil {
-		return err
+		return domain.LimitSpotFundsPnlBounds{}, err
 	}
 	scoped := limit
 	scoped.Account, err = s.scopeLimitSubject(
 		caller, limit.Scope, limit.Account, limit.AccountGroup,
 	)
 	if err != nil {
-		return err
+		return domain.LimitSpotFundsPnlBounds{}, err
 	}
 	scopedMissing, err := s.scope.MissingAccount(caller, missing)
 	if err != nil {
-		return err
+		return domain.LimitSpotFundsPnlBounds{}, err
 	}
 	if err := write.Validate(); err != nil {
-		return err
+		return domain.LimitSpotFundsPnlBounds{}, err
 	}
 	if err := scoped.Validate(); err != nil {
-		return err
+		return domain.LimitSpotFundsPnlBounds{}, err
 	}
 	if err := domain.ValidateAsset(scoped.Currency); err != nil {
-		return err
+		return domain.LimitSpotFundsPnlBounds{}, err
 	}
 	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
-		return err
+		return domain.LimitSpotFundsPnlBounds{}, err
 	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
@@ -282,7 +300,13 @@ func (s *Service) PutSpotFundsPnlBoundsLimit(
 	sink, err := n.PutSpotFundsPnlBoundsLimit(
 		ctx, scoped, write, scopedMissing, caller,
 	)
-	return s.finishLimitChangeLocked(sink, err)
+	if err := s.finishLimitChangeLocked(sink, err); err != nil {
+		return domain.LimitSpotFundsPnlBounds{}, err
+	}
+	return persistedLimit(ctx, n, scoped,
+		func(limits node.AccountLimits) []domain.LimitSpotFundsPnlBounds {
+			return limits.SpotFundsPnlBoundsLimits
+		})
 }
 
 // DeleteLimit validates the target's scope/axes for its policy and removes the
@@ -340,4 +364,43 @@ func (s *Service) finishLimitChangeLocked(sink marketdata.Sink, err error) error
 	}
 	// A failed restore is internal even when either cause has a caller code.
 	return domain.Internal(errors.Join(err, restoreErr))
+}
+
+func persistedSpotFundsLimitMode(
+	ctx context.Context, n node.Node,
+) (domain.LimitSpotFundsLimitMode, error) {
+	limits, err := n.ListLimits(ctx, "")
+	if err != nil {
+		return domain.LimitSpotFundsLimitMode{}, err
+	}
+	if len(limits.SpotFundsLimitModes) == 0 {
+		return domain.LimitSpotFundsLimitMode{}, domain.Internal(
+			errors.New("limit mode write was stored but its read-back did not find it"))
+	}
+	return limits.SpotFundsLimitModes[0], nil
+}
+
+func persistedLimit[Limit domain.KeyedLimit](
+	ctx context.Context, n node.Node,
+	target Limit,
+	slice func(node.AccountLimits) []Limit,
+) (Limit, error) {
+	var zero Limit
+	key, err := target.Key()
+	if err != nil {
+		return zero, err
+	}
+	limits, err := n.ListLimits(ctx, key.Account())
+	if err != nil {
+		return zero, err
+	}
+	limit, found, err := domain.FindLimit(slice(limits), key)
+	if err != nil {
+		return zero, err
+	}
+	if !found {
+		return zero, domain.Internal(
+			errors.New("limit write was stored but its read-back did not find it"))
+	}
+	return limit, nil
 }

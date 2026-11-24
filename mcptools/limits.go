@@ -306,11 +306,7 @@ func putRateLimit(
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
-	err = src.PutRateLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
-	if err != nil {
-		return httpx.PutLimitResultDTO{}, err
-	}
-	stored, err := httpx.PersistedRateLimit(ctx, src, limit)
+	stored, err := src.PutRateLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
@@ -325,11 +321,7 @@ func putOrderSizeLimit(
 		Scope: in.Scope, Account: in.Account, Asset: in.Asset,
 		MaxQuantity: in.MaxQuantity, MaxNotional: in.MaxNotional,
 	})
-	err := src.PutOrderSizeLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
-	if err != nil {
-		return httpx.PutLimitResultDTO{}, err
-	}
-	stored, err := httpx.PersistedOrderSizeLimit(ctx, src, limit)
+	stored, err := src.PutOrderSizeLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
@@ -344,11 +336,7 @@ func putPositionLimit(
 		Scope: in.Scope, Account: in.Account, Asset: in.Asset,
 		MaxPosition: in.MaxPosition,
 	})
-	err := src.PutPositionLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
-	if err != nil {
-		return httpx.PutLimitResultDTO{}, err
-	}
-	stored, err := httpx.PersistedPositionLimit(ctx, src, limit)
+	stored, err := src.PutPositionLimit(ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount))
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
@@ -369,13 +357,9 @@ func putSpotFundsPnlBoundsLimit(
 		Scope: in.Scope, Account: in.Account, AccountGroup: in.AccountGroup,
 		Currency: in.Currency, LowerBound: in.LowerBound, UpperBound: in.UpperBound,
 	})
-	err := src.PutSpotFundsPnlBoundsLimit(
+	stored, err := src.PutSpotFundsPnlBoundsLimit(
 		ctx, limit, write, missingAccountPolicy(limit.Account, in.MissingAccount),
 	)
-	if err != nil {
-		return httpx.PutLimitResultDTO{}, err
-	}
-	stored, err := httpx.PersistedSpotFundsPnlBoundsLimit(ctx, src, limit)
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}
@@ -397,10 +381,7 @@ func putSpotFundsLimitMode(
 	limit := httpx.FromSpotFundsLimitModeLimitDTO(httpx.SpotFundsLimitModeLimitDTO{
 		Scope: in.Scope, Mode: in.Mode,
 	})
-	if err := src.PutSpotFundsLimitMode(ctx, limit); err != nil {
-		return httpx.PutLimitResultDTO{}, err
-	}
-	stored, err := httpx.PersistedSpotFundsLimitMode(ctx, src)
+	stored, err := src.PutSpotFundsLimitMode(ctx, limit)
 	if err != nil {
 		return httpx.PutLimitResultDTO{}, err
 	}

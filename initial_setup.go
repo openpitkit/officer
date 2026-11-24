@@ -112,7 +112,7 @@ func (s *InitialSetup) apply(ctx context.Context, cp backend.ControlPlane, scope
 	if _, err := accountmode.ApplyDuringSetup(ctx, cp, scope, service, accountmode.Request{Mode: s.AccountMode}); err != nil {
 		return fmt.Errorf("initial setup: account mode: %w", err)
 	}
-	if err := cp.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: s.FundsLimitMode}); err != nil {
+	if _, err := cp.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal, Mode: s.FundsLimitMode}); err != nil {
 		return fmt.Errorf("initial setup: funds limit mode: %w", err)
 	}
 	if s.Encryption == "disabled" {

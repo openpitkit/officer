@@ -85,6 +85,9 @@ type Service struct {
 	lockSettlement  LockSettlementPrice
 	scope           AccountScope
 	forceAuthorizer ForceAuthorizer
+	// marketDataMu guards market-data lifecycle and every write that adds,
+	// changes, removes or re-keys a limit barrier or the Spot Funds limit mode.
+	// A limit write holds it through its read-back.
 	marketDataMu    sync.Mutex
 	tradingMu       sync.Mutex
 	nonReleaseBuild bool

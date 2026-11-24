@@ -147,12 +147,10 @@ func TestOmittedAccountByAccountFeatures(t *testing.T) {
 	}
 }
 
-// TestOmittedLimitAccountReadsBackStoredBarrier covers the limit puts, which
-// answer from a read-back of the stored barrier: an account-axis barrier that
-// names no account reaches the service as sent and is read back under the
-// composition's one account, which the service's account scope stored it with.
-// A barrier whose scope has no account axis is read back with its empty account.
-func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
+// TestOmittedLimitAccountForwardsSourceBarrier proves the handler forwards an
+// omitted account unchanged and answers with the barrier returned by the
+// source, including its stored account.
+func TestOmittedLimitAccountForwardsSourceBarrier(t *testing.T) {
 	stored := node.AccountLimits{
 		RateLimits: []domain.LimitRate{{Mode: domain.RuleModeReject,
 			Scope: domain.ScopeAccount, Account: oneAccountFeatures.Account,
@@ -177,19 +175,22 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, path, body, member string
+		result                   fakeService
 		sent                     func(*fakeService) domain.AccountID
-		// want is the account of the barrier the read-back answers with.
+		// want is the account of the barrier returned by the source.
 		want domain.AccountID
 	}{
 		{
 			"rate", "/limits/rate",
 			`{"scope":"account","windowMs":1000,"maxOrders":100}`, "rateLimit",
+			fakeService{rateLimitResult: stored.RateLimits[0]},
 			func(f *fakeService) domain.AccountID { return f.rateLimitPut.Account },
 			oneAccountFeatures.Account,
 		},
 		{
 			"rate-broker", "/limits/rate",
 			`{"scope":"broker","windowMs":1000,"maxOrders":50}`, "rateLimit",
+			fakeService{rateLimitResult: stored.RateLimits[1]},
 			func(f *fakeService) domain.AccountID { return f.rateLimitPut.Account },
 			"",
 		},
@@ -197,6 +198,7 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 			"order-size", "/limits/order-size",
 			`{"scope":"account_underlying_asset","asset":"AAPL","maxQuantity":"10"}`,
 			"orderSizeLimit",
+			fakeService{orderSizeLimitResult: stored.OrderSizeLimits[0]},
 			func(f *fakeService) domain.AccountID { return f.orderSizeLimitPut.Account },
 			oneAccountFeatures.Account,
 		},
@@ -204,6 +206,7 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 			"spot-funds-pnl-bounds", "/limits/spot-funds-pnl-bounds",
 			`{"scope":"account","currency":"USD","lowerBound":"-100"}`,
 			"spotFundsPnlBoundsLimit",
+			fakeService{pnlBoundsLimitResult: stored.SpotFundsPnlBoundsLimits[0]},
 			func(f *fakeService) domain.AccountID {
 				return f.spotFundsPnlBoundsLimitPut.Account
 			},
@@ -212,12 +215,14 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 		{
 			"position", "/limits/position",
 			`{"scope":"account_asset","asset":"AAPL","maxPosition":"10"}`, "positionLimit",
+			fakeService{positionLimitResult: stored.PositionLimits[0]},
 			func(f *fakeService) domain.AccountID { return f.positionLimitPut.Account },
 			oneAccountFeatures.Account,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{accountFeatures: oneAccountFeatures, limits: stored}
+			svc := &tc.result
+			svc.accountFeatures = oneAccountFeatures
 			rec := callTrading(t, svc, "/api/v1", http.MethodPut, tc.path, tc.body)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
@@ -227,7 +232,7 @@ func TestOmittedLimitAccountReadsBackStoredBarrier(t *testing.T) {
 			}
 			limit, _ := bodyMap(t, rec.Result())[tc.member].(map[string]any)
 			if limit["account"] != string(tc.want) {
-				t.Fatalf("read-back %s = %v, want the stored barrier of %q",
+				t.Fatalf("source result %s = %v, want the stored barrier of %q",
 					tc.member, limit, tc.want)
 			}
 		})

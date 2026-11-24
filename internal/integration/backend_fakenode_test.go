@@ -598,7 +598,7 @@ func (n *fakeNode) ListPolicyRows(
 }
 
 func (n *fakeNode) PutRateLimit(
-	_ context.Context, limit domain.LimitRate, _ domain.LimitWrite,
+	_ context.Context, limit domain.LimitRate, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutRateLimit", limit.Account, missing)
@@ -607,21 +607,25 @@ func (n *fakeNode) PutRateLimit(
 		n.putRateLimitHook()
 	}
 	n.putRateLimitCalls = append(n.putRateLimitCalls, limit)
-	return n.restoreSink, nil
+	var err error
+	n.limits.RateLimits, err = putFakeLimit(n.limits.RateLimits, limit, write)
+	return n.restoreSink, err
 }
 
 func (n *fakeNode) PutPositionLimit(
-	_ context.Context, limit domain.LimitPosition, _ domain.LimitWrite,
+	_ context.Context, limit domain.LimitPosition, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutPositionLimit", limit.Account, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	n.putPositionLimitCalls = append(n.putPositionLimitCalls, limit)
-	return n.restoreSink, nil
+	var err error
+	n.limits.PositionLimits, err = putFakeLimit(n.limits.PositionLimits, limit, write)
+	return n.restoreSink, err
 }
 
 func (n *fakeNode) PutOrderSizeLimit(
-	_ context.Context, limit domain.LimitOrderSize, _ domain.LimitWrite,
+	_ context.Context, limit domain.LimitOrderSize, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutOrderSizeLimit", limit.Account, missing)
@@ -630,11 +634,13 @@ func (n *fakeNode) PutOrderSizeLimit(
 		n.putOrderSizeLimitHook()
 	}
 	n.putOrderSizeLimitCalls = append(n.putOrderSizeLimitCalls, limit)
-	return n.restoreSink, nil
+	var err error
+	n.limits.OrderSizeLimits, err = putFakeLimit(n.limits.OrderSizeLimits, limit, write)
+	return n.restoreSink, err
 }
 
 func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
-	_ context.Context, limit domain.LimitSpotFundsPnlBounds, _ domain.LimitWrite,
+	_ context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall(
@@ -645,7 +651,41 @@ func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
 		n.putSpotFundsPnlBoundsLimitCalls,
 		limit,
 	)
-	return n.restoreSink, nil
+	var err error
+	n.limits.SpotFundsPnlBoundsLimits, err = putFakeLimit(n.limits.SpotFundsPnlBoundsLimits, limit, write)
+	return n.restoreSink, err
+}
+
+func putFakeLimit[Limit domain.KeyedLimit](rows []Limit, limit Limit, write domain.LimitWrite) ([]Limit, error) {
+	key, err := limit.Key()
+	if err != nil {
+		return rows, err
+	}
+	index := -1
+	for i, row := range rows {
+		storedKey, err := row.Key()
+		if err != nil {
+			return rows, err
+		}
+		if storedKey == key {
+			index = i
+			break
+		}
+	}
+	if err := write.Validate(); err != nil {
+		return rows, err
+	}
+	if write == domain.LimitWriteAdd && index >= 0 {
+		return rows, domain.ErrLimitExists
+	}
+	if write == domain.LimitWriteChange && index < 0 {
+		return rows, domain.ErrNotFound
+	}
+	if index < 0 {
+		return append(rows, limit), nil
+	}
+	rows[index] = limit
+	return rows, nil
 }
 
 func (n *fakeNode) DeleteLimit(
@@ -1745,6 +1785,10 @@ func (n *fakeNode) SetSpotFundsLimitMode(
 	n.setSpotFundsLimitModeCalls = append(n.setSpotFundsLimitModeCalls,
 		setSpotFundsLimitModeCall{mode: mode, caller: caller})
 	n.spotFundsLimitMode.Mode = mode
+	n.spotFundsLimitMode.Stored = true
+	n.limits.SpotFundsLimitModes = []domain.LimitSpotFundsLimitMode{{
+		Scope: domain.ScopeGlobal, Mode: mode,
+	}}
 	return nil
 }
 

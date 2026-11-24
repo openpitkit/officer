@@ -168,9 +168,9 @@ func missingAccountRoutes() []missingAccountRoute {
 
 // newMissingAccountService builds a fake service whose canned data satisfies
 // every route in missingAccountRoutes. The limit fixtures mirror the request
-// bodies because each Put* handler answers from a persisted read-back.
+// bodies and prepare the source results returned by the Put* handlers.
 func newMissingAccountService() *fakeService {
-	return &fakeService{
+	svc := &fakeService{
 		accounts:   []domain.Account{{Code: "acc-1"}},
 		adjustment: domain.AccountAdjustmentRecord{Account: "acc-1", Asset: "USD"},
 		limits: node.AccountLimits{
@@ -206,6 +206,11 @@ func newMissingAccountService() *fakeService {
 			}},
 		},
 	}
+	svc.rateLimitResult = svc.limits.RateLimits[0]
+	svc.orderSizeLimitResult = svc.limits.OrderSizeLimits[0]
+	svc.positionLimitResult = svc.limits.PositionLimits[0]
+	svc.pnlBoundsLimitResult = svc.limits.SpotFundsPnlBoundsLimits[0]
+	return svc
 }
 
 func callMissingAccountRoute(

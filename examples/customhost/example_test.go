@@ -1167,26 +1167,26 @@ func (s *customHostSource) ApplyAdjustment(ctx context.Context, account domain.A
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitRate, error) {
+	return domain.LimitRate{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitOrderSize, error) {
+	return domain.LimitOrderSize{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitPosition, error) {
+	return domain.LimitPosition{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitSpotFundsPnlBounds, error) {
+	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotImplemented
 }
 
 func (s *customHostSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
 	return domain.SpotFundsLimitModeState{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
+	return domain.LimitSpotFundsLimitMode{}, domain.ErrNotImplemented
 }

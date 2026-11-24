@@ -69,7 +69,7 @@ func prepareOrderReviewAlert(t *testing.T, cp backend.ControlPlane, ctx context.
 	}, domain.MissingAccountReject); err != nil {
 		t.Fatal(err)
 	}
-	if err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+	if _, err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 		Mode: ruleMode, Scope: domain.ScopeAccountUnderlyingAsset, Account: "other", Asset: "AAPL", MaxQuantity: "1",
 	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestOrderReviewAlertDecisions(t *testing.T) {
 					caller := domain.Caller{Source: domain.SourcePanel, Principal: domain.PrincipalOperator}
 					deciding := auth.ContextWithCaller(t.Context(), caller)
 					if action == "reject" {
-						if err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+						if _, err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 							Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "other", Asset: "AAPL", MaxQuantity: "1",
 						}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 							t.Fatal(err)

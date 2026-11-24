@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +38,8 @@ import (
 
 type limitTestNode struct {
 	node.Node
+	storageMu sync.Mutex
+	limits    node.AccountLimits
 
 	deleteCalls    int
 	putCalls       int
@@ -57,9 +61,22 @@ func (n *limitTestNode) SpotFundsLimitMode(context.Context) (domain.SpotFundsLim
 }
 
 func (n *limitTestNode) SetSpotFundsLimitMode(_ context.Context, mode domain.SpotFundsLimitMode, caller domain.Caller) error {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
 	n.modeWriteCalls++
 	n.modeWrite, n.modeCaller = mode, caller
+	if n.modeWriteErr == nil {
+		n.limits.SpotFundsLimitModes = []domain.LimitSpotFundsLimitMode{{
+			Scope: domain.ScopeGlobal, Mode: mode,
+		}}
+	}
 	return n.modeWriteErr
+}
+
+func (n *limitTestNode) ListLimits(context.Context, domain.AccountID) (node.AccountLimits, error) {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	return n.limits, nil
 }
 
 type limitModeTestScope struct{ EveryAccount }
@@ -129,7 +146,7 @@ func TestServiceSpotFundsLimitModeRequiresCaller(t *testing.T) {
 	n := &limitTestNode{}
 	svc := newLimitTestService(t, n)
 	_, readErr := svc.SpotFundsLimitMode(ctx)
-	writeErr := svc.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{
+	_, writeErr := svc.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{
 		Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
 	})
 	for _, err := range []error{readErr, writeErr} {
@@ -150,7 +167,7 @@ func TestServicePutSpotFundsLimitModeForwardsCaller(t *testing.T) {
 		n := &limitTestNode{modeWriteErr: wantErr}
 		svc := newLimitTestService(t, n)
 		svc.scope = limitModeTestScope{}
-		err := svc.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{
+		_, err := svc.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{
 			Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
 		})
 		if err != wantErr {
@@ -185,7 +202,7 @@ func TestServicePutSpotFundsLimitModeValidatesBeforeNode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			n := &limitTestNode{}
-			err := newLimitTestService(t, n).PutSpotFundsLimitMode(systemCtx(), tc.limit)
+			_, err := newLimitTestService(t, n).PutSpotFundsLimitMode(systemCtx(), tc.limit)
 			if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != tc.pointer {
 				t.Fatalf("error = %v, pointer = %q; want ErrInvalid at %s", err, domain.ValidationPointer(err), tc.pointer)
 			}
@@ -205,32 +222,52 @@ func (n *limitTestNode) DeleteLimit(
 
 func (n *limitTestNode) PutSpotFundsPnlBoundsLimit(
 	_ context.Context,
-	_ domain.LimitSpotFundsPnlBounds,
+	limit domain.LimitSpotFundsPnlBounds,
 	write domain.LimitWrite,
 	_ domain.MissingAccountPolicy,
 	_ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	if n.putErr == nil {
+		n.limits.SpotFundsPnlBoundsLimits = []domain.LimitSpotFundsPnlBounds{limit}
+	}
 	return n.recordLimitWrite(write)
 }
 
 func (n *limitTestNode) PutRateLimit(
-	_ context.Context, _ domain.LimitRate, write domain.LimitWrite,
+	_ context.Context, limit domain.LimitRate, write domain.LimitWrite,
 	_ domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	if n.putErr == nil {
+		n.limits.RateLimits = []domain.LimitRate{limit}
+	}
 	return n.recordLimitWrite(write)
 }
 
 func (n *limitTestNode) PutOrderSizeLimit(
-	_ context.Context, _ domain.LimitOrderSize, write domain.LimitWrite,
+	_ context.Context, limit domain.LimitOrderSize, write domain.LimitWrite,
 	_ domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	if n.putErr == nil {
+		n.limits.OrderSizeLimits = []domain.LimitOrderSize{limit}
+	}
 	return n.recordLimitWrite(write)
 }
 
 func (n *limitTestNode) PutPositionLimit(
-	_ context.Context, _ domain.LimitPosition, write domain.LimitWrite,
+	_ context.Context, limit domain.LimitPosition, write domain.LimitWrite,
 	_ domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	if n.putErr == nil {
+		n.limits.PositionLimits = []domain.LimitPosition{limit}
+	}
 	return n.recordLimitWrite(write)
 }
 
@@ -247,26 +284,30 @@ func TestServiceLimitWriteIntent(t *testing.T) {
 		put  func(*Service, domain.LimitWrite) error
 	}{
 		{"rate", func(s *Service, write domain.LimitWrite) error {
-			return s.PutRateLimit(systemCtx(), domain.LimitRate{Mode: domain.RuleModeReject,
+			_, err := s.PutRateLimit(systemCtx(), domain.LimitRate{Mode: domain.RuleModeReject,
 				Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 10,
 			}, write, "")
+			return err
 		}},
 		{"order-size", func(s *Service, write domain.LimitWrite) error {
-			return s.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
+			_, err := s.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
 				Mode:  domain.RuleModeReject,
 				Scope: domain.ScopeBroker, MaxQuantity: "10",
 			}, write, "")
+			return err
 		}},
 		{"position", func(s *Service, write domain.LimitWrite) error {
-			return s.PutPositionLimit(systemCtx(), domain.LimitPosition{Mode: domain.RuleModeReject,
+			_, err := s.PutPositionLimit(systemCtx(), domain.LimitPosition{Mode: domain.RuleModeReject,
 				Scope: domain.ScopeAccountAsset, Account: "acc", Asset: "AAPL", MaxPosition: "10",
 			}, write, domain.MissingAccountCreate)
+			return err
 		}},
 		{"pnl", func(s *Service, write domain.LimitWrite) error {
-			return s.PutSpotFundsPnlBoundsLimit(systemCtx(), domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
+			_, err := s.PutSpotFundsPnlBoundsLimit(systemCtx(), domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal,
 				Currency: "USD", LowerBound: "-10",
 			}, write, "")
+			return err
 		}},
 	}
 	for _, tc := range cases {
@@ -333,7 +374,7 @@ func TestServiceLimitChangeRestoreFailureIsInternal(t *testing.T) {
 			n := &limitTestNode{putSink: marketDataDeleteTestSink{}, putErr: nodeErr}
 			svc := newLimitTestService(t, n)
 			svc.md = &marketDataDeleteTestRuntime{restartErr: tc.restartErr}
-			err := svc.PutSpotFundsPnlBoundsLimit(
+			_, err := svc.PutSpotFundsPnlBoundsLimit(
 				systemCtx(), limit, domain.LimitWriteAdd, domain.MissingAccountReject,
 			)
 			if tc.restartErr == nil {
@@ -361,7 +402,7 @@ func TestServiceLimitChangeRestoreFailureIsInternal(t *testing.T) {
 		n := &limitTestNode{putSink: marketDataDeleteTestSink{}}
 		svc := newLimitTestService(t, n)
 		svc.md = &marketDataDeleteTestRuntime{restartErr: restartErr}
-		err := svc.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
+		_, err := svc.PutOrderSizeLimit(systemCtx(), domain.LimitOrderSize{
 			Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "10",
 		}, domain.LimitWriteAdd, "")
 		if err == nil || !strings.Contains(err.Error(), restartErr.Error()) {
@@ -644,7 +685,7 @@ func TestServicePutSpotFundsPnlBoundsLimitValidatesCurrencyBeforeNode(t *testing
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			callsBefore := n.putCalls
-			err := svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
+			_, err := svc.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 				Axis:       domain.SpotFundsPnlAxisRealized,
 				Scope:      domain.ScopeGlobal,
 				Currency:   tc.currency,
@@ -667,6 +708,470 @@ func TestServicePutSpotFundsPnlBoundsLimitValidatesCurrencyBeforeNode(t *testing
 			}
 			if n.putCalls != callsBefore+1 {
 				t.Fatalf("put calls = %d, want %d", n.putCalls, callsBefore+1)
+			}
+		})
+	}
+}
+
+type persistedLimitReader struct {
+	*limitTestNode
+	limits node.AccountLimits
+	err    error
+	listed []domain.AccountID
+}
+
+func (r *persistedLimitReader) ListLimits(_ context.Context, account domain.AccountID) (node.AccountLimits, error) {
+	r.listed = append(r.listed, account)
+	return r.limits, r.err
+}
+
+func checkPersistedPair[Limit interface {
+	domain.KeyedLimit
+	comparable
+}](t *testing.T, rows []Limit, limits node.AccountLimits,
+	put func(*Service, context.Context, Limit, domain.LimitWrite, domain.MissingAccountPolicy) (Limit, error),
+) {
+	t.Helper()
+	reader := &persistedLimitReader{limitTestNode: &limitTestNode{}, limits: limits}
+	svc := &Service{node: reader, scope: EveryAccount{}}
+	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
+	})
+	for i, target := range rows {
+		key, err := target.Key()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var missing domain.MissingAccountPolicy
+		if key.Account() != "" {
+			missing = domain.MissingAccountReject
+		}
+		got, err := put(svc, ctx, target, domain.LimitWriteReplace, missing)
+		if err != nil || got != target {
+			t.Fatalf("barrier %d: got %+v, error %v; want %+v", i, got, err, target)
+		}
+	}
+}
+
+func TestPersistedLimitIdentity(t *testing.T) {
+	t.Parallel()
+	t.Run("policy", func(t *testing.T) {
+		rows := []domain.LimitSpotFundsPnlBounds{
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisUnrealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"},
+		}
+		checkPersistedPair(t, rows, node.AccountLimits{SpotFundsPnlBoundsLimits: rows}, (*Service).PutSpotFundsPnlBoundsLimit)
+	})
+	t.Run("mode", func(t *testing.T) {
+		rows := []domain.LimitOrderSize{
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "10"},
+			{Mode: domain.RuleModeReviewWithoutHold, Scope: domain.ScopeBroker, MaxQuantity: "10"},
+		}
+		checkPersistedPair(t, rows, node.AccountLimits{OrderSizeLimits: rows}, (*Service).PutOrderSizeLimit)
+	})
+	t.Run("scope", func(t *testing.T) {
+		rows := []domain.LimitOrderSize{
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL", MaxQuantity: "10"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeSettlementAsset, Asset: "AAPL", MaxNotional: "10"},
+		}
+		checkPersistedPair(t, rows, node.AccountLimits{OrderSizeLimits: rows}, (*Service).PutOrderSizeLimit)
+	})
+	t.Run("account", func(t *testing.T) {
+		rows := []domain.LimitRate{
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "desk-alpha", Window: time.Second, MaxOrders: 10},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "desk-beta", Window: time.Second, MaxOrders: 10},
+		}
+		checkPersistedPair(t, rows, node.AccountLimits{RateLimits: rows}, (*Service).PutRateLimit)
+	})
+	t.Run("account_group", func(t *testing.T) {
+		rows := []domain.LimitSpotFundsPnlBounds{
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "group-alpha", Currency: "USD", LowerBound: "-10"},
+			{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccountGroup, AccountGroup: "group-beta", Currency: "USD", LowerBound: "-10"},
+		}
+		checkPersistedPair(t, rows, node.AccountLimits{SpotFundsPnlBoundsLimits: rows}, (*Service).PutSpotFundsPnlBoundsLimit)
+	})
+	t.Run("asset", func(t *testing.T) {
+		rows := []domain.LimitRate{
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "AAPL", Window: time.Second, MaxOrders: 10},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAsset, Asset: "MSFT", Window: time.Second, MaxOrders: 10},
+		}
+		checkPersistedPair(t, rows, node.AccountLimits{RateLimits: rows}, (*Service).PutRateLimit)
+	})
+	t.Run("position_asset", func(t *testing.T) {
+		rows := []domain.LimitPosition{
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "AAPL", MaxPosition: "10"},
+			{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "MSFT", MaxPosition: "10"},
+		}
+		checkPersistedPair(t, rows, node.AccountLimits{PositionLimits: rows}, (*Service).PutPositionLimit)
+	})
+}
+
+func checkPersistedErrors[Limit domain.KeyedLimit](t *testing.T,
+	target, corrupt Limit, limits node.AccountLimits,
+	put func(*Service, context.Context, Limit, domain.LimitWrite, domain.MissingAccountPolicy) (Limit, error),
+) {
+	t.Helper()
+	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
+	})
+	reader := &persistedLimitReader{limitTestNode: &limitTestNode{}}
+	svc := &Service{node: reader, scope: EveryAccount{}}
+	key, err := target.Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missing domain.MissingAccountPolicy
+	if key.Account() != "" {
+		missing = domain.MissingAccountReject
+	}
+	if _, err := put(svc, ctx, target, domain.LimitWriteReplace, missing); err == nil ||
+		domain.Internal(err) != err ||
+		!strings.Contains(err.Error(), "write was stored but its read-back did not find it") {
+		t.Fatalf("missing stored barrier must be internal: %v", err)
+	}
+	reader.limits = limits
+	_, err = put(svc, ctx, target, domain.LimitWriteReplace, missing)
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("stored key error must be corruption, not ErrInvalid: %v", err)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("%+v", corrupt)) {
+		t.Fatalf("stored key error does not name barrier %+v: %v", corrupt, err)
+	}
+	reader.listed = nil
+	if _, err := put(svc, ctx, corrupt, domain.LimitWriteReplace, missing); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("target key error = %v, want ErrInvalid", err)
+	}
+	if len(reader.listed) != 0 {
+		t.Fatalf("invalid target called ListLimits: %v", reader.listed)
+	}
+	reader.err = errors.New("list failed")
+	if _, err := put(svc, ctx, target, domain.LimitWriteReplace, missing); err != reader.err {
+		t.Fatalf("list error = %v, want %v", err, reader.err)
+	}
+}
+
+func TestPersistedLimitErrors(t *testing.T) {
+	t.Parallel()
+	t.Run("rate", func(t *testing.T) {
+		target := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, Window: time.Second, MaxOrders: 10}
+		corrupt := domain.LimitRate{Mode: domain.RuleModeReject, Scope: "corrupt-rate"}
+		checkPersistedErrors(t, target, corrupt, node.AccountLimits{RateLimits: []domain.LimitRate{corrupt}}, (*Service).PutRateLimit)
+	})
+	t.Run("order_size", func(t *testing.T) {
+		target := domain.LimitOrderSize{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "10"}
+		corrupt := domain.LimitOrderSize{Mode: "corrupt-mode", Scope: domain.ScopeBroker}
+		checkPersistedErrors(t, target, corrupt, node.AccountLimits{OrderSizeLimits: []domain.LimitOrderSize{corrupt}}, (*Service).PutOrderSizeLimit)
+	})
+	t.Run("position", func(t *testing.T) {
+		target := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "desk-alpha", Asset: "AAPL", MaxPosition: "10"}
+		corrupt := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: "corrupt-position"}
+		checkPersistedErrors(t, target, corrupt, node.AccountLimits{PositionLimits: []domain.LimitPosition{corrupt}}, (*Service).PutPositionLimit)
+	})
+	t.Run("pnl", func(t *testing.T) {
+		target := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10"}
+		corrupt := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: "corrupt-axis", Scope: domain.ScopeGlobal}
+		checkPersistedErrors(t, target, corrupt, node.AccountLimits{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{corrupt}}, (*Service).PutSpotFundsPnlBoundsLimit)
+	})
+}
+
+func TestServiceLimitWriteReadsStoredValues(t *testing.T) {
+	t.Parallel()
+	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
+	})
+	rate := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker,
+		Window: time.Second, MaxOrders: 11}
+	size := domain.LimitOrderSize{Mode: domain.RuleModeReject,
+		Scope: domain.ScopeBroker, MaxQuantity: "11"}
+	position := domain.LimitPosition{Mode: domain.RuleModeReject,
+		Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "AAPL", MaxPosition: "11"}
+	pnl := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
+		Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal,
+		Currency: "USD", LowerBound: "-11"}
+	for _, tc := range []struct {
+		name string
+		put  func(*Service) (any, error)
+		want any
+	}{
+		{"rate", func(s *Service) (any, error) {
+			request := rate
+			request.MaxOrders = 10
+			return s.PutRateLimit(ctx, request, domain.LimitWriteReplace, "")
+		}, rate},
+		{"order size", func(s *Service) (any, error) {
+			request := size
+			request.MaxQuantity = "10"
+			return s.PutOrderSizeLimit(ctx, request, domain.LimitWriteReplace, "")
+		}, size},
+		{"position", func(s *Service) (any, error) {
+			request := position
+			request.MaxPosition = "10"
+			return s.PutPositionLimit(ctx, request, domain.LimitWriteReplace, domain.MissingAccountReject)
+		}, position},
+		{"pnl", func(s *Service) (any, error) {
+			request := pnl
+			request.LowerBound = "-10"
+			return s.PutSpotFundsPnlBoundsLimit(ctx, request, domain.LimitWriteReplace, "")
+		}, pnl},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &persistedLimitReader{limitTestNode: &limitTestNode{}, limits: node.AccountLimits{
+				RateLimits: []domain.LimitRate{rate}, OrderSizeLimits: []domain.LimitOrderSize{size},
+				PositionLimits:           []domain.LimitPosition{position},
+				SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{pnl},
+			}}
+			s := &Service{node: n, scope: EveryAccount{}}
+			got, err := tc.put(s)
+			if err != nil || got != tc.want {
+				t.Fatalf("write answer = %+v, %v; want stored %+v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestServiceLimitModeWriteReadsStoredValue(t *testing.T) {
+	t.Parallel()
+	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
+	})
+	stored := domain.LimitSpotFundsLimitMode{Scope: domain.ScopeGlobal,
+		Mode: domain.SpotFundsLimitModeEnforce}
+	readErr := errors.New("mode read failed")
+	for _, tc := range []struct {
+		name string
+		rows []domain.LimitSpotFundsLimitMode
+		err  error
+	}{
+		{"stored", []domain.LimitSpotFundsLimitMode{stored}, nil},
+		{"missing", nil, nil},
+		{"read failed", nil, readErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &persistedLimitReader{limitTestNode: &limitTestNode{},
+				limits: node.AccountLimits{SpotFundsLimitModes: tc.rows}, err: tc.err}
+			s := &Service{node: n, scope: EveryAccount{}}
+			got, err := s.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{
+				Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
+			})
+			switch tc.name {
+			case "stored":
+				if err != nil || got != stored {
+					t.Fatalf("mode write answer = %+v, %v; want stored %+v", got, err, stored)
+				}
+			case "missing":
+				if err == nil || domain.Internal(err) != err ||
+					!strings.Contains(err.Error(), "write was stored but its read-back did not find it") {
+					t.Fatalf("missing stored mode must be internal: %v", err)
+				}
+			case "read failed":
+				if err != readErr {
+					t.Fatalf("mode read error = %v, want %v", err, readErr)
+				}
+			}
+		})
+	}
+}
+
+func (n *limitTestNode) DeleteAccount(_ context.Context, code domain.AccountID, force bool, _ domain.Caller) error {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	if !force {
+		return domain.ErrConflict
+	}
+	n.limits.OrderSizeLimits = slices.DeleteFunc(
+		slices.Clone(n.limits.OrderSizeLimits),
+		func(limit domain.LimitOrderSize) bool { return limit.Account == code },
+	)
+	return nil
+}
+
+func (n *limitTestNode) UpdateAccount(_ context.Context, oldCode domain.AccountID, account domain.Account, _ domain.Caller) (domain.Account, error) {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	n.limits.OrderSizeLimits = slices.Clone(n.limits.OrderSizeLimits)
+	for i := range n.limits.OrderSizeLimits {
+		if n.limits.OrderSizeLimits[i].Account == oldCode {
+			n.limits.OrderSizeLimits[i].Account = account.Code
+		}
+	}
+	return account, nil
+}
+
+func (n *limitTestNode) DeleteGroup(_ context.Context, code string, force bool, _ domain.Caller) error {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	if !force {
+		return domain.ErrConflict
+	}
+	n.limits.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
+		slices.Clone(n.limits.SpotFundsPnlBoundsLimits),
+		func(limit domain.LimitSpotFundsPnlBounds) bool {
+			return limit.AccountGroup == code
+		},
+	)
+	return nil
+}
+
+func (n *limitTestNode) UpdateGroup(_ context.Context, oldCode string, group domain.AccountGroup, _ domain.Caller) (domain.AccountGroup, error) {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	n.limits.SpotFundsPnlBoundsLimits = slices.Clone(n.limits.SpotFundsPnlBoundsLimits)
+	for i := range n.limits.SpotFundsPnlBoundsLimits {
+		if n.limits.SpotFundsPnlBoundsLimits[i].AccountGroup == oldCode {
+			n.limits.SpotFundsPnlBoundsLimits[i].AccountGroup = group.Code
+		}
+	}
+	return group, nil
+}
+
+func (n *limitTestNode) UpdateAsset(_ context.Context, oldCode string, asset domain.Asset, _ domain.Caller) (domain.Asset, error) {
+	n.storageMu.Lock()
+	defer n.storageMu.Unlock()
+	n.limits.OrderSizeLimits = slices.Clone(n.limits.OrderSizeLimits)
+	for i := range n.limits.OrderSizeLimits {
+		if n.limits.OrderSizeLimits[i].Asset == oldCode {
+			n.limits.OrderSizeLimits[i].Asset = asset.Code
+		}
+	}
+	return asset, nil
+}
+
+type interleavingLimitNode struct {
+	node.Node
+	written    atomic.Bool
+	afterWrite func()
+}
+
+func (n *interleavingLimitNode) afterFirstWrite(err error) {
+	if err == nil && n.written.CompareAndSwap(false, true) {
+		n.afterWrite()
+	}
+}
+
+func (n *interleavingLimitNode) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy, caller domain.Caller) (marketdata.Sink, error) {
+	sink, err := n.Node.PutOrderSizeLimit(ctx, limit, write, missing, caller)
+	n.afterFirstWrite(err)
+	return sink, err
+}
+
+func (n *interleavingLimitNode) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy, caller domain.Caller) (marketdata.Sink, error) {
+	sink, err := n.Node.PutSpotFundsPnlBoundsLimit(ctx, limit, write, missing, caller)
+	n.afterFirstWrite(err)
+	return sink, err
+}
+
+func (n *interleavingLimitNode) SetSpotFundsLimitMode(ctx context.Context, mode domain.SpotFundsLimitMode, caller domain.Caller) error {
+	err := n.Node.SetSpotFundsLimitMode(ctx, mode, caller)
+	n.afterFirstWrite(err)
+	return err
+}
+
+func TestServiceLimitWriteAnswersBeforeCompetingWriter(t *testing.T) {
+	t.Parallel()
+	orderSize := domain.LimitOrderSize{
+		Mode:    domain.RuleModeReviewWithoutHold,
+		Scope:   domain.ScopeAccountUnderlyingAsset,
+		Account: "desk", Asset: "AAPL", MaxQuantity: "10",
+	}
+	pnl := domain.LimitSpotFundsPnlBounds{
+		Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized,
+		Scope: domain.ScopeAccountGroup, AccountGroup: "group",
+		Currency: "USD", LowerBound: "-10",
+	}
+	mode := domain.LimitSpotFundsLimitMode{
+		Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeTrackOnly,
+	}
+	for _, tc := range []struct {
+		name    string
+		first   string
+		forceID string
+		compete func(context.Context, *Service) error
+	}{
+		{"delete account", "order-size", ForceDeleteAccount, func(ctx context.Context, s *Service) error {
+			return s.DeleteAccount(ctx, orderSize.Account, true)
+		}},
+		{"rename account", "order-size", "", func(ctx context.Context, s *Service) error {
+			_, err := s.UpdateAccount(ctx, orderSize.Account, domain.Account{Code: "renamed"})
+			return err
+		}},
+		{"delete group", "pnl", ForceDeleteGroup, func(ctx context.Context, s *Service) error {
+			return s.DeleteGroup(ctx, pnl.AccountGroup, true)
+		}},
+		{"rename group", "pnl", "", func(ctx context.Context, s *Service) error {
+			_, err := s.UpdateGroup(ctx, pnl.AccountGroup, domain.AccountGroup{Code: "renamed"})
+			return err
+		}},
+		{"rename asset", "order-size", "", func(ctx context.Context, s *Service) error {
+			_, err := s.UpdateAsset(ctx, orderSize.Asset, domain.Asset{Code: "MSFT"})
+			return err
+		}},
+		{"write mode", "mode", "", func(ctx context.Context, s *Service) error {
+			_, err := s.PutSpotFundsLimitMode(ctx, domain.LimitSpotFundsLimitMode{
+				Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce,
+			})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			caller := domain.Caller{Source: domain.SourceAPI, Principal: domain.PrincipalOperator}
+			ctx := auth.ContextWithCaller(context.Background(), caller)
+			n := &interleavingLimitNode{Node: &limitTestNode{}}
+			approvals := 0
+			svc, err := New(n, nil, nil, testLockSettlementPrice,
+				WithForceAuthorizer(forceAuthorizeFunc(func(_ context.Context, got domain.Caller, id string) error {
+					if got != caller || id != tc.forceID || tc.forceID == "" {
+						return fmt.Errorf("unexpected force approval for %q", id)
+					}
+					approvals++
+					return nil
+				})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan struct{})
+			var competingErr error
+			n.afterWrite = func() {
+				go func() {
+					competingErr = tc.compete(ctx, svc)
+					close(done)
+				}()
+				// A locked writer waits here until this write has read back.
+				// With the lock, every passing case waits the full bound.
+				// Without it, a competitor scheduled after the bound can
+				// hide the race and let a broken writer pass.
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+				}
+			}
+			var got, want any
+			switch tc.first {
+			case "order-size":
+				got, err = svc.PutOrderSizeLimit(ctx, orderSize, domain.LimitWriteAdd, domain.MissingAccountReject)
+				want = orderSize
+			case "pnl":
+				got, err = svc.PutSpotFundsPnlBoundsLimit(ctx, pnl, domain.LimitWriteAdd, "")
+				want = pnl
+			case "mode":
+				got, err = svc.PutSpotFundsLimitMode(ctx, mode)
+				want = mode
+			default:
+				t.Fatalf("unknown first write %q", tc.first)
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("competing writer did not finish after the first write")
+			}
+			if competingErr != nil {
+				t.Fatalf("competing writer: %v", competingErr)
+			}
+			if tc.forceID != "" && approvals != 1 {
+				t.Fatalf("force approvals = %d, want one", approvals)
+			}
+			if err != nil || got != want {
+				t.Fatalf("write answered %+v, error %v; want its own stored %+v", got, err, want)
 			}
 		})
 	}

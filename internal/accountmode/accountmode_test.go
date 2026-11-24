@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/engine"
 	"go.openpit.dev/officer/framework/auth"
@@ -876,6 +877,108 @@ func newTestNode(t *testing.T) node.Node {
 	}
 	t.Cleanup(func() { _ = n.Close() })
 	return n
+}
+
+// An omitted account is resolved before storage. The write's answer carries
+// that stored account only when the barrier has an account axis.
+func TestSingleAccountLimitWriteAnswersStoredAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		put  func(context.Context, backend.ControlPlane) (domain.AccountID, error)
+		want domain.AccountID
+	}{
+		{
+			"rate account",
+			func(ctx context.Context, cp backend.ControlPlane) (domain.AccountID, error) {
+				stored, err := cp.PutRateLimit(ctx, domain.LimitRate{
+					Mode: domain.RuleModeReject, Scope: domain.ScopeAccount,
+					Window: time.Second, MaxOrders: 100,
+				}, domain.LimitWriteAdd, "")
+				return stored.Account, err
+			},
+			desk,
+		},
+		{
+			"rate broker",
+			func(ctx context.Context, cp backend.ControlPlane) (domain.AccountID, error) {
+				stored, err := cp.PutRateLimit(ctx, domain.LimitRate{
+					Mode: domain.RuleModeReject, Scope: domain.ScopeBroker,
+					Window: time.Second, MaxOrders: 100,
+				}, domain.LimitWriteAdd, "")
+				return stored.Account, err
+			},
+			"",
+		},
+		{
+			"order size account",
+			func(ctx context.Context, cp backend.ControlPlane) (domain.AccountID, error) {
+				stored, err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+					Mode:  domain.RuleModeReject,
+					Scope: domain.ScopeAccountUnderlyingAsset,
+					Asset: "AAPL", MaxQuantity: "10",
+				}, domain.LimitWriteAdd, "")
+				return stored.Account, err
+			},
+			desk,
+		},
+		{
+			"position account",
+			func(ctx context.Context, cp backend.ControlPlane) (domain.AccountID, error) {
+				stored, err := cp.PutPositionLimit(ctx, domain.LimitPosition{
+					Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset,
+					Asset: "AAPL", MaxPosition: "10",
+				}, domain.LimitWriteAdd, "")
+				return stored.Account, err
+			},
+			desk,
+		},
+		{
+			"pnl bounds account",
+			func(ctx context.Context, cp backend.ControlPlane) (domain.AccountID, error) {
+				stored, err := cp.PutSpotFundsPnlBoundsLimit(ctx,
+					domain.LimitSpotFundsPnlBounds{
+						Mode:     domain.RuleModeReject,
+						Axis:     domain.SpotFundsPnlAxisRealized,
+						Scope:    domain.ScopeAccount,
+						Currency: "USD", LowerBound: "-100",
+					}, domain.LimitWriteAdd, "")
+				return stored.Account, err
+			},
+			desk,
+		},
+		{
+			"pnl bounds global",
+			func(ctx context.Context, cp backend.ControlPlane) (domain.AccountID, error) {
+				stored, err := cp.PutSpotFundsPnlBoundsLimit(ctx,
+					domain.LimitSpotFundsPnlBounds{
+						Mode:     domain.RuleModeReject,
+						Axis:     domain.SpotFundsPnlAxisRealized,
+						Scope:    domain.ScopeGlobal,
+						Currency: "USD", LowerBound: "-100",
+					}, domain.LimitWriteAdd, "")
+				return stored.Account, err
+			},
+			"",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := newTestNode(t)
+			createAccounts(t, n, desk)
+			if err := n.SetAccountCurrency(
+				clientContext(), desk, "USD", clientCaller,
+			); err != nil {
+				t.Fatalf("SetAccountCurrency: %v", err)
+			}
+			cp := newTestControlPlane(t, n, singleAccount{account: desk})
+			got, err := tc.put(clientContext(), cp)
+			if err != nil {
+				t.Fatalf("write with omitted account: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("stored barrier account = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 // newTestControlPlane returns the Officer control plane over n running scope.

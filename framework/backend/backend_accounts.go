@@ -163,6 +163,8 @@ func (s *Service) UpdateAccount(
 	if err := domain.ValidateTitle(account.Title); err != nil {
 		return domain.Account{}, err
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	return s.node.UpdateAccount(
 		ctx,
 		oldID,
@@ -214,6 +216,8 @@ func (s *Service) DeleteAccount(
 			return err
 		}
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	return s.node.DeleteAccount(ctx, id, force, caller)
 }
 
