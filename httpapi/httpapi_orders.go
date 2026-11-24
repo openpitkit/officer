@@ -148,7 +148,7 @@ func handleGetOrder(svc backend.ControlPlane) http.HandlerFunc {
 			"trades": trades,
 		}
 		if detail.Venue != nil {
-			venue, err := toVenueOrderDTO(*detail.Venue)
+			venue, err := httpx.ToVenueOrderDTO(*detail.Venue, storedTradingRouteDTO)
 			if err != nil {
 				httpx.WriteErr(w, err)
 				return
