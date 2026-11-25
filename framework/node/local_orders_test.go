@@ -2611,6 +2611,111 @@ func TestLocalNode_SubmitOrderAndImmediateRecordDecisionAudit(t *testing.T) {
 	}
 }
 
+func TestLocalNode_SubmissionAuditPanicFatalsAfterPersistence(t *testing.T) {
+	tests := []struct {
+		name       string
+		immediate  bool
+		verdict    domain.Verdict
+		held       bool
+		wantStatus domain.OrderStatus
+	}{
+		{name: "order accept", verdict: domain.VerdictAccept, wantStatus: domain.OrderStatusCommitted},
+		{name: "order held review", verdict: domain.VerdictReview, held: true, wantStatus: domain.OrderStatusAwaitingReview},
+		{name: "order rejected", verdict: domain.VerdictReject, wantStatus: domain.OrderStatusRejected},
+		{name: "order unheld review", verdict: domain.VerdictReview, wantStatus: domain.OrderStatusAwaitingReview},
+		{name: "immediate accept", immediate: true, verdict: domain.VerdictAccept, wantStatus: domain.OrderStatusFilled},
+		{name: "immediate held review", immediate: true, verdict: domain.VerdictReview, held: true, wantStatus: domain.OrderStatusAwaitingReview},
+		{name: "immediate rejected", immediate: true, verdict: domain.VerdictReject, wantStatus: domain.OrderStatusRejected},
+		{name: "immediate unheld review", immediate: true, verdict: domain.VerdictReview, wantStatus: domain.OrderStatusAwaitingReview},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cause := errors.New("submission decision audit panic")
+			st := newRealmWrapStore(newMemoryStore("node.db"), func(realm store.RealmStore) store.RealmStore {
+				return &panicActionAuditRealm{
+					RealmStore: realm,
+					action:     domain.AuditActionSubmitOrder,
+					err:        cause,
+				}
+			})
+			ctx := context.Background()
+			if err := st.Migrate(ctx); err != nil {
+				t.Fatalf("Migrate: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			eng := newFakeEngine()
+			eng.submitLock = fakeStoredLock(t)
+			eng.submitOutcomes = []engine.BalanceOutcome{{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					IncomingDelta: "1", IncomingResult: "1",
+				},
+			}}
+			if test.verdict == domain.VerdictReject {
+				eng.submitReject = &domain.OrderReject{Code: "order_size_limit"}
+			}
+			var fatalErr error
+			fatalCalls := 0
+			n := newTestNodeWithStore(t, st, eng, func(err error) {
+				fatalErr = err
+				fatalCalls++
+			})
+			t.Cleanup(func() { _ = n.Close() })
+			if test.verdict == domain.VerdictReview {
+				mode := domain.RuleModeReviewWithoutHold
+				if test.held {
+					mode = domain.RuleModeReviewWithHold
+				}
+				n.engine = &verdictAfterReservationEngine{
+					fakeEngine: eng, verdict: test.verdict, held: test.held,
+					reviews: []domain.ReviewMark{{
+						OrderReject: domain.OrderReject{Code: "order_size_limit"},
+						Mode:        mode,
+					}},
+				}
+			}
+			input := domain.Order{
+				ExternalID: "audit-panic-order", Account: "acc-1",
+				BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+				AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",
+			}
+			var err error
+			if test.immediate {
+				_, _, err = n.SubmitImmediate(ctx, input, domain.MissingAccountCreate, testCaller)
+			} else {
+				_, err = n.SubmitOrder(ctx, input, domain.MissingAccountCreate, testCaller)
+			}
+			if !errors.Is(err, cause) || !strings.Contains(err.Error(), cause.Error()) {
+				t.Fatalf("submission error = %v, want panic cause %v", err, cause)
+			}
+			if fatalErr == nil || !errors.Is(fatalErr, cause) ||
+				!strings.Contains(fatalErr.Error(), "post-commit audit failure") {
+				t.Fatalf("fatal error = %v, want panic cause and family %q", fatalErr, "post-commit audit failure")
+			}
+			if fatalCalls != 1 {
+				t.Fatalf("fatal calls = %d, want 1", fatalCalls)
+			}
+			detail, err := st.realm.GetOrder(ctx, input.ExternalID)
+			if err != nil {
+				t.Fatalf("GetOrder: %v", err)
+			}
+			if detail.Order.Status != test.wantStatus {
+				t.Fatalf("order status = %q, want %q", detail.Order.Status, test.wantStatus)
+			}
+			rows, err := st.realm.ListAuditFiltered(ctx, domain.AuditFilter{
+				Actions: []domain.AuditAction{domain.AuditActionSubmitOrder},
+			}, 10)
+			if err != nil {
+				t.Fatalf("ListAuditFiltered: %v", err)
+			}
+			if len(rows) != 0 {
+				t.Fatalf("submission audit rows = %+v, want none", rows)
+			}
+		})
+	}
+}
+
 func TestLocalNode_SubmitImmediateDecisionAuditFailureFatals(t *testing.T) {
 	t.Parallel()
 	auditCause := errors.New("immediate decision audit failed")
