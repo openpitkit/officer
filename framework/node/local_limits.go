@@ -499,8 +499,8 @@ func (n *localNode) guardTightenOnlyOrderSize(
 		return nil
 	default:
 		return fmt.Errorf(
-			"scope %q not allowed for policy %q: %w",
-			limit.Scope, domain.PolicyOrderSizeLimit, domain.ErrInvalid,
+			"scope %q not allowed for policy %q",
+			limit.Scope, domain.PolicyOrderSizeLimit,
 		)
 	}
 	key, err := domain.NewLimitKey(
@@ -558,8 +558,8 @@ func (n *localNode) guardTightenOnlySpotFundsPnlBounds(
 		ref, ok, err = n.resolvedSpotFundsPnlBounds(ctx, limit.Axis, limit.Mode, groupCode, currency)
 	default:
 		return fmt.Errorf(
-			"scope %q not allowed for policy %q: %w",
-			limit.Scope, limit.Axis.Policy(), domain.ErrInvalid,
+			"scope %q not allowed for policy %q",
+			limit.Scope, limit.Axis.Policy(),
 		)
 	}
 	if err != nil {
@@ -751,7 +751,7 @@ func (n *localNode) deleteBarrier(
 			)
 		}, nil
 	default:
-		return nil, fmt.Errorf("unknown policy %q: %w", key.Policy(), domain.ErrInvalid)
+		return nil, fmt.Errorf("unknown policy %q", key.Policy())
 	}
 }
 
@@ -987,7 +987,7 @@ func (n *localNode) policyLimitSet(ctx context.Context, policy string) (engine.L
 		}
 		return engine.LimitSet{SpotFundsPnlBoundsLimits: limits}, nil
 	default:
-		return engine.LimitSet{}, fmt.Errorf("unknown policy %q: %w", policy, domain.ErrInvalid)
+		return engine.LimitSet{}, fmt.Errorf("unknown policy %q", policy)
 	}
 }
 
@@ -1147,8 +1147,8 @@ func (n *localNode) readSpotFundsPnlBoundsBarrier(
 ) (domain.LimitSpotFundsPnlBounds, bool, error) {
 	if _, ok := domain.SpotFundsPnlAxisOf(key.Policy()); !ok {
 		return domain.LimitSpotFundsPnlBounds{}, false, fmt.Errorf(
-			"policy %q is not a spot funds pnl-bounds policy: %w",
-			key.Policy(), domain.ErrInvalid,
+			"policy %q is not a spot funds pnl-bounds policy",
+			key.Policy(),
 		)
 	}
 	limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")

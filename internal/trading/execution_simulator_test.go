@@ -690,6 +690,16 @@ func buildTestConnector(t *testing.T, build fwtrading.BuildContext) fwtrading.Co
 	return c
 }
 
+func TestTestConnectorMissingClientOrderIDIsInternal(t *testing.T) {
+	connector := buildTestConnector(t, testBuildContext(t))
+	order := testExecutionOrder()
+	order.ClientOrderID = ""
+	_, err := connector.Send(context.Background(), order)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("missing runtime-generated client order id = %v, want internal error", err)
+	}
+}
+
 func testExecutionOrder() fwtrading.Order {
 	return fwtrading.Order{ClientOrderID: "client", Symbol: "opaque-route-id",
 		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,

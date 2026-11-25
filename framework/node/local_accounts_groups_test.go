@@ -49,6 +49,13 @@ func (r *mismatchedGroupIdentityRealm) GetGroup(
 	return group, ok, err
 }
 
+func TestPnlResetSchedulerMissingOwnerIsInternal(t *testing.T) {
+	n := &localNode{}
+	if err := n.InstallPnlResetScheduler(nil); err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing scheduler owner = %v, want internal error", err)
+	}
+}
+
 func TestAdministrativeIdentityMismatchErrorsAreRedacted(t *testing.T) {
 	t.Parallel()
 	err := validateAccountAdministrativeSource(
@@ -58,13 +65,35 @@ func TestAdministrativeIdentityMismatchErrorsAreRedacted(t *testing.T) {
 		},
 		param.NewAccountIDFromUint64(313131),
 	)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("validateAccountAdministrativeSource = %v, want ErrInvalid", err)
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("validateAccountAdministrativeSource = %v, want internal error", err)
 	}
 	for _, handle := range []string{"424242", "313131"} {
 		if strings.Contains(err.Error(), handle) {
 			t.Fatalf("validation error %q discloses engine handle %s", err, handle)
 		}
+	}
+}
+
+func TestLocalNode_SetGroupBlockedRejectsMissingLiveGroupAlias(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}, testCaller); err != nil {
+		t.Fatal(err)
+	}
+	eng.resolverMu.Lock()
+	delete(eng.groupResolverIDs, "desk")
+	eng.resolverMu.Unlock()
+	err := n.SetGroupBlocked(ctx, "desk", true, "risk", testCaller)
+	if err == nil || errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "live dictionary") {
+		t.Fatalf("missing live group alias = %v, want internal error", err)
+	}
+	stored, ok, err := st.GetGroup(ctx, "desk")
+	if err != nil || !ok || stored.Blocked {
+		t.Fatalf("group = %+v, ok=%v err=%v, want unchanged", stored, ok, err)
 	}
 }
 
@@ -86,8 +115,8 @@ func TestLocalNode_SetGroupBlockedRejectsStoredLiveIdentityMismatch(t *testing.T
 		group:      "desk",
 	}
 	err := n.SetGroupBlocked(ctx, "desk", true, "risk", testCaller)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SetGroupBlocked = %v, want ErrInvalid", err)
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetGroupBlocked = %v, want internal error", err)
 	}
 	if strings.Contains(err.Error(), "424242") {
 		t.Fatalf("SetGroupBlocked error discloses stored engine handle: %v", err)

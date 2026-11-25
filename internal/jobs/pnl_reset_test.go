@@ -21,6 +21,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
 	"go.openpit.dev/officer/engine"
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
@@ -30,12 +38,8 @@ import (
 	"go.openpit.dev/officer/framework/scheduler"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/framework/trading"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/store/sqlite"
-	"path/filepath"
-	"reflect"
-	"strings"
-	"testing"
-	"time"
 )
 
 type partialResetHost struct {
@@ -133,6 +137,28 @@ func TestEnabledScheduleEditCompletesAfterCommittedCancellation(t *testing.T) {
 	audit, err := n.ListAudit(ctx, 10)
 	if err != nil || len(audit) == 0 || audit[0].Action != domain.AuditActionSetSetting || !strings.Contains(audit[0].Detail.Params["value"], "10:00") {
 		t.Fatalf("enabled edit audit after cancellation=%+v %v", audit, err)
+	}
+}
+
+func TestScheduleRecoveryRejectsRetryOutsideFailedState(t *testing.T) {
+	for _, state := range []string{scheduler.Paused, scheduler.Ready} {
+		t.Run(string(state), func(t *testing.T) {
+			r, _, _, _, _ := resetTaskFixture(t)
+			at := time.Date(2030, 1, 1, 9, 0, 0, 0, time.UTC)
+			job, err := r.worker.Add(context.Background(), scheduler.JobSpec{
+				Kind: PnlResetKind, Config: []byte("{}"),
+				Schedule:    scheduler.Schedule{Kind: scheduler.Daily, StartAt: at, Time: "09:00", Timezone: "UTC"},
+				Termination: scheduler.Termination{Mode: scheduler.Forever},
+			}, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = r.Recover(context.Background(), job.Revision, scheduler.Retry, auth.SystemCaller())
+			public := httpx.DescribeErr(err)
+			if err == nil || public.Status != http.StatusUnprocessableEntity || public.Code != "validation" {
+				t.Fatalf("retry of %s job = %v, described as %+v, want 422 validation", state, err, public)
+			}
+		})
 	}
 }
 
@@ -671,6 +697,75 @@ func TestProgressFreeSettingsRestoreWithLiveResetReceipts(t *testing.T) {
 		})
 	}
 }
+func TestResetRuntimeStoredDefinitionIsInternal(t *testing.T) {
+	r, _, _, _, _ := resetTaskFixture(t)
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	_, err := r.worker.Add(context.Background(), scheduler.JobSpec{
+		Kind: PnlResetKind, Config: json.RawMessage(`{}`),
+		Schedule:    scheduler.Schedule{Kind: scheduler.Interval, StartAt: time.Now().UTC(), Every: time.Hour},
+		Termination: scheduler.Termination{Mode: scheduler.Forever},
+	}, scheduler.Paused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.Read(context.Background())
+	if !internalFailureAnswer(err) {
+		t.Fatalf("stored reset definition error = %v, want internal error", err)
+	}
+}
+
+func TestResetRuntimeFactoryFailureIsInternal(t *testing.T) {
+	r, _, _, _, st := resetTaskFixture(t)
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	worker, err := scheduler.New(st, func(kind string, _ json.RawMessage) (scheduler.Task, error) {
+		return nil, fmt.Errorf("task %q is not registered: %w", kind, scheduler.ErrUnknownKind)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.worker = worker
+	_, err = r.Save(context.Background(), backend.AccountPnlResetScheduleInput{
+		Time: "09:00", Timezone: "UTC", Termination: scheduler.Termination{Mode: scheduler.Forever},
+	}, auth.SystemCaller())
+	if !internalFailureAnswer(err) {
+		t.Fatalf("factory registration failure = %v, want internal error", err)
+	}
+}
+
+func TestResetRuntimeMissingDependenciesAreInternal(t *testing.T) {
+	r, n, _, host, st := resetTaskFixture(t)
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, missing := range []string{"node", "host", "store"} {
+		t.Run(missing, func(t *testing.T) {
+			testNode, testHost, testStore := n, node.PnlResetHost(host), st
+			switch missing {
+			case "node":
+				testNode = nil
+			case "host":
+				testHost = nil
+			case "store":
+				testStore = nil
+			}
+			_, err := New(testNode, testHost, testStore)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("missing dependency error = %v, want internal error", err)
+			}
+		})
+	}
+}
+
 func TestResetScheduleRefusesMalformedInputAndAgents(t *testing.T) {
 	r, _, _, _, _ := resetTaskFixture(t)
 	ctx := context.Background()

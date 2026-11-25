@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/framework/alerts"
 	frameworkapp "go.openpit.dev/officer/framework/app"
@@ -587,9 +588,137 @@ func TestMixedAlertInstalledAccountScopeAcrossRESTAndMCP(t *testing.T) {
 	}
 }
 
+type storedFailureAlert struct {
+	alerts.Store
+	event alerts.Event
+}
+
+func (s storedFailureAlert) GetAlert(context.Context, string, string) (alerts.Alert, error) {
+	return alerts.Alert{Event: s.event}, nil
+}
+
+func (s storedFailureAlert) ResolveAlert(_ context.Context, _ string, resolve func(alerts.Event) (alerts.Resolution, store.AuditEntry, error)) (alerts.Resolution, error) {
+	resolution, _, err := resolve(s.event)
+	return resolution, err
+}
+
+func TestAlertRegistrationFailuresAreInternal(t *testing.T) {
+	for _, defect := range []string{"store", "type name", "validator", "actions", "duplicate type", "action name", "action validator", "handler", "channel name", "delivery", "duplicate channel"} {
+		t.Run(defect, func(t *testing.T) {
+			var st alerts.Store = storedFailureAlert{}
+			typ := mixedTradingAccessType(nil)
+			types := []alerts.Type{typ}
+			var channels []alerts.Channel
+			switch defect {
+			case "store":
+				st = nil
+			case "type name":
+				types[0].Name = ""
+			case "validator":
+				types[0].Validate = nil
+			case "actions":
+				types[0].Actions = nil
+			case "duplicate type":
+				types = append(types, typ)
+			case "action name", "action validator", "handler":
+				action := typ.Actions["acknowledge"]
+				name := "acknowledge"
+				switch defect {
+				case "action name":
+					name = ""
+				case "action validator":
+					action.Validate = nil
+				case "handler":
+					action.Resolve = nil
+				}
+				types[0].Actions = map[string]alerts.Action{name: action}
+			case "channel name":
+				channels = []alerts.Channel{{Deliver: func(context.Context, alerts.Event) error { return nil }}}
+			case "delivery":
+				channels = []alerts.Channel{{Name: "email"}}
+			case "duplicate channel":
+				channels = []alerts.Channel{{Name: "panel", Deliver: func(context.Context, alerts.Event) error { return nil }}}
+			}
+			_, err := alerts.New(st, types, channels)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("registration error = %v, want internal error", err)
+			}
+		})
+	}
+}
+
+func TestAlertInternalFailures(t *testing.T) {
+	for _, defect := range []string{"stored type", "stored JSON", "stored payload", "caller missing", "caller source", "caller principal", "caller system", "producer source", "producer principal", "event id", "event time", "event source", "handler JSON"} {
+		t.Run(defect, func(t *testing.T) {
+			event := alerts.Event{ID: "event", Type: mixedTradingAccessAlert, At: time.Now().UTC(), Source: domain.SourceSystem, Payload: json.RawMessage(`{"account":"desk","title":"Desk"}`)}
+			caller := domain.Caller{Source: domain.SourcePanel, Principal: domain.PrincipalOperator}
+			typ := mixedTradingAccessType(func(context.Context, domain.AccountID) (bool, error) { return true, nil })
+			publish := false
+			switch defect {
+			case "stored type":
+				event.Type = "unregistered"
+			case "stored JSON":
+				event.Payload = json.RawMessage(`{`)
+			case "stored payload":
+				typ.Validate = func(json.RawMessage) error {
+					return errors.Join(domain.ErrInvalid, domain.ErrNotFound, domain.ErrConflict, domain.ErrForbidden, domain.ErrLoosening, domain.ErrUpstream)
+				}
+			case "caller source", "producer source":
+				caller.Source = "unknown"
+				publish = defect == "producer source"
+			case "caller principal", "producer principal":
+				caller.Principal = ""
+				publish = defect == "producer principal"
+			case "caller system":
+				caller = auth.SystemCaller()
+			case "event id":
+				event.ID, publish = "", true
+			case "event time":
+				event.At, publish = time.Time{}, true
+			case "event source":
+				event.Source, publish = "unknown", true
+			case "handler JSON":
+				action := typ.Actions["acknowledge"]
+				action.Resolve = func(context.Context, alerts.Event, json.RawMessage) (json.RawMessage, error) {
+					return json.RawMessage(`{`), nil
+				}
+				typ.Actions["acknowledge"] = action
+			}
+			service, err := alerts.New(storedFailureAlert{event: event}, []alerts.Type{typ}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := auth.ContextWithCaller(context.Background(), caller)
+			if defect == "caller missing" {
+				ctx = context.Background()
+			}
+			switch {
+			case publish:
+				err = service.Publish(ctx, event)
+			case defect == "handler JSON":
+				_, err = service.Resolve(ctx, event.ID, "acknowledge", json.RawMessage(`{}`))
+			default:
+				_, err = service.Detail(ctx, event.ID)
+			}
+			if !internalFailureAnswer(err) {
+				t.Fatalf("internal alert failure = %v", err)
+			}
+			public := httpx.DescribeErr(err)
+			if public.Status != http.StatusInternalServerError || public.Code != "internal" {
+				t.Fatalf("internal alert failure described as %+v", public)
+			}
+			for _, sentinel := range []error{domain.ErrInvalid, domain.ErrNotFound, domain.ErrConflict, domain.ErrForbidden, domain.ErrLoosening, domain.ErrUpstream} {
+				if errors.Is(err, sentinel) {
+					t.Errorf("internal failure matches %v", sentinel)
+				}
+			}
+		})
+	}
+}
+
 func TestRegisteredMixedTradingAccessAlertAndAcknowledgement(t *testing.T) {
 	for _, raw := range []string{`null`, `{}`, `{"account":"desk","title":null}`, `{"account":null,"title":"Desk"}`} {
-		if err := mixedTradingAccessType(func(context.Context, domain.AccountID) (bool, error) { return true, nil }).Validate(json.RawMessage(raw)); !errors.Is(err, domain.ErrInvalid) {
+		if err := mixedTradingAccessType(func(context.Context, domain.AccountID) (bool, error) { return true, nil }).Validate(json.RawMessage(raw)); !internalFailureAnswer(err) {
 			t.Fatalf("invalid payload accepted: %s, %v", raw, err)
 		}
 	}

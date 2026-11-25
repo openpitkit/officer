@@ -1,0 +1,62 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# A single-error mapper must preserve non-domain failures as internal errors.
+# Translate parsing and input errors at their validation call site, never
+# in a general single-error mapper, even for a parsing package sentinel.
+rules:
+  - id: internal-error-mapper
+    message: >-
+      A general error mapper translates another package's failure to invalid
+      input. Internal failures must not wrap domain.ErrInvalid; preserve the
+      error or use domain.Internal at the internal caller.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-not-inside: domain.Internal(...)
+      - pattern-inside: |
+          func $FUNC($ERR error) error { ... }
+      - pattern-either:
+          - pattern-inside: |
+              switch {
+              case ...
+              case ..., errors.Is($ERR, $PKG.$SENTINEL), ...:
+                ...
+              case ...
+              }
+          - patterns:
+              - pattern-inside: |
+                  if $COND { ... }
+              - metavariable-pattern:
+                  metavariable: $COND
+                  pattern: errors.Is($ERR, $PKG.$SENTINEL)
+      - metavariable-regex:
+          metavariable: $PKG
+          regex: '^(?!domain$).+'
+      - metavariable-regex:
+          metavariable: $SENTINEL
+          regex: '^Err'
+      - pattern-either:
+          - pattern: errors.Join(..., domain.ErrInvalid, ...)
+          - pattern: fmt.Errorf(..., domain.ErrInvalid, ...)
+          - pattern: return domain.ErrInvalid
+    paths:
+      include:
+        - "**/*.go"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

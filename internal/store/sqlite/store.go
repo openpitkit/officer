@@ -212,15 +212,15 @@ func sqliteDSN(path string) string {
 
 // ForRealm returns the data-access handle bound to realm. The single-realm
 // connector accepts only its bound realm id; any other id, the empty one
-// included, is rejected with an error wrapping domain.ErrInvalid. The bound
+// included, is rejected as an internal host binding error. The bound
 // realm's identity row is ensured so backup labelling has it.
 func (s *sqliteStore) ForRealm(
 	ctx context.Context, realm domain.RealmID,
 ) (fwstore.RealmStore, error) {
 	if realm != s.realm {
 		return nil, fmt.Errorf(
-			"store: realm %q not served by this single-realm connector (serves %q): %w",
-			realm, s.realm, domain.ErrInvalid,
+			"store: realm %q not served by this single-realm connector (serves %q)",
+			realm, s.realm,
 		)
 	}
 	if err := s.ensureRealmRow(ctx); err != nil {
@@ -234,7 +234,7 @@ func (s *sqliteStore) ForRealm(
 // conditional on the schema's single-row constraint, so concurrent opens of one
 // database leave exactly one row. The stored code is then compared with the
 // bound realm: a row whose code is another realm means the database was created
-// for that realm, and it is rejected with an error wrapping domain.ErrInvalid
+// for that realm, and it is rejected with an internal error
 // naming both codes rather than served under the bound one. Migrate runs the
 // same check before it writes anything else, so a foreign database is refused
 // before its secrets are resealed.
@@ -267,8 +267,8 @@ func (s *sqliteStore) ensureRealmRowDB(ctx context.Context, db *sql.DB) error {
 	}
 	if code != s.realm.String() {
 		return fmt.Errorf(
-			"store: database at %q is bound to realm %q, not %q: %w",
-			s.path, code, s.realm, domain.ErrInvalid,
+			"store: database at %q is bound to realm %q, not %q",
+			s.path, code, s.realm,
 		)
 	}
 	return nil
@@ -364,8 +364,8 @@ func (s *sqliteStore) migrateDB(
 		return access.Snapshot{}, fmt.Errorf(
 			"store: database at %q has shared and application migration records that disagree "+
 				"(created before the application tables existed or first start interrupted) "+
-				"and must be recreated: %w",
-			s.path, domain.ErrInvalid,
+				"and must be recreated",
+			s.path,
 		)
 	}
 	sharedSource, sharedConfig := s.sharedMigrationSet()

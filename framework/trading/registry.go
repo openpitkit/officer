@@ -74,7 +74,7 @@ func NewRegistry() *Registry { return &Registry{providers: make(map[string]Provi
 // Register adds or replaces a provider. Its type and builder are required.
 func (r *Registry) Register(p Provider) error {
 	if r == nil || p.Type == "" || p.Build == nil {
-		return fmt.Errorf("trading: provider type and builder required: %w", domain.ErrInvalid)
+		return fmt.Errorf("trading: provider type and builder required")
 	}
 	if r.providers == nil {
 		r.providers = make(map[string]Provider)
@@ -113,7 +113,7 @@ func (r *Registry) Build(ctx BuildContext) (Connector, error) {
 		return nil, fmt.Errorf("trading: build connector: %w", err)
 	}
 	if c == nil {
-		return nil, fmt.Errorf("trading: provider %q returned no connector: %w", p.Type, domain.ErrInvalid)
+		return nil, fmt.Errorf("trading: provider %q returned no connector", p.Type)
 	}
 	return c, nil
 }

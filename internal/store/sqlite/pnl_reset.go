@@ -74,7 +74,7 @@ func (s *sqliteStore) SchedulerStore(ctx context.Context, realm domain.RealmID) 
 // AccountPnlResetRecorded answers from committed account-owned receipts.
 func (r *realmStore) AccountPnlResetRecorded(ctx context.Context, account domain.EngineAccountID, runID string) (bool, error) {
 	if runID == "" || account == 0 {
-		return false, domain.ErrInvalid
+		return false, fmt.Errorf("store: reset receipt requires a run id and engine account id")
 	}
 	db, err := r.db()
 	if err != nil {
@@ -90,7 +90,7 @@ func (r *realmStore) AccountPnlResetRecorded(ctx context.Context, account domain
 // transaction. A post-engine failure is returned to the node's fail-stop path.
 func (r *realmStore) RecordAccountPnlReset(ctx context.Context, account domain.Account, runID string, entry fwstore.AuditEntry) (err error) {
 	if entry.Action != domain.AuditActionResetAccountPnl || entry.Account != account.Code || entry.AccountIdentity != account.EngineAccountID {
-		return fmt.Errorf("reset audit does not identify the account: %w", domain.ErrInvalid)
+		return fmt.Errorf("reset audit does not identify the account")
 	}
 	db, err := r.db()
 	if err != nil {

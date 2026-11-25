@@ -126,6 +126,37 @@ whose earlier item contains braces. Its fixture runs through `check-semgrep`.
 
 This rule has no approval marker or baseline.
 
+### Internal failures and invalid input
+
+Four rules keep internal failures out of the client validation classification:
+
+- `internal-error-mapper` rejects another package's `Err*` sentinel translated
+  to `domain.ErrInvalid` in a single-error mapper's `errors.Is` switch or
+  conditional chain. Parsing and input translation belongs at the validation
+  call site, including errors from parsing packages, rather than in a general
+  single-error mapper.
+- `nil-dependency-invalid-input` rejects `domain.ErrInvalid` inside a nil
+  guard on a pointer method receiver or its field, including compound conditions.
+  Value-receiver DTO validation and request parameter fields are input;
+  constructor parameters and field aliases remain
+  with review because their role is not syntactically distinguishable.
+- `stored-row-invalid-input` rejects explicit `domain.ErrInvalid` in SQLite
+  `scan*`/`decode*` helpers and in JSON validation of a scanned column. It also
+  rejects a trailing `%w` wrapping `domain.ExternalIDFromBytes` errors for a
+  scanned column. Restore transaction methods validate archive input. Input
+  reference lookups and shared archive consistency checks may use `Scan`
+  without turning their input errors into stored-value errors. Shared DTO
+  decoders may propagate validation errors; their stored callers must
+  classify those errors as internal.
+- `node-internal-invalid-input` checks the post-commit scope helpers and
+  errors passed inline or constructed locally for `fatalReconciliation`.
+
+All four rules include `errors.Join` constructions of `domain.ErrInvalid`.
+Each rule has a fixture run by `check-semgrep`. Production scans exclude
+`*_test.go` and the fixtures. There is no approval marker or baseline.
+Aliases, error construction across functions, and arbitrary validators called
+on stored values remain with review.
+
 ### `store-transaction-helper`
 
 `checks/semgrep/store-transaction-helper.yml` requires SQLite store transactions

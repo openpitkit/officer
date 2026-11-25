@@ -1210,8 +1210,8 @@ func TestTradingRemoveAccessUnregisteredProvider(t *testing.T) {
 		s, n, rt := newService(t)
 		ctx := auth.ContextWithCaller(context.Background(), tradingTestAgent)
 		err := s.RemoveTradingAccess(ctx, access.Connection, access.Account, "")
-		if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "unknown trading provider") {
-			t.Fatalf("agent revoke = %v, want the provider's ErrInvalid", err)
+		if err == nil || errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "unknown trading provider") {
+			t.Fatalf("agent revoke = %v, want an internal provider failure", err)
 		}
 		if len(n.writes) != 0 || !reflect.DeepEqual(n.access, []domain.TradingAccess{access}) ||
 			len(rt.checks) != 0 || rt.restarts != 0 {
@@ -1410,7 +1410,7 @@ func TestTradingRequiresCaller(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			if err := call(); !errors.Is(err, domain.ErrInvalid) {
+			if err := call(); err == nil || errors.Is(err, domain.ErrInvalid) {
 				t.Fatalf("missing caller = %v", err)
 			}
 		})

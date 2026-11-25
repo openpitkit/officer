@@ -818,12 +818,11 @@ func (r *realmStore) CreateVenueOrder(
 	ctx context.Context, order domain.VenueOrder,
 ) (domain.VenueOrder, error) {
 	if err := domain.ValidateVenueOrder(order); err != nil {
-		return order, err
+		return order, domain.Internal(err)
 	}
 	if order.SendAttempted || order.VenueOrderID != "" {
 		return order, fmt.Errorf(
-			"venue order must be unsent and unacknowledged at creation: %w",
-			domain.ErrInvalid,
+			"venue order must be unsent and unacknowledged at creation",
 		)
 	}
 	db, err := r.db()
@@ -862,7 +861,7 @@ func (r *realmStore) SetVenueOrderID(
 	ctx context.Context, order domain.ExternalID, venueOrderID string,
 ) error {
 	if venueOrderID == "" || venueOrderID != strings.TrimSpace(venueOrderID) {
-		return fmt.Errorf("venue order id: %w", domain.ErrInvalid)
+		return fmt.Errorf("venue order id is empty or padded")
 	}
 	db, err := r.db()
 	if err != nil {

@@ -21,8 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"go.openpit.dev/officer/framework/domain"
 )
 
 type postCommitKey struct{}
@@ -57,10 +55,10 @@ func PostCommitNotifications(ctx context.Context) (context.Context, func() error
 func requirePostCommitScope(ctx context.Context) (*postCommitScope, error) {
 	scope, ok := ctx.Value(postCommitKey{}).(*postCommitScope)
 	if !ok || scope == nil {
-		return nil, fmt.Errorf("missing post-commit notification scope: %w", domain.ErrInvalid)
+		return nil, fmt.Errorf("missing post-commit notification scope")
 	}
 	if scope.finished {
-		return nil, fmt.Errorf("post-commit notification scope is finished: %w", domain.ErrInvalid)
+		return nil, fmt.Errorf("post-commit notification scope is finished")
 	}
 	return scope, nil
 }

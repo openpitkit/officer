@@ -56,7 +56,7 @@ func (s *Scheduler) Error() error {
 // once, after the old worker has stopped, before admitting ticks.
 func New(store Store, factory Factory) (*Scheduler, error) {
 	if store == nil || factory == nil {
-		return nil, fmt.Errorf("scheduler requires store and task factory: %w", ErrInvalid)
+		return nil, fmt.Errorf("scheduler requires store and task factory")
 	}
 	return &Scheduler{store: store, factory: factory}, nil
 }
@@ -70,7 +70,7 @@ func (s *Scheduler) validateSpec(spec JobSpec) error {
 		return err
 	}
 	if task == nil {
-		return fmt.Errorf("task factory returned no implementation: %w", ErrInvalid)
+		return fmt.Errorf("task factory returned no implementation")
 	}
 	return nil
 }

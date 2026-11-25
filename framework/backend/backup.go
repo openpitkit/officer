@@ -168,10 +168,13 @@ func (s *Service) RestoreBackup(
 		reloadErr = fmt.Errorf("backend: reload signer after backup restore: %w", reloadErr)
 	}
 	if err != nil {
+		var marketDataRestartErr error
 		if mdStopped {
-			err = errors.Join(err, s.restoreMarketDataAfterBackup(sink))
+			marketDataRestartErr = s.restoreMarketDataAfterBackup(sink)
 		}
-		err = errors.Join(err, tradingRestartErr, reloadErr)
+		if recoveryErr := errors.Join(marketDataRestartErr, tradingRestartErr, reloadErr); recoveryErr != nil {
+			err = domain.Internal(errors.Join(err, recoveryErr))
+		}
 		return backup.RestoreSummary{},
 			fmt.Errorf("backend: restore backup: %w", err)
 	}
@@ -208,10 +211,10 @@ func (s *Service) RestoreBackup(
 		}
 	}
 	if postRestoreErr != nil {
-		return summary, errors.Join(postRestoreErr, tradingRestartErr, reloadErr)
+		return summary, domain.Internal(errors.Join(postRestoreErr, tradingRestartErr, reloadErr))
 	}
 	if err := errors.Join(tradingRestartErr, reloadErr); err != nil {
-		return summary, err
+		return summary, domain.Internal(err)
 	}
 	return summary, nil
 }
