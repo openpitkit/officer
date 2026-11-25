@@ -101,12 +101,18 @@ function, and builders returned by helpers, read from struct fields, or
 received as a function-literal parameter. For
 split `CheckOrder` chains, a step in an `else`, `for`, `switch`, or closure body
 escapes detection. The rule checks the same block and the then-branch of one
-enclosing `if`. A `Finally` that ignores its outcome or fails to escalate a
-post-commit failure passes the check.
+enclosing `if`.
 
-Its fixture runs through `check-semgrep`.
+`account-chain-finally-outcome` in the same file requires a function literal
+at each `Finally` call and rejects literals whose `asyncengine.ChainOutcome`
+parameter is blank, unnamed, or never referenced in the body. Named functions,
+method values, and function variables are rejected. It does not verify correct
+escalation after an outcome reference or detect calls through a `Finally`
+method alias such as `f := builder.Finally`.
 
-This rule has no approval marker or baseline.
+Their fixtures run through `check-semgrep`.
+
+These rules have no approval marker or baseline.
 
 ### `error-type-one-form`
 
