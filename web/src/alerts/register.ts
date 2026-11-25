@@ -21,20 +21,20 @@ import { createElement } from "react";
 import { registerNav } from "@/framework/registries/nav";
 import { AlertsLauncher } from "./AlertsLauncher";
 import { registerAlertRenderer } from "./registry";
-import { Summary, Detail } from "./TradingAccessAlert";
+import { summary, Detail } from "./TradingAccessAlert";
 import {
-  Summary as OrderReviewSummary,
+  summary as orderReviewSummary,
   Detail as OrderReviewDetail,
 } from "./OrderReviewAlert";
 
 /** Standalone registration stays separate from shared Officer defaults. */
 export function registerAlerts(): void {
   registerAlertRenderer("order_awaiting_review", {
-    summary: (alert) => createElement(OrderReviewSummary, { alert }),
+    summary: orderReviewSummary,
     Detail: OrderReviewDetail,
   });
   registerAlertRenderer("mixed_trading_access", {
-    summary: (alert) => createElement(Summary, { alert }),
+    summary,
     Detail,
   });
   registerNav({

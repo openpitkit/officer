@@ -15,7 +15,8 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-import type { ComponentType, ReactNode } from "react";
+import type { TFunction } from "i18next";
+import type { ComponentType } from "react";
 
 export interface ActionableAlert {
   id: string;
@@ -32,7 +33,7 @@ export interface ActionableAlert {
  * The registered renderer must use the server-declared actions and call resolve
  * with its validated form values. Payloads render as React text, never HTML. */
 export interface AlertRenderer {
-  summary: (alert: ActionableAlert) => ReactNode;
+  summary: (alert: ActionableAlert, t: TFunction) => string;
   Detail: ComponentType<{
     alert: ActionableAlert;
     pending: boolean;
@@ -55,4 +56,12 @@ export function registerAlertRenderer(
 
 export function getAlertRenderer(type: string): AlertRenderer | undefined {
   return renderers.get(type);
+}
+
+/** Formats the same plain-text summary for the drawer and browser. */
+export function alertSummary(alert: ActionableAlert, t: TFunction): string {
+  const renderer = getAlertRenderer(alert.type);
+  return renderer
+    ? renderer.summary(alert, t)
+    : t("alerts:unsupported", { type: alert.type });
 }

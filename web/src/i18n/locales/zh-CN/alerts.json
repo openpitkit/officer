@@ -1,4 +1,16 @@
 {
+  "browserNotifications": {
+    "unsupported": "此浏览器不支持浏览器通知",
+    "default": "浏览器通知已关闭",
+    "defaultDetail": "此标签页打开时，面板可以发送新提醒的通知。",
+    "allow": "允许通知",
+    "granted": "浏览器通知已开启",
+    "denied": "浏览器通知已被阻止",
+    "deniedDetail": "浏览器不会再次请求权限。请在浏览器的网站设置中允许此网站发送通知，然后重新加载页面。",
+    "failed": "浏览器通知出错",
+    "refused": "浏览器拒绝显示通知。",
+    "notificationTitle": "Pit Officer：有新提醒"
+  },
   "orderAwaitingReview": {
     "title": "订单等待审核：{{order}}",
     "detail": "订单 {{order}}，账户 {{account}}，标记代码 {{markCode}}。",

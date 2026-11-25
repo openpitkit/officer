@@ -21,7 +21,7 @@ import { I18nextProvider } from "react-i18next";
 import { beforeEach, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import type { ActionableAlert } from "./registry";
-import { Summary, Detail } from "./TradingAccessAlert";
+import { summary, Detail } from "./TradingAccessAlert";
 
 const alert: ActionableAlert = {
   id: "event",
@@ -40,7 +40,7 @@ it("names the account safely and acknowledges using only the registered action",
   const resolve = vi.fn().mockResolvedValue(undefined);
   const { container } = render(
     <I18nextProvider i18n={i18n}>
-      <Summary alert={alert} />
+      <span>{summary(alert, i18n.t)}</span>
       <Detail alert={alert} pending={false} resolve={resolve} />
     </I18nextProvider>,
   );

@@ -65,8 +65,9 @@ available.
 The web composition calls `registerAlerts` from the standalone `main.tsx`.
 Shared `registerOfficerDefaults` does not install alerts for Cloud consumers.
 Concrete panel types call `registerAlertRenderer` from `web/src/alerts/registry`.
-A renderer provides a summary and detail component with its actual decision
-controls and passes validated form values to the supplied `resolve` operation.
+A renderer provides a summary text function that takes the alert and translation
+function `t`. Its detail component renders the decision controls and passes
+validated form values to the supplied `resolve` operation.
 It uses the server's action list. Unknown renderers show an explicit error;
 there is no generic JSON editor or invented business decision.
 
@@ -173,4 +174,33 @@ event; a successful one must remove it and leave attributed result/audit data.
 Escape closes the drawer and returns focus to its launcher. Repeat on mobile
 using the existing navigation affordance.
 
-Browser OS notifications and PWA badges are outside this slice.
+## Browser notifications
+
+Browser notifications run while a standalone panel tab is open. Delivery uses
+the browser's Notifications API without Web Push or a service worker.
+Browsers throttle timers in background tabs, so notifications there can take
+up to about a minute to arrive even when the poll interval is shorter.
+
+The drawer shows whether notifications are unavailable, off, on, or blocked.
+They are unavailable if the browser lacks the Notifications API or cannot
+create notifications from a page, as in Android Chrome.
+**Allow notifications** stays available while permission is undecided. If
+blocked, allow them in the browser's site settings and reload. A separate
+notice reports browser errors, refusals to display a notification, or failed
+permission requests. It clears when a new permission request starts.
+Permission is per origin. The panel stores no notification settings.
+
+The first successful alerts load establishes the baseline. Each successful
+load adds all its alert IDs to an in-memory set for that tab. Later loads
+notify only for unread IDs that are new to the set, and only with permission.
+Each open panel tab notifies on its own, so with several tabs open the same
+alert can raise one notification per tab (browsers that replace notifications
+with the same tag may show one). Clicking a notification
+focuses the tab and opens the drawer. If the alert is still in the list, it
+expands and uses the standard mark-read action.
+
+The tab title shows the unread count and the favicon shows an unread dot
+regardless of notification permission. Both return to their original values
+when the unread count is zero or unknown. Read marks are held on the server.
+**Mark unread** changes the count without sending a new notification. The
+panel never sees an alert opened and resolved between two polls.
