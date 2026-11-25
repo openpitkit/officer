@@ -91,6 +91,13 @@ func restReviewMarks() []domain.ReviewMark {
 	}}
 }
 
+func heldReviewMarks() []domain.ReviewMark {
+	return []domain.ReviewMark{{
+		OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order"},
+		Mode:        domain.RuleModeReviewWithHold,
+	}}
+}
+
 func assertRESTReviewMarks(t *testing.T, raw any) {
 	t.Helper()
 	want := []any{map[string]any{
@@ -474,6 +481,7 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
 		{"ReviewLastConfirm", httpx.ReviewConfirmDTO{}},
 		{"ConfirmOrderReviewResponse", confirmOrderReviewResponseDTO{}},
 		{"EventReproductionResponse", eventReproductionResponseDTO{}},
+		{"EventAttestation", eventAttestationDTO{}},
 		{"SignedApproval", signedApprovalDTO{}},
 		{"AlertFailure", httpx.AlertFailureDTO{}},
 		{"OrderMutationResponse", orderMutationResponseDTO{}},
@@ -510,6 +518,12 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
               $ref: "#/components/schemas/SubmitMode"
 `) {
 		t.Fatal("SubmitOrderRequest.mode must reference SubmitMode")
+	}
+	if !strings.Contains(schemas["EventAttestation"], `
+        mode:
+          $ref: "#/components/schemas/SubmitMode"
+`) {
+		t.Fatal("EventAttestation.mode must reference SubmitMode")
 	}
 	if !strings.Contains(schemas["SubmitMode"]+"\n", "\n      enum: [immediate, hold]\n") {
 		t.Fatal("SubmitMode must enumerate exactly immediate and hold")

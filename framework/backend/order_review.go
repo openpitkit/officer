@@ -290,8 +290,10 @@ func (s *Service) CancelOrderReview(
 			}
 			cancelled := orderForEvent(stored.Order, stored.Order.Account, event, caller)
 			cancelled.Status, cancelled.Leaves = domain.OrderStatusCancelled, "0"
-			payload, err := s.buildLifecyclePayload(cancelled, domain.AttestationRequestReviewCancel, "cancelled", "", review.ApprovalID)
-			payload.Mode = stored.Review.Mode
+			payload, err := s.buildLifecyclePayload(
+				cancelled, stored.Review.Mode, domain.AttestationRequestReviewCancel,
+				"cancelled", "", review.ApprovalID,
+			)
 			return payload, err == nil, err
 		},
 		func(got Attestation, _ domain.ApprovalPayload) { att = got },

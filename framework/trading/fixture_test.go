@@ -375,12 +375,21 @@ func (f *fixture) draft(quantity string) domain.Order {
 }
 func (f *fixture) submit(quantity string) domain.Order {
 	f.t.Helper()
-	order, err := f.n.SubmitOrder(testCtx, f.draft(quantity), domain.MissingAccountReject, testCaller)
-	must(f.t, err)
+	order := f.submitWithMode(f.draft(quantity), backend.SubmitModeHold)
 	if order.Status != domain.OrderStatusCommitted {
 		f.t.Fatalf("hold status = %s", order.Status)
 	}
 	return order
+}
+
+func (f *fixture) submitWithMode(draft domain.Order, mode string) domain.Order {
+	f.t.Helper()
+	ctx := auth.ContextWithCaller(testCtx, testCaller)
+	approval, err := f.svc.SubmitOrder(ctx, draft, mode, domain.MissingAccountReject)
+	must(f.t, err)
+	detail, err := f.st.GetOrder(testCtx, domain.ExternalID(approval.OrderExternalID))
+	must(f.t, err)
+	return detail.Order
 }
 func (f *fixture) send(order domain.Order) domain.VenueOrder {
 	f.t.Helper()

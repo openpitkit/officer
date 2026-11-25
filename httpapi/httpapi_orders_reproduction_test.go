@@ -713,10 +713,7 @@ func TestOrderReproduction_StoredRequestTypes(t *testing.T) {
 	reviewConfirmed := submit(handler, "facet-review-confirm")
 	eng.reviews = nil
 	serveJSON(t, handler, http.MethodPost, reviewConfirmed+"/review/confirm", "", http.StatusOK)
-	eng.reviews = []domain.ReviewMark{{
-		OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order"},
-		Mode:        domain.RuleModeReviewWithHold,
-	}}
+	eng.reviews = heldReviewMarks()
 	reviewForced := submit(handler, "facet-review-force")
 	eng.reviews = nil
 	serveJSON(t, handler, http.MethodPost, reviewForced+"/review/force", "", http.StatusOK)
@@ -749,6 +746,7 @@ func TestOrderReproduction_StoredRequestTypes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		assertStoredAttestationMode(t, detail, domain.SubmitModeHold)
 		for _, event := range detail.Events {
 			if event.Attestation != nil {
 				requestType := event.Attestation.RequestType
@@ -781,6 +779,16 @@ func TestOrderReproduction_StoredRequestTypes(t *testing.T) {
 		return
 	}
 	t.Fatal("attestation request type dictionary is missing")
+}
+
+func assertStoredAttestationMode(t *testing.T, detail domain.OrderDetail, mode string) {
+	t.Helper()
+	for _, event := range detail.Events {
+		if att := event.Attestation; att != nil && att.Mode != mode {
+			t.Errorf("order %s event %s (%s/%s) attestation mode = %q, want %q",
+				detail.Order.ExternalID, event.ExternalID, event.Type, att.RequestType, att.Mode, mode)
+		}
+	}
 }
 
 func reproStoredFacet(
@@ -907,10 +915,15 @@ func TestOrderReproduction_ImmediateExecutionReport(t *testing.T) {
 	const path = "/orders/" + id
 	serveJSON(t, handler, http.MethodPost, "/orders/submit?missingAccount=reject",
 		`{"id":"immediate-report-reproduction","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"immediate"}`, http.StatusCreated)
+	const lateReportID = "immediate-late-fill"
+	serveJSON(t, handler, http.MethodPost, path+"/execution-reports",
+		`{"id":"`+lateReportID+`","quantity":"1","price":"100","leavesQuantity":"0","status":"filled","force":true}`, http.StatusCreated)
 	detail, err := realm.GetOrder(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertStoredAttestationMode(t, detail, domain.SubmitModeImmediate)
+	var immediateFill, lateFill bool
 	for _, event := range detail.Events {
 		if event.Type != domain.OrderEventFill {
 			continue
@@ -923,9 +936,15 @@ func TestOrderReproduction_ImmediateExecutionReport(t *testing.T) {
 		if want := event.Payload.ExecutionReport.ExternalID.String(); response["id"] != want {
 			t.Fatalf("reproduced immediate report id = %v, want %s", response["id"], want)
 		}
-		return
+		if event.Payload.ExecutionReport.ExternalID == lateReportID {
+			lateFill = true
+		} else {
+			immediateFill = true
+		}
 	}
-	t.Fatal("immediate submission stored no fill event")
+	if !immediateFill || !lateFill {
+		t.Fatalf("stored immediate fill = %t, stored later fill = %t, want both", immediateFill, lateFill)
+	}
 }
 
 func TestOrderReproduction_ReviewSubmit(t *testing.T) {

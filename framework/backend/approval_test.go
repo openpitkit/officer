@@ -39,7 +39,9 @@ func TestBuildExecutionReportPayloadSignsWriteSetLeaves(t *testing.T) {
 		Leaves:      "5",
 	}
 
-	payload, err := (&Service{scope: EveryAccount{}}).buildExecutionReportPayload(order, persistence)
+	payload, err := (&Service{scope: EveryAccount{}}).buildExecutionReportPayload(
+		order, SubmitModeHold, persistence,
+	)
 	if err != nil {
 		t.Fatalf("buildExecutionReportPayload: %v", err)
 	}
@@ -66,6 +68,7 @@ func TestBuildExecutionReportPayloadCarriesTypedBlockCause(t *testing.T) {
 	}
 	payload, err := (&Service{scope: EveryAccount{}}).buildExecutionReportPayload(
 		domain.Order{Account: block.Account},
+		SubmitModeHold,
 		engine.ExecutionReportPersistence{Blocks: []domain.AccountBlock{block}},
 	)
 	if err != nil {

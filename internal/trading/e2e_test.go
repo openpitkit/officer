@@ -54,6 +54,23 @@ import (
 	"go.openpit.dev/officer/signing"
 )
 
+func submitHeldOrder(
+	t *testing.T, ctx context.Context, service *backend.Service, realm store.RealmStore,
+	caller domain.Caller, draft domain.Order,
+) domain.Order {
+	t.Helper()
+	approval, err := service.SubmitOrder(auth.ContextWithCaller(ctx, caller), draft,
+		backend.SubmitModeHold, domain.MissingAccountReject)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	detail, err := realm.GetOrder(ctx, domain.ExternalID(approval.OrderExternalID))
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	return detail.Order
+}
+
 func assertDecimal(t *testing.T, got, want string) {
 	t.Helper()
 	value, err := decimal.NewFromString(got)
@@ -232,10 +249,13 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		return domain.Order{Account: "desk", BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: quantity, Price: "2"}
 	}
+	submitOrder := func(quantity string) domain.Order {
+		t.Helper()
+		return submitHeldOrder(t, ctx, service, realm, caller, draft(quantity))
+	}
 	submit := func(quantity string) domain.Order {
 		t.Helper()
-		order, err := n.SubmitOrder(ctx, draft(quantity), domain.MissingAccountReject, caller)
-		must(err)
+		order := submitOrder(quantity)
 		if order.Status != domain.OrderStatusCommitted {
 			t.Fatalf("order was not held: %+v", order)
 		}
@@ -316,8 +336,7 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	}
 	assertBalances("981.5", "10")
 
-	rejected, err := n.SubmitOrder(ctx, draft("10000"), domain.MissingAccountReject, caller)
-	must(err)
+	rejected := submitOrder("10000")
 	if rejected.Status != domain.OrderStatusRejected {
 		t.Fatalf("pre-trade did not reject: %+v", rejected)
 	}

@@ -99,6 +99,7 @@ import type {
   AttestationBlock,
   AttestationResult,
   EventAttestation,
+  SubmitMode,
   EventReproduction,
   EventReproductionESign,
   EventReproductionRequest,
@@ -4439,6 +4440,13 @@ function normalizeEventReproductionESign(v: unknown): EventReproductionESign {
   };
 }
 
+function normalizeSubmitMode(v: unknown): SubmitMode {
+  if (v === "immediate" || v === "hold") {
+    return v;
+  }
+  throw new ApiError("Invalid submit mode in the API response", "internal");
+}
+
 function normalizeEventAttestation(v: unknown): EventAttestation | null {
   if (!isObject(v)) {
     return null;
@@ -4454,7 +4462,7 @@ function normalizeEventAttestation(v: unknown): EventAttestation | null {
     requestType: asString(
       pick(v, "requestType", "RequestType", "request_type"),
     ),
-    mode: asString(pick(v, "mode", "Mode")),
+    mode: normalizeSubmitMode(pick(v, "mode", "Mode")),
     issuedAt: asString(pick(v, "issuedAt", "IssuedAt", "issued_at")),
     signed: asBool(pick(v, "signed", "Signed")),
   };

@@ -561,6 +561,9 @@ order unchanged. After a 500 the decision may already be recorded; check
 Every confirmation runs pre-trade again and spends rate-limit
 units again. `POST /orders/{id}/review/cancel`, also without a body, returns
 the cancelled order and its signed attestation, releasing a held review's hold.
+Every event attestation of an order carries the order's original submit mode
+(`hold` or `immediate`); execution-report attestations signed by Officer 0.3.1
+and earlier carry `immediate` whatever the order's mode.
 Execution reports and the ordinary `/confirm` and `/cancel` shortcuts refuse
 waiting orders with 409
 `conflict`. MCP shows review status only; it cannot confirm, retry, force or cancel.

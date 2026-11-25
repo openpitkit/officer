@@ -1319,9 +1319,17 @@ func httpTokenPayload(t *testing.T, signer *fakeSigner, mode string) domain.Appr
 }
 
 // mustWorkflow issues a workflow token and fails the test on error.
-func mustWorkflow(t *testing.T, svc *backend.Service) backend.SignedApproval {
+func mustWorkflow(t *testing.T, svc *backend.Service, quantity ...string) backend.SignedApproval {
 	t.Helper()
-	tok, err := svc.SubmitOrder(systemCtx(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
+	order := sampleOrder()
+	switch len(quantity) {
+	case 0:
+	case 1:
+		order.AmountValue = quantity[0]
+	default:
+		t.Fatalf("workflow setup: got %d quantity overrides, want at most one", len(quantity))
+	}
+	tok, err := svc.SubmitOrder(systemCtx(), order, backend.SubmitModeHold, domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("workflow setup: %v", err)
 	}
