@@ -10178,8 +10178,8 @@ components:
       additionalProperties: true
       description: >
         Provider credentials, accepted only on input. Never returned.
-        Alpaca uses {apiKey, apiSecret}; Bybit uses {apiKey, apiSecret}, an HMAC
-        key pair. Coinbase uses {apiKeyId, apiKeySecret}
+        Alpaca, Binance and Bybit use {apiKey, apiSecret} (Binance and Bybit: an
+        HMAC key pair). Coinbase uses {apiKeyId, apiKeySecret}
         (apiKeyId: the CDP API key ID organizations/{org}/apiKeys/{id};
         apiKeySecret: the Secret, an EC P-256 private key as an unencrypted
         SEC1 PEM ('-----BEGIN EC PRIVATE KEY-----'), with line breaks or with

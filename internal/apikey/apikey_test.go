@@ -175,7 +175,7 @@ func TestParseCDPPrivateKey(t *testing.T) {
 				}
 				return
 			}
-			assertValidationError(t, err, "/apiKeySecret", "format", "coinbase: apiKeySecret must be a PEM EC P-256 private key")
+			assertValidationError(t, err, "/apiKeySecret", "format", "coinbase: apiKeySecret must be one unencrypted SEC1 PEM block (BEGIN EC PRIVATE KEY) with no headers, holding a P-256 private key")
 			if got != (apikey.CDPCredentials{}) {
 				t.Fatal("invalid private key returned credentials")
 			}
