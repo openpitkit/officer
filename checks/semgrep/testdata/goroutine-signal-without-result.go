@@ -22,6 +22,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func resetBeforeConnection(t *testing.T, db *sql.DB, reset func() error) {
@@ -328,6 +330,192 @@ func signalInInitializer(run func() error, signal chan bool) {
 	if v := <-signal; v {
 		_ = v
 	}
+	_ = <-result
+}
+
+func pollUntilWithoutResult(run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	// ruleid: goroutine-signal-without-result
+	polltest.Until(func() bool { return ready() })
+	_ = <-result
+}
+
+func pollUntilInSeparateGoroutine(t *testing.T, run func() error, ready func() bool) {
+	first, second := make(chan error, 1), make(chan error, 1)
+	go func() { first <- run() }()
+	// ok: goroutine-signal-without-result
+	go func() {
+		polltest.Until(func() bool { return ready() })
+		second <- run()
+	}()
+	// ok: goroutine-signal-without-result
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	// ok: goroutine-signal-without-result
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func pollUntilInParameterizedGoroutine(t *testing.T, run func() error, ready func() bool) {
+	first, second := make(chan error, 1), make(chan error, 1)
+	go func() { first <- run() }()
+	// ok: goroutine-signal-without-result
+	go func(waitReady func() bool) {
+		polltest.Until(func() bool { return waitReady() })
+		second <- run()
+	}(ready)
+	// ok: goroutine-signal-without-result
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	// ok: goroutine-signal-without-result
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func pollUntilInLaterIf(run func() error, ready func() bool, wait bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	// ruleid: goroutine-signal-without-result
+	if wait {
+		polltest.Until(func() bool { return ready() })
+	}
+	_ = <-result
+}
+
+func pollUntilInSubtest(t *testing.T, run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	// ruleid: goroutine-signal-without-result
+	t.Run("ready", func(t *testing.T) {
+		polltest.Until(func() bool { return ready() })
+	})
+	_ = <-result
+}
+
+func pollUntilWithCallbackReference(run func() error, h struct{ ready func() bool }) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	// ruleid: goroutine-signal-without-result
+	polltest.Until(h.ready)
+	_ = <-result
+}
+
+func pollUntilAfterResult(run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	err := <-result
+	_ = err
+	// todook: goroutine-signal-without-result
+	polltest.Until(func() bool { return ready() })
+}
+
+func pollUntilWithResult(t *testing.T, run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	// ok: goroutine-signal-without-result
+	polltest.Until(func() bool {
+		select {
+		case err := <-result:
+			t.Fatalf("returned before state was ready: %v", err)
+		default:
+		}
+		return ready()
+	})
+	_ = <-result
+}
+
+func pollUntilWithBareResult(t *testing.T, run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	// ok: goroutine-signal-without-result
+	polltest.Until(func() bool {
+		select {
+		case <-result:
+			t.Fatal("returned before state was ready")
+		default:
+		}
+		return ready()
+	})
+	_ = <-result
+}
+
+func pollUntilWithAssignedResult(t *testing.T, run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	var err error
+	// ok: goroutine-signal-without-result
+	polltest.Until(func() bool {
+		select {
+		case err = <-result:
+			t.Fatalf("returned before state was ready: %v", err)
+		default:
+		}
+		return ready()
+	})
+	_ = <-result
+}
+
+func pollUntilWithCommaOKResult(t *testing.T, run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	// ok: goroutine-signal-without-result
+	polltest.Until(func() bool {
+		select {
+		case err, ok := <-result:
+			t.Fatalf("returned before state was ready: %v (open: %v)", err, ok)
+		default:
+		}
+		return ready()
+	})
+	_ = <-result
+}
+
+func pollUntilWithAssignedCommaOKResult(t *testing.T, run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	var err error
+	var ok bool
+	// ok: goroutine-signal-without-result
+	polltest.Until(func() bool {
+		select {
+		case err, ok = <-result:
+			t.Fatalf("returned before state was ready: %v (open: %v)", err, ok)
+		default:
+		}
+		return ready()
+	})
+	_ = <-result
+}
+
+func pollUntilWithOtherResult(run func() error, ready func() bool, other chan error) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	// ruleid: goroutine-signal-without-result
+	polltest.Until(func() bool {
+		select {
+		case <-other:
+		default:
+		}
+		return ready()
+	})
+	_ = <-result
+}
+
+func pollUntilWithResultCheckOutside(t *testing.T, run func() error, ready func() bool) {
+	result := make(chan error, 1)
+	go func() { result <- run() }()
+	select {
+	case err := <-result:
+		t.Fatalf("returned before polling: %v", err)
+	default:
+	}
+	// ruleid: goroutine-signal-without-result
+	polltest.Until(func() bool { return ready() })
 	_ = <-result
 }
 

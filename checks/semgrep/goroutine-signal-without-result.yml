@@ -17,13 +17,13 @@
 
 # A goroutine may return before reaching the signal or state a test awaits.
 # Read its result during the wait, so an early failure is reported instead of
-# hanging until the package timeout. Polling covers direct sleep loops; waits
-# hidden behind a helper still require review.
+# hanging until the package timeout. Polling covers direct sleep loops and
+# polltest.Until calls; waits hidden behind other helpers require review.
 
 rules:
   - id: goroutine-signal-without-result
     message: >-
-      Await the signal together with the goroutine's result in one select,
+      While awaiting a signal or state, check the goroutine's result in a select,
       and fail with that result if it returns before the awaited signal or state.
       Keep checking the actual result after the signal path.
     severity: ERROR
@@ -137,6 +137,69 @@ rules:
               metavariable: $S
               comparison: str($S) != str($R)
           - focus-metavariable: $S
+      - patterns:
+          - pattern: |
+              go func() {
+                ...
+                $R <- $V
+                ...
+              }()
+              ...
+              $WAIT
+          - metavariable-pattern:
+              metavariable: $WAIT
+              patterns:
+                - pattern: polltest.Until(...)
+                - pattern-not-inside: |
+                    go func(...) {
+                      ...
+                    }(...)
+                - pattern-not: |
+                    polltest.Until(func() bool {
+                      ...
+                      select {
+                      case <-$R:
+                        ...
+                      }
+                      ...
+                    })
+                - pattern-not: |
+                    polltest.Until(func() bool {
+                      ...
+                      select {
+                      case $X := <-$R:
+                        ...
+                      }
+                      ...
+                    })
+                - pattern-not: |
+                    polltest.Until(func() bool {
+                      ...
+                      select {
+                      case $X = <-$R:
+                        ...
+                      }
+                      ...
+                    })
+                - pattern-not: |
+                    polltest.Until(func() bool {
+                      ...
+                      select {
+                      case $X, $OK := <-$R:
+                        ...
+                      }
+                      ...
+                    })
+                - pattern-not: |
+                    polltest.Until(func() bool {
+                      ...
+                      select {
+                      case $X, $OK = <-$R:
+                        ...
+                      }
+                      ...
+                    })
+          - focus-metavariable: $WAIT
     paths:
       include:
         - "/internal/integration/**/*_test.go"
