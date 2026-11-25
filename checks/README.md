@@ -291,6 +291,37 @@ consumed value back before failing so the deferred receive does not hang until
 including a nested function or goroutine, are exempt because receiving does
 not consume closure. Its fixtures run through `check-semgrep`, with no approval marker or baseline.
 
+### `goroutine-signal-without-result`
+
+`checks/semgrep/goroutine-signal-without-result.yml` covers Go tests under
+`internal/integration` and `internal/store/sqlite`, and `internal/trading/*e2e_test.go`.
+After a goroutine sends its result on a channel,
+it rejects a blocking receive on another channel, including assignments, and
+direct `time.Sleep` polling loops that omit the result. Use
+`select { case <-signal: case err := <-result: t.Fatalf("early return: %v", err) }`
+and keep the later result check. Polling loops need a non-blocking result check
+inside the loop; `polltest.Until` callbacks need the same non-blocking result
+check. If completion is legitimate, check the result and then assert
+the signal without blocking; before the awaited call returns, the signal must
+be receivable with nobody waiting: its channel is closed, or the value is in a
+buffer whose capacity allowed the send to complete. Its fixtures run through
+`check-semgrep`.
+
+The rule follows direct goroutine sends and subsequent receive/assignment,
+select, channel-range (including local `ch := make(chan T)`), sleep-loop
+statements or `polltest.Until` calls, including comma-ok receives,
+not result aliases passed into goroutines, receives in `if`
+initializers, channel ranges through fields whose type cannot be inferred, or
+waits hidden behind helper calls. Those waits still require
+review and are pinned with `todoruleid` fixtures. Non-literal `polltest.Until`
+callbacks are flagged because their result check cannot be inspected here.
+A blocking signal receive or `polltest.Until` call after the result was
+already received is still flagged, pinned with `todook`.
+The safe buffered collect idiom with sends to both channels, `wg.Wait()`,
+`close(b)` and `for v := range b` is also flagged, pinned with `todook`.
+Non-blocking selects and short observation windows are allowed.
+This rule has no approval marker or baseline.
+
 ### `sqlite-test-parallel`
 
 `checks/semgrep/sqlite-test-parallel.yml` requires SQLite tests to start with
@@ -569,12 +600,15 @@ rule needs narrowing, not a marker.
 
 `checks/public-packages.txt` is the sorted allowlist of importable packages
 and commands, one import path per line. The gate lists the module with
-`go list ./...` from the module root, drops `web/node_modules/` (npm install
-output, never committed) and every path with an `internal` element, and fails
-on any difference in either direction, printing each offending path. A path
+`go list ./...` from the module root, drops every path with an `internal`
+element, and fails on any difference in either direction, printing each
+offending path. A path
 `./...` does not match - see `go help packages`; a directory whose Go files are
 all excluded by build constraints is skipped too - is neither listed nor
 checked.
+
+The module's `go.mod` ignore directive keeps npm's `web/node_modules` tree out
+of `go list ./...`.
 
 It runs right after the gofmt check in `lint-go`, `lint-go-debug-dev`, and
 `lint-go-release-dev`, so every gate that lints Go runs it, CI included.

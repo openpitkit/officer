@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -476,8 +477,8 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
 		name  string
 		value any
 	}{
-		{"OrderReview", httpx.OrderReviewDTO[json.RawMessage]{}},
 		{"BackupOrderReview", backup.OrderReview{}},
+		{"OrderReview", httpx.OrderReviewDTO[json.RawMessage]{}},
 		{"ReviewLastConfirm", httpx.ReviewConfirmDTO{}},
 		{"ConfirmOrderReviewResponse", confirmOrderReviewResponseDTO{}},
 		{"EventReproductionResponse", eventReproductionResponseDTO{}},
@@ -497,21 +498,76 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
 	if !ok {
 		t.Fatal("OpenAPI schemas are missing")
 	}
-	if !strings.Contains(schemas["BackupData"], `
-        orderReviews:
-          type: array
-          items:
-            $ref: "#/components/schemas/BackupOrderReview"`) {
+	backupSchema := openAPIFields(t, "BackupOrderReview", schemas["BackupOrderReview"])
+	properties := openAPIFields(t, "BackupOrderReview.properties", backupSchema["properties"])
+	typ := reflect.TypeOf(backup.OrderReview{})
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		want := map[string]string{}
+		switch field.Type {
+		case reflect.TypeFor[domain.ExternalID]():
+			want["$ref"] = "#/components/schemas/Id"
+		case reflect.TypeFor[*bool]():
+			want["type"] = "boolean"
+		case reflect.TypeFor[string]():
+			// Mode is stored as a string, with SubmitMode semantics on the wire.
+			if field.Name == "Mode" {
+				want["$ref"] = "#/components/schemas/SubmitMode"
+			} else {
+				want["type"] = "string"
+			}
+		default:
+			t.Fatalf("BackupOrderReview.%s: unknown Go field type %s", name, field.Type)
+		}
+		got := map[string]string{}
+		for key, block := range openAPIFields(t, "BackupOrderReview."+name, properties[name]) {
+			if key == "type" || key == "$ref" {
+				got[key] = openAPIValue(block)
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("BackupOrderReview.%s (Go %s): schema=%v, want %v", name, field.Type, got, want)
+		}
+	}
+	// Venue routing is a pair; a venue account has meaning only on a connection.
+	wantDependencies := map[string][]string{"connection": {"route"}, "route": {"connection"}, "venueAccount": {"connection"}}
+	gotDependencies := map[string][]string{}
+	for name, block := range openAPIFields(t, "BackupOrderReview.dependentRequired", backupSchema["dependentRequired"]) {
+		gotDependencies[name] = openAPIList(t, "BackupOrderReview.dependentRequired."+name, block)
+	}
+	if !reflect.DeepEqual(gotDependencies, wantDependencies) {
+		t.Fatalf("BackupOrderReview.dependentRequired=%v, want %v", gotDependencies, wantDependencies)
+	}
+	mode := openAPIFields(t, "SubmitMode", schemas["SubmitMode"])
+	if got := openAPIValue(mode["type"]); got != "string" {
+		t.Fatalf("SubmitMode.type=%q, want string", got)
+	}
+	// Go constants are not enumerable; use the domain constants validated by SubmitOrder.
+	wantModes := []string{domain.SubmitModeHold, domain.SubmitModeImmediate}
+	slices.Sort(wantModes)
+	if got := openAPIList(t, "SubmitMode.enum", mode["enum"]); !reflect.DeepEqual(got, wantModes) {
+		t.Fatalf("SubmitMode.enum=%v, want %v", got, wantModes)
+	}
+	modeDeclarations := 0
+	lines := strings.Split(spec, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "enum:") {
+			block := strings.Join(append([]string{line}, nestedLines(lines, i)...), "\n")
+			if reflect.DeepEqual(openAPIList(t, "enum", block), wantModes) {
+				modeDeclarations++
+			}
+		}
+	}
+	if modeDeclarations != 1 {
+		t.Fatalf("submission mode must be declared once in SubmitMode and referenced elsewhere: got %d declarations", modeDeclarations)
+	}
+	backupData := openAPIFields(t, "BackupData", schemas["BackupData"])
+	backupProperties := openAPIFields(t, "BackupData.properties", backupData["properties"])
+	orderReviews := openAPIFields(t, "BackupData.orderReviews", backupProperties["orderReviews"])
+	items := openAPIFields(t, "BackupData.orderReviews.items", orderReviews["items"])
+	if openAPIValue(orderReviews["type"]) != "array" || openAPIValue(items["$ref"]) != "#/components/schemas/BackupOrderReview" {
 		t.Fatal("BackupData.orderReviews must be an array of BackupOrderReview")
-	}
-	if strings.Count(spec, "enum: [immediate, hold]") != 1 {
-		t.Fatal("submission mode must be declared once in SubmitMode and referenced elsewhere")
-	}
-	if !strings.Contains(schemas["BackupOrderReview"], `
-        mode:
-          $ref: "#/components/schemas/SubmitMode"
-`) {
-		t.Fatal("BackupOrderReview.mode must reference SubmitMode")
 	}
 	if !strings.Contains(schemas["SubmitOrderRequest"], `
             mode:
@@ -519,25 +575,17 @@ func TestOrderReviewOpenAPIContract(t *testing.T) {
 `) {
 		t.Fatal("SubmitOrderRequest.mode must reference SubmitMode")
 	}
-	if !strings.Contains(schemas["EventAttestation"], `
-        mode:
-          $ref: "#/components/schemas/SubmitMode"
-`) {
+	attestation := openAPIFields(t, "EventAttestation", schemas["EventAttestation"])
+	attestationProperties := openAPIFields(t, "EventAttestation.properties", attestation["properties"])
+	attestationMode := openAPIFields(t, "EventAttestation.mode", attestationProperties["mode"])
+	if openAPIValue(attestationMode["$ref"]) != "#/components/schemas/SubmitMode" {
 		t.Fatal("EventAttestation.mode must reference SubmitMode")
 	}
-	if !strings.Contains(schemas["SubmitMode"]+"\n", "\n      enum: [immediate, hold]\n") {
-		t.Fatal("SubmitMode must enumerate exactly immediate and hold")
-	}
-	if !strings.Contains(schemas["BackupOrderReview"], `
-      dependentRequired:
-        connection: [route]
-        route: [connection]
-        venueAccount: [connection]
-      properties:`) {
-		t.Fatal("BackupOrderReview connection and route must appear together, and venueAccount requires connection")
-	}
 	for _, name := range []string{"SignedApproval", "ConfirmOrderReviewResponse", "OrderMutationResponse"} {
-		if !strings.Contains(schemas[name], "alertFailure:\n          $ref: \"#/components/schemas/AlertFailure\"") {
+		schema := openAPIFields(t, name, schemas[name])
+		properties := openAPIFields(t, name+".properties", schema["properties"])
+		alertFailure := openAPIFields(t, name+".alertFailure", properties["alertFailure"])
+		if openAPIValue(alertFailure["$ref"]) != "#/components/schemas/AlertFailure" {
 			t.Fatalf("%s must reference the shared AlertFailure schema", name)
 		}
 	}

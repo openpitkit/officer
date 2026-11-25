@@ -279,7 +279,11 @@ func TestSchedulerClaimsExcludeConcurrentCallbacksAndEdits(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { _, _, err := first.Tick(ctx, schedulerBase); done <- err }()
-	<-entered
+	select {
+	case <-entered:
+	case err := <-done:
+		t.Fatalf("Tick returned before callback entered: %v", err)
+	}
 	active := scheduledJob(t, second, job.ID)
 	if _, ran, err := second.Tick(ctx, schedulerBase); err != nil || ran {
 		t.Fatalf("duplicate claim: %v %v", ran, err)
@@ -543,7 +547,11 @@ func TestSchedulerStopJoinsCancelledCallback(t *testing.T) {
 	<-entered // Worker started.
 	stopped := make(chan error, 1)
 	go func() { stopped <- runtime.Stop() }()
-	<-cancelled
+	select {
+	case <-cancelled:
+	case err := <-stopped:
+		t.Fatalf("Stop returned before callback cancellation: %v", err)
+	}
 	select {
 	case err := <-stopped:
 		t.Fatalf("Stop returned before joining the callback: %v", err)

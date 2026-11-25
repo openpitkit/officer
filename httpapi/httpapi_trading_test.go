@@ -825,25 +825,17 @@ func jsonMembers(typ reflect.Type) (required, properties []string) {
 // property names from the spec text, sorted.
 func openAPISchemaMembers(t *testing.T, spec, name string) (required, properties []string) {
 	t.Helper()
-	_, schema, found := strings.Cut(spec, "\n    "+name+":\n")
-	if !found {
+	schemas, found := openAPIComponents(strings.Split(spec, "\n"), "schemas")
+	if !found || schemas[name] == "" {
 		t.Fatalf("OpenAPI schema %s is missing", name)
 	}
-	inProperties := false
-	for _, line := range strings.Split(schema, "\n") {
-		indent := len(line) - len(strings.TrimLeft(line, " "))
-		if strings.TrimSpace(line) != "" && indent < 6 {
-			break
-		}
-		switch {
-		case indent == 6:
-			inProperties = line == "      properties:"
-			if list, ok := strings.CutPrefix(line, "      required: ["); ok {
-				required = strings.Split(strings.TrimSuffix(list, "]"), ", ")
-			}
-		case indent == 8 && inProperties:
-			properties = append(properties, strings.TrimSuffix(strings.TrimSpace(line), ":"))
-		}
+	schema := openAPIFields(t, name, schemas[name])
+	// Schemas whose fields are all optional have no required member.
+	if block, exists := schema["required"]; exists {
+		required = openAPIList(t, name+".required", block)
+	}
+	for property := range openAPIFields(t, name+".properties", schema["properties"]) {
+		properties = append(properties, property)
 	}
 	slices.Sort(required)
 	slices.Sort(properties)

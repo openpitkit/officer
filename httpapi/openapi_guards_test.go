@@ -20,6 +20,7 @@ package httpapi
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -415,4 +416,77 @@ func childBlocks(lines []string, indent int) map[string]string {
 		}
 	}
 	return blocks
+}
+
+func openAPIFields(t *testing.T, name, block string) map[string]string {
+	t.Helper()
+	if block == "" {
+		t.Fatalf("OpenAPI %s is missing", name)
+	}
+	children := nestedLines(strings.Split(block, "\n"), 0)
+	result := map[string]string{}
+	childIndent := -1
+	for i, line := range children {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if childIndent == -1 {
+			childIndent = indentOf(line)
+		}
+		if indentOf(line) != childIndent {
+			continue
+		}
+		key, _, found := strings.Cut(strings.TrimSpace(line), ":")
+		if !found {
+			t.Fatalf("OpenAPI %s has an invalid mapping: %s", name, line)
+		}
+		key = strings.Trim(key, `"'`)
+		if _, exists := result[key]; exists {
+			t.Fatalf("OpenAPI %s has a repeated key: %s", name, key)
+		}
+		result[key] = strings.Join(append([]string{line}, nestedLines(children, i)...), "\n")
+	}
+	return result
+}
+
+func openAPIValue(block string) string {
+	header, _, _ := strings.Cut(block, "\n")
+	_, scalar, _ := strings.Cut(header, ":")
+	return strings.Trim(strings.TrimSpace(scalar), `"'`)
+}
+
+func openAPIList(t *testing.T, name, block string) []string {
+	t.Helper()
+	if block == "" {
+		t.Fatalf("OpenAPI %s is missing", name)
+	}
+	var result []string
+	children := nestedLines(strings.Split(block, "\n"), 0)
+	scalar := strings.TrimSpace(strings.Join(append([]string{openAPIValue(block)}, children...), " "))
+	if strings.HasPrefix(scalar, "[") && strings.HasSuffix(scalar, "]") {
+		for _, item := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(scalar, "["), "]"), ",") {
+			if strings.TrimSpace(item) != "" {
+				result = append(result, strings.Trim(strings.TrimSpace(item), `"'`))
+			}
+		}
+	} else {
+		if openAPIValue(block) != "" || len(children) == 0 {
+			t.Fatalf("OpenAPI %s has an invalid list: %s", name, block)
+		}
+		for _, line := range children {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			item, found := strings.CutPrefix(strings.TrimSpace(line), "- ")
+			if !found {
+				t.Fatalf("OpenAPI %s has an invalid list item: %s", name, line)
+			}
+			result = append(result, strings.Trim(strings.TrimSpace(item), `"'`))
+		}
+		if len(result) == 0 {
+			t.Fatalf("OpenAPI %s has no list items", name)
+		}
+	}
+	slices.Sort(result)
+	return result
 }
