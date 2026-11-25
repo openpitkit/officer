@@ -135,7 +135,7 @@ func TestParseCredentials(t *testing.T) {
 			_, err := ParseCredentials(credentialsJSON(t, tc.pem))
 			if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/apiKeySecret" ||
 				domain.ValidationConstraint(err) != "format" ||
-				err.Error() != "coinbase: apiKeySecret must be a PEM EC P-256 private key" {
+				err.Error() != "coinbase: apiKeySecret must be one unencrypted SEC1 PEM block (BEGIN EC PRIVATE KEY) with no headers, holding a P-256 private key" {
 				t.Fatal("expected unchanged apikey validation error at /apiKeySecret")
 			}
 			assertSecretFree(t, err, identity, tc.pem)

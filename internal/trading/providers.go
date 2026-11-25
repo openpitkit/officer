@@ -127,8 +127,9 @@ func BinanceProvider() fwtrading.Provider {
 // Advanced Trade's sandbox serves only static, pre-defined responses and cannot
 // trade, so only live mode is supported. REST uses api.coinbase.com; the user
 // WebSocket host is advanced-trade-ws-user.coinbase.com. Credentials are
-// apiKeyId (organizations/{org}/apiKeys/{id}) and apiKeySecret (an EC P-256
-// PEM, with line breaks or with the \n escapes the Coinbase key dialog shows);
+// apiKeyId (organizations/{org}/apiKeys/{id}) and apiKeySecret (one unencrypted
+// SEC1 EC PRIVATE KEY PEM block on P-256, with line breaks or with the \n
+// escapes the Coinbase key dialog shows);
 // requests use ES256 JWT authentication, the only key type Advanced Trade
 // accepts, so Ed25519 keys are refused. VenueAccount is
 // empty. Route JSON for a limit order is {"timeInForce":"GTC"|"IOC"|"FOK"}; a

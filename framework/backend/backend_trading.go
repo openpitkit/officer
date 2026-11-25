@@ -265,8 +265,9 @@ func (s *Service) requireNonReleaseTradingConfirmation(caller domain.Caller, con
 	return nil
 }
 
-// CreateTradingConnection identifies the venue account before storing a paper
-// connection. The returned value omits credentials. A tighten-only caller is
+// CreateTradingConnection checks the connection with its provider in paper or
+// live mode before storing it with the venue identity returned by CheckAccount.
+// The returned value omits credentials. A tighten-only caller is
 // refused with domain.ErrLoosening before anything is checked or the venue is
 // called: a new connection widens what can be sent. In single-account mode the
 // create also writes the scope account's grant (see grantScopeAccountLocked).

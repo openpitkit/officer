@@ -100,7 +100,8 @@ func ParseCDP(raw, vendor string) (CDPCredentials, error) {
 	if err != nil {
 		return CDPCredentials{}, err
 	}
-	invalidKey := domain.NewValidationError("/apiKeySecret", "format", vendor+": apiKeySecret must be a PEM EC P-256 private key")
+	invalidKey := domain.NewValidationError("/apiKeySecret", "format",
+		vendor+": apiKeySecret must be one unencrypted SEC1 PEM block (BEGIN EC PRIVATE KEY) with no headers, holding a P-256 private key")
 	privateKey := strings.ReplaceAll(values[1], `\n`, "\n")
 	block, rest := pem.Decode([]byte(privateKey))
 	// Decode skips leading text and malformed blocks before a valid block.
