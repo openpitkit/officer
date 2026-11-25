@@ -26,16 +26,10 @@ import unreadIcon from "./favicon-unread.svg?no-inline";
 import { alertSummary } from "./registry";
 
 let seenAlerts: Set<string> | null = null;
-let notifierRequested = false;
-let isNotifier = false;
 let constructorCheck: "pending" | "checked" | "unsupported" = "pending";
 
 function notificationPermission(): NotificationPermission | "unsupported" {
-  if (
-    typeof Notification === "undefined" ||
-    typeof navigator.locks === "undefined" ||
-    constructorCheck === "unsupported"
-  )
+  if (typeof Notification === "undefined" || constructorCheck === "unsupported")
     return "unsupported";
   return Notification.permission;
 }
@@ -92,18 +86,6 @@ export function useBrowserNotifications(
   }, [onClick]);
 
   useEffect(() => {
-    if (notifierRequested || notificationPermission() === "unsupported") return;
-    notifierRequested = true;
-    void navigator.locks
-      .request("pit-officer-alert-notifier", () => {
-        isNotifier = true;
-        // The browser releases the lock when this tab goes away.
-        return new Promise<never>(() => {});
-      })
-      .catch((error: unknown) => setFailure(failureMessage(error)));
-  }, []);
-
-  useEffect(() => {
     // This effect reports each constructor failure once by updating state
     // synchronously.
     function reportConstructorError(error: unknown) {
@@ -134,12 +116,7 @@ export function useBrowserNotifications(
     for (const alert of fresh.alerts) {
       if (seenAlerts.has(alert.id)) continue;
       seenAlerts.add(alert.id);
-      if (
-        baseline ||
-        alert.read ||
-        !isNotifier ||
-        notificationPermission() !== "granted"
-      )
+      if (baseline || alert.read || notificationPermission() !== "granted")
         continue;
 
       const title = t("alerts:browserNotifications.notificationTitle");

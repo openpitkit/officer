@@ -24,6 +24,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -50,9 +51,6 @@ class BrowserNotification extends EventTarget {
     BrowserNotification.shown.push(this);
   }
 }
-
-const requestLock =
-  vi.fn<(name: string, grant: () => Promise<never>) => Promise<never>>();
 
 const initial: ActionableAlert = {
   id: "first",
@@ -81,8 +79,23 @@ function ready(...alerts: ActionableAlert[]) {
   };
 }
 
-function Panel({ load }: { load: LoadState<AlertList> }) {
-  const permission = useBrowserNotifications(load, i18n.t, () => {});
+// Starts a new tab: fresh module state, with the alert renderer registered.
+async function openTab() {
+  vi.resetModules();
+  const tab = await import("./browserNotifications");
+  const { registerAlertRenderer } = await import("./registry");
+  registerAlertRenderer(initial.type, { summary, Detail });
+  return tab.useBrowserNotifications;
+}
+
+function Panel({
+  load,
+  hook = useBrowserNotifications,
+}: {
+  load: LoadState<AlertList>;
+  hook?: typeof useBrowserNotifications;
+}) {
+  const permission = hook(load, i18n.t, () => {});
   return (
     <I18nextProvider i18n={i18n}>
       <NotificationPermissionNotice {...permission} />
@@ -92,21 +105,13 @@ function Panel({ load }: { load: LoadState<AlertList> }) {
 
 beforeEach(async () => {
   // Each test starts a new tab with its own module state.
-  vi.resetModules();
-  ({ useBrowserNotifications } = await import("./browserNotifications"));
-  const { registerAlertRenderer } = await import("./registry");
-  registerAlertRenderer(initial.type, { summary, Detail });
+  useBrowserNotifications = await openTab();
   await i18n.changeLanguage("en");
   BrowserNotification.permission = "granted";
   BrowserNotification.requestPermission.mockReset();
   BrowserNotification.attempts.mockReset();
   BrowserNotification.shown = [];
   vi.stubGlobal("Notification", BrowserNotification);
-  requestLock.mockReset().mockImplementation((_name, grant) => grant());
-  Object.defineProperty(navigator, "locks", {
-    configurable: true,
-    value: { request: requestLock },
-  });
   document.title = "Pit Officer";
   icon = document.createElement("link");
   icon.rel = "icon";
@@ -118,7 +123,6 @@ afterEach(() => {
   cleanup();
   icon.remove();
   document.title = originalTitle;
-  Reflect.deleteProperty(navigator, "locks");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -374,42 +378,76 @@ function pollAlerts() {
   return act(() => vi.advanceTimersByTimeAsync(5_000));
 }
 
-it("counts alerts while the lock is pending and notifies only for new alerts after it is granted", async () => {
-  requestLock.mockImplementation(() => new Promise<never>(() => {}));
-  const { state } = await mountLauncher();
+it("notifies without the Web Locks API", async () => {
+  expect(navigator.locks).toBeUndefined();
+  const { launcher, state } = await mountLauncher();
 
-  state.alerts = [initial];
+  state.alerts = [newAlert];
   await pollAlerts();
-  expect(document.title).toBe("(1) Pit Officer");
-  expect(icon.getAttribute("href")).toBe(unreadIcon);
-  expect(BrowserNotification.attempts).not.toHaveBeenCalled();
+  await act(async () => {
+    fireEvent.click(launcher);
+  });
 
-  const [, grant] = requestLock.mock.calls[0];
-  void grant();
-  await pollAlerts();
-  expect(BrowserNotification.attempts).not.toHaveBeenCalled();
-
-  state.alerts = [initial, newAlert];
-  await pollAlerts();
   expect(BrowserNotification.attempts).toHaveBeenCalledExactlyOnceWith(
     "Pit Officer: new alert",
     { body: "Paper and live access: Desk (desk)", tag: newAlert.id },
   );
-  expect(requestLock).toHaveBeenCalledTimes(1);
+  expect(
+    within(screen.getByRole("dialog")).queryByText(
+      "Browser notifications are not available in this browser",
+    ),
+  ).not.toBeInTheDocument();
 });
 
-it.each(["no Web Locks", "probe TypeError", "delivery TypeError"])(
+it("each tab notifies the same new alert on its own", async () => {
+  const firstHook = await openTab();
+  const secondHook = await openTab();
+  expect(secondHook).not.toBe(firstHook);
+
+  const first = render(<Panel hook={firstHook} load={ready(initial)} />);
+  const other = render(<Panel hook={secondHook} load={ready(initial)} />);
+  expect(BrowserNotification.attempts).not.toHaveBeenCalled();
+
+  first.rerender(<Panel hook={firstHook} load={ready(initial, newAlert)} />);
+  other.rerender(<Panel hook={secondHook} load={ready(initial, newAlert)} />);
+  expect(BrowserNotification.attempts).toHaveBeenCalledTimes(2);
+  for (const call of [1, 2]) {
+    expect(BrowserNotification.attempts).toHaveBeenNthCalledWith(
+      call,
+      "Pit Officer: new alert",
+      { body: "Paper and live access: Desk (desk)", tag: "second" },
+    );
+  }
+});
+
+it("keeps the baseline across a remount and StrictMode in one tab", () => {
+  const first = render(
+    <StrictMode>
+      <Panel load={ready(initial)} />
+    </StrictMode>,
+  );
+  expect(BrowserNotification.attempts).not.toHaveBeenCalled();
+  first.unmount();
+
+  render(
+    <StrictMode>
+      <Panel load={ready(initial, newAlert)} />
+    </StrictMode>,
+  );
+  expect(BrowserNotification.attempts).toHaveBeenCalledExactlyOnceWith(
+    "Pit Officer: new alert",
+    { body: "Paper and live access: Desk (desk)", tag: "second" },
+  );
+});
+
+it.each(["probe TypeError", "delivery TypeError"])(
   "shows unavailable notifications in the drawer for %s",
   async (scenario) => {
     BrowserNotification.permission =
       scenario === "delivery TypeError" ? "granted" : "default";
-    if (scenario === "no Web Locks") {
-      Reflect.deleteProperty(navigator, "locks");
-    } else {
-      BrowserNotification.attempts.mockImplementation(() => {
-        throw new TypeError("Illegal constructor");
-      });
-    }
+    BrowserNotification.attempts.mockImplementation(() => {
+      throw new TypeError("Illegal constructor");
+    });
 
     const { launcher, state } = await mountLauncher();
     if (scenario === "delivery TypeError") {
@@ -434,9 +472,7 @@ it.each(["no Web Locks", "probe TypeError", "delivery TypeError"])(
       drawer.queryByText("Browser notifications failed"),
     ).not.toBeInTheDocument();
     expect(document.title).toBe("(1) Pit Officer");
-    expect(BrowserNotification.attempts).toHaveBeenCalledTimes(
-      scenario === "no Web Locks" ? 0 : 1,
-    );
+    expect(BrowserNotification.attempts).toHaveBeenCalledTimes(1);
   },
 );
 
