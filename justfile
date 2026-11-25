@@ -23,7 +23,8 @@
 
 set dotenv-load
 set dotenv-path := ".github/ci-versions.env"
-set windows-shell := ["cmd.exe", "/c"]
+# A leading @ keeps cmd /c from stripping quotes around the executable and its arguments.
+set windows-shell := ["cmd.exe", "/c", "@"]
 
 just_helper := "scripts/just_helpers.py"
 officer_binary := if os_family() == "windows" { "pit-officer.exe" } else { "pit-officer" }
