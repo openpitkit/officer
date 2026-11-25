@@ -79,7 +79,7 @@ func (task testExecutionTask) Run(ctx context.Context, run scheduler.Run) (json.
 // when due after cancellation, a connector restart or a process restart.
 func (r *Runtime) Schedule(ctx context.Context, at time.Time, run func(time.Time)) (func() bool, error) {
 	if ctx == nil || at.IsZero() || run == nil {
-		return nil, fmt.Errorf("test execution requires context, deadline and handler: %w", domain.ErrInvalid)
+		return nil, fmt.Errorf("test execution requires context, deadline and handler")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -97,7 +97,7 @@ func appendAdjustment(
 	}
 	principalID, err := resolveOptionalPrincipalID(ctx, q, rec.Principal)
 	if err != nil {
-		return rec, err
+		return rec, domain.Internal(err)
 	}
 
 	reqJSON, err := json.Marshal(rec.Request)
@@ -112,13 +112,13 @@ func appendAdjustment(
 	status := adjustmentStatus(rec)
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(rec.Source))
 	if err != nil {
-		return rec, err
+		return rec, domain.Internal(err)
 	}
 	statusID, err := dictionaries.id(
 		adjustmentStatusTable, "adjustment status", string(status),
 	)
 	if err != nil {
-		return rec, err
+		return rec, domain.Internal(err)
 	}
 
 	xid, err := externalIDForInsert(rec.ExternalID)
@@ -213,13 +213,13 @@ func upsertBalancesTx(
 	for _, b := range balances {
 		accountID, err := resolveAccountID(ctx, tx, b.Account)
 		if err != nil {
-			return fmt.Errorf("store: balance account %q: %w", b.Account, err)
+			return fmt.Errorf("store: balance account %q: %w", b.Account, domain.Internal(err))
 		}
 		assetID, err := resolveAssetID(ctx, tx, b.Asset)
 		if err != nil {
 			return fmt.Errorf(
 				"store: balance asset %q for account %q: %w",
-				b.Asset, b.Account, err,
+				b.Asset, b.Account, domain.Internal(err),
 			)
 		}
 		available := settleOrZero(b.Available)
@@ -527,7 +527,8 @@ func adjustmentTypeID(
 	if err := domain.ValidateAdjustmentType(t); err != nil {
 		return 0, err
 	}
-	return dictionaries.id(adjustmentTypeTable, "adjustment type", string(t))
+	id, err := dictionaries.id(adjustmentTypeTable, "adjustment type", string(t))
+	return id, domain.Internal(err)
 }
 
 // adjustmentOutcomeEnvelope is the JSON envelope written to the outcome column.

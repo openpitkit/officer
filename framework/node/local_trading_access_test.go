@@ -51,6 +51,20 @@ func (r committedAccessRealm) AppendAudit(ctx context.Context, entry store.Audit
 	return r.RealmStore.AppendAudit(ctx, entry)
 }
 
+func TestTradingAccessObserverWiringFailuresAreInternal(t *testing.T) {
+	n := &localNode{}
+	if err := n.InstallTradingAccessObserver(nil); err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing observer = %v, want internal error", err)
+	}
+	observer := func(context.Context, domain.Account, domain.Caller) error { return nil }
+	if err := n.InstallTradingAccessObserver(observer); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.InstallTradingAccessObserver(observer); err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("duplicate observer = %v, want internal error", err)
+	}
+}
+
 func TestTradingAccessNotificationCompletesOutsideNodeLocks(t *testing.T) {
 	n, realm, paper := newTradingFeeAccountNode(t)
 	ctx := context.Background()

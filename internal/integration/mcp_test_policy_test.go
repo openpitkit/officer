@@ -20,6 +20,7 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -91,6 +92,12 @@ func (r policyTradingRuntime) Providers() []trading.Provider { return r.registry
 
 func policyControlPlane(t *testing.T) (*backend.Service, node.Node, store.RealmStore) {
 	t.Helper()
+	return policyControlPlaneAt(t, filepath.Join(t.TempDir(), "officer.db"))
+}
+
+// policyControlPlaneAt is policyControlPlane over the database file at path.
+func policyControlPlaneAt(t *testing.T, path string) (*backend.Service, node.Node, store.RealmStore) {
+	t.Helper()
 	registry := trading.NewRegistry()
 	for _, p := range []trading.Provider{
 		{Type: "test", ExecutionPolicy: true},
@@ -104,7 +111,7 @@ func policyControlPlane(t *testing.T) (*backend.Service, node.Node, store.RealmS
 			t.Fatal(err)
 		}
 	}
-	target, realm := newLocalNodeBuiltBy(t, engine.NewOpenPitEngineBuildFunc(), trading.Provider{
+	target, realm := newLocalNodeAt(t, path, engine.NewOpenPitEngineBuildFunc(), trading.Provider{
 		Type: "venue", ExecutionPolicy: false,
 		Build: func(trading.BuildContext) (trading.Connector, error) {
 			t.Fatal("fixture built a connector")

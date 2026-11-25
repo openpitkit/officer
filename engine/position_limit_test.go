@@ -19,7 +19,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"math/rand"
 	"runtime"
 	"strings"
@@ -528,8 +527,8 @@ func TestPositionLimit_BuildRejectsInvalidStoredSet(t *testing.T) {
 			if eng != nil {
 				defer eng.Stop()
 			}
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Errorf("build invalid stored position limits = %v, want ErrInvalid", err)
+			if !internalFailureAnswer(err) {
+				t.Errorf("build invalid stored position limits = %v, want internal error", err)
 			}
 			if eng != nil {
 				t.Error("build invalid stored position limits returned a non-nil engine")
@@ -563,8 +562,8 @@ func TestPositionLimit_AtomicValidation(t *testing.T) {
 					positionLimit("acc-1", "AAPL", "110"), bad,
 				}},
 			)
-			if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), domain.PolicyPositionLimit) {
-				t.Fatalf("invalid complete set = %v, want position_limit ErrInvalid", err)
+			if !internalFailureAnswer(err) || !strings.Contains(err.Error(), domain.PolicyPositionLimit) {
+				t.Fatalf("invalid complete set = %v, want position_limit 500 internal", err)
 			}
 			assertPositionLimitCheck(t, eng, checkProbe("acc-1", domain.OrderSideBuy, "11", "1"), false)
 			probe := checkProbe("acc-2", domain.OrderSideBuy, "11", "1")

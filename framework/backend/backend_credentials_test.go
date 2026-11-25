@@ -120,17 +120,17 @@ func TestCredentialStorage(t *testing.T) {
 		{
 			name:      "malformed-market-data",
 			instances: sources(source(domain.MarketDataProviderFinnhub, `{"token":"md-token-value"`)),
-			wantErr:   "backend: market-data source md-1: stored market-data credentials are not a JSON object: invalid",
+			wantErr:   "backend: market-data source md-1: stored market-data credentials are not a JSON object",
 		},
 		{
 			name:      "market-data-json-null",
 			instances: sources(source(domain.MarketDataProviderFinnhub, `null`)),
-			wantErr:   "backend: market-data source md-1: stored market-data credentials are not a JSON object: invalid",
+			wantErr:   "backend: market-data source md-1: stored market-data credentials are not a JSON object",
 		},
 		{
 			name:        "malformed-trading",
 			connections: connectionWith(`{"apiKey":"trading-key-value"`),
-			wantErr:     "backend: trading connection connection-1: secret: stored credentials are not a JSON object: invalid",
+			wantErr:     "backend: trading connection connection-1: secret: stored credentials are not a JSON object",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,7 +140,7 @@ func TestCredentialStorage(t *testing.T) {
 			}
 			got, err := (&Service{node: n}).CredentialStorage(systemCtx())
 			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr || !errors.Is(err, domain.ErrInvalid) {
+				if err == nil || err.Error() != tc.wantErr || errors.Is(err, domain.ErrInvalid) {
 					t.Fatalf("CredentialStorage error = %v, want %q", err, tc.wantErr)
 				}
 				return

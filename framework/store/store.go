@@ -1213,14 +1213,14 @@ var ErrResetCommitted = errors.New("store: database reset committed")
 // realm-scoped RealmStore from ForRealm.
 //
 // The bundled SQLite connector is single-realm: it serves one fixed realm and
-// rejects a non-matching realm id with an error wrapping domain.ErrInvalid.
+// rejects a non-matching realm id as an internal host binding error.
 type Store interface {
 	// BindExecutionPolicyProviders installs the capability lookup once for every realm handle.
 	// Nil and repeated bindings are rejected; Reset preserves the binding.
 	BindExecutionPolicyProviders(domain.ExecutionPolicyProviderLookup) error
 	// ForRealm returns the data-access handle bound to realm. The single-realm
-	// connector accepts only its bound realm id and returns an error wrapping
-	// domain.ErrInvalid for any other id.
+	// connector accepts only its bound realm id and returns an internal host
+	// binding error for any other id.
 	ForRealm(ctx context.Context, realm domain.RealmID) (RealmStore, error)
 
 	// Migrate brings the database schema up to the version this build expects.
@@ -1252,8 +1252,8 @@ type Store interface {
 // cancellation and deadlines. Read methods return a non-nil empty slice when
 // there is nothing to return. Methods that address a specific row map internal
 // not-found/conflict conditions onto domain.ErrNotFound, domain.ErrAlreadyExists
-// and domain.ErrConflict. A reference to an unknown dictionary code is reported
-// as an error wrapping domain.ErrInvalid.
+// and domain.ErrConflict. An unknown dictionary code supplied by a caller is
+// domain.ErrInvalid; an inconsistent internally generated reference is internal.
 type RealmStore interface {
 	// GetTestExecutionPolicy reads and validates a test connection's stored policy.
 	// An unbound lookup, an unavailable provider, an unsupported policy or a missing
@@ -1449,8 +1449,8 @@ type RealmStore interface {
 	// reason together, mirroring an assignment the engine already applied. An
 	// empty haltReason records that a non-empty pnl is authoritative. A non-empty
 	// haltReason stores no numeric value even if pnl is also supplied. Returns
-	// domain.ErrNotFound when the account is absent, or an error wrapping
-	// domain.ErrInvalid when pnl is not a decimal.
+	// domain.ErrNotFound when the account is absent. A malformed engine-produced
+	// pnl or halt reason is an internal error.
 	SetAccountPnl(
 		ctx context.Context,
 		code domain.AccountID,
@@ -1687,7 +1687,7 @@ type RealmStore interface {
 	// every appended event to attest, stamping the returned attestation onto
 	// that event as PutEventAttestation would. An attestor error rolls the whole
 	// settlement back; an event the attestor skips and a settlement carrying no
-	// event at all yield domain.ErrInvalid with nothing written.
+	// event at all yield an internal error with nothing written.
 	RecordOrderSettlementWithAttestation(
 		ctx context.Context,
 		st domain.OrderSettlement,
@@ -1711,7 +1711,7 @@ type RealmStore interface {
 	// transaction, stamping each returned attestation onto its event. An
 	// attestor error rolls the whole submission back; an event the attestor
 	// skips, or a settlement apply returned without events, yields
-	// domain.ErrInvalid with nothing written.
+	// an internal error with nothing written.
 	RecordOrderSubmissionWithAttestation(
 		ctx context.Context,
 		o domain.Order,
@@ -1979,16 +1979,17 @@ type RealmStore interface {
 	) (time.Time, bool, error)
 
 	// CreateVenueOrder creates a pre-send venue-order link and stamps CreatedAt.
-	// A send-attempted or acknowledged input returns domain.ErrInvalid. Unknown
+	// A send-attempted or acknowledged link is an internal error. Unknown
 	// orders or connections return domain.ErrNotFound; a duplicate order link or
 	// client order id returns domain.ErrAlreadyExists.
 	CreateVenueOrder(
 		ctx context.Context, order domain.VenueOrder,
 	) (domain.VenueOrder, error)
 
-	// SetVenueOrderID records the venue acknowledgement once. An empty id returns
-	// domain.ErrInvalid, a missing link domain.ErrNotFound, and changing an
-	// already recorded id domain.ErrConflict. Repeating the same id is a no-op.
+	// SetVenueOrderID records the venue acknowledgement once. An empty or padded
+	// venue id is an internal error, a missing link domain.ErrNotFound, and
+	// changing an already recorded id domain.ErrConflict. Repeating the same id
+	// is a no-op.
 	SetVenueOrderID(
 		ctx context.Context, order domain.ExternalID, venueOrderID string,
 	) error

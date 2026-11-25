@@ -113,9 +113,10 @@ func (r *idResolver) ensureInitialized() {
 	}
 }
 
-// account resolves an account code to its engine account id. An unknown code is
-// caller input (e.g. an order for an account the live engine does not run) and
-// wraps domain.ErrInvalid so the HTTP surface reports 400 rather than 500.
+// account resolves an account code to its engine account id. An unknown request
+// code (e.g. an order for an account the live engine does not run) wraps
+// domain.ErrInvalid. Stored-state callers must mask that error with
+// domain.Internal.
 func (r idResolver) account(code domain.AccountID) (param.AccountID, error) {
 	if r.shared == nil {
 		return param.AccountID{}, unknownAccountAliasError(code)
@@ -142,8 +143,8 @@ func (r idResolver) accountAlias(id param.AccountID) (domain.AccountID, error) {
 	return code, nil
 }
 
-// asset resolves a human asset code to the immutable ready asset held by the
-// adapter. An unknown code is caller input and therefore wraps domain.ErrInvalid.
+// asset resolves a human asset code to the adapter's immutable ready asset.
+// Request codes wrap domain.ErrInvalid; stored-state callers must mask it.
 func (r idResolver) asset(code string) (param.Asset, error) {
 	if r.shared == nil {
 		return param.Asset{}, unknownAssetAliasError(code)
@@ -232,8 +233,8 @@ func (r idResolver) assetCodesIn(text string) (string, error) {
 	return out.String(), nil
 }
 
-// group resolves a group code to its engine group id. An unknown code is caller
-// input and wraps domain.ErrInvalid.
+// group resolves a group code to its engine group id. Unknown request codes
+// wrap domain.ErrInvalid; stored-state callers must mask it.
 func (r idResolver) group(code string) (param.AccountGroupID, error) {
 	if r.shared == nil {
 		return param.AccountGroupID{}, unknownGroupAliasError(code)
@@ -291,8 +292,8 @@ func (r idResolver) addAccountResolverEntry(account domain.Account) error {
 	}
 	if alias, exists := r.shared.accountAliases[idKey]; exists {
 		return fmt.Errorf(
-			"engine: account engine id %d already belongs to resolver alias %q: %w",
-			account.EngineAccountID, alias, domain.ErrInvalid,
+			"engine: account engine id %d already belongs to resolver alias %q",
+			account.EngineAccountID, alias,
 		)
 	}
 	r.shared.accounts[account.Code] = id
@@ -320,14 +321,14 @@ func (r idResolver) addAssetResolverEntry(asset domain.Asset) error {
 	}
 	if alias, exists := r.shared.assetAliases[id]; exists {
 		return fmt.Errorf(
-			"engine: asset engine id %d already belongs to resolver alias %q: %w",
-			asset.EngineAssetID, alias, domain.ErrInvalid,
+			"engine: asset engine id %d already belongs to resolver alias %q",
+			asset.EngineAssetID, alias,
 		)
 	}
 	if _, exists := r.shared.assetIDs[asset.EngineAssetID]; exists {
 		return fmt.Errorf(
-			"engine: asset engine id %d already exists: %w",
-			asset.EngineAssetID, domain.ErrInvalid,
+			"engine: asset engine id %d already exists",
+			asset.EngineAssetID,
 		)
 	}
 	r.shared.assets[asset.Code] = ready
@@ -344,19 +345,19 @@ func (r idResolver) renameAccountResolverEntry(
 		return err
 	}
 	if r.shared == nil {
-		return unknownAccountAliasError(oldCode)
+		return domain.Internal(unknownAccountAliasError(oldCode))
 	}
 
 	r.shared.mu.Lock()
 	defer r.shared.mu.Unlock()
 	currentID, exists := r.shared.accounts[oldCode]
 	if !exists {
-		return unknownAccountAliasError(oldCode)
+		return domain.Internal(unknownAccountAliasError(oldCode))
 	}
 	if currentID.Handle() != targetID.Handle() {
 		return fmt.Errorf(
-			"engine: account resolver alias %q has engine id %s, target %q has %d: %w",
-			oldCode, currentID, account.Code, account.EngineAccountID, domain.ErrInvalid,
+			"engine: account resolver alias %q has engine id %s, target %q has %d",
+			oldCode, currentID, account.Code, account.EngineAccountID,
 		)
 	}
 	if oldCode == account.Code {
@@ -377,7 +378,7 @@ func (r idResolver) renameAccountResolverEntry(
 
 func (r idResolver) renameAssetResolverEntry(oldCode string, asset domain.Asset) error {
 	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
-		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, err)
+		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, domain.Internal(err))
 	}
 	if r.shared == nil {
 		return fmt.Errorf("engine: asset resolver is not initialized")
@@ -387,13 +388,13 @@ func (r idResolver) renameAssetResolverEntry(oldCode string, asset domain.Asset)
 	defer r.shared.mu.Unlock()
 	current, exists := r.shared.assets[oldCode]
 	if !exists {
-		return unknownAssetAliasError(oldCode)
+		return domain.Internal(unknownAssetAliasError(oldCode))
 	}
 	id := current.Safe()
 	if id != strconv.FormatUint(asset.EngineAssetID.Uint64(), 10) {
 		return fmt.Errorf(
-			"engine: asset resolver alias %q has engine id %q, target %q has %d: %w",
-			oldCode, id, asset.Code, asset.EngineAssetID, domain.ErrInvalid,
+			"engine: asset resolver alias %q has engine id %q, target %q has %d",
+			oldCode, id, asset.Code, asset.EngineAssetID,
 		)
 	}
 	if oldCode == asset.Code {
@@ -407,8 +408,8 @@ func (r idResolver) renameAssetResolverEntry(oldCode string, asset domain.Asset)
 	}
 	if alias, exists := r.shared.assetAliases[id]; !exists || alias != oldCode {
 		return fmt.Errorf(
-			"engine: asset resolver alias %q has corrupt engine id mapping: %w",
-			oldCode, domain.ErrInvalid,
+			"engine: asset resolver alias %q has corrupt engine id mapping",
+			oldCode,
 		)
 	}
 
@@ -420,7 +421,7 @@ func (r idResolver) renameAssetResolverEntry(oldCode string, asset domain.Asset)
 
 func (r idResolver) removeAssetResolverEntry(asset domain.Asset) error {
 	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
-		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, err)
+		return fmt.Errorf("engine: asset %q engine id: %w", asset.Code, domain.Internal(err))
 	}
 	if r.shared == nil {
 		return fmt.Errorf("engine: asset resolver is not initialized")
@@ -431,19 +432,19 @@ func (r idResolver) removeAssetResolverEntry(asset domain.Asset) error {
 	defer r.shared.mu.Unlock()
 	current, exists := r.shared.assets[asset.Code]
 	if !exists {
-		return unknownAssetAliasError(asset.Code)
+		return domain.Internal(unknownAssetAliasError(asset.Code))
 	}
 	currentID := current.Safe()
 	if currentID != expectedID {
 		return fmt.Errorf(
-			"engine: asset resolver alias %q has engine id %q, removal target has %d: %w",
-			asset.Code, currentID, asset.EngineAssetID, domain.ErrInvalid,
+			"engine: asset resolver alias %q has engine id %q, removal target has %d",
+			asset.Code, currentID, asset.EngineAssetID,
 		)
 	}
 	if alias, exists := r.shared.assetAliases[expectedID]; !exists || alias != asset.Code {
 		return fmt.Errorf(
-			"engine: asset resolver alias %q has corrupt engine id mapping: %w",
-			asset.Code, domain.ErrInvalid,
+			"engine: asset resolver alias %q has corrupt engine id mapping",
+			asset.Code,
 		)
 	}
 
@@ -473,8 +474,8 @@ func (r idResolver) addGroupResolverEntry(group domain.AccountGroup) error {
 	}
 	if alias, exists := r.shared.groupAliases[idKey]; exists {
 		return fmt.Errorf(
-			"engine: group engine id %d already belongs to resolver alias %q: %w",
-			group.EngineGroupID, alias, domain.ErrInvalid,
+			"engine: group engine id %d already belongs to resolver alias %q",
+			group.EngineGroupID, alias,
 		)
 	}
 	r.shared.groups[group.Code] = id
@@ -490,19 +491,19 @@ func (r idResolver) renameGroupResolverEntry(
 		return err
 	}
 	if r.shared == nil {
-		return unknownGroupAliasError(oldCode)
+		return domain.Internal(unknownGroupAliasError(oldCode))
 	}
 
 	r.shared.mu.Lock()
 	defer r.shared.mu.Unlock()
 	currentID, exists := r.shared.groups[oldCode]
 	if !exists {
-		return unknownGroupAliasError(oldCode)
+		return domain.Internal(unknownGroupAliasError(oldCode))
 	}
 	if currentID.Handle() != targetID.Handle() {
 		return fmt.Errorf(
-			"engine: group resolver alias %q has engine id %s, target %q has %d: %w",
-			oldCode, currentID, group.Code, group.EngineGroupID, domain.ErrInvalid,
+			"engine: group resolver alias %q has engine id %s, target %q has %d",
+			oldCode, currentID, group.Code, group.EngineGroupID,
 		)
 	}
 	if oldCode == group.Code {
@@ -527,19 +528,19 @@ func (r idResolver) removeGroupResolverEntry(group domain.AccountGroup) error {
 		return err
 	}
 	if r.shared == nil {
-		return unknownGroupAliasError(group.Code)
+		return domain.Internal(unknownGroupAliasError(group.Code))
 	}
 
 	r.shared.mu.Lock()
 	defer r.shared.mu.Unlock()
 	currentID, exists := r.shared.groups[group.Code]
 	if !exists {
-		return unknownGroupAliasError(group.Code)
+		return domain.Internal(unknownGroupAliasError(group.Code))
 	}
 	if currentID.Handle() != targetID.Handle() {
 		return fmt.Errorf(
-			"engine: group resolver alias %q has engine id %s, removal target has %d: %w",
-			group.Code, currentID, group.EngineGroupID, domain.ErrInvalid,
+			"engine: group resolver alias %q has engine id %s, removal target has %d",
+			group.Code, currentID, group.EngineGroupID,
 		)
 	}
 
@@ -552,8 +553,8 @@ func resolverGroupID(group domain.AccountGroup) (param.AccountGroupID, error) {
 	if group.Code == "" {
 		if group.EngineGroupID != 0 {
 			return param.AccountGroupID{}, fmt.Errorf(
-				"engine: default group engine id %d, want 0: %w",
-				group.EngineGroupID, domain.ErrInvalid,
+				"engine: default group engine id %d, want 0",
+				group.EngineGroupID,
 			)
 		}
 		return param.DefaultAccountGroup, nil
@@ -567,7 +568,7 @@ func resolverGroupID(group domain.AccountGroup) (param.AccountGroupID, error) {
 func engineAccountID(id domain.EngineAccountID, code domain.AccountID) (param.AccountID, error) {
 	if err := domain.ValidateEngineAccountID(id); err != nil {
 		return param.AccountID{}, fmt.Errorf(
-			"engine: account %q engine id: %w", code, err)
+			"engine: account %q engine id: %w", code, domain.Internal(err))
 	}
 	return param.NewAccountIDFromUint64(id.Uint64()), nil
 }
@@ -578,7 +579,7 @@ func engineAccountID(id domain.EngineAccountID, code domain.AccountID) (param.Ac
 func engineGroupID(id domain.EngineGroupID, code string) (param.AccountGroupID, error) {
 	if err := domain.ValidateEngineGroupID(id); err != nil {
 		return param.AccountGroupID{}, fmt.Errorf(
-			"engine: group %q engine id: %w", code, err)
+			"engine: group %q engine id: %w", code, domain.Internal(err))
 	}
 	group, err := param.NewAccountGroupIDFromUint32(id.Uint32())
 	if err != nil {
@@ -593,7 +594,7 @@ func engineGroupID(id domain.EngineGroupID, code string) (param.AccountGroupID, 
 // entry, so the C-backed param.Asset is constructed once per asset.
 func engineAsset(id domain.EngineAssetID, code string) (param.Asset, error) {
 	if err := domain.ValidateEngineAssetID(id); err != nil {
-		return param.Asset{}, fmt.Errorf("engine: asset %q engine id: %w", code, err)
+		return param.Asset{}, fmt.Errorf("engine: asset %q engine id: %w", code, domain.Internal(err))
 	}
 	asset, err := param.NewAsset(strconv.FormatUint(id.Uint64(), 10))
 	if err != nil {
@@ -2066,9 +2067,8 @@ func immediateFillQuantity(
 				candidate = outcome.Outcome.HeldDelta
 			default:
 				return "", fmt.Errorf(
-					"engine: volume immediate order has unsupported side %q: %w",
+					"engine: volume immediate order has unsupported side %q",
 					o.Side,
-					domain.ErrInvalid,
 				)
 			}
 			if candidate == "" {
@@ -2092,9 +2092,8 @@ func immediateFillQuantity(
 		return fillQuantity, nil
 	default:
 		return "", fmt.Errorf(
-			"engine: unsupported immediate order amount kind %q: %w",
+			"engine: unsupported immediate order amount kind %q",
 			o.AmountKind,
-			domain.ErrInvalid,
 		)
 	}
 }

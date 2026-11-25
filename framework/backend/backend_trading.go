@@ -384,7 +384,7 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 	}
 	var storedValues, mergedValues map[string]any
 	if err := json.Unmarshal([]byte(c.Credentials), &storedValues); err != nil {
-		return fmt.Errorf("stored trading credentials are not a JSON object: %w", domain.ErrInvalid)
+		return fmt.Errorf("stored trading credentials are not a JSON object")
 	}
 	// The market-data merger emits an empty string for two empty objects;
 	// trading must retain its stored JSON object when no fields change.
@@ -402,7 +402,7 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 		return err
 	}
 	if err := json.Unmarshal([]byte(merged), &mergedValues); err != nil {
-		return fmt.Errorf("merged trading credentials are not a JSON object: %w", domain.ErrInvalid)
+		return fmt.Errorf("merged trading credentials are not a JSON object")
 	}
 	changed := !reflect.DeepEqual(storedValues, mergedValues)
 	if caller.TightenOnly() {
@@ -411,10 +411,10 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 		// while the merged text stores them apart.
 		var storedExact, mergedExact map[string]any
 		if err := decodeCredentialsJSON(c.Credentials, &storedExact); err != nil {
-			return fmt.Errorf("stored trading credentials are not a JSON object: %w", domain.ErrInvalid)
+			return fmt.Errorf("stored trading credentials are not a JSON object")
 		}
 		if err := decodeCredentialsJSON(merged, &mergedExact); err != nil {
-			return fmt.Errorf("merged trading credentials are not a JSON object: %w", domain.ErrInvalid)
+			return fmt.Errorf("merged trading credentials are not a JSON object")
 		}
 		if !reflect.DeepEqual(storedExact, mergedExact) {
 			return fmt.Errorf(
@@ -506,7 +506,7 @@ func (s *Service) grantScopeAccountLocked(ctx context.Context, id string) error 
 	}
 	p, err := s.tradingProvider(c.Provider)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if p.VenueAccounts {
 		return nil
@@ -697,7 +697,7 @@ func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAcc
 	}
 	p, err := s.tradingProvider(c.Provider)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	return s.node.PutTradingAccess(ctx, access, p.UnlinkedFees, caller)
 }
@@ -742,7 +742,7 @@ func (s *Service) RemoveTradingAccess(ctx context.Context, connection domain.Ext
 		}
 		p, err := s.tradingProvider(c.Provider)
 		if err != nil {
-			return err
+			return domain.Internal(err)
 		}
 		requireFeeAccount = p.UnlinkedFees
 	}
@@ -789,7 +789,7 @@ func (s *Service) SetTradingFeeAccount(ctx context.Context, connection domain.Ex
 	}
 	p, err := s.tradingProvider(c.Provider)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if !p.UnlinkedFees {
 		return fmt.Errorf("trading provider has no unlinked fees: %w", domain.ErrInvalid)
@@ -985,7 +985,7 @@ func (s *Service) preCheckTradingOrder(ctx context.Context, o domain.Order, dest
 		if tradingHasDomainSentinel(err) {
 			return err
 		}
-		return fmt.Errorf("trading pre-check: %w: %w", err, domain.ErrUpstream)
+		return fmt.Errorf("trading pre-check: %w", err)
 	}
 	return nil
 }

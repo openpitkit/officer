@@ -131,8 +131,8 @@ func (s *Service) ConfirmOrderReview(
 // Other domain errors from the venue pre-check are returned unchanged.
 // The node refuses an account blocked by its own flag or group, a changed hold,
 // or a mode mismatch with ErrConflict inside the account lane before any write;
-// changed chain input returns ErrInvalid. Node errors pass through unchanged
-// and prevent sending. Missing stored settlement data, an unknown mode, an
+// changed chain input returns an internal error. Node errors pass through
+// unchanged and prevent sending. Missing stored settlement data, an unknown mode, an
 // unexpected verdict or a missing decision attestation is an explicit error.
 // It returns the recorded order and its signed (or eSign-off) accept decision.
 // Send carries the trading outcome; "refused" means the order was cancelled.

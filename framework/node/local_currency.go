@@ -312,7 +312,7 @@ func (n *localNode) administrativeAsset(
 	}
 	if err := domain.ValidateEngineAssetID(asset.EngineAssetID); err != nil {
 		return param.Asset{}, fmt.Errorf(
-			"%s %q engine id: %w", kind, code, err,
+			"%s %q engine id: %w", kind, code, domain.Internal(err),
 		)
 	}
 	ready, err := resolver.ResolveAsset(code)
@@ -321,15 +321,14 @@ func (n *localNode) administrativeAsset(
 			"resolve %s %q from the live dictionary: %w",
 			kind,
 			code,
-			err,
+			domain.Internal(err),
 		)
 	}
 	if ready.Safe() != strconv.FormatUint(asset.EngineAssetID.Uint64(), 10) {
 		return param.Asset{}, fmt.Errorf(
-			"%s %q engine identity does not match the live resolver: %w",
+			"%s %q engine identity does not match the live resolver",
 			kind,
 			code,
-			domain.ErrInvalid,
 		)
 	}
 	return ready, nil

@@ -267,7 +267,7 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 		return backup.Data{}, err
 	}
 	if err := data.SetSpotFundsPnlBounds(spotFundsPnlBounds); err != nil {
-		return backup.Data{}, err
+		return backup.Data{}, domain.Internal(err)
 	}
 	if data.Adjustments, err = r.exportAdjustments(ctx); err != nil {
 		return backup.Data{}, err

@@ -718,7 +718,7 @@ func TestRecordServiceLifecycleRejectsUnresolvedCaller(t *testing.T) {
 		ctx, domain.AuditActionRestartService,
 		domain.NewAuditDetail(domain.AuditDetailRestartService, nil),
 	)
-	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "no caller in context") {
+	if !internalFailureAnswer(err) || !strings.Contains(err.Error(), "no caller in context") {
 		t.Errorf("RecordServiceLifecycle without a caller = %v, want the missing caller named", err)
 	}
 	after, err := realm.ListAudit(ctx, 1000)

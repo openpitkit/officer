@@ -1213,9 +1213,7 @@ func TestService_AccountScopeRestrictsLists(t *testing.T) {
 			t.Parallel()
 			scope := &recordingScope{account: scopeResolvedAccount, unowned: true}
 			svc, fn, _ := newScopeTestService(t, scope)
-			if err := site.run(context.Background(), svc); !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("%s without a caller = %v, want ErrInvalid", site.name, err)
-			}
+			requireInternalError(t, site.name+" without a caller", site.run(context.Background(), svc))
 			if len(scope.calls) != 0 {
 				t.Fatalf("scope asked %+v without a caller, want nothing", scope.calls)
 			}
@@ -1317,10 +1315,7 @@ func TestService_AccountScopeNarrowsOwnedRowLists(t *testing.T) {
 			t.Parallel()
 			scope := &recordingScope{account: scopeResolvedAccount, unowned: true}
 			svc, fn, _ := newScopeTestService(t, scope)
-			err := site.run(context.Background(), svc, scopeResolvedAccount)
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("%s without a caller = %v, want ErrInvalid", site.name, err)
-			}
+			requireInternalError(t, site.name+" without a caller", site.run(context.Background(), svc, scopeResolvedAccount))
 			if len(scope.calls) != 0 {
 				t.Fatalf("scope asked %+v without a caller, want nothing", scope.calls)
 			}
@@ -1472,9 +1467,7 @@ func TestService_AccountScopeNarrowsGetGroup(t *testing.T) {
 		svc, fn, _ := newScopeTestService(t, scope)
 		fn.groupMembers = members
 		_, _, err := svc.GetGroup(context.Background(), scopeVisibleGroup)
-		if !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("GetGroup without a caller = %v, want ErrInvalid", err)
-		}
+		requireInternalError(t, "GetGroup without a caller", err)
 		if len(scope.calls) != 0 {
 			t.Fatalf("scope asked %+v without a caller, want nothing", scope.calls)
 		}
@@ -1671,9 +1664,8 @@ func TestService_AccountScopeNarrowsLimits(t *testing.T) {
 			scope := newNarrowingScope()
 			svc, fn, _ := newScopeTestService(t, scope)
 			fn.limits = limits
-			if _, err := svc.ListLimits(context.Background(), account); !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("ListLimits(%q) without a caller = %v, want ErrInvalid", account, err)
-			}
+			_, err := svc.ListLimits(context.Background(), account)
+			requireInternalError(t, "ListLimits("+string(account)+") without a caller", err)
 			if len(scope.calls) != 0 {
 				t.Fatalf("scope asked %+v without a caller, want nothing", scope.calls)
 			}

@@ -42,14 +42,14 @@ type OrderReviewObserverHost interface {
 
 func (n *localNode) InstallOrderReviewObserver(observer OrderReviewObserver) error {
 	if observer == nil {
-		return fmt.Errorf("missing order review observer: %w", domain.ErrInvalid)
+		return fmt.Errorf("missing order review observer")
 	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
 	if n.orderReviewObserver != nil {
-		return fmt.Errorf("order review observer already installed: %w", domain.ErrInvalid)
+		return fmt.Errorf("order review observer already installed")
 	}
 	n.orderReviewObserver = observer
 	return nil
@@ -97,7 +97,7 @@ func (n *localNode) finishSubmitReviewNotifications(
 ) {
 	if *resultErr == nil && order.Status == domain.OrderStatusAwaitingReview {
 		if len(*reviews) == 0 {
-			*resultErr = fmt.Errorf("order awaiting review has no review mark: %w", domain.ErrInvalid)
+			*resultErr = fmt.Errorf("order awaiting review has no review mark")
 		} else {
 			*resultErr = n.publishOrderAwaitingReview(ctx, *order, (*reviews)[0], caller)
 		}

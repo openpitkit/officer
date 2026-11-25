@@ -44,6 +44,50 @@ func (r *pnlBoundReadProbeRealm) ListSpotFundsPnlBoundsLimits(
 	return r.RealmStore.ListSpotFundsPnlBoundsLimits(ctx, account)
 }
 
+func TestInternalLimitDispatchFailures(t *testing.T) {
+	ctx := context.Background()
+	n, st := newTestNode(t, newFakeEngine())
+	if err := st.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxQuantity: "100",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{"order size scope", func() error {
+			return n.guardTightenOnlyOrderSize(ctx, domain.LimitOrderSize{
+				Mode: domain.RuleModeReject, Scope: domain.ScopeAccount, Account: "desk", MaxQuantity: "100",
+			}, domain.LimitOrderSize{}, false, agentCaller)
+		}},
+		{"pnl bounds scope", func() error {
+			return n.guardTightenOnlySpotFundsPnlBounds(ctx, domain.LimitSpotFundsPnlBounds{
+				Axis: domain.SpotFundsPnlAxisRealized, Mode: domain.RuleModeReject,
+				Scope: domain.ScopeBroker, Currency: "USD", LowerBound: "-100",
+			}, domain.LimitSpotFundsPnlBounds{}, false, "", "USD", agentCaller)
+		}},
+		{"delete policy", func() error {
+			_, err := n.deleteBarrier(ctx, domain.LimitKey{})
+			return err
+		}},
+		{"policy snapshot", func() error {
+			_, err := n.policyLimitSet(ctx, "unknown-policy")
+			return err
+		}},
+		{"pnl bounds policy", func() error {
+			_, _, err := n.readSpotFundsPnlBoundsBarrier(ctx, domain.LimitKey{})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.run(); err == nil || errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("internal dispatch = %v, want internal error", err)
+			}
+		})
+	}
+}
+
 func TestLocalNode_PnlBoundAccountCurrency(t *testing.T) {
 	t.Parallel()
 	for _, axis := range []domain.SpotFundsPnlAxis{

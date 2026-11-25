@@ -468,6 +468,7 @@ func TestSendPaperOrderValidation(t *testing.T) {
 
 func TestSendPaperOrderPreCheck(t *testing.T) {
 	domainError := fmt.Errorf("worker unavailable: %w", domain.ErrConflict)
+	internalError := errors.New("stored trading connection read failed")
 	joinedError := fmt.Errorf("worker: %w", errors.Join(errors.New("offline"), domain.ErrUpstream))
 	for _, tc := range []struct {
 		name        string
@@ -477,18 +478,21 @@ func TestSendPaperOrderPreCheck(t *testing.T) {
 		{"venue_refusal", fmt.Errorf("invalid price increment: %w", trading.ErrRejected), domain.ErrInvalid, false},
 		{"domain", domainError, domain.ErrConflict, true},
 		{"joined_domain", joinedError, domain.ErrUpstream, true},
-		{"upstream", errors.New("connection lost"), domain.ErrUpstream, false},
+		{"internal", internalError, internalError, false},
 		{"unsupported", fmt.Errorf("invalid amount: %w", trading.ErrUnsupported), domain.ErrInvalid, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, n, rt, _ := newPaperSendTestService(t)
 			rt.preCheckErr = tc.cause
 			_, err := s.SendPaperOrder(systemCtx(), paperSendTestOrder(), SendDestination{Route: "{}"})
-			if !errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.cause.Error()) || (tc.passthrough && err != tc.cause) {
+			if errors.Is(err, domain.ErrUpstream) != errors.Is(tc.cause, domain.ErrUpstream) || !errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.cause.Error()) || (tc.passthrough && err != tc.cause) {
 				t.Fatalf("precheck error = %v", err)
 			}
 			if !reflect.DeepEqual(rt.drafts, []domain.Order{paperSendTestOrder()}) {
 				t.Fatalf("precheck draft = %v", rt.drafts)
+			}
+			if tc.name == "internal" && (err == nil || tradingHasDomainSentinel(err)) {
+				t.Fatalf("store pre-check failure = %v, want 500 internal", err)
 			}
 			assertPaperSendNotHeld(t, s, n, rt)
 		})
@@ -812,7 +816,7 @@ func TestSendPaperOrderRedactsCredentialSpellings(t *testing.T) {
 				cause := errors.New("venue echoed " + spelling.text)
 				switch stage {
 				case "precheck":
-					rt.preCheckErr = cause
+					rt.preCheckErr = fmt.Errorf("%w: %w", cause, domain.ErrUpstream)
 				case "send":
 					rt.sendErr = cause
 				case "not_sent":

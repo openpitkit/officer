@@ -43,7 +43,7 @@ func (r *realmStore) validateTradingAccessModes(ctx context.Context, tx *sql.Tx,
 			modes[i] = domain.TradingMode(mode)
 		}
 		if err := domain.ValidateTradingAccessModes(account, modes); err != nil {
-			return err
+			return domain.Internal(err)
 		}
 	}
 	return nil
