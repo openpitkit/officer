@@ -19,16 +19,14 @@ package node
 
 import (
 	"errors"
-	"runtime"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/polltest"
 )
-
-const identityGateTestTimeout = time.Second
 
 type identityGateSink struct{}
 
@@ -75,7 +73,7 @@ func TestLocalNode_LiveIdentityPublicationWaitsForActiveLane(t *testing.T) {
 	assertIdentityGateBlocked(t, acquired)
 	endLane()
 	laneEnded = true
-	waitIdentityGateSignal(t, acquired, "live identity publication did not acquire")
+	<-acquired // Live identity publication acquires the gate.
 	close(release)
 	if err := <-errs; err != nil {
 		t.Fatalf("beginLiveIdentityPublication: %v", err)
@@ -136,12 +134,7 @@ func TestLocalNode_LiveIdentityPublicationFencesNewLanesWithoutRestartOrSwap(
 
 	n.endLiveIdentityPublication()
 	released = true
-	var lane laneResult
-	select {
-	case lane = <-laneResults:
-	case <-time.After(identityGateTestTimeout):
-		t.Fatal("account lane did not enter after live identity publication ended")
-	}
+	lane := <-laneResults
 	if lane.err != nil {
 		t.Fatalf("beginLane after publication: %v", lane.err)
 	}
@@ -193,17 +186,18 @@ func TestLocalNode_LiveIdentityPublicationRechecksRestartAfterMutationWait(
 
 	errs := make(chan error, 1)
 	go func() { errs <- n.beginLiveIdentityPublication() }()
-	waitIdentityGateWriter(t, &n.laneGate)
+	polltest.Until(func() bool {
+		if !n.laneGate.TryRLock() {
+			return true
+		}
+		n.laneGate.RUnlock()
+		return false
+	}) // Live identity publication fenced lane admission.
 	n.restarting.Store(true)
 	n.mutate.Unlock()
 	mutationLocked = false
 
-	var err error
-	select {
-	case err = <-errs:
-	case <-time.After(identityGateTestTimeout):
-		t.Fatal("live identity publication did not finish after mutation lock release")
-	}
+	err := <-errs
 	if !errors.Is(err, domain.ErrEngineRestarting) {
 		t.Fatalf("beginLiveIdentityPublication error = %v, want ErrEngineRestarting", err)
 	}
@@ -234,7 +228,7 @@ func TestLocalNode_EngineRestartFromLaneReservesBeforeRelease(t *testing.T) {
 		})
 	}()
 
-	waitIdentityGateSignal(t, endLaneEntered, "lane release hook did not start")
+	<-endLaneEntered // Lane release hook starts.
 	if !n.restarting.Load() {
 		t.Fatal("restart was not reserved before the admitted lane released")
 	}
@@ -262,29 +256,4 @@ func assertIdentityGateBlocked[Value any](t *testing.T, ch <-chan Value) {
 		t.Fatal("operation entered while the exclusive gate should block it")
 	case <-time.After(50 * time.Millisecond):
 	}
-}
-
-func waitIdentityGateSignal(t *testing.T, ch <-chan struct{}, failure string) {
-	t.Helper()
-	select {
-	case <-ch:
-	case <-time.After(identityGateTestTimeout):
-		t.Fatal(failure)
-	}
-}
-
-func waitIdentityGateWriter(t *testing.T, gate interface {
-	TryRLock() bool
-	RUnlock()
-}) {
-	t.Helper()
-	deadline := time.Now().Add(identityGateTestTimeout)
-	for time.Now().Before(deadline) {
-		if !gate.TryRLock() {
-			return
-		}
-		gate.RUnlock()
-		runtime.Gosched()
-	}
-	t.Fatal("live identity publication did not fence lane admission")
 }

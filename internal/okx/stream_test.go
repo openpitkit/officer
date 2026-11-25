@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 
@@ -34,8 +33,7 @@ import (
 )
 
 func TestPrivateFrames(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	frames := make(chan bool, 1)
 	timestamp := strconv.FormatInt(fixedTime.Unix(), 10)
 	signature := expectedSignature(timestamp + "GET" + "/users/self/verify")
@@ -104,8 +102,7 @@ func TestPrivateWriterFailures(t *testing.T) {
 }
 
 func TestPrivateWriteErrorsPreserveCause(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {

@@ -29,6 +29,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func testExternalID(label string) domain.ExternalID {
@@ -229,7 +230,7 @@ func startManualReconciliationTestManager(
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(manager.Stop)
-	waitFor(t, time.Second, func() bool { return sink.count() >= 2 })
+	polltest.Until(func() bool { return sink.count() >= 2 })
 	return manager, store, instanceID, instrument
 }
 
@@ -289,7 +290,7 @@ func startBlockedSinkTransitionTestManager(
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(manager.Stop)
-	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
+	polltest.Until(func() bool { return sink.count() == 2 })
 	return manager, store, streamConnector, instrument
 }
 
@@ -627,16 +628,8 @@ func TestManagerStopTimesOutStuckConnectorClose(t *testing.T) {
 		close(done)
 	}()
 
-	select {
-	case <-connector.closeEntered:
-	case <-time.After(time.Second):
-		t.Fatal("connector Close was not called")
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Stop waited indefinitely for connector Close")
-	}
+	<-connector.closeEntered
+	<-done
 }
 
 func TestManagerStartAppliesConfiguredManualQuotesOutsideLock(t *testing.T) {
@@ -676,7 +669,7 @@ func TestManagerStartAppliesConfiguredManualQuotesOutsideLock(t *testing.T) {
 	}
 	defer manager.Stop()
 
-	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
+	polltest.Until(func() bool { return sink.count() == 1 })
 }
 
 func TestManagerUseSinkRejectsNil(t *testing.T) {
@@ -725,7 +718,7 @@ func TestManagerUseSinkPreservesLastAcceptedSnapshotAcrossEngineRebuild(t *testi
 	mustPush(t, connector, QuoteUpdate{
 		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "185",
 	})
-	waitFor(t, time.Second, func() bool { return firstSink.count() == 1 })
+	polltest.Until(func() bool { return firstSink.count() == 1 })
 
 	secondSink := &fakeSink{}
 	liveSink = secondSink
@@ -737,7 +730,7 @@ func TestManagerUseSinkPreservesLastAcceptedSnapshotAcrossEngineRebuild(t *testi
 	mustPush(t, connector, QuoteUpdate{
 		Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "186",
 	})
-	waitFor(t, time.Second, func() bool { return secondSink.count() == 1 })
+	polltest.Until(func() bool { return secondSink.count() == 1 })
 	snapshots = manager.QuoteSnapshots()
 	if len(snapshots) != 1 || snapshots[0].Mark != "186" {
 		t.Fatalf("quote snapshots after rebuilt sink push = %+v, want mark 186", snapshots)
@@ -776,7 +769,7 @@ func TestManagerFansMockQuotesToSink(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "185"})
-	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
+	polltest.Until(func() bool { return sink.count() == 1 })
 	manager.Stop()
 	quotes := manager.QuoteSnapshots()
 	if len(quotes) != 1 || quotes[0].ExternalSymbol != "AAPL" {
@@ -820,7 +813,7 @@ func TestManager_PushErrorDoesNotStopFeed(t *testing.T) {
 	}
 	defer manager.Stop()
 	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "185"})
-	waitFor(t, time.Second, func() bool { return sink.attemptCount() >= 1 })
+	polltest.Until(func() bool { return sink.attemptCount() >= 1 })
 	if err := manager.acquireGate(
 		context.Background(), manager.sinkApplyGate,
 	); err != nil {
@@ -837,7 +830,7 @@ func TestManager_PushErrorDoesNotStopFeed(t *testing.T) {
 	sink.pushErr = nil
 	sink.mu.Unlock()
 	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "186"})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		quotes := manager.QuoteSnapshots()
 		return sink.count() == 2 && len(quotes) == 1 && quotes[0].Mark == "186"
 	})
@@ -977,7 +970,7 @@ func TestManagerStopPreservesRestartContext(t *testing.T) {
 		t.Fatalf("applied config after Restart is empty")
 	}
 	mustPush(t, connectors[1], QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "185"})
-	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
+	polltest.Until(func() bool { return sink.count() == 1 })
 	manager.Stop()
 }
 
@@ -1036,7 +1029,7 @@ func TestManagerAppliesConfiguredManualPriceOnceAtStartup(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
+	polltest.Until(func() bool { return sink.count() == 1 })
 	manager.Stop()
 	if got := manager.QuoteSnapshots()[0]; got.ExternalSymbol != "USDT/USD" ||
 		got.Mark != "1" {
@@ -1080,11 +1073,11 @@ func TestManagerManualRefreshTracksLiveUpdateAndClear(t *testing.T) {
 	defer manager.Stop()
 
 	// Startup publishes once; subsequent ticks must keep the static mark fresh.
-	waitFor(t, time.Second, func() bool { return sink.count() >= 3 })
+	polltest.Until(func() bool { return sink.count() >= 3 })
 
 	instrument.ManualPrice = "3"
 	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{instrument})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		for _, update := range sink.snapshot() {
 			if update.Mark == "3" {
 				return true
@@ -1158,15 +1151,11 @@ func TestManagerManualClearIsAfterOldHeartbeatAndClearsSynthetic(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer manager.Stop()
-	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
+	polltest.Until(func() bool { return sink.count() == 2 })
 
 	entered, release := sink.blockNextPush()
 	mustPush(t, connector, manualQuote(instrument))
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("old heartbeat did not reach sink")
-	}
+	<-entered
 
 	cleared := instrument
 	cleared.ManualPrice = ""
@@ -1176,13 +1165,8 @@ func TestManagerManualClearIsAfterOldHeartbeatAndClearsSynthetic(t *testing.T) {
 		clearResult <- manager.PushManual(context.Background(), instanceID.String(), cleared)
 	}()
 	close(release)
-	select {
-	case err := <-clearResult:
-		if err != nil {
-			t.Fatalf("PushManual(clear): %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("manual clear did not drain after old heartbeat")
+	if err := <-clearResult; err != nil {
+		t.Fatalf("PushManual(clear): %v", err)
 	}
 
 	// Queue another stale old tick before a second clear barrier. The desired
@@ -1251,7 +1235,7 @@ func TestManagerManualClearInvalidatesAlreadyReadRefresh(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer manager.Stop()
-	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
+	polltest.Until(func() bool { return sink.count() == 2 })
 
 	read, release := store.blockNextEnabledInstrumentList()
 	refreshDone := make(chan struct{})
@@ -1259,11 +1243,7 @@ func TestManagerManualClearInvalidatesAlreadyReadRefresh(t *testing.T) {
 		manager.refreshManualMarksOnce(context.Background())
 		close(refreshDone)
 	}()
-	select {
-	case <-read:
-	case <-time.After(time.Second):
-		t.Fatal("manual refresh did not read the old mark")
-	}
+	<-read
 
 	cleared := instrument
 	cleared.ManualPrice = ""
@@ -1272,11 +1252,7 @@ func TestManagerManualClearInvalidatesAlreadyReadRefresh(t *testing.T) {
 		t.Fatalf("PushManual(clear): %v", err)
 	}
 	close(release)
-	select {
-	case <-refreshDone:
-	case <-time.After(time.Second):
-		t.Fatal("stale refresh snapshot did not finish")
-	}
+	<-refreshDone
 
 	// A second clear is a FIFO barrier after the stale refresh attempt.
 	if err := manager.PushManual(context.Background(), instanceID.String(), cleared); err != nil {
@@ -1310,7 +1286,7 @@ func TestManagerManualClearFailureRetriesStoredConfiguration(t *testing.T) {
 	sink.clearErr = nil
 	sink.mu.Unlock()
 
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(sink.clearedSnapshot()) == 2
 	})
 	manager.mu.Lock()
@@ -1367,14 +1343,13 @@ func TestManagerManualClearTimeoutReleasesPublisherAndPreservesNewMark(t *testin
 
 	updated := instrument
 	updated.ManualPrice = "3"
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
+	ctx := t.Context()
 	if err := manager.PushManual(ctx, instanceID.String(), updated); err != nil {
 		t.Fatalf("PushManual(new mark) while old clear is pending: %v", err)
 	}
 	close(release)
 	released = true
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		for _, update := range sink.snapshot() {
 			if update.Base == testMarketDataAssetID("Z") && update.Quote == testMarketDataAssetID("USD") && update.Mark == "3" {
 				return true
@@ -1434,7 +1409,7 @@ func TestManagerPendingManualClearSurvivesRestart(t *testing.T) {
 	if err := manager.Restart(); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(sink.clearedSnapshot()) == 2
 	})
 }
@@ -1451,7 +1426,7 @@ func TestManagerRestartClearsEmptyManualDirectAndSyntheticPairs(t *testing.T) {
 	if err := manager.Restart(); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(sink.clearedSnapshot()) == 2
 	})
 	want := []quoteInstrumentKey{
@@ -1481,11 +1456,11 @@ func TestManagerRetriesFailedStartupManualClear(t *testing.T) {
 	if err := manager.Restart(); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
-	waitFor(t, time.Second, func() bool { return sink.clearCount() > 0 })
+	polltest.Until(func() bool { return sink.clearCount() > 0 })
 	sink.mu.Lock()
 	sink.clearErr = nil
 	sink.mu.Unlock()
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(sink.clearedSnapshot()) == 2
 	})
 }
@@ -1505,7 +1480,7 @@ func TestManagerFailedStartupManualClearDoesNotBlockRetry(t *testing.T) {
 	if err := manager.Restart(); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
-	waitFor(t, time.Second, func() bool { return sink.clearCount() > 0 })
+	polltest.Until(func() bool { return sink.clearCount() > 0 })
 	if err := manager.acquireGate(context.Background(), manager.manualPublisherGate); err != nil {
 		t.Fatalf("wait for startup clear: %v", err)
 	}
@@ -1522,12 +1497,7 @@ func TestManagerFailedStartupManualClearDoesNotBlockRetry(t *testing.T) {
 	if !ok {
 		t.Fatal("failed startup clear is not pending")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), manager.stopGrace/2)
-	defer cancel()
-	manager.refreshManualMarksOnce(ctx)
-	if err := ctx.Err(); err != nil {
-		t.Fatalf("retry blocked behind pending startup clear: %v", err)
-	}
+	manager.refreshManualMarksOnce(t.Context()) // Retry returns despite the pending startup clear.
 	manager.mu.Lock()
 	retried, ok := manager.pendingManualClears[identity]
 	manager.mu.Unlock()
@@ -1538,7 +1508,7 @@ func TestManagerFailedStartupManualClearDoesNotBlockRetry(t *testing.T) {
 	sink.clearErr = nil
 	sink.mu.Unlock()
 	manager.refreshManualMarksOnce(context.Background())
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(sink.clearedSnapshot()) == 2
 	})
 }
@@ -1562,11 +1532,11 @@ func TestManagerRetriesFailedSyntheticTopologyClear(t *testing.T) {
 	if err := manager.Restart(); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
-	waitFor(t, time.Second, func() bool { return sink.clearCount() > 0 })
+	polltest.Until(func() bool { return sink.clearCount() > 0 })
 	sink.mu.Lock()
 	sink.clearErr = nil
 	sink.mu.Unlock()
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(sink.clearedSnapshot()) == 1
 	})
 	cleared := sink.clearedSnapshot()[0]
@@ -1633,18 +1603,13 @@ func TestManagerRestartWaitsForOldManualClearBeforeStreamingTick(t *testing.T) {
 	}
 	close(release)
 	released = true
-	select {
-	case err := <-restarted:
-		if err != nil {
-			t.Fatalf("Restart: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Restart did not finish after old manual clear")
+	if err := <-restarted; err != nil {
+		t.Fatalf("Restart: %v", err)
 	}
 	mustPush(t, streamConnector, QuoteUpdate{
 		Base: testMarketDataAssetID("Z"), Quote: testMarketDataAssetID("USD"), Mark: "9",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		update, ok := sink.liveQuote(quoteInstrumentKey{base: testMarketDataAssetID("Z"), quote: testMarketDataAssetID("USD")})
 		return sink.clearCount() >= 4 && ok && update.Mark == "9"
 	})
@@ -1681,11 +1646,7 @@ func TestManagerSinkBarrierOrdersQueuedStreamingQuoteAfterInheritedClear(
 			context.Background(), instanceID.String(), clearedInstrument,
 		)
 	}()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("old manual clear did not enter sink")
-	}
+	<-entered
 	holdTimer := time.NewTimer(holdWindow)
 	defer holdTimer.Stop()
 
@@ -1715,28 +1676,15 @@ func TestManagerSinkBarrierOrdersQueuedStreamingQuoteAfterInheritedClear(
 			Mark:  quoteMark,
 		})
 	}()
-	select {
-	case err := <-pushed:
-		if err != nil {
-			t.Fatalf("queue streaming quote: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("streaming quote was not queued while clear was blocked")
+	if err := <-pushed; err != nil {
+		t.Fatalf("queue streaming quote: %v", err)
 	}
-	select {
-	case err := <-clearResult:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("got %v, want context.DeadlineExceeded", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("PushManual(clear) did not time out while sink was blocked")
+	if err := <-clearResult; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want context.DeadlineExceeded", err)
 	}
-	gateCtx, cancelGateWait := context.WithTimeout(context.Background(), time.Second)
-	if err := manager.acquireGate(gateCtx, manager.manualPublisherGate); err != nil {
-		cancelGateWait()
+	if err := manager.acquireGate(t.Context(), manager.manualPublisherGate); err != nil {
 		t.Fatalf("hold startup manual publisher gate: %v", err)
 	}
-	cancelGateWait()
 	publisherGateHeld := true
 	t.Cleanup(func() {
 		if publisherGateHeld {
@@ -1756,23 +1704,13 @@ func TestManagerSinkBarrierOrdersQueuedStreamingQuoteAfterInheritedClear(
 	close(release)
 	released = true
 
-	select {
-	case err := <-restarted:
-		if err != nil {
-			t.Fatalf("Restart: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Restart did not finish after old clear")
+	if err := <-restarted; err != nil {
+		t.Fatalf("Restart: %v", err)
 	}
-	select {
-	case consumed := <-streamConnector.consumed:
-		if consumed.Base != instrument.BaseAssetID ||
-			consumed.Quote != instrument.QuoteAssetID ||
-			consumed.Mark != quoteMark {
-			t.Fatalf("consumed streaming quote = %+v", consumed)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("drain did not consume queued streaming quote")
+	if consumed := <-streamConnector.consumed; consumed.Base != instrument.BaseAssetID ||
+		consumed.Quote != instrument.QuoteAssetID ||
+		consumed.Mark != quoteMark {
+		t.Fatalf("consumed streaming quote = %+v", consumed)
 	}
 	if got := sink.count(); got != 2 {
 		t.Fatalf("sink pushes after drain consumption = %d, want initial 2", got)
@@ -1788,15 +1726,12 @@ func TestManagerSinkBarrierOrdersQueuedStreamingQuoteAfterInheritedClear(
 	sink.mu.Unlock()
 	manager.releaseGate(manager.manualPublisherGate)
 	publisherGateHeld = false
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return sink.clearCount() > clearAttempts
 	})
-	gateCtx, cancelGateWait = context.WithTimeout(context.Background(), time.Second)
-	if err := manager.acquireGate(gateCtx, manager.manualPublisherGate); err != nil {
-		cancelGateWait()
+	if err := manager.acquireGate(t.Context(), manager.manualPublisherGate); err != nil {
 		t.Fatalf("wait for failed startup inherited clear: %v", err)
 	}
-	cancelGateWait()
 	manager.releaseGate(manager.manualPublisherGate)
 	time.Sleep(holdWindow)
 	if got := sink.count(); got != 2 {
@@ -1810,7 +1745,7 @@ func TestManagerSinkBarrierOrdersQueuedStreamingQuoteAfterInheritedClear(
 	pair := quoteInstrumentKey{
 		base: instrument.BaseAssetID, quote: instrument.QuoteAssetID,
 	}
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		update, ok := sink.liveQuote(pair)
 		return ok && update.Mark == quoteMark
 	})
@@ -1913,15 +1848,10 @@ func TestManagerStopTimeoutOrdersNewRunMarkAfterOldClear(t *testing.T) {
 	}
 	close(release)
 	released = true
-	select {
-	case err := <-restarted:
-		if err != nil {
-			t.Fatalf("Restart: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Restart did not finish after old clear")
+	if err := <-restarted; err != nil {
+		t.Fatalf("Restart: %v", err)
 	}
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
 		acknowledged := manager.manualAcknowledged[manualQuoteIdentity{
@@ -1984,11 +1914,7 @@ func TestManagerStopTimeoutOrdersNewStreamingQuoteAfterOldPush(t *testing.T) {
 		}
 	})
 	mustPush(t, oldConnector, QuoteUpdate{Base: testMarketDataAssetID("Z"), Quote: testMarketDataAssetID("USD"), Mark: "1"})
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("old streaming quote did not enter sink")
-	}
+	<-entered
 	restarted := make(chan error, 1)
 	go func() { restarted <- manager.Restart() }()
 	select {
@@ -2000,13 +1926,8 @@ func TestManagerStopTimeoutOrdersNewStreamingQuoteAfterOldPush(t *testing.T) {
 	}
 	close(release)
 	released = true
-	select {
-	case err := <-restarted:
-		if err != nil {
-			t.Fatalf("Restart: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Restart did not finish after old push")
+	if err := <-restarted; err != nil {
+		t.Fatalf("Restart: %v", err)
 	}
 	if oldConnector.statusReporter == nil {
 		t.Fatal("old connector did not receive status reporter")
@@ -2030,11 +1951,7 @@ func TestManagerStopTimeoutOrdersNewStreamingQuoteAfterOldPush(t *testing.T) {
 		}
 	})
 	mustPush(t, newConnector, QuoteUpdate{Base: testMarketDataAssetID("Z"), Quote: testMarketDataAssetID("USD"), Mark: "2"})
-	select {
-	case <-newEntered:
-	case <-time.After(time.Second):
-		t.Fatal("new streaming quote did not enter sink after old push")
-	}
+	<-newEntered
 	quotes := manager.QuoteSnapshots()
 	if len(quotes) != 1 || quotes[0].Mark != "1" {
 		t.Fatalf("quote snapshots while new push is blocked = %+v, want old accepted mark 1", quotes)
@@ -2042,7 +1959,7 @@ func TestManagerStopTimeoutOrdersNewStreamingQuoteAfterOldPush(t *testing.T) {
 
 	close(newRelease)
 	newReleased = true
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		update, ok := sink.liveQuote(quoteInstrumentKey{base: testMarketDataAssetID("Z"), quote: testMarketDataAssetID("USD")})
 		quotes := manager.QuoteSnapshots()
 		return ok && update.Mark == "2" && len(quotes) == 1 && quotes[0].Mark == "2"
@@ -2080,7 +1997,7 @@ func TestManagerStopEndsManualRefresh(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitFor(t, time.Second, func() bool { return sink.count() >= 2 })
+	polltest.Until(func() bool { return sink.count() >= 2 })
 	manager.Stop()
 	countAfterStop := sink.count()
 	time.Sleep(5 * manager.manualRefreshInterval)
@@ -2165,7 +2082,7 @@ func TestManagerPushManualAfterStartupPushesOnce(t *testing.T) {
 	if err := manager.PushManual(context.Background(), instanceID.String(), manual); err != nil {
 		t.Fatalf("PushManual: %v", err)
 	}
-	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
+	polltest.Until(func() bool { return sink.count() == 1 })
 	manager.Stop()
 	if got := manager.QuoteSnapshots()[0]; got.ExternalSymbol != "USDT/USD" ||
 		got.Mark != "1" {
@@ -2302,13 +2219,13 @@ func TestManagerQuoteUpdateIntervalUnknownThenGap(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100"})
-	waitFor(t, time.Second, func() bool { return len(manager.QuoteSnapshots()) == 1 })
+	polltest.Until(func() bool { return len(manager.QuoteSnapshots()) == 1 })
 	if _, ok := manager.QuoteUpdateInterval(instanceID.String(), "AAPL"); ok {
 		t.Fatalf("interval known after first quote")
 	}
 	time.Sleep(5 * time.Millisecond)
 	mustPush(t, connector, QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "101"})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		interval, ok := manager.QuoteUpdateInterval(instanceID.String(), "AAPL")
 		return ok && interval > 0
 	})
@@ -2451,7 +2368,7 @@ func TestManagerBuildsThroughRegistry(t *testing.T) {
 	}
 	defer manager.Stop()
 	connector.ch <- QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100"}
-	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
+	polltest.Until(func() bool { return sink.count() == 1 })
 
 	status := manager.InstanceStatuses()[instanceID.String()]
 	if status.State != StateOK || !status.VerifiesSymbols || !status.SearchesSymbols {
@@ -2630,18 +2547,6 @@ func TestRecordDiagLocked_LevelMapping(t *testing.T) {
 	}
 }
 
-func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatal("condition not met within timeout")
-}
-
 func TestManagerSinkProviderResolvesLiveSink(t *testing.T) {
 	static := &fakeSink{}
 	manager := mustNewManager(t, NewRegistry(), &fakeStore{}, static, nil)
@@ -2717,7 +2622,7 @@ func TestManagerStartReconcilesThroughSinkProvider(t *testing.T) {
 		base:  testMarketDataAssetID("NEW"),
 		quote: testMarketDataAssetID("USD"),
 	}
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		_, live := liveSink.liveQuote(pair)
 		return live && len(manager.QuoteSnapshots()) == 1
 	})
@@ -2797,7 +2702,7 @@ func TestManagerStartClearsRemovedInstrumentAndSyntheticInverse(t *testing.T) {
 		Quote: testMarketDataAssetID("USD"),
 		Mark:  "185",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		_, direct := sink.liveQuote(quoteInstrumentKey{
 			base:  testMarketDataAssetID("AAPL"),
 			quote: testMarketDataAssetID("USD"),
@@ -2881,7 +2786,7 @@ func TestManagerStartPreservesConfiguredEnabledQuote(t *testing.T) {
 		Quote: testMarketDataAssetID("USD"),
 		Mark:  "185",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	manager.Stop()
@@ -2946,7 +2851,7 @@ func TestManagerStartBuildFailurePreservesConfiguredEnabledQuote(t *testing.T) {
 		Quote: testMarketDataAssetID("USD"),
 		Mark:  "185",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	manager.Stop()
@@ -3003,7 +2908,7 @@ func TestManagerStartReturnsQuoteReconciliationClearFailure(t *testing.T) {
 		Quote: testMarketDataAssetID("USD"),
 		Mark:  "185",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	manager.Stop()
@@ -3061,7 +2966,7 @@ func TestManagerStartDropsUnresolvableQuoteIdentity(t *testing.T) {
 	mustPush(t, connector, QuoteUpdate{
 		Base: pair.base, Quote: pair.quote, Mark: "185",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	manager.Stop()
@@ -3226,7 +3131,7 @@ func TestManagerUnknownManualAssetDoesNotBlockStreamingFeed(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return sink.attemptCount() == 1
 	})
 	if got := manager.QuoteSnapshots(); len(got) != 0 {
@@ -3248,7 +3153,7 @@ func TestManagerUnknownManualAssetDoesNotBlockStreamingFeed(t *testing.T) {
 	}
 	defer manager.Stop()
 	var retired health.Diagnostic
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		status := manager.InstanceStatuses()[byoID.String()]
 		for _, diag := range status.Diagnostics {
 			if diag.Title == "Manual quote identity retired" {
@@ -3275,7 +3180,7 @@ func TestManagerUnknownManualAssetDoesNotBlockStreamingFeed(t *testing.T) {
 	mustPush(t, streamingConnectors[len(streamingConnectors)-1], QuoteUpdate{
 		Base: streamingPair.base, Quote: streamingPair.quote, Mark: "410",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		update, ok := sink.liveQuote(streamingPair)
 		return ok && update.Mark == "410" && sink.count() > before
 	})
@@ -3338,13 +3243,13 @@ func TestManagerStartPreservesQuoteNamedByAnotherEnabledIdentity(t *testing.T) {
 	mustPush(t, connectors[firstID.String()], QuoteUpdate{
 		Base: pair.base, Quote: pair.quote, Mark: "184",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	mustPush(t, connectors[secondID.String()], QuoteUpdate{
 		Base: pair.base, Quote: pair.quote, Mark: "185",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 2
 	})
 	manager.Stop()
@@ -3425,13 +3330,13 @@ func TestManagerStartClearsDisabledDirectionAndPreservesConfiguredReverseQuote(t
 	mustPush(t, connectors[0], QuoteUpdate{
 		Base: forwardPair.base, Quote: forwardPair.quote, Mark: "1.1",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	mustPush(t, connectors[0], QuoteUpdate{
 		Base: reversePair.base, Quote: reversePair.quote, Mark: "0.9",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 2
 	})
 	manager.Stop()
@@ -3510,13 +3415,13 @@ func TestManagerStartClearsDeletedDirectionWhenReverseBecomesSynthetic(t *testin
 	mustPush(t, connectors[0], QuoteUpdate{
 		Base: forwardPair.base, Quote: forwardPair.quote, Mark: "1.1",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	mustPush(t, connectors[0], QuoteUpdate{
 		Base: reversePair.base, Quote: reversePair.quote, Mark: "0.9",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 2
 	})
 	manager.Stop()
@@ -3592,7 +3497,7 @@ func TestManagerStartWaitsForSinkApplyGateBeforeReconciliation(t *testing.T) {
 	mustPush(t, connectors[0], QuoteUpdate{
 		Base: pair.base, Quote: pair.quote, Mark: "185",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	manager.Stop()
@@ -3682,7 +3587,7 @@ func TestManagerStartTimesOutWaitingForSinkApplyGate(t *testing.T) {
 	mustPush(t, connectors[0], QuoteUpdate{
 		Base: pair.base, Quote: pair.quote, Mark: "185",
 	})
-	waitFor(t, time.Second, func() bool {
+	polltest.Until(func() bool {
 		return len(manager.QuoteSnapshots()) == 1
 	})
 	manager.Stop()

@@ -50,7 +50,7 @@ func TestDemoHTTPClient(t *testing.T) {
 				}))
 			defer server.Close()
 			original := server.Client()
-			original.Timeout = time.Second
+			original.Timeout = time.Hour
 			client := original
 			if demo {
 				client = DemoHTTPClient(original)

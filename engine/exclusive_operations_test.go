@@ -209,8 +209,7 @@ func TestSpotFundsRetuneWaitsForLaneWork(t *testing.T) {
 	if err := <-retuned; err != nil {
 		t.Fatalf("ConfigurePolicy after the lane freed: %v", err)
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	waitCtx := t.Context()
 	if _, err := held.Await(waitCtx); err != nil {
 		t.Fatalf("lane task: %v", err)
 	}

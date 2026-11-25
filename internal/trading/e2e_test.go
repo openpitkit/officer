@@ -49,6 +49,7 @@ import (
 	"go.openpit.dev/officer/framework/store"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/signing"
 )
@@ -68,12 +69,6 @@ func submitHeldOrder(
 		t.Fatalf("GetOrder: %v", err)
 	}
 	return detail.Order
-}
-
-func waitForTrading(check func() bool) {
-	for !check() {
-		time.Sleep(time.Millisecond)
-	}
 }
 
 func assertDecimal(t *testing.T, got, want string) {
@@ -319,11 +314,11 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		}
 	}
 	push("partial_fill", "3", "3", "1.5")
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		return detail(first).Order.Status == domain.OrderStatusPartiallyFilled
 	}) // partial fill
 	push("fill", "7", "10", "2")
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		return detail(first).Order.Status == domain.OrderStatusFilled
 	}) // final fill
 	firstDetail := detail(first)
@@ -411,7 +406,7 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		return built
 	}
 	built := startApp()
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		return detail(second).Order.Status == domain.OrderStatusFilled
 	}) // reconciled fill
 	secondDetail := detail(second)
@@ -426,7 +421,7 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 			t.Fatalf("reconciled report caller was not system: %+v", event)
 		}
 	}
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		records, err := realm.ListAdjustments(ctx, "desk", domain.SourceSystem, 10)
 		must(err)
 		return len(records) == 1
@@ -442,12 +437,12 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	})
 	venueMu.Unlock()
 	built = startApp()
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		records, err := realm.ListAdjustments(ctx, "desk", domain.SourceSystem, 10)
 		must(err)
 		return len(records) == 2
 	}) // core-rejected app fee
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 		must(err)
 		return len(rows) == 1

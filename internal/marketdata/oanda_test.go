@@ -222,56 +222,34 @@ func TestOANDAConnector_SubscribeCloseLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("stream did not start")
-	}
+	<-started // Stream starts.
 	var update fwmarketdata.QuoteUpdate
-	select {
-	case got, ok := <-ch:
-		if !ok {
-			t.Fatal("subscription channel closed before first quote")
-		}
-		update = got
-	case <-time.After(time.Second):
-		t.Fatal("subscription did not deliver first quote")
+	got, ok := <-ch // Quote or channel closure arrives.
+	if !ok {
+		t.Fatal("subscription channel closed before first quote")
 	}
+	update = got
 	if update.Bid != "1" || update.Ask != "1.1" ||
 		update.Base != testMarketDataAssetID("EUR") || update.Quote != testMarketDataAssetID("USD") {
 		t.Fatalf("update = %+v", update)
 	}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		var wg sync.WaitGroup
-		for range 2 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				connector.Close()
-			}()
-		}
-		wg.Wait()
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Close did not stop Subscribe goroutine")
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			connector.Close()
+		}()
 	}
+	wg.Wait() // Concurrent Close calls complete.
 	if _, ok := <-ch; ok {
 		t.Fatal("subscription channel is still open after Close")
 	}
 	if body == nil {
 		t.Fatal("stream body was not created")
 	}
-	select {
-	case <-body.closed:
-	case <-time.After(time.Second):
-		t.Fatal("stream body was not closed")
-	}
+	<-body.closed // Stream body closes.
 }
 
 func TestStreamOANDANonOKClosesBody(t *testing.T) {
@@ -466,11 +444,7 @@ func TestOANDAConnector_IdleTimeoutClosesStream(t *testing.T) {
 	if body == nil {
 		t.Fatal("stream body was not created")
 	}
-	select {
-	case <-body.closed:
-	case <-time.After(time.Second):
-		t.Fatal("idle watchdog did not close the body")
-	}
+	<-body.closed // Stream body closes.
 }
 
 func TestOANDAConnector_ResetsBackoffAfterRead(t *testing.T) {

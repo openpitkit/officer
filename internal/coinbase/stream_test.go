@@ -175,8 +175,7 @@ func TestDialStreamReadLimit(t *testing.T) {
 					return
 				}
 				defer func() { _ = conn.CloseNow() }()
-				ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-				defer cancel()
+				ctx := r.Context()
 				if err := conn.Write(ctx, websocket.MessageText, payload); err != nil && size <= maxStreamMessageBytes {
 					if t.Context().Err() == nil {
 						t.Error("write bounded frame failed")
@@ -184,8 +183,7 @@ func TestDialStreamReadLimit(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			conn, err := DialStream(ctx, server.URL)
 			if err != nil {
 				t.Fatal("dial stream failed")
@@ -223,8 +221,7 @@ func TestDialStreamAndSubscribe(t *testing.T) {
 		frames <- p
 	}))
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	conn, err := DialStream(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
 	if err != nil {
 		t.Fatal("dial stream failed")

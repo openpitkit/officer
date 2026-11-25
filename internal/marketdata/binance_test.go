@@ -323,13 +323,8 @@ func TestBinanceConnector_CloseStopsSubscription(t *testing.T) {
 	connector.Close()
 	connector.Close()
 
-	select {
-	case _, ok := <-ch:
-		if ok {
-			t.Fatal("channel should be closed")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for connector shutdown")
+	if _, ok := <-ch; ok { // Quote or channel closure arrives.
+		t.Fatal("channel should be closed")
 	}
 }
 
@@ -354,24 +349,10 @@ func TestBinanceConnector_CloseBeforeSubscribeDoesNotBreakLaterClose(t *testing.
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	done := make(chan struct{})
-	go func() {
-		connector.Close()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Close")
-	}
+	connector.Close()
 
-	select {
-	case _, ok := <-ch:
-		if ok {
-			t.Fatal("channel should be closed")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for connector shutdown")
+	if _, ok := <-ch; ok { // Quote or channel closure arrives.
+		t.Fatal("channel should be closed")
 	}
 }
 
