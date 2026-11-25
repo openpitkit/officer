@@ -464,6 +464,7 @@ type workflowExecutionReportChainState struct {
 	settlement           domain.OrderSettlement
 	err                  error
 	forcedTerminalBypass bool
+	persistenceCompleted bool
 }
 
 func (n *localNode) recordWorkflowExecutionReport(
@@ -560,6 +561,7 @@ func (n *localNode) recordWorkflowExecutionReport(
 			state.err = fmt.Errorf("record workflow execution report: %w", err)
 			return state.err
 		}
+		state.persistenceCompleted = true
 		state.in.ExternalID = reportID
 		return nil
 	}).Then(func(
@@ -586,10 +588,14 @@ func (n *localNode) recordWorkflowExecutionReport(
 		}
 		return nil
 	}).Finally(func(
-		context.Context,
-		*workflowExecutionReportChainState,
-		asyncengine.ChainOutcome,
+		_ context.Context,
+		state *workflowExecutionReportChainState,
+		outcome asyncengine.ChainOutcome,
 	) error {
+		state.err = n.accountChainTerminalError(
+			"workflow execution report", account, state.err,
+			state.persistenceCompleted, state.persistenceCompleted, outcome,
+		)
 		return nil
 	})
 	_, chainErr := runner.Run(

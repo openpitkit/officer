@@ -77,10 +77,11 @@ type orderSubmissionCompletion struct {
 // the SDK chain runs. The store callback publishes the assigned draft and then
 // waits for the settlement produced by the chain hook.
 type orderSubmissionBridge struct {
-	settlement chan domain.OrderSettlement
-	abort      chan struct{}
-	done       chan orderSubmissionCompletion
-	completed  bool
+	settlement           chan domain.OrderSettlement
+	abort                chan struct{}
+	done                 chan orderSubmissionCompletion
+	completed            bool
+	persistenceCompleted bool
 	// accountBlocked is the order account's block state when the chain began,
 	// read before the submission transaction opens; preTradeLatchedBlocks reads
 	// it. A drop-copy submission does not read it.
@@ -173,6 +174,9 @@ func (b *orderSubmissionBridge) complete(
 	b.completed = true
 	b.settlement <- settlement
 	completion := <-b.done
+	if completion.err == nil {
+		b.persistenceCompleted = true
+	}
 	return completion.order, completion.err
 }
 
@@ -226,18 +230,17 @@ type submitOrderChainState struct {
 }
 
 type submitImmediateChainState struct {
-	ctx                  context.Context
-	bridge               *orderSubmissionBridge
-	order                domain.Order
-	result               engine.ImmediateResult
-	preparation          engine.ImmediatePreparation
-	attest               store.EventAttestor
-	err                  error
-	preTradeFinalized    bool
-	reportSettled        bool
-	heldSettlement       domain.OrderSettlement
-	heldReviewCompleted  bool
-	persistenceCompleted bool
+	ctx                 context.Context
+	bridge              *orderSubmissionBridge
+	order               domain.Order
+	result              engine.ImmediateResult
+	preparation         engine.ImmediatePreparation
+	attest              store.EventAttestor
+	err                 error
+	preTradeFinalized   bool
+	reportSettled       bool
+	heldSettlement      domain.OrderSettlement
+	heldReviewCompleted bool
 }
 
 // SubmitOrder runs pre-trade and caller persistence in one account chain and
@@ -474,8 +477,12 @@ func (n *localNode) submitOrder(
 	}).Finally(func(
 		_ context.Context,
 		state *submitOrderChainState,
-		_ asyncengine.ChainOutcome,
+		outcome asyncengine.ChainOutcome,
 	) error {
+		state.err = n.accountChainTerminalError(
+			"submit order", o.Account, state.err,
+			state.bridge.persistenceCompleted, state.bridge.persistenceCompleted, outcome,
+		)
 		state.bridge.abortAndWait()
 		return nil
 	})
@@ -1045,7 +1052,6 @@ func (n *localNode) submitImmediate(
 				state.err = n.fatalPostEnginePersistence("record immediate submission", o.Account, state.err)
 				return state.err
 			}
-			state.persistenceCompleted = true
 			state.err = n.auditSubmittedOrder(state.ctx, o.Account, state.order, engine.OrderResult{
 				Verdict: state.result.Verdict, Reviews: state.result.Reviews, Blocks: state.preparation.Blocks,
 			}, caller, state.bridge.accountIdentity, submissionAuditAction(state.order))
@@ -1109,7 +1115,6 @@ func (n *localNode) submitImmediate(
 	}).Then(func(
 		_ context.Context, state *submitImmediateChainState,
 	) error {
-		state.persistenceCompleted = true
 		state.err = n.auditImmediateSubmission(
 			state.ctx, o.Account, state.order, state.result, caller,
 			state.bridge.accountIdentity, submissionAuditAction(state.order),
@@ -1132,7 +1137,7 @@ func (n *localNode) submitImmediate(
 		if !state.heldReviewCompleted {
 			state.err = n.accountChainTerminalError(
 				"submit immediate", o.Account, state.err,
-				state.preTradeFinalized, state.persistenceCompleted, outcome,
+				state.preTradeFinalized || state.bridge.persistenceCompleted, state.bridge.persistenceCompleted, outcome,
 			)
 		}
 		state.bridge.abortAndWait()

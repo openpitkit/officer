@@ -24,9 +24,12 @@
 # received as a function-literal parameter. For
 # split CheckOrder chains, a step in an else, for, switch, or closure body
 # escapes detection. The rule checks the same block and the then-branch of one
-# enclosing if. A Finally that ignores its outcome or fails to escalate a
-# post-commit failure passes the check.
-# This rule has no approval marker or baseline.
+# enclosing if.
+# The outcome rule requires a function literal at each Finally call and rejects
+# a blank, unnamed, or unreferenced asyncengine.ChainOutcome parameter. It does
+# not verify correct escalation after an outcome reference or detect calls
+# through a Finally method alias such as f := builder.Finally.
+# These rules have no approval marker or baseline.
 rules:
   - id: account-chain-finally
     message: End the account chain with Finally before calling Run.
@@ -93,6 +96,33 @@ rules:
               - metavariable-regex:
                   metavariable: $STEP
                   regex: '^(?!(Run|CheckOrder|Finally)$)'
+    paths:
+      include:
+        - "/framework/**"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"
+  - id: account-chain-finally-outcome
+    message: Pass Finally a function literal that references its ChainOutcome.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - patterns:
+          - pattern: $BUILDER.Finally($CALLBACK)
+          - pattern-not: $BUILDER.Finally(func(...) error { ... })
+      - pattern: |
+          $BUILDER.Finally(func(..., _ asyncengine.ChainOutcome, ...) error { ... })
+      - pattern: |
+          $BUILDER.Finally(func(..., asyncengine.ChainOutcome, ...) error { ... })
+      - patterns:
+          - pattern: |
+              $BUILDER.Finally(func(..., $OUTCOME asyncengine.ChainOutcome, ...) error { ... })
+          - pattern-not: |
+              $BUILDER.Finally(func(..., $OUTCOME asyncengine.ChainOutcome, ...) error {
+                ...
+                <... $OUTCOME ...>;
+                ...
+              })
     paths:
       include:
         - "/framework/**"
