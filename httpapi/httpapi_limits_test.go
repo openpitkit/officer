@@ -1514,7 +1514,8 @@ func TestPutSpotFundsPnlBoundsLimit_ExponentNotationValidationError(t *testing.T
 // P&L-bounds barrier with lowerBound under an upper bound of 0, and fails t
 // unless the answer comes within a second as a single decimal validation
 // error at /lowerBound with nothing stored, so a bound whose check grows with
-// its exponent fails the test instead of stalling the suite.
+// its exponent fails the test. A call that never returns is left to go test's
+// -timeout.
 func requireLowerBoundRefused(t *testing.T, lowerBound string) {
 	t.Helper()
 	r, realm := newRealServiceRouter(t)

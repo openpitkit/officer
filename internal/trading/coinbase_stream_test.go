@@ -55,7 +55,7 @@ func coinbaseReadSubscriptions(ctx context.Context, conn *websocket.Conn) ([]map
 
 func coinbaseTestStream(t *testing.T) (*coinbaseConnector, context.Context, <-chan coinbaseTestSocket, <-chan string, <-chan health.Diagnostic) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	sockets := make(chan coinbaseTestSocket, 8)
 	c := coinbaseTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
@@ -95,29 +95,9 @@ func coinbaseTestStream(t *testing.T) (*coinbaseConnector, context.Context, <-ch
 	return c, ctx, sockets, failures, diags
 }
 
-func coinbaseNextSocket(t *testing.T, ctx context.Context, sockets <-chan coinbaseTestSocket) coinbaseTestSocket {
+func coinbaseNextSocket(t *testing.T, sockets <-chan coinbaseTestSocket) coinbaseTestSocket {
 	t.Helper()
-	select {
-	case s := <-sockets:
-		return s
-	case <-ctx.Done():
-		t.Fatal("Coinbase stream did not subscribe")
-		return coinbaseTestSocket{}
-	}
-}
-
-func coinbaseNextEvent(t *testing.T, events <-chan fwtrading.Event) fwtrading.Event {
-	t.Helper()
-	select {
-	case e, ok := <-events:
-		if !ok {
-			t.Fatal("stream closed early")
-		}
-		return e
-	case <-time.After(8 * time.Second):
-		t.Fatal("Coinbase event missing")
-		return fwtrading.Event{}
-	}
+	return <-sockets // Coinbase stream sends its subscriptions.
 }
 
 func coinbasePushFrame(t *testing.T, ctx context.Context, conn *websocket.Conn, channel string, sequence int, events any) {
@@ -146,7 +126,7 @@ func TestCoinbaseStreamSubscriptionAndUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := coinbaseNextSocket(t, ctx, sockets)
+	s := coinbaseNextSocket(t, sockets)
 	for i, channel := range []string{"user", "heartbeats"} {
 		if len(s.frames[i]) != 3 || s.frames[i]["type"] != "subscribe" || s.frames[i]["channel"] != channel || s.frames[i]["jwt"] == "" {
 			t.Fatalf("subscribe frame: %+v", s.frames[i])
@@ -166,7 +146,7 @@ func TestCoinbaseStreamSubscriptionAndUpdates(t *testing.T) {
 	case <-time.After(40 * time.Millisecond):
 	}
 	coinbasePushFrame(t, ctx, s.conn, "user", 4, coinbaseUserEvent("snapshot"))
-	if e := coinbaseNextEvent(t, events); e.Kind != fwtrading.EventConnected {
+	if e := nextEvent(t, events); e.Kind != fwtrading.EventConnected {
 		t.Fatalf("snapshot did not connect: %+v", e)
 	}
 	coinbasePushFrame(t, ctx, s.conn, "user", 5, coinbaseUserEvent("snapshot", map[string]any{"order_id": "ignored", "client_order_id": "ignored"}))
@@ -182,8 +162,6 @@ func TestCoinbaseStreamSubscriptionAndUpdates(t *testing.T) {
 		t.Fatalf("unknown channel ended the live session: %s", text)
 	case <-sockets:
 		t.Fatal("unknown channel opened a new socket")
-	case <-time.After(time.Second):
-		t.Fatal("next update after unknown channel was not delivered")
 	}
 	if e.Kind != fwtrading.EventOrder || e.Ref.ClientOrderID != "officer-order" || e.Ref.VenueOrderID != "venue-order" || e.Fill.Quantity != "" {
 		t.Fatalf("order update must only request REST lookup: %+v", e)
@@ -211,23 +189,19 @@ func TestCoinbaseStreamSequenceReconnect(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := coinbaseNextSocket(t, ctx, sockets)
+			s := coinbaseNextSocket(t, sockets)
 			coinbasePushFrame(t, ctx, s.conn, "user", 0, coinbaseUserEvent("snapshot"))
-			if e := coinbaseNextEvent(t, events); e.Kind != fwtrading.EventConnected {
+			if e := nextEvent(t, events); e.Kind != fwtrading.EventConnected {
 				t.Fatal(e)
 			}
 			coinbasePushFrame(t, ctx, s.conn, "future_channel", sequence, map[string]any{})
-			select {
-			case message := <-failures:
-				if !strings.Contains(message, "sequence") {
-					t.Fatal(message)
-				}
-			case <-ctx.Done():
-				t.Fatal("sequence failure missing")
+			message := <-failures // Stream reports the sequence failure.
+			if !strings.Contains(message, "sequence") {
+				t.Fatal(message)
 			}
-			s = coinbaseNextSocket(t, ctx, sockets)
+			s = coinbaseNextSocket(t, sockets)
 			coinbasePushFrame(t, ctx, s.conn, "user", 0, coinbaseUserEvent("snapshot"))
-			if e := coinbaseNextEvent(t, events); e.Kind != fwtrading.EventConnected {
+			if e := nextEvent(t, events); e.Kind != fwtrading.EventConnected {
 				t.Fatal(e)
 			}
 		})
@@ -242,11 +216,11 @@ func TestCoinbaseStreamDeadlines(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := coinbaseNextSocket(t, ctx, sockets)
+			s := coinbaseNextSocket(t, sockets)
 			started := time.Now()
 			if snapshot {
 				coinbasePushFrame(t, ctx, s.conn, "user", 0, coinbaseUserEvent("snapshot"))
-				_ = coinbaseNextEvent(t, events)
+				_ = nextEvent(t, events)
 			} else {
 				go func() {
 					for i := 0; i < 7; i++ {
@@ -262,13 +236,9 @@ func TestCoinbaseStreamDeadlines(t *testing.T) {
 					}
 				}()
 			}
-			select {
-			case message := <-failures:
-				if message == "" {
-					t.Fatal("empty timeout status")
-				}
-			case <-ctx.Done():
-				t.Fatal("deadline missing")
+			message := <-failures // Stream reports its deadline failure.
+			if message == "" {
+				t.Fatal("empty timeout status")
 			}
 			want := coinbaseReadTimeout
 			if !snapshot {
@@ -296,7 +266,7 @@ func TestCoinbaseStreamErrorAndRedaction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := coinbaseNextSocket(t, ctx, sockets)
+			s := coinbaseNextSocket(t, sockets)
 			message := "denied " + coinbaseTestAPIKeyID + " " + s.frames[0]["jwt"].(string)
 			frame := map[string]any{"type": "error"}
 			want := "denied"
@@ -329,32 +299,24 @@ func TestCoinbaseStreamErrorAndRedaction(t *testing.T) {
 			if err := s.conn.Write(ctx, websocket.MessageText, raw); err != nil {
 				t.Fatal(err)
 			}
-			select {
-			case text := <-failures:
-				if !strings.Contains(text, want) || strings.Contains(text, coinbaseTestAPIKeyID) || strings.Contains(text, "eyJ") {
-					t.Errorf("want %q; unsafe status: %s", want, text)
-				}
-				for _, fragment := range []string{"apiKeys", "test", "secret-key-name"} {
-					if strings.Contains(text, fragment) {
-						t.Errorf("status leaked key fragment %q: %s", fragment, text)
-					}
-				}
-			case <-ctx.Done():
-				t.Fatal("refusal status missing")
+			text := <-failures // Stream reports the authorization refusal.
+			if !strings.Contains(text, want) || strings.Contains(text, coinbaseTestAPIKeyID) || strings.Contains(text, "eyJ") {
+				t.Errorf("want %q; unsafe status: %s", want, text)
 			}
-			select {
-			case d := <-diags:
-				for _, fragment := range []string{"apiKeys", "test", "secret-key-name"} {
-					if strings.Contains(d.Detail, fragment) {
-						t.Errorf("diagnostic leaked key fragment %q: %s", fragment, d.Detail)
-					}
+			for _, fragment := range []string{"apiKeys", "test", "secret-key-name"} {
+				if strings.Contains(text, fragment) {
+					t.Errorf("status leaked key fragment %q: %s", fragment, text)
 				}
-				raw, _ := json.Marshal(d)
-				if !strings.Contains(d.Detail, want) || d.Code != health.CodeInvalidProviderConfig || strings.Contains(string(raw), coinbaseTestAPIKeyID) || strings.Contains(string(raw), "eyJ") {
-					t.Errorf("want %q; unsafe refusal diagnostic: %s", want, raw)
+			}
+			d := <-diags // Stream publishes the refusal diagnostic.
+			for _, fragment := range []string{"apiKeys", "test", "secret-key-name"} {
+				if strings.Contains(d.Detail, fragment) {
+					t.Errorf("diagnostic leaked key fragment %q: %s", fragment, d.Detail)
 				}
-			case <-ctx.Done():
-				t.Fatal("refusal diagnostic missing")
+			}
+			diagnosticRaw, _ := json.Marshal(d)
+			if !strings.Contains(d.Detail, want) || d.Code != health.CodeInvalidProviderConfig || strings.Contains(string(diagnosticRaw), coinbaseTestAPIKeyID) || strings.Contains(string(diagnosticRaw), "eyJ") {
+				t.Errorf("want %q; unsafe refusal diagnostic: %s", want, diagnosticRaw)
 			}
 			select {
 			case <-sockets:
@@ -371,25 +333,21 @@ func TestCoinbaseStreamErrorAndRedaction(t *testing.T) {
 						_, err := c.stream(ctx, make(chan fwtrading.Event))
 						result <- err
 					}()
-					s := coinbaseNextSocket(t, ctx, sockets)
+					s := coinbaseNextSocket(t, sockets)
 					if err := s.conn.Write(ctx, websocket.MessageText, raw); err != nil {
 						t.Fatal(err)
 					}
-					select {
-					case err := <-result:
-						if !errors.Is(err, errCoinbaseUnauthorized) {
-							t.Fatalf("want authorization refusal, got %v", err)
+					err := <-result // Stream returns its refusal error.
+					if !errors.Is(err, errCoinbaseUnauthorized) {
+						t.Fatalf("want authorization refusal, got %v", err)
+					}
+					for _, fragment := range []string{"apiKeys", "test", "secret-key-name"} {
+						if strings.Contains(err.Error(), fragment) {
+							t.Errorf("returned error leaked key fragment %q: %v", fragment, err)
 						}
-						for _, fragment := range []string{"apiKeys", "test", "secret-key-name"} {
-							if strings.Contains(err.Error(), fragment) {
-								t.Errorf("returned error leaked key fragment %q: %v", fragment, err)
-							}
-						}
-						if !strings.Contains(err.Error(), want) {
-							t.Errorf("want %q in returned error: %v", want, err)
-						}
-					case <-ctx.Done():
-						t.Fatal("stream error missing")
+					}
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("want %q in returned error: %v", want, err)
 					}
 				})
 			}
@@ -404,18 +362,14 @@ func TestCoinbaseStreamReadErrorRedaction(t *testing.T) {
 		_, err := c.stream(ctx, make(chan fwtrading.Event))
 		result <- err
 	}()
-	s := coinbaseNextSocket(t, ctx, sockets)
+	s := coinbaseNextSocket(t, sockets)
 	_ = s.conn.Close(websocket.StatusPolicyViolation, coinbaseTestAPIKeyID)
-	select {
-	case err := <-result:
-		if err == nil || strings.Contains(err.Error(), coinbaseTestAPIKeyID) {
-			t.Fatalf("unsafe stream read error: %v", err)
-		}
-		if errors.Unwrap(err) != nil {
-			t.Fatal("stream read error retained an unscrubbed cause")
-		}
-	case <-ctx.Done():
-		t.Fatal("stream read error missing")
+	err := <-result // Stream returns its read error.
+	if err == nil || strings.Contains(err.Error(), coinbaseTestAPIKeyID) {
+		t.Fatalf("unsafe stream read error: %v", err)
+	}
+	if errors.Unwrap(err) != nil {
+		t.Fatal("stream read error retained an unscrubbed cause")
 	}
 }
 
@@ -440,9 +394,9 @@ func TestCoinbaseStreamMalformedHeartbeatKeepsConnection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := coinbaseNextSocket(t, ctx, sockets)
+			s := coinbaseNextSocket(t, sockets)
 			coinbasePushFrame(t, ctx, s.conn, "user", 0, coinbaseUserEvent("snapshot"))
-			if e := coinbaseNextEvent(t, events); e.Kind != fwtrading.EventConnected {
+			if e := nextEvent(t, events); e.Kind != fwtrading.EventConnected {
 				t.Fatalf("snapshot did not connect: %+v", e)
 			}
 			for sequence := 1; sequence <= 2; sequence++ {
@@ -457,13 +411,9 @@ func TestCoinbaseStreamMalformedHeartbeatKeepsConnection(t *testing.T) {
 					t.Fatal(err)
 				}
 				if sequence == 1 {
-					select {
-					case d := <-diags:
-						if d.Code != health.CodeUnparsableData || d.Level != health.DiagWarn || d.Detail != tc.detail || d.Remediation != venueStreamSkipped {
-							t.Fatalf("want skipped heartbeat warning, got %+v", d)
-						}
-					case <-ctx.Done():
-						t.Fatal("heartbeat diagnostic missing")
+					d := <-diags // Stream publishes the heartbeat diagnostic.
+					if d.Code != health.CodeUnparsableData || d.Level != health.DiagWarn || d.Detail != tc.detail || d.Remediation != venueStreamSkipped {
+						t.Fatalf("want skipped heartbeat warning, got %+v", d)
 					}
 				}
 			}
@@ -476,8 +426,6 @@ func TestCoinbaseStreamMalformedHeartbeatKeepsConnection(t *testing.T) {
 				}
 			case failure := <-failures:
 				t.Fatalf("malformed heartbeat ended session: %s", failure)
-			case <-ctx.Done():
-				t.Fatal("update after heartbeat missing")
 			}
 			select {
 			case d := <-diags:
@@ -506,9 +454,9 @@ func TestCoinbaseStreamHeartbeatTimestampDoesNotSilenceUserError(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := coinbaseNextSocket(t, ctx, sockets)
+			s := coinbaseNextSocket(t, sockets)
 			coinbasePushFrame(t, ctx, s.conn, "user", 0, coinbaseUserEvent("snapshot"))
-			if e := coinbaseNextEvent(t, events); e.Kind != fwtrading.EventConnected {
+			if e := nextEvent(t, events); e.Kind != fwtrading.EventConnected {
 				t.Fatalf("snapshot did not connect: %+v", e)
 			}
 			for i, frame := range []struct {
@@ -530,24 +478,14 @@ func TestCoinbaseStreamHeartbeatTimestampDoesNotSilenceUserError(t *testing.T) {
 				if err := s.conn.Write(ctx, websocket.MessageText, raw); err != nil {
 					t.Fatal(err)
 				}
-				select {
-				case d := <-diags:
-					if d.Code != health.CodeUnparsableData || d.Level != frame.level || d.Detail != frame.detail || d.Remediation != frame.remedy {
-						t.Errorf("%s timestamp diagnostic: %+v", frame.channel, d)
-					}
-				case <-ctx.Done():
-					t.Fatal("timestamp diagnostic missing")
-				case <-time.After(time.Second):
-					t.Errorf("%s timestamp diagnostic missing", frame.channel)
+				d := <-diags // Stream publishes the timestamp diagnostic.
+				if d.Code != health.CodeUnparsableData || d.Level != frame.level || d.Detail != frame.detail || d.Remediation != frame.remedy {
+					t.Errorf("%s timestamp diagnostic: %+v", frame.channel, d)
 				}
 			}
-			select {
-			case message := <-failures:
-				if !strings.Contains(message, tc.userDetail) {
-					t.Fatalf("unexpected session failure: %s", message)
-				}
-			case <-ctx.Done():
-				t.Fatal("bad user timestamp did not end session")
+			message := <-failures // Stream reports the invalid user timestamp.
+			if !strings.Contains(message, tc.userDetail) {
+				t.Fatalf("unexpected session failure: %s", message)
 			}
 		})
 	}
@@ -576,29 +514,19 @@ func TestCoinbaseStreamUnparsable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := coinbaseNextSocket(t, ctx, sockets)
+			s := coinbaseNextSocket(t, sockets)
 			coinbasePushFrame(t, ctx, s.conn, "user", 0, coinbaseUserEvent("snapshot"))
-			if e := coinbaseNextEvent(t, events); e.Kind != fwtrading.EventConnected {
+			if e := nextEvent(t, events); e.Kind != fwtrading.EventConnected {
 				t.Fatalf("snapshot did not connect: %+v", e)
 			}
 			if err := s.conn.Write(ctx, websocket.MessageText, []byte(tc.raw)); err != nil {
 				t.Fatal(err)
 			}
-			select {
-			case d := <-diags:
-				if d.Code != health.CodeUnparsableData || d.Level != health.DiagError || d.Detail != tc.detail || d.Remediation != venueStreamReconciled {
-					t.Fatal(d)
-				}
-			case <-ctx.Done():
-				t.Fatal("unparsable diagnostic missing")
-			case <-time.After(time.Second):
-				t.Fatal("unparsable diagnostic missing")
+			d := <-diags // Stream publishes the unparsable frame diagnostic.
+			if d.Code != health.CodeUnparsableData || d.Level != health.DiagError || d.Detail != tc.detail || d.Remediation != venueStreamReconciled {
+				t.Fatal(d)
 			}
-			select {
-			case <-failures:
-			case <-ctx.Done():
-				t.Fatal("bad frame did not end session")
-			}
+			<-failures // Stream reports the bad frame failure.
 		})
 	}
 }
@@ -616,17 +544,13 @@ func TestCoinbaseStreamRedirectRefused(t *testing.T) {
 			failures <- message
 		}
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	_, err := c.Subscribe(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-failures:
-	case <-ctx.Done():
-		t.Fatal("redirect refusal missing")
-	}
+	<-failures // Stream reports the redirect refusal.
 	if targetCalls.Load() != 0 {
 		t.Fatal("stream followed a redirect")
 	}

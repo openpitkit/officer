@@ -432,11 +432,23 @@ func TestInvariantUnknownOutcomeIsNotRejected(t *testing.T) {
 			w.WriteHeader(tc.status)
 			_, _ = w.Write([]byte(tc.body))
 		}))
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		_, err := testAlpacaConnector(t, server).Send(ctx, testOrder())
-		cancel()
+		ctx := t.Context()
+		if tc.slow {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 20*time.Millisecond)
+			defer cancel()
+		}
+		c := testAlpacaConnector(t, server)
+		if tc.slow {
+			// The caller's deadline is the only one that can end the request.
+			c.client = alpaca.NewClient(server.URL, c.credentials, &http.Client{Timeout: time.Hour}, c.redact)
+		}
+		_, err := c.Send(ctx, testOrder())
 		close(late)
 		server.Close()
+		if tc.slow && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			t.Fatal("Send returned before its deadline")
+		}
 		if err == nil || errors.Is(err, fwtrading.ErrRejected) {
 			t.Fatal("uncertain outcome marked rejected")
 		}

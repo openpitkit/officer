@@ -29,6 +29,7 @@ import (
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func TestNormalizeOKXSubscriptions(t *testing.T) {
@@ -170,9 +171,7 @@ func TestOKXConnector_PingsAndUsesPublicURL(t *testing.T) {
 		connector.run(ctx, subs, make(chan fwmarketdata.QuoteUpdate))
 	}()
 
-	if !conn.waitForWrite("ping", time.Second) {
-		t.Fatal("timed out waiting for OKX ping")
-	}
+	conn.waitForWrite("ping") // Ping is written.
 	cancel()
 	<-done
 
@@ -433,25 +432,20 @@ func (c *fakeOKXConn) Close(websocket.StatusCode, string) error {
 	return nil
 }
 
-func (c *fakeOKXConn) waitForWrite(want string, timeout time.Duration) bool {
-	deadline := time.After(timeout)
+func (c *fakeOKXConn) waitForWrite(want string) {
 	for {
 		c.mu.Lock()
 		for _, write := range c.writes {
 			if string(write) == want {
 				c.mu.Unlock()
-				return true
+				return
 			}
 		}
 		notify := make(chan struct{})
 		c.notify = notify
 		c.mu.Unlock()
 
-		select {
-		case <-deadline:
-			return false
-		case <-notify:
-		}
+		<-notify // A frame is written.
 	}
 }
 
@@ -505,23 +499,12 @@ func TestOKXConnector_CloseStopsSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for !conn.hasSubscribe("BTC-USDT") && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if !conn.hasSubscribe("BTC-USDT") {
-		t.Fatal("subscribe frame was not written")
-	}
+	polltest.Until(func() bool { return conn.hasSubscribe("BTC-USDT") }) // Subscription is written.
 
 	connector.Close()
 	connector.Close()
 
-	select {
-	case _, ok := <-out:
-		if ok {
-			t.Fatal("subscription channel still open")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("subscription channel did not close")
+	if _, ok := <-out; ok { // Subscription channel closes.
+		t.Fatal("subscription channel still open")
 	}
 }

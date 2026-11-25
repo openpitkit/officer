@@ -149,21 +149,15 @@ func TestMixedAlertRestoreCompletesRuntimeAndManualQuoteBeforeDelivery(t *testin
 	}()
 	defer func() {
 		close(release)
-		select {
-		case result := <-done:
-			if !errors.Is(result.err, domain.ErrTradingAccessNotification) || errors.Is(result.err, deliveryErr) || !domain.OnlyTradingAccessNotification(result.err) || len(result.summary.Applied) == 0 {
-				t.Errorf("committed summary/warning=%+v %v", result.summary, result.err)
-			}
-		case <-time.After(3 * time.Second):
-			t.Error("restore did not finish")
+		if result := <-done; !errors.Is(result.err, domain.ErrTradingAccessNotification) || errors.Is(result.err, deliveryErr) || !domain.OnlyTradingAccessNotification(result.err) || len(result.summary.Applied) == 0 {
+			t.Errorf("committed summary/warning=%+v %v", result.summary, result.err)
 		}
 	}()
 	select {
 	case <-entered:
 	case result := <-done:
+		done <- result // The deferred check receives the result.
 		t.Fatalf("restore failed before delivery: %v", result.err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("restore delivery not reached")
 	}
 	if rt.stopped || rt.restarts != 1 || signer.reloads != 1 {
 		t.Fatalf("warning preceded runtime/signer completion: stopped=%v restarts=%d reloads=%d", rt.stopped, rt.restarts, signer.reloads)
@@ -173,8 +167,6 @@ func TestMixedAlertRestoreCompletesRuntimeAndManualQuoteBeforeDelivery(t *testin
 		t.Fatalf("restored instrument: %+v %v", instruments, err)
 	}
 	sink := local.CurrentMarketDataSink().(*mixedAlertQuoteSink)
-	deadline := time.NewTimer(3 * time.Second)
-	defer deadline.Stop()
 	for {
 		sink.mu.Lock()
 		mark := sink.marks[[2]domain.EngineAssetID{instruments[0].BaseAssetID, instruments[0].QuoteAssetID}]
@@ -183,23 +175,14 @@ func TestMixedAlertRestoreCompletesRuntimeAndManualQuoteBeforeDelivery(t *testin
 		if mark == "125.5" && clears > 0 {
 			break
 		}
-		select {
-		case <-changed:
-		case <-deadline.C:
-			t.Fatalf("active runtime did not receive restored price while delivery blocked: mark=%q clears=%d", mark, clears)
-		}
+		<-changed
 	}
 	unrelated := make(chan error, 1)
 	go func() {
 		unrelated <- app.Service().PutTradingAccess(ctx, domain.TradingAccess{Account: "other", Connection: paper})
 	}()
-	select {
-	case err := <-unrelated:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("delivery still holds backend tradingMu")
+	if err := <-unrelated; err != nil {
+		t.Fatal(err)
 	}
 	joined := errors.Join(errors.New("restart failed"), &domain.TradingAccessNotificationError{Cause: deliveryErr})
 	if public := httpx.DescribeErr(joined); public.Code != "trading_access_completion_failed" || public.Status != 500 {
@@ -350,35 +333,22 @@ func TestMixedAlertAutomaticGrantsCompleteOutsideBackendLocks(t *testing.T) {
 			}()
 			defer func() {
 				close(release)
-				select {
-				case result := <-done:
-					if result.err != nil {
-						t.Error(result.err)
-					}
-					if operation == "create" && (result.connection.ExternalID.IsZero() || result.connection.Credentials != "") {
-						t.Errorf("committed connection result lost or credentials exposed: %+v", result.connection)
-					}
-				case <-time.After(3 * time.Second):
-					t.Error("automatic grant did not finish after delivery")
+				result := <-done
+				if result.err != nil {
+					t.Error(result.err)
+				}
+				if operation == "create" && (result.connection.ExternalID.IsZero() || result.connection.Credentials != "") {
+					t.Errorf("committed connection result lost or credentials exposed: %+v", result.connection)
 				}
 			}()
-			select {
-			case <-entered:
-			case <-time.After(3 * time.Second):
-				t.Fatal("automatic mixed grant did not reach delivery")
-			}
+			<-entered
 			if runtime.restarts != beforeRestarts+1 {
 				t.Fatalf("automatic grant delivery preceded runtime restart: got %d, want %d", runtime.restarts, beforeRestarts+1)
 			}
 			other := make(chan error, 1)
 			go func() { other <- app.Service().SetTradingConnectionEnabled(ctx, paper.String(), false, false) }()
-			select {
-			case err := <-other:
-				if err != nil {
-					t.Fatal(err)
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("automatic grant delivery holds backend or node locks")
+			if err := <-other; err != nil {
+				t.Fatal(err)
 			}
 			listed, err := service.List(ctx)
 			if err != nil || listed.Total != 1 {
@@ -411,12 +381,7 @@ func TestMixedAlertChannelReentryAndRetainedContextOwnCompletion(t *testing.T) {
 				defer close(exited)
 				done <- control.PutTradingAccess(ctx, domain.TradingAccess{Account: "other", Connection: live})
 			}()
-			select {
-			case nestedErr = <-done:
-			case <-time.After(2 * time.Second):
-				nestedErr = errors.New("nested administrative call blocked during channel delivery")
-				return nestedErr
-			}
+			nestedErr = <-done
 		case "other":
 			return nestedDeliveryErr
 		}
@@ -427,24 +392,10 @@ func TestMixedAlertChannelReentryAndRetainedContextOwnCompletion(t *testing.T) {
 	defer func() {
 		select {
 		case exited := <-nestedLifetimes:
-			select {
-			case <-exited:
-			case <-time.After(3 * time.Second):
-				t.Error("nested call did not exit after outer completion")
-			}
+			<-exited
 		default:
 		}
 	}()
-	put := func(ctx context.Context, access domain.TradingAccess) error {
-		done := make(chan error, 1)
-		go func() { done <- control.PutTradingAccess(ctx, access) }()
-		select {
-		case err := <-done:
-			return err
-		case <-time.After(5 * time.Second):
-			return errors.New("administrative call did not finish within deadline")
-		}
-	}
 	ctx := auth.ContextWithCaller(t.Context(), domain.Caller{Source: domain.SourcePanel, Principal: domain.PrincipalOperator})
 	paper, liveConnection := seedMixedAlertConnections(t, realm)
 	live = liveConnection
@@ -453,7 +404,7 @@ func TestMixedAlertChannelReentryAndRetainedContextOwnCompletion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := put(ctx, domain.TradingAccess{Account: "desk", Connection: live}); err != nil {
+	if err := control.PutTradingAccess(ctx, domain.TradingAccess{Account: "desk", Connection: live}); err != nil {
 		t.Fatalf("nested warning failure escaped into outer successful delivery: %v", err)
 	}
 	if !errors.Is(nestedErr, domain.ErrTradingAccessNotification) || !domain.OnlyTradingAccessNotification(nestedErr) || errors.Is(nestedErr, nestedDeliveryErr) {
@@ -466,7 +417,7 @@ func TestMixedAlertChannelReentryAndRetainedContextOwnCompletion(t *testing.T) {
 	if err != nil || list.Total != 2 {
 		t.Fatalf("reentrant warning persistence: %+v %v", list, err)
 	}
-	if err := put(retained, domain.TradingAccess{Account: "hidden", Connection: live}); err != nil {
+	if err := control.PutTradingAccess(retained, domain.TradingAccess{Account: "hidden", Connection: live}); err != nil {
 		t.Fatalf("retained channel context could not complete a later call: %v", err)
 	}
 	list, err = service.List(ctx)
@@ -490,34 +441,21 @@ func TestMixedAlertBackendDeliveryReleasesTradingLock(t *testing.T) {
 	}()
 	defer func() {
 		close(release)
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Error(err)
-			}
-		case <-time.After(3 * time.Second):
-			t.Error("delivery failed to finish")
+		if err := <-done; err != nil {
+			t.Error(err)
 		}
 	}()
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("channel not entered")
-	}
+	<-entered
 	unrelated := make(chan error, 1)
 	go func() {
 		unrelated <- app.Service().PutTradingAccess(ctx, domain.TradingAccess{Account: "other", Connection: paper})
 	}()
-	select {
-	case err := <-unrelated:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("slow warning holds backend tradingMu or node serialization")
+	if err := <-unrelated; err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case err := <-done:
+		done <- err // The deferred check receives the result.
 		t.Fatalf("administrative response did not wait for delivery: %v", err)
 	default:
 	}

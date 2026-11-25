@@ -58,6 +58,7 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
 	"go.openpit.dev/officer/internal/logtest"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 	"go.openpit.dev/officer/signing"
@@ -1103,7 +1104,7 @@ func TestTradingSendPaperEndToEnd(t *testing.T) {
 			if !sendFrame(t, f.ctx, stream, websocket.MessageBinary, frame) {
 				t.Fatal("fill stream failed")
 			}
-			waitForTrading(func() bool {
+			polltest.Until(func() bool {
 				detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 				tradingE2EMust(t, err)
 				return detail.Order.Status == domain.OrderStatusFilled
@@ -1141,7 +1142,7 @@ func TestTradingSendPaperEndToEnd(t *testing.T) {
 				"date": time.Now().UTC().Format("2006-01-02")}}
 			f.venueMu.Unlock()
 			f.start()
-			waitForTrading(func() bool {
+			polltest.Until(func() bool {
 				rows, err := f.realm.ListAdjustments(f.ctx, "fees", domain.SourceSystem, 10)
 				tradingE2EMust(t, err)
 				return len(rows) == 1
@@ -1292,12 +1293,12 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 					link.VenueOrderID != "test:"+id+":"+link.ClientOrderID {
 					t.Fatalf("send acknowledgement = %+v", result)
 				}
-				waitForTrading(func() bool {
+				polltest.Until(func() bool {
 					detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
 					tradingE2EMust(t, err)
 					return detail.Order.Status == domain.OrderStatusFilled
 				}) // test order filled through sink
-				waitForTrading(func() bool {
+				polltest.Until(func() bool {
 					_, found, err := connector.Lookup(f.ctx, fwtrading.OrderRef{ClientOrderID: link.ClientOrderID})
 					requireTestBookLookup(t, found, err)
 					return !found
@@ -1372,7 +1373,7 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 				if result.VenueSend.Status != "acknowledged" || result.VenueSend.Refusal != nil {
 					t.Fatalf("split acknowledgement = %+v", result)
 				}
-				waitForTrading(func() bool {
+				polltest.Until(func() bool {
 					detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
 					tradingE2EMust(t, err)
 					return detail.Order.Status == domain.OrderStatusFilled
@@ -1422,7 +1423,7 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 					if result.VenueSend.Status != "acknowledged" || result.VenueSend.Refusal != nil {
 						t.Fatalf("odd acknowledgement = %+v", result)
 					}
-					waitForTrading(func() bool {
+					polltest.Until(func() bool {
 						detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
 						tradingE2EMust(t, err)
 						return detail.Order.Status == domain.OrderStatusFilled
@@ -1454,7 +1455,7 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 			quotes.snapshots[0].AsOf = clock.now().Add(10 * time.Second)
 			clock.set(clock.now().Add(10 * time.Second))
 			timer.ticks <- clock.now()
-			waitForTrading(func() bool {
+			polltest.Until(func() bool {
 				detail, err := f.realm.GetOrder(f.ctx, "test-rest-no-ask")
 				tradingE2EMust(t, err)
 				return detail.Order.Status == domain.OrderStatusCancelled
@@ -1606,7 +1607,7 @@ func TestTestExecutionLostBookDisabledEndToEnd(t *testing.T) {
 			if mode == "split" {
 				wantTrades = 1
 			}
-			waitForTrading(func() bool {
+			polltest.Until(func() bool {
 				detail, err := f.realm.GetOrder(f.ctx, "lost-book")
 				tradingE2EMust(t, err)
 				return len(detail.Trades) == wantTrades
@@ -1625,7 +1626,7 @@ func TestTestExecutionLostBookDisabledEndToEnd(t *testing.T) {
 			tradingE2EMust(t, f.realm.SetTradingConnectionEnabled(f.ctx, domain.ExternalID(id), false))
 			f.close()
 			f.start()
-			waitForTrading(func() bool {
+			polltest.Until(func() bool {
 				detail, err := f.realm.GetOrder(f.ctx, "lost-book")
 				tradingE2EMust(t, err)
 				return detail.Order.Status == domain.OrderStatusCancelled
@@ -1706,7 +1707,7 @@ func (f *tradingE2E) testExecutionOrder(id string) testExecutionE2EOrder {
 
 func (f *tradingE2E) assertTestExecutionFill(id, price string, quantities map[string]int) {
 	f.t.Helper()
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		return f.testExecutionOrder(id).Order.Status == "filled"
 	}) // public order filled
 	detail := f.testExecutionOrder(id)
@@ -1910,7 +1911,7 @@ func TestTestExecutionInfiniteRestartEndToEnd(t *testing.T) {
 	}
 	f.close()
 	f.start()
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		return f.testExecutionOrder("infinite-restart").Order.Status == "cancelled"
 	}) // enabled lost-book order cancelled
 	if detail := f.testExecutionOrder("infinite-restart"); len(detail.Trades) != 0 {
@@ -2364,7 +2365,7 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 			f.venueMu.Unlock()
 			f.start()
 			if feeAccount {
-				waitForTrading(func() bool {
+				polltest.Until(func() bool {
 					rows, err := f.realm.ListAdjustments(f.ctx, "fees", domain.SourceSystem, 10)
 					tradingE2EMust(t, err)
 					return len(rows) == 1
@@ -2396,7 +2397,7 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 					t.Fatalf("venue_fee adjustments = %+v", venueFees)
 				}
 			} else {
-				waitForTrading(func() bool {
+				polltest.Until(func() bool {
 					rows, err := f.realm.ListAuditFiltered(f.ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 					tradingE2EMust(t, err)
 					return len(rows) == 1
@@ -2963,7 +2964,7 @@ func TestTradingStreamFailureEndToEnd(t *testing.T) {
 				map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 					"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
 			id := f.setupSend("REST")
-			waitForTrading(func() bool {
+			polltest.Until(func() bool {
 				return f.health().State == "degraded"
 			}) // degraded connection
 			viaREST, viaMCP := f.connectionSurfaces()
@@ -3008,7 +3009,7 @@ func TestTradingUnparsableUpdateEndToEnd(t *testing.T) {
 	if !sendFrame(t, f.ctx, stream, websocket.MessageText, `{"stream":"trade_updates","data":{"event":42}}`) {
 		t.Fatal("broken update stream failed")
 	}
-	waitForTrading(func() bool {
+	polltest.Until(func() bool {
 		return len(f.health().Diagnostics) != 0
 	}) // unparsable_data diagnostic
 	viaREST, viaMCP := f.connectionSurfaces()

@@ -45,6 +45,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/internal/config"
 	"go.openpit.dev/officer/internal/nonrelease"
+	"go.openpit.dev/officer/internal/polltest"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
 	"go.openpit.dev/openpit"
 )
@@ -405,20 +406,16 @@ func TestSetupServeNonRelease(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("choose empty database = %d %s, want 202", rec.Code, rec.Body)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for {
+	polltest.Until(func() bool {
 		got := serveBuildStatus(t, handler)
 		if got.Phase == nonrelease.PhaseReady {
-			break
+			return true
 		}
 		if got.Phase != nonrelease.PhasePreparing {
 			t.Fatalf("build status after choice = %+v, want preparing or ready", got)
 		}
-		if ctx.Err() != nil {
-			t.Fatalf("build did not reach ready before deadline: %+v", got)
-		}
-	}
+		return false
+	}) // Build is ready after choosing an empty database.
 	assertApplicationSession(t, handler)
 	own := cfg.SQLitePath + ".non-release-" + testBuildCommit
 	if _, err := os.Stat(own); err != nil {

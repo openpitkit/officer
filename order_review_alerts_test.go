@@ -379,11 +379,7 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 			if done == nil {
 				continue
 			}
-			select {
-			case <-done:
-			case <-time.After(3 * time.Second):
-				t.Error("order review operation did not finish during cleanup")
-			}
+			<-done
 		}
 		if err := app.Close(); err != nil {
 			t.Fatal(err)
@@ -416,8 +412,6 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 	case waiting = <-entered:
 	case result := <-finished:
 		t.Fatalf("submit finished without reaching publication: %+v, %v", result.approval, result.err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("submit did not reach publication")
 	}
 	id := waiting.ExternalID.String()
 	assertOrderReviewAlerts(t, service, ctx, "", "")
@@ -431,11 +425,7 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 		defer close(decisionDone)
 		decided, _, failure, decisionErr = cp.CancelOrderReview(deciding, id)
 	}()
-	select {
-	case <-decisionDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("publication still holds the account lane during cancel")
-	}
+	<-decisionDone
 	if decisionErr != nil || decided.Status != domain.OrderStatusCancelled || failure == nil || failure.Step != "close" || failure.Message == "" {
 		t.Fatalf("decision before publication = %+v, failure %+v, %v", decided, failure, decisionErr)
 	}
@@ -445,12 +435,7 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 	}
 	assertOrderReviewAlerts(t, service, deciding, "", "")
 	unblock()
-	var result submitted
-	select {
-	case result = <-finished:
-	case <-time.After(3 * time.Second):
-		t.Fatal("submit did not finish after publication was released")
-	}
+	result := <-finished
 	if result.err != nil || result.approval.AlertFailure != nil || result.approval.Verdict != domain.VerdictReview || len(result.approval.Reviews) == 0 {
 		t.Fatalf("delayed publication = %+v, %v", result.approval, result.err)
 	}

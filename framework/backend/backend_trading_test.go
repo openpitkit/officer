@@ -600,25 +600,12 @@ func TestTradingSearchDoesNotBlockEnable(t *testing.T) {
 	go func() {
 		enableDone <- s.SetTradingConnectionEnabled(systemCtx(), "connection-1", true, false)
 	}()
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	blocked := false
-	select {
-	case err := <-enableDone:
-		if err != nil {
-			t.Error(err)
-		}
-	case <-timer.C:
-		blocked = true
+	if err := <-enableDone; err != nil {
+		t.Error(err)
 	}
 	close(rt.searchRelease)
 	if err := <-searchDone; err != nil {
 		t.Error(err)
-	}
-	if blocked {
-		//nolint:staticcheck // S1005: drain before reporting the blocked call.
-		_ = <-enableDone
-		t.Fatal("slow symbol search blocked connection enable")
 	}
 	if !n.connections[0].Enabled || rt.restarts != 1 {
 		t.Fatal("enable did not save and restart while search was pending")

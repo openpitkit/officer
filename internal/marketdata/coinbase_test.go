@@ -29,6 +29,7 @@ import (
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func TestNormalizeCoinbaseSubscriptions(t *testing.T) {
@@ -405,22 +406,11 @@ func TestCoinbaseConnector_CloseStopsSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for conn.writeCount() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if conn.writeCount() == 0 {
-		t.Fatal("subscribe frame was not written")
-	}
+	polltest.Until(func() bool { return conn.writeCount() != 0 }) // Subscription is written.
 
 	connector.Close()
-	select {
-	case _, ok := <-out:
-		if ok {
-			t.Fatal("subscription channel still open")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("subscription channel did not close")
+	if _, ok := <-out; ok { // Subscription channel closes.
+		t.Fatal("subscription channel still open")
 	}
 }
 

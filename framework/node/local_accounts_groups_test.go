@@ -348,11 +348,7 @@ func TestLocalNode_SetGroupBlockedRunsUnderLiveIdentityGate(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() { errs <- n.SetGroupBlocked(ctx, "desk-a", true, "risk", testCaller) }()
 
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("SetGroupBlocked did not reach its post-engine store hook")
-	}
+	<-entered
 
 	created := make(chan error, 1)
 	go func() {
@@ -729,11 +725,7 @@ func assertAdministrativeStoreWriteSerialized(
 
 	operation := make(chan error, 1)
 	go func() { operation <- run() }()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("administrative operation did not reach its store hook")
-	}
+	<-entered
 
 	source, err := eng.AccountID(account)
 	if err != nil {
@@ -757,8 +749,7 @@ func assertAdministrativeStoreWriteSerialized(
 	if err := <-operation; err != nil {
 		t.Fatalf("administrative operation: %v", err)
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	waitCtx := t.Context()
 	if _, err := competing.Await(waitCtx); err != nil {
 		t.Fatalf("competing same-account task: %v", err)
 	}

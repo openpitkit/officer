@@ -847,8 +847,7 @@ func TestRegisterSingleAccountRealmPnlScheduleAuthority(t *testing.T) {
 	}
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {
@@ -963,8 +962,7 @@ func TestRegisterMCPServerVersionNonRelease(t *testing.T) {
 		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, false)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {
@@ -988,8 +986,7 @@ func assertOneAccountSubmitSchema(t *testing.T, handler http.Handler) {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {

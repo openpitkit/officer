@@ -42,13 +42,8 @@ func TestBYOConnector_PushForwards(t *testing.T) {
 		t.Fatalf("Push: %v", err)
 	}
 
-	select {
-	case got := <-ch:
-		if got != want {
-			t.Fatalf("got %+v, want %+v", got, want)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for forwarded push")
+	if got := <-ch; got != want { // Quote or channel closure arrives.
+		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
 

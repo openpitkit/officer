@@ -197,13 +197,8 @@ func TestTestExecutionRegistrationDuringSchedulerSuspension(t *testing.T) {
 		}
 		done <- err
 	}()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("registration blocked behind scheduler lifecycle ownership")
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

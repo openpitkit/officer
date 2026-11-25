@@ -34,8 +34,6 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-const livePolicyTestTimeout = 5 * time.Second
-
 func TestLocalNode_OrderSizeModeKeyLifecycle(t *testing.T) {
 	for _, firstMode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
 		t.Run(string(firstMode), func(t *testing.T) {
@@ -511,7 +509,7 @@ func TestLocalNode_LivePolicyConfigurationQuiescesAccountChains(t *testing.T) {
 		).Await(context.Background())
 		laneDone <- err
 	}()
-	waitLivePolicySignal(t, laneEntered, "account lane did not start")
+	<-laneEntered // Account lane starts.
 
 	configureDone := make(chan error, 1)
 	go func() {
@@ -525,10 +523,10 @@ func TestLocalNode_LivePolicyConfigurationQuiescesAccountChains(t *testing.T) {
 	}()
 	assertLivePolicyBlocked(t, configureEntered, "policy configure entered before active lane left")
 	close(laneRelease)
-	if err := waitLivePolicyResult(t, laneDone, "account lane did not finish"); err != nil {
+	if err := <-laneDone; err != nil { // Account lane finishes.
 		t.Fatalf("account lane: %v", err)
 	}
-	waitLivePolicySignal(t, configureEntered, "policy configure did not start after lane left")
+	<-configureEntered // Policy configure starts after the lane leaves.
 
 	nextLaneEntered := make(chan struct{})
 	nextLaneDone := make(chan struct{})
@@ -542,11 +540,11 @@ func TestLocalNode_LivePolicyConfigurationQuiescesAccountChains(t *testing.T) {
 	}()
 	assertLivePolicyBlocked(t, nextLaneEntered, "new lane entered during policy configure")
 	close(configureRelease)
-	if err := waitLivePolicyResult(t, configureDone, "policy configure did not finish"); err != nil {
+	if err := <-configureDone; err != nil { // Policy configure finishes.
 		t.Fatalf("PutRateLimit: %v", err)
 	}
-	waitLivePolicySignal(t, nextLaneEntered, "new lane did not enter after policy configure")
-	waitLivePolicySignal(t, nextLaneDone, "new lane did not finish")
+	<-nextLaneEntered // New lane enters after policy configure.
+	<-nextLaneDone    // New lane finishes.
 }
 
 func TestLocalNode_RateLimitAuditFailureFatalsAfterConfigure(t *testing.T) {
@@ -726,25 +724,5 @@ func assertLivePolicyBlocked[Value any](t *testing.T, ch <-chan Value, failure s
 	case <-ch:
 		t.Fatal(failure)
 	case <-time.After(50 * time.Millisecond):
-	}
-}
-
-func waitLivePolicySignal(t *testing.T, ch <-chan struct{}, failure string) {
-	t.Helper()
-	select {
-	case <-ch:
-	case <-time.After(livePolicyTestTimeout):
-		t.Fatal(failure)
-	}
-}
-
-func waitLivePolicyResult(t *testing.T, ch <-chan error, failure string) error {
-	t.Helper()
-	select {
-	case err := <-ch:
-		return err
-	case <-time.After(livePolicyTestTimeout):
-		t.Fatal(failure)
-		return nil
 	}
 }

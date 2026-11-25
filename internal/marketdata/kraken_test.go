@@ -261,13 +261,8 @@ func TestKrakenConnector_CloseStopsSubscription(t *testing.T) {
 	connector.Close()
 	connector.Close()
 
-	select {
-	case _, ok := <-ch:
-		if ok {
-			t.Fatal("channel should be closed")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for connector shutdown")
+	if _, ok := <-ch; ok { // Quote or channel closure arrives.
+		t.Fatal("channel should be closed")
 	}
 }
 

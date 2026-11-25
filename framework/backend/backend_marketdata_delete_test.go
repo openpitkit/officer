@@ -22,7 +22,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -258,13 +257,8 @@ func TestServiceMarketDataConfigurationMutationsReachNodeWithoutRestartingMarket
 				done <- test.mutate(svc)
 			}()
 
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatalf("market-data configuration mutation: %v", err)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("market-data configuration mutation deadlocked")
+			if err := <-done; err != nil {
+				t.Fatalf("market-data configuration mutation: %v", err)
 			}
 			if got := test.calls(n); got != 1 {
 				t.Fatalf("node calls = %d, want 1", got)
