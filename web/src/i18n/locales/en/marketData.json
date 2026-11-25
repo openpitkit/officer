@@ -75,6 +75,11 @@
       "description": "Live trade prices from Finnhub WebSocket. Requires an API token; external symbols use Finnhub-supported symbols.",
       "createHint": "Create a Finnhub source for live trade prices. Add the API token."
     },
+    "openalgo": {
+      "title": "OpenAlgo",
+      "description": "Last traded prices of NSE and BSE instruments from your OpenAlgo's quote stream. Requires OpenAlgo's REST and WebSocket addresses and its API key; external symbols use EXCHANGE:SYMBOL, such as NSE:RELIANCE.",
+      "createHint": "Create an OpenAlgo source for live NSE and BSE prices. Enter your OpenAlgo's addresses and API key."
+    },
     "byo": {
       "title": "BYO",
       "description": "Manual marks maintained by the operator. Use it for static FX, test marks, or feeds that are injected by another system.",

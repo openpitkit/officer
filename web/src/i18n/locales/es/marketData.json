@@ -75,6 +75,11 @@
       "description": "Precios de operaciones en tiempo real de Finnhub WebSocket. Requiere un token de API; los símbolos externos deben ser compatibles con Finnhub.",
       "createHint": "Cree una fuente Finnhub para precios de operaciones en tiempo real. Añada el token de API."
     },
+    "openalgo": {
+      "title": "OpenAlgo",
+      "description": "Precios de las últimas operaciones de instrumentos de NSE y BSE del flujo de cotizaciones de su OpenAlgo. Requiere las direcciones REST y WebSocket de OpenAlgo y su clave de API; los símbolos externos usan EXCHANGE:SYMBOL, como NSE:RELIANCE.",
+      "createHint": "Cree una fuente OpenAlgo para precios de NSE y BSE en tiempo real. Introduzca las direcciones y la clave de API de su OpenAlgo."
+    },
     "byo": {
       "title": "BYO",
       "description": "Precios de valoración manuales mantenidos por el operador. Úsela para FX estático, precios de prueba o flujos que inyecta otro sistema.",

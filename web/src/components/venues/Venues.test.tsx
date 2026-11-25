@@ -55,6 +55,7 @@ describe("venue blocks", () => {
       ["bybit", "#151827"],
       ["oanda", "#fff"],
       ["finnhub", "#fff"],
+      ["openalgo", "#fff"],
     ];
     const { container, rerender } = render(
       <ProviderIcon type="ib" className="h-5 w-5" />,
@@ -71,6 +72,11 @@ describe("venue blocks", () => {
       }
       if (type === "finnhub") {
         expect(svg.querySelector("path")).toHaveAttribute("fill", "#37b34a");
+      }
+      if (type === "openalgo") {
+        expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
+        expect(svg.querySelector("path")).toHaveAttribute("stroke", "#111");
+        expect(svg.querySelectorAll("path")[1]).toHaveAttribute("fill", "#111");
       }
       if (type === "oanda") {
         expect(svg.querySelector("text")).toHaveTextContent("ANDA");

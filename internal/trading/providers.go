@@ -27,7 +27,7 @@ import (
 func FirstPartyProviders() []fwtrading.Provider {
 	return []fwtrading.Provider{
 		AlpacaProvider(), BinanceProvider(), CoinbaseProvider(), IBProvider(),
-		EtoroProvider(), BybitProvider(), OKXProvider(), TestProvider(),
+		EtoroProvider(), BybitProvider(), OKXProvider(), OpenAlgoProvider(), TestProvider(),
 	}
 }
 
@@ -244,6 +244,35 @@ func EtoroProvider() fwtrading.Provider {
 		UnlinkedFees: false,
 		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
 			return NewEtoroConnector(ctx.Connection)
+		},
+	}
+}
+
+// OpenAlgoProvider trades one OpenAlgo user and verifies and searches symbols.
+//
+// Credentials are {url, wsUrl, apiKey}; url and wsUrl are non-secret settings.
+// Paper requires OpenAlgo's analyzer mode and live requires its live mode;
+// account check and pre-check refuse a mismatch. OpenAlgo has no account ID.
+// Identity is "<broker> <analyze|live> <url>". Changing an existing
+// connection's REST url is refused; wsUrl may change.
+//
+// Route is {"product":"CNC"} or {"product":"MIS"}, with no default.
+// Quantity orders use whole numbers in multiples of the lot size; limit prices
+// are multiples of the tick size. Currency is INR; NSE and BSE symbols use the
+// form NSE:SYMBOL. Semi-auto mode queues orders in OpenAlgo's Action Center;
+// their outcome stays unknown with a diagnostic.
+//
+// Reconciliation reads orderstatus and tradebook per order; both cover the
+// current trading day. Fills are booked only at a final status. A closed
+// order's fills require the stream's filled quantity to match the trade book.
+// No commission is reported.
+func OpenAlgoProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderOpenAlgo, Title: "OpenAlgo",
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewOpenAlgoConnector(ctx.Connection)
 		},
 	}
 }

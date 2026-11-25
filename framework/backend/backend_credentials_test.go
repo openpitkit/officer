@@ -50,6 +50,11 @@ func TestCredentialStorage(t *testing.T) {
 		c.Credentials = credentials
 		return []domain.TradingConnection{c}
 	}
+	providerConnectionWith := func(provider, credentials string) []domain.TradingConnection {
+		connections := connectionWith(credentials)
+		connections[0].Provider = provider
+		return connections
+	}
 	source := func(provider, credentials string) domain.MarketDataInstance {
 		return domain.MarketDataInstance{ExternalID: "md-1", Provider: provider, Credentials: credentials}
 	}
@@ -72,6 +77,53 @@ func TestCredentialStorage(t *testing.T) {
 			want:        CredentialStorage{Sealed: true},
 		},
 		{name: "unsealed-empty"},
+		{
+			name: "openalgo-market-data-key",
+			instances: sources(source(domain.MarketDataProviderOpenAlgo,
+				`{"url":"http://localhost:5000","wsUrl":"ws://localhost:8765","apiKey":"fake-key"}`)),
+			want: CredentialStorage{PlaintextMarketDataKeys: true},
+		},
+		{
+			name: "openalgo-market-data-settings-only",
+			instances: sources(source(domain.MarketDataProviderOpenAlgo,
+				`{"url":"http://localhost:5000","wsUrl":"ws://localhost:8765"}`)),
+		},
+		{
+			name:        "ib-settings-only",
+			connections: providerConnectionWith(domain.TradingProviderIB, `{"host":"127.0.0.1","port":4002}`),
+		},
+		{
+			name:        "ib-all-settings",
+			connections: providerConnectionWith(domain.TradingProviderIB, `{"host":"127.0.0.1","port":4002,"clientId":7}`),
+		},
+		{
+			name:        "openalgo-api-key",
+			connections: providerConnectionWith(domain.TradingProviderOpenAlgo, `{"url":"http://h","wsUrl":"ws://x","apiKey":"k-secret"}`),
+			want:        CredentialStorage{PlaintextTradingKeys: true},
+		},
+		{
+			name:        "openalgo-settings-only",
+			connections: providerConnectionWith(domain.TradingProviderOpenAlgo, `{"url":"http://h","wsUrl":"ws://x"}`),
+		},
+		{
+			name:        "openalgo-blank-api-key",
+			connections: providerConnectionWith(domain.TradingProviderOpenAlgo, `{"url":"http://h","wsUrl":"ws://x","apiKey":"  "}`),
+		},
+		{
+			name:        "openalgo-other-secret",
+			connections: providerConnectionWith(domain.TradingProviderOpenAlgo, `{"url":"http://h","extra":{"url":"n-secret"}}`),
+			want:        CredentialStorage{PlaintextTradingKeys: true},
+		},
+		{
+			name:        "openalgo-wrong-type-url",
+			connections: providerConnectionWith(domain.TradingProviderOpenAlgo, `{"url":5,"wsUrl":"ws://x"}`),
+			want:        CredentialStorage{PlaintextTradingKeys: true},
+		},
+		{
+			name:        "alpaca-host-is-secret",
+			connections: providerConnectionWith(domain.TradingProviderAlpaca, `{"host":"h-secret"}`),
+			want:        CredentialStorage{PlaintextTradingKeys: true},
+		},
 		{
 			name:        "no-keys",
 			connections: connectionWith(`{"apiKey":" ","apiSecret":""}`),

@@ -537,13 +537,14 @@ func TestServerToolSnapshot(t *testing.T) {
 				`eToro uses {} for market or {"timeInForce":"ioc"} for an IOC limit buy`,
 				"Bybit requires GTC, IOC or FOK for a limit order and {} for a market order",
 				"OKX requires GTC, IOC or FOK for a limit order and {} for a market order",
+				`OpenAlgo requires {"product":"CNC"} or {"product":"MIS"}, with no default or timeInForce field`,
 			} {
 				if !strings.Contains(dest.Properties["route"].Description, guidance) {
 					t.Errorf("%s destination.route description must include %q", tool, guidance)
 				}
 			}
 			for field, guidance := range map[string]string{
-				"amountKind": "built-in Alpaca, Binance, Bybit, Coinbase, IB, eToro and OKX require quantity",
+				"amountKind": "built-in Alpaca, Binance, Bybit, Coinbase, IB, eToro, OKX and OpenAlgo require quantity; OpenAlgo requires whole numbers in multiples of the lot size",
 				"price":      "IB crypto buys require a limit price",
 			} {
 				property := input.Properties[field]

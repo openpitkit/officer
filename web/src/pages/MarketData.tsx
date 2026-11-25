@@ -228,6 +228,7 @@ const OKX_PROVIDER = "okx";
 const BYBIT_PROVIDER = "bybit";
 const OANDA_PROVIDER = "oanda";
 const FINNHUB_PROVIDER = "finnhub";
+const OPENALGO_PROVIDER = "openalgo";
 const MOCK_PROVIDER = "mock";
 
 const IB_SITE_URL = "https://www.interactivebrokers.com";
@@ -273,6 +274,9 @@ const FINNHUB_SITE_URL = "https://finnhub.io";
 const FINNHUB_DOCS_URL = "https://finnhub.io/docs/api/websocket-trades";
 const FINNHUB_SYMBOLS_URL = "https://finnhub.io/docs/api";
 const FINNHUB_DASHBOARD_URL = "https://finnhub.io/dashboard";
+const OPENALGO_DOCS_URL =
+  "https://docs.openalgo.in/api-documentation/v1/websockets";
+const OPENALGO_SYMBOLS_URL = "https://docs.openalgo.in/symbol-format";
 
 const MARKET_DATA_DIALOG_CONTENT_CLASS =
   "max-h-[90vh] max-w-[40rem] overflow-y-auto";
@@ -283,6 +287,7 @@ const PROVIDERS_WITH_SETTINGS = new Set([
   BYBIT_PROVIDER,
   OANDA_PROVIDER,
   FINNHUB_PROVIDER,
+  OPENALGO_PROVIDER,
 ]);
 
 const PROVIDERS_WITH_CUSTOM_INSTRUMENT_DIALOG = new Set([IB_PROVIDER]);
@@ -297,6 +302,7 @@ const PROVIDER_ORDER = [
   BYBIT_PROVIDER,
   OANDA_PROVIDER,
   FINNHUB_PROVIDER,
+  OPENALGO_PROVIDER,
   MANUAL_PROVIDER,
   MOCK_PROVIDER,
 ];
@@ -310,6 +316,7 @@ const FALLBACK_PROVIDERS: MarketDataProvider[] = [
   { type: BYBIT_PROVIDER, title: "Bybit" },
   { type: OANDA_PROVIDER, title: "OANDA" },
   { type: FINNHUB_PROVIDER, title: "Finnhub" },
+  { type: OPENALGO_PROVIDER, title: "OpenAlgo" },
   { type: MANUAL_PROVIDER, title: "BYO" },
   { type: MOCK_PROVIDER, title: "Mock" },
 ];
@@ -358,6 +365,10 @@ const PROVIDER_LINKS: Record<
     siteUrl: FINNHUB_SITE_URL,
     docsUrl: FINNHUB_DOCS_URL,
     symbolsUrl: FINNHUB_SYMBOLS_URL,
+  },
+  [OPENALGO_PROVIDER]: {
+    docsUrl: OPENALGO_DOCS_URL,
+    symbolsUrl: OPENALGO_SYMBOLS_URL,
   },
 };
 
@@ -411,6 +422,13 @@ function initialSettingsDraft(
   if (type === FINNHUB_PROVIDER) {
     return { token: "" };
   }
+  if (type === OPENALGO_PROVIDER) {
+    return {
+      url: settingString(settings, "url"),
+      wsUrl: settingString(settings, "wsUrl"),
+      apiKey: "",
+    };
+  }
   return {};
 }
 
@@ -450,6 +468,18 @@ function providerSettingsReady(
   }
   if (type === FINNHUB_PROVIDER) {
     return draft.token?.trim() !== "" || hasSecret(instance, "token");
+  }
+  if (type === OPENALGO_PROVIDER) {
+    return (
+      Boolean(draft.url?.trim()) &&
+      Boolean(draft.wsUrl?.trim()) &&
+      (Boolean(draft.apiKey?.trim()) ||
+        (hasSecret(instance, "apiKey") &&
+          typeof instance?.settings?.url === "string" &&
+          typeof instance.settings.wsUrl === "string" &&
+          draft.url?.trim() === instance.settings.url.trim() &&
+          draft.wsUrl?.trim() === instance.settings.wsUrl.trim()))
+    );
   }
   return true;
 }
@@ -491,6 +521,10 @@ function buildProviderCredentials(
     putIfFilled(body, "environment", draft.environment);
   } else if (type === FINNHUB_PROVIDER) {
     putIfFilled(body, "token", draft.token);
+  } else if (type === OPENALGO_PROVIDER) {
+    putIfFilled(body, "url", draft.url);
+    putIfFilled(body, "wsUrl", draft.wsUrl);
+    putIfFilled(body, "apiKey", draft.apiKey);
   }
   if (Object.keys(body).length === 0) {
     return "";
@@ -1252,6 +1286,47 @@ function ProviderSettingsFields({
       </div>
     );
   }
+  if (providerType === OPENALGO_PROVIDER) {
+    return (
+      <div className="flex flex-col gap-y-3">
+        <UnsealedKeysWarning storage={credentialStorage} />
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="flex flex-col gap-y-2">
+            <Label htmlFor="md-settings-openalgo-url">
+              {t("trading:settings.openalgo.url")}
+            </Label>
+            <Input
+              id="md-settings-openalgo-url"
+              value={draft.url}
+              placeholder="http://127.0.0.1:5000"
+              onChange={(e) => set("url", e.target.value)}
+              disabled={busy}
+            />
+          </div>
+          <div className="flex flex-col gap-y-2">
+            <Label htmlFor="md-settings-openalgo-ws-url">
+              {t("trading:settings.openalgo.wsUrl")}
+            </Label>
+            <Input
+              id="md-settings-openalgo-ws-url"
+              value={draft.wsUrl}
+              placeholder="ws://127.0.0.1:8765"
+              onChange={(e) => set("wsUrl", e.target.value)}
+              disabled={busy}
+            />
+          </div>
+          <SecretInput
+            id="md-settings-openalgo-api-key"
+            label={t("venues:settings.apiKey")}
+            value={draft.apiKey}
+            placeholder={storedPlaceholder("apiKey")}
+            disabled={busy}
+            onChange={(value) => set("apiKey", value)}
+          />
+        </div>
+      </div>
+    );
+  }
   if (providerType === FINNHUB_PROVIDER) {
     return (
       <div className="flex flex-col gap-y-3">
@@ -1590,7 +1665,11 @@ export function InstanceSettingsDialog({
       >
         <DialogHeader>
           <DialogTitle>{t("settings.editTitle")}</DialogTitle>
-          <DialogDescription>{t("settings.editDescription")}</DialogDescription>
+          <DialogDescription>
+            {t("settings.editDescription")}
+            {instance?.provider === OPENALGO_PROVIDER &&
+              ` ${t("trading:settings.openalgo.addressKeyHint")}`}
+          </DialogDescription>
         </DialogHeader>
         {instance && (
           <div className="flex flex-col gap-y-4">

@@ -230,6 +230,13 @@
           "ioc": "IOC - Ejecutar y anular",
           "fok": "FOK - Todo o nada"
         },
+        "product": "Producto",
+        "chooseProduct": "Elija el producto",
+        "productOptions": {
+          "cnc": "CNC - entrega",
+          "mis": "MIS - intradía"
+        },
+        "aboutProducts": "Acerca de los productos",
         "aboutTimeInForce": "Acerca de la validez",
         "unsupportedProvider": "Este panel no admite el envío a {{provider}}.",
         "quantityHint": "Las órdenes se envían a la plataforma por cantidad.",
@@ -461,6 +468,7 @@
         "statusFilled": "Ejecutada",
         "statusCancelled": "Cancelada, rechazada o vencida en la plataforma",
         "timeInForce": "Validez",
+        "product": "Producto",
         "linkedAt": "Vinculada el",
         "fees": "Las comisiones de {{venue}} no vinculadas a órdenes se registran más tarde como ajustes de la cuenta.",
         "feesUnknownProvider": "Las comisiones de la plataforma no vinculadas a órdenes se registran más tarde como ajustes de la cuenta.",

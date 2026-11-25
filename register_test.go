@@ -253,7 +253,7 @@ func TestRegisterTradingComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.Providers) != 8 ||
+	if len(status.Providers) != 9 ||
 		status.Providers[0].Type != domain.TradingProviderAlpaca ||
 		status.Providers[1].Type != domain.TradingProviderBinance ||
 		status.Providers[2].Type != domain.TradingProviderBybit ||
@@ -261,7 +261,8 @@ func TestRegisterTradingComposition(t *testing.T) {
 		status.Providers[4].Type != domain.TradingProviderEtoro ||
 		status.Providers[5].Type != domain.TradingProviderIB ||
 		status.Providers[6].Type != domain.TradingProviderOKX ||
-		status.Providers[7].Type != "test" ||
+		status.Providers[7].Type != domain.TradingProviderOpenAlgo ||
+		status.Providers[8].Type != "test" ||
 		len(status.Connections) != 1 || status.Connections[0].State != "unavailable" {
 		t.Fatal("trading runtime was not wired into the control plane before Start")
 	}

@@ -527,6 +527,8 @@ const (
 	MarketDataProviderOANDA = "oanda"
 	// MarketDataProviderFinnhub is the Finnhub market-data feed.
 	MarketDataProviderFinnhub = "finnhub"
+	// MarketDataProviderOpenAlgo is the user's OpenAlgo NSE/BSE quote feed.
+	MarketDataProviderOpenAlgo = "openalgo"
 	// MarketDataProviderMock is the synthetic provider for demos.
 	MarketDataProviderMock = "mock"
 )

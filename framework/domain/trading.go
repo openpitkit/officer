@@ -56,6 +56,9 @@ const TradingProviderEtoro = "etoro"
 // TradingProviderOKX is the OKX trading-provider discriminator.
 const TradingProviderOKX = "okx"
 
+// TradingProviderOpenAlgo is the OpenAlgo trading-provider discriminator.
+const TradingProviderOpenAlgo = "openalgo"
+
 // TradingModeSupported reports whether mode is a supported trading mode.
 func TradingModeSupported(mode TradingMode) bool {
 	return mode == TradingModePaper || mode == TradingModeLive

@@ -27,10 +27,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -53,11 +51,7 @@ type etoroConnector struct {
 	redact       *strings.Replacer
 	lifecycle    streamLifecycle
 
-	ordersMu sync.Mutex
-	orderIDs map[string]string
-	finished []string
-	held     []string
-	mapped   chan struct{}
+	*orderCorrelator
 }
 
 var _ fwtrading.PreChecker = (*etoroConnector)(nil)
@@ -97,7 +91,7 @@ func newEtoroConnector(connection domain.TradingConnection, restURL string) (*et
 	return &etoroConnector{
 		client: etoro.NewClient(restURL, credentials, &http.Client{Timeout: 10 * time.Second}, redact),
 		demo:   demo, credentials: credentials, streamURL: etoro.StreamURL, redact: redact,
-		orderIDs: make(map[string]string), mapped: make(chan struct{}, 1),
+		orderCorrelator: newOrderCorrelator(),
 	}, nil
 }
 
@@ -1030,42 +1024,27 @@ func (c *etoroConnector) orderSnapshot(ref fwtrading.OrderRef, state etoroOrderS
 	if state.statusID == "4" || state.statusID == "10" {
 		snapshot.Reason = c.redact.Replace(state.reason)
 	}
-	cumulative := decimal.Zero
+	ordered := make([]fillExecution, len(executions))
 	for i, execution := range executions {
-		cumulative = cumulative.Add(execution.quantity)
-		leaves := state.requested.Sub(cumulative)
-		if leaves.IsNegative() {
-			return fwtrading.Snapshot{}, true, c.lookupUnparsable("eToro executions exceed requestedUnits.")
-		}
-		fill := fwtrading.Fill{
-			Quantity: execution.quantity.String(), Price: execution.price.String(),
-			CumQuantity: cumulative.String(), LeavesQuantity: leaves.String(),
-			Final: i == len(executions)-1 && state.status == fwtrading.VenueStatusFilled,
-			At:    execution.at,
+		ordered[i] = fillExecution{
+			quantity: execution.quantity, price: execution.price, at: execution.at,
 		}
 		if state.currency != "" {
-			fill.Commission = &domain.Commission{Amount: execution.fee.String(), Currency: state.currency}
+			ordered[i].commission = &domain.Commission{Amount: execution.fee.String(), Currency: state.currency}
 		}
-		snapshot.Fills = append(snapshot.Fills, fill)
 	}
+	fills, cumulative, ok := fillChain(ordered, state.requested, state.status)
+	if !ok {
+		return fwtrading.Snapshot{}, true, c.lookupUnparsable("eToro executions exceed requestedUnits.")
+	}
+	snapshot.Fills = fills
 	// eToro demo probe P8: a filled order's executions sum to its requested units (bestEffort under-execution unverified).
 	if state.status == fwtrading.VenueStatusFilled && !cumulative.Equal(state.requested) {
 		return fwtrading.Snapshot{}, true, c.lookupUnparsable("An eToro filled order's executions do not sum to requestedUnits.")
 	}
 	snapshot.FilledQuantity = cumulative.String()
 	if state.status == fwtrading.VenueStatusFilled || state.status == fwtrading.VenueStatusCancelled {
-		c.ordersMu.Lock()
-		delete(c.orderIDs, orderID)
-		if !slices.Contains(c.finished, orderID) {
-			if len(c.finished) == etoroHeldLimit {
-				c.finished = slices.Delete(c.finished, 0, 1)
-			}
-			c.finished = append(c.finished, orderID)
-		}
-		if i := slices.Index(c.held, orderID); i >= 0 {
-			c.held = slices.Delete(c.held, i, i+1)
-		}
-		c.ordersMu.Unlock()
+		c.finishOrder(orderID)
 	} else {
 		c.mapOrder(orderID, ref.ClientOrderID)
 	}

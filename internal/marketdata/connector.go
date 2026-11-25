@@ -233,6 +233,28 @@ func websocketReadLoop(
 	return reads
 }
 
+func pingLoop(ctx context.Context, interval time.Duration, ping func(context.Context) error, errs chan<- error) {
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := ping(ctx); err != nil {
+				select {
+				case errs <- err:
+				default:
+				}
+				return
+			}
+		}
+	}
+}
+
 func nextWebsocketRead(
 	ctx context.Context,
 	reads <-chan websocketReadResult,

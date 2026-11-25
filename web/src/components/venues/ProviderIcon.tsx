@@ -233,6 +233,26 @@ function OANDAIcon({ className }: { className?: string }) {
   );
 }
 
+function OpenAlgoIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+    >
+      <rect width="24" height="24" rx="4" fill="#fff" />
+      <path
+        d="M12 3 21 12 12 21 3 12Z"
+        stroke="#111"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="m12 9 3 3-3 3-3-3Z" fill="#111" />
+    </svg>
+  );
+}
+
 function FinnhubIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -284,6 +304,9 @@ export function ProviderIcon({ type, className }: ProviderIconProps) {
   }
   if (type === "finnhub") {
     return <FinnhubIcon className={className} />;
+  }
+  if (type === "openalgo") {
+    return <OpenAlgoIcon className={className} />;
   }
   if (type === "mock" || type === "test") {
     return <FlaskConical className={className} />;

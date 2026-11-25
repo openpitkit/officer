@@ -69,6 +69,8 @@ type TradingConnectionStatus struct {
 	// diagnostic and in each action target are redacted.
 	Diagnostics []health.Diagnostic
 	Secrets     map[string]bool
+	// Settings holds connection settings; credential values in its string
+	// values are redacted.
 	Settings    map[string]any
 	Instruments []domain.TradingInstrument
 	// Access lists the connection's grants the account scope shows the caller,
@@ -76,10 +78,16 @@ type TradingConnectionStatus struct {
 	Access []store.TradingAccessListRow
 }
 
-// TradingConnectionSettings reports non-secret settings safe to display in
-// edit forms: IB host, port and clientId; OKX site. It is nil for any other
-// provider, whose credentials it never reads, and when the stored credentials
-// are not a JSON object or hold no such settings.
+// TradingConnectionSettings reports raw settings for edit forms: IB host, port
+// and clientId, OKX site, and OpenAlgo url and wsUrl. A caller displaying them
+// passes string values through the connection's tradingCredentialRedactor,
+// as GetTrading does. Every key reported is excluded from secret presence
+// (Secrets and CredentialStorage.PlaintextTradingKeys) and credential redaction
+// through tradingCredentialRedactor; adding a key removes it from both.
+// OpenAlgo addresses must be non-blank absolute URLs with a scheme and host
+// and without userinfo, query (even a bare '?') or fragment. It is nil for
+// other providers, whose credentials it never reads, and when the stored
+// credentials are not a JSON object or hold no such settings.
 func TradingConnectionSettings(c domain.TradingConnection) map[string]any {
 	settings := make(map[string]any)
 	switch c.Provider {
@@ -91,6 +99,10 @@ func TradingConnectionSettings(c domain.TradingConnection) map[string]any {
 	case domain.TradingProviderOKX:
 		credentials := credentialsObject(c.Credentials)
 		copyStringSetting(settings, credentials, "site")
+	case domain.TradingProviderOpenAlgo:
+		credentials := credentialsObject(c.Credentials)
+		copyAddressSetting(settings, credentials, "url")
+		copyAddressSetting(settings, credentials, "wsUrl")
 	default:
 		return nil
 	}
@@ -98,6 +110,17 @@ func TradingConnectionSettings(c domain.TradingConnection) map[string]any {
 		return nil
 	}
 	return settings
+}
+
+func copyAddressSetting(dst, src map[string]any, key string) {
+	value, ok := src[key].(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return
+	}
+	if _, ok := secret.CredentialFreeURL(value); !ok {
+		return
+	}
+	dst[key] = value
 }
 
 // TradingStatus is the credential-free control-plane view of trading.
@@ -238,9 +261,15 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			feeAccount = ""
 		}
 		state, reason := tradingConnectionState(c.ExternalID, states)
-		secrets, redact, err := secret.CredentialRedactor(c.Credentials)
+		secrets, redact, err := tradingCredentialRedactor(c)
 		if err != nil {
 			return TradingStatus{}, err
+		}
+		settings := TradingConnectionSettings(c)
+		for key, value := range settings {
+			if text, ok := value.(string); ok {
+				settings[key] = redact.Replace(text)
+			}
 		}
 		status.Connections = append(status.Connections, TradingConnectionStatus{
 			ExecutionPolicy: executionPolicy,
@@ -250,7 +279,7 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			Error: redact.Replace(reason),
 			Diagnostics: redactTradingDiagnostics(
 				redact, states[c.ExternalID].Diagnostics),
-			Secrets: secrets, Settings: TradingConnectionSettings(c),
+			Secrets: secrets, Settings: settings,
 			Instruments: instruments, Access: access,
 		})
 	}
@@ -423,6 +452,18 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 					"trading runtime and so brings unavailable connections back: %w",
 				c.ExternalID, domain.ErrLoosening,
 			)
+		}
+	}
+	if c.Provider == domain.TradingProviderOpenAlgo {
+		urlChanged, wsURLChanged, hasAPIKey, err := openAlgoAddressChanges(c.Credentials, merged, credentials)
+		if err != nil {
+			return err
+		}
+		if urlChanged {
+			return fmt.Errorf("openalgo: the REST address of an existing connection cannot change; to use another address, create a new connection: %w", domain.ErrConflict)
+		}
+		if wsURLChanged && !hasAPIKey {
+			return domain.NewValidationError("/credentials/apiKey", "required", "openalgo: a changed wsUrl requires apiKey; Officer does not send a stored key to a new address")
 		}
 	}
 	c.Credentials = merged
@@ -835,7 +876,7 @@ func (s *Service) ListTradingDestinations(ctx context.Context, account domain.Ac
 			continue
 		}
 		state, reason := tradingConnectionState(c.ExternalID, states)
-		reason, err = redactTradingCredentials(c.Credentials, reason)
+		reason, err = redactTradingCredentials(c, reason)
 		if err != nil {
 			return nil, err
 		}
@@ -923,7 +964,7 @@ func (s *Service) sendOrder(ctx context.Context, o domain.Order, dest SendDestin
 		if err != nil {
 			return VenueSendResult{}, err
 		}
-		_, redact, err = secret.CredentialRedactor(connection.Credentials)
+		_, redact, err = tradingCredentialRedactor(connection)
 		if err != nil {
 			return VenueSendResult{}, err
 		}
@@ -960,7 +1001,7 @@ func (s *Service) resolveTradingConnection(ctx context.Context, account domain.A
 	if err != nil {
 		return domain.TradingConnection{}, "", nil, err
 	}
-	_, redact, err := secret.CredentialRedactor(connection.Credentials)
+	_, redact, err := tradingCredentialRedactor(connection)
 	if err != nil {
 		return connection, "", redact, err
 	}
@@ -1107,7 +1148,7 @@ func tradingAccountCheckError(operation string, connection domain.TradingConnect
 	// A provider can reject local settings before contacting its venue.
 	var validation interface{ ValidationPointer() string }
 	if errors.Is(cause, domain.ErrInvalid) && errors.As(cause, &validation) {
-		message, err := redactTradingCredentials(connection.Credentials, cause.Error())
+		message, err := redactTradingCredentials(connection, cause.Error())
 		if err != nil {
 			return err
 		}
@@ -1117,7 +1158,7 @@ func tradingAccountCheckError(operation string, connection domain.TradingConnect
 }
 
 func tradingUpstreamError(operation string, connection domain.TradingConnection, cause error) error {
-	message, err := redactTradingCredentials(connection.Credentials, cause.Error())
+	message, err := redactTradingCredentials(connection, cause.Error())
 	if err != nil {
 		return err
 	}
@@ -1163,8 +1204,19 @@ type redactedTradingError struct {
 func (e *redactedTradingError) Error() string { return e.text }
 func (e *redactedTradingError) Unwrap() error { return e.cause }
 
-func redactTradingCredentials(credentials, text string) (string, error) {
-	_, redact, err := secret.CredentialRedactor(credentials)
+// tradingCredentialRedactor takes its exclusions from
+// TradingConnectionSettings.
+func tradingCredentialRedactor(c domain.TradingConnection) (map[string]bool, *strings.Replacer, error) {
+	settings := TradingConnectionSettings(c)
+	keys := make([]string, 0, len(settings))
+	for key := range settings {
+		keys = append(keys, key)
+	}
+	return secret.CredentialRedactor(c.Credentials, keys...)
+}
+
+func redactTradingCredentials(c domain.TradingConnection, text string) (string, error) {
+	_, redact, err := tradingCredentialRedactor(c)
 	if err != nil {
 		return "", err
 	}

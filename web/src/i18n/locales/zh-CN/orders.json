@@ -230,6 +230,13 @@
           "ioc": "IOC - 立即成交或取消",
           "fok": "FOK - 全部成交或取消"
         },
+        "product": "产品",
+        "chooseProduct": "选择产品",
+        "productOptions": {
+          "cnc": "CNC - 交割",
+          "mis": "MIS - 日内"
+        },
+        "aboutProducts": "关于产品",
         "aboutTimeInForce": "关于有效期",
         "unsupportedProvider": "此面板不支持向 {{provider}} 发送订单。",
         "quantityHint": "订单按数量发送到交易场所。",
@@ -461,6 +468,7 @@
         "statusFilled": "已成交",
         "statusCancelled": "已在交易场所取消、拒绝或到期",
         "timeInForce": "有效期",
+        "product": "产品",
         "linkedAt": "关联时间",
         "fees": "与订单无关的 {{venue}} 费用稍后会记作账户调整。",
         "feesUnknownProvider": "与订单无关的交易场所费用稍后会记作账户调整。",

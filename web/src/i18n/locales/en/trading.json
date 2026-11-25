@@ -81,6 +81,10 @@
       "apiKeySecretStored": "Secret: stored",
       "apiKeySecretNotSet": "Secret: not set"
     },
+    "openalgo": {
+      "url": "REST address: {{url}}",
+      "wsUrl": "WebSocket address: {{wsUrl}}"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "Enabled",
@@ -125,6 +129,19 @@
       "createKey": "Under {{apiKeys}}, select {{secretApiKeys}} and click {{createApiKey}}. Fill in {{nickname}}. Optionally enter the public IP address of the machine running Officer under {{ipAllowlist}}.",
       "restrictKey": "Under {{permissions}}, expand {{advancedTrade}}, select the portfolio and check {{read}} and {{trade}}, leaving {{transfer}} unchecked. Under {{signatureAlgorithm}}, choose {{ecdsa}}: the Coinbase trading API does not accept {{ed25519}} keys. Click {{create}} to generate the key.",
       "copyKeys": "Copy the {{apiKeyId}} and the {{secret}} from the Coinbase dialog exactly as shown, or click {{downloadApiKey}} to save them to a file."
+    },
+    "openalgo": {
+      "install": "Install OpenAlgo on a machine Officer can reach and start it. In OpenAlgo, open {{selectBroker}}, save your broker's API keys and log in to the broker with {{loginWith}}.",
+      "installationGuide": "Installation guide",
+      "brokerConfiguration": "Broker configuration",
+      "paperMode": "Switch OpenAlgo to {{analyzer}} mode and keep it there while this connection is enabled. Officer refuses a paper connection while OpenAlgo is in live mode. An order OpenAlgo places in live mode is reported as an error, and Officer does not track it further: if it closes, it stays pending for you to check at the broker.",
+      "liveMode": "Switch OpenAlgo to live mode and keep it there while this connection is enabled: live mode sends real orders to your broker. Officer refuses a live connection while OpenAlgo is in {{analyzer}} mode. An order OpenAlgo places in {{analyzer}} mode is reported as an error, and Officer does not track it further: if it closes, it stays pending for you to check in OpenAlgo.",
+      "aboutAnalyzer": "About Analyzer mode",
+      "apiKey": "Open {{apiKeyPage}} from OpenAlgo's profile menu, generate the API key and copy it. On the same page keep {{orderMode}} on {{auto}}: in {{semiAuto}} OpenAlgo queues orders for approval in its {{actionCenter}} instead of sending them, and Officer reports each such order as an error with an unknown outcome.",
+      "orderExecutionModes": "About order execution modes",
+      "addresses": "Enter OpenAlgo's REST address (its {{hostServer}} setting) and WebSocket address ({{websocketUrl}}) below, with the API key. The REST address identifies this connection and cannot be changed later: to use another address, create a new connection.",
+      "paperTradingDay": "OpenAlgo's order and trade books cover the current trading day only, and OpenAlgo confirms the filled quantity of a cancelled, rejected or expired order only through its live order stream. An order Officer cannot reconcile within its trading day, or one that closed while Officer was stopped, stays pending with an error: check it in OpenAlgo while it is in {{analyzer}} mode.",
+      "liveTradingDay": "OpenAlgo's order and trade books cover the current trading day only, and OpenAlgo confirms the filled quantity of a cancelled, rejected or expired order only through its live order stream. An order Officer cannot reconcile within its trading day, or one that closed while Officer was stopped, stays pending with an error: check it at the broker."
     },
     "test": {
       "prepare": "This connection executes test orders locally and needs no keys. After creating it, grant access to a test account, configure symbol masks and their execution rules, then enable the connection."
@@ -225,6 +242,13 @@
     "coinbase": {
       "apiKeyId": "API key ID",
       "apiKeySecret": "Secret"
+    },
+    "openalgo": {
+      "url": "REST address",
+      "wsUrl": "WebSocket address",
+      "urlCreateHint": "The REST address identifies this connection and cannot be changed later. To use another address, create a new connection.",
+      "urlHint": "The REST address identifies this connection. To use another address, create a new connection.",
+      "addressKeyHint": "To change an address, enter the API key again: Officer does not send a stored key to a new address."
     },
     "description": "Leave fields blank to keep the stored values.",
     "unknownProviderCredentials": "This panel does not know the credential fields of this provider.",

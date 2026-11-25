@@ -35,6 +35,7 @@ func FirstPartyProviders() []fwmarketdata.Provider {
 		BybitProvider(),
 		OANDAProvider(),
 		FinnhubProvider(),
+		OpenAlgoProvider(),
 		BYOProvider(),
 		MockProvider(),
 	}
@@ -154,6 +155,15 @@ func FinnhubProvider() fwmarketdata.Provider {
 		Build: func(instance domain.MarketDataInstance) (fwmarketdata.Connector, error) {
 			return NewFinnhubConnector(instance)
 		},
+	}
+}
+
+// OpenAlgoProvider describes the user's OpenAlgo quote connector.
+func OpenAlgoProvider() fwmarketdata.Provider {
+	return fwmarketdata.Provider{
+		Type: domain.MarketDataProviderOpenAlgo, Title: "OpenAlgo",
+		VerifiesSymbols: true, SearchesSymbols: true,
+		Build: NewOpenAlgoConnector,
 	}
 }
 

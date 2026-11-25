@@ -65,7 +65,7 @@ func TestProvidersAndEndpoints(t *testing.T) {
 	want := []string{
 		domain.TradingProviderAlpaca, domain.TradingProviderBinance, domain.TradingProviderCoinbase,
 		domain.TradingProviderIB, domain.TradingProviderEtoro, domain.TradingProviderBybit,
-		domain.TradingProviderOKX, "test",
+		domain.TradingProviderOKX, domain.TradingProviderOpenAlgo, "test",
 	}
 	if len(providers) != len(want) {
 		t.Fatalf("got %d providers, want %d", len(providers), len(want))

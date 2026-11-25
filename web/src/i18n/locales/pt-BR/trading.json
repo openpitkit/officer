@@ -81,6 +81,10 @@
       "apiKeySecretStored": "Secret: armazenado",
       "apiKeySecretNotSet": "Secret: não definido"
     },
+    "openalgo": {
+      "url": "Endereço REST: {{url}}",
+      "wsUrl": "Endereço WebSocket: {{wsUrl}}"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "Ativada",
@@ -125,6 +129,19 @@
       "createKey": "Em {{apiKeys}}, selecione {{secretApiKeys}} e clique em {{createApiKey}}. Preencha {{nickname}}. Se desejar, informe em {{ipAllowlist}} o endereço IP público do computador que executa o Officer.",
       "restrictKey": "Em {{permissions}}, expanda {{advancedTrade}}, selecione o portfólio e marque {{read}} e {{trade}}, sem marcar {{transfer}}. Em {{signatureAlgorithm}}, escolha {{ecdsa}}: a API de negociação da Coinbase não aceita chaves {{ed25519}}. Clique em {{create}} para gerar a chave.",
       "copyKeys": "Copie {{apiKeyId}} e {{secret}} do diálogo da Coinbase exatamente como são exibidos, ou clique em {{downloadApiKey}} para salvá-los em um arquivo."
+    },
+    "openalgo": {
+      "install": "Instale e inicie o OpenAlgo em uma máquina acessível pelo Officer. No OpenAlgo, abra {{selectBroker}}, salve as chaves API da sua corretora e entre na corretora com {{loginWith}}.",
+      "installationGuide": "Guia de instalação",
+      "brokerConfiguration": "Configuração da corretora",
+      "paperMode": "Altere o OpenAlgo para o modo {{analyzer}} e mantenha esse modo enquanto esta conexão estiver habilitada. O Officer recusa uma conexão simulada quando o OpenAlgo está no modo real. Se o OpenAlgo enviar uma ordem no modo real, o Officer informa um erro e deixa de acompanhá-la: se ela for encerrada, permanecerá pendente para que você a confira na corretora.",
+      "liveMode": "Altere o OpenAlgo para o modo real e mantenha esse modo enquanto esta conexão estiver habilitada: esse modo envia ordens reais à sua corretora. O Officer recusa uma conexão real quando o OpenAlgo está no modo {{analyzer}}. Se o OpenAlgo enviar uma ordem no modo {{analyzer}}, o Officer informa um erro e deixa de acompanhá-la: se ela for encerrada, permanecerá pendente para que você a confira no OpenAlgo.",
+      "aboutAnalyzer": "Sobre o modo Analyzer",
+      "apiKey": "Abra {{apiKeyPage}} no menu de perfil do OpenAlgo, gere a chave API e copie-a. Na mesma página, mantenha {{orderMode}} em {{auto}}: em {{semiAuto}}, o OpenAlgo coloca as ordens em uma fila para aprovação no {{actionCenter}} em vez de enviá-las, e o Officer informa um erro com resultado desconhecido para cada uma dessas ordens.",
+      "orderExecutionModes": "Sobre os modos de execução de ordens",
+      "addresses": "Informe abaixo o endereço REST do OpenAlgo (a configuração {{hostServer}}), o endereço WebSocket ({{websocketUrl}}) e a chave API. O endereço REST identifica esta conexão e não pode ser alterado depois: para usar outro endereço, crie uma nova conexão.",
+      "paperTradingDay": "Os livros de ordens e negócios do OpenAlgo cobrem apenas o dia de negociação atual. O OpenAlgo confirma a quantidade executada de uma ordem cancelada, rejeitada ou expirada somente pelo fluxo de ordens em tempo real. Uma ordem que o Officer não consiga conciliar dentro do seu dia de negociação, ou que tenha sido encerrada enquanto o Officer estava parado, permanece pendente com um erro: confira-a no OpenAlgo enquanto estiver no modo {{analyzer}}.",
+      "liveTradingDay": "Os livros de ordens e negócios do OpenAlgo cobrem apenas o dia de negociação atual. O OpenAlgo confirma a quantidade executada de uma ordem cancelada, rejeitada ou expirada somente pelo fluxo de ordens em tempo real. Uma ordem que o Officer não consiga conciliar dentro do seu dia de negociação, ou que tenha sido encerrada enquanto o Officer estava parado, permanece pendente com um erro: confira-a na corretora."
     },
     "test": {
       "prepare": "Esta conexão executa ordens de teste localmente e não precisa de chaves. Após criá-la, conceda acesso a uma conta de teste, configure as máscaras de símbolos e suas regras de execução e ative a conexão."
@@ -225,6 +242,13 @@
     "coinbase": {
       "apiKeyId": "API key ID",
       "apiKeySecret": "Secret"
+    },
+    "openalgo": {
+      "url": "Endereço REST",
+      "wsUrl": "Endereço WebSocket",
+      "urlCreateHint": "O endereço REST identifica esta conexão e não pode ser alterado depois. Para usar outro endereço, crie uma nova conexão.",
+      "urlHint": "O endereço REST identifica esta conexão. Para usar outro endereço, crie uma nova conexão.",
+      "addressKeyHint": "Para alterar um endereço, insira a chave API novamente: o Officer não envia uma chave armazenada para um novo endereço."
     },
     "description": "Deixe os campos em branco para manter os valores armazenados.",
     "unknownProviderCredentials": "Este painel não conhece os campos de credenciais deste provedor.",

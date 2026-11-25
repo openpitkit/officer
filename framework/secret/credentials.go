@@ -22,19 +22,41 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
+
+// CredentialFreeURL reports an absolute address that carries no credential
+// material: no user info, query or fragment. It trims surrounding whitespace
+// before parsing, as credential parsers do.
+func CredentialFreeURL(value string) (*url.URL, bool) {
+	if strings.TrimSpace(value) == "" {
+		return nil, false
+	}
+	address, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || !address.IsAbs() || address.Host == "" ||
+		address.User != nil || address.RawQuery != "" || address.ForceQuery ||
+		strings.Contains(value, "#") {
+		return nil, false
+	}
+	return address, true
+}
 
 // CredentialRedactor is the credential redactor that connectors and the
 // backend boundary share. It reads the stored credentials of a trading
 // connection or a market-data source, a JSON object, and returns the members
 // that hold a value and a replacer that redacts each non-blank credential
 // value, trimmed, spelled raw, JSON-escaped (HTML-escaped or not), URL query-
-// or path-escaped. The replacer tries the longest spelling first, so a
+// or path-escaped, or Go-quoted (strconv.Quote and strconv.QuoteToASCII, with
+// quotes stripped). The replacer tries the longest spelling first, so a
 // credential inside a longer credential's spelling is redacted with it and
-// leaves no fragment.
-func CredentialRedactor(credentials string) (map[string]bool, *strings.Replacer, error) {
+// leaves no fragment. Top-level members named in settings are excluded from
+// both the presence map and the collected credential values; nested members
+// are never excluded by name. Secret values are still redacted wherever they
+// occur in text, including inside a setting's value.
+func CredentialRedactor(credentials string, settings ...string) (map[string]bool, *strings.Replacer, error) {
 	var values map[string]any
 	if err := json.Unmarshal([]byte(credentials), &values); err != nil || values == nil {
 		return nil, nil, fmt.Errorf("secret: stored credentials are not a JSON object")
@@ -63,6 +85,9 @@ func CredentialRedactor(credentials string) (map[string]bool, *strings.Replacer,
 		}
 	}
 	for key, value := range values {
+		if slices.Contains(settings, key) {
+			continue
+		}
 		set := value != nil
 		switch v := value.(type) {
 		case string:
@@ -82,6 +107,9 @@ func CredentialRedactor(credentials string) (map[string]bool, *strings.Replacer,
 		spellings[value] = true
 		spellings[url.QueryEscape(value)] = true
 		spellings[url.PathEscape(value)] = true
+		for _, quoted := range []string{strconv.Quote(value), strconv.QuoteToASCII(value)} {
+			spellings[quoted[1:len(quoted)-1]] = true
+		}
 		for _, escapeHTML := range []bool{true, false} {
 			var quoted bytes.Buffer
 			encoder := json.NewEncoder(&quoted)

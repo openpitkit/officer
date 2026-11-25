@@ -10185,6 +10185,10 @@ components:
         SEC1 PEM ('-----BEGIN EC PRIVATE KEY-----'), with line breaks or with
         the \n escapes the Coinbase key dialog shows; Ed25519 keys are refused);
         IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}.
+        OpenAlgo uses {url, wsUrl, apiKey}.
+        OpenAlgo's url and wsUrl are non-secret settings returned under settings;
+        its API key is write-only.
+        An OpenAlgo update that changes url is refused; a changed wsUrl must carry apiKey.
         OKX uses {apiKey, apiSecret, passphrase, site}, all required.
         site is the OKX site the account is registered on: www.okx.com for
         global accounts, my.okx.com for EEA accounts or app.okx.com for US and
@@ -10303,7 +10307,7 @@ components:
           type: object
           additionalProperties:
             type: boolean
-          description: Key presence only; credential values are never returned.
+          description: Key presence only; credential values are never returned. Non-secret settings are not listed here; they are reported under `settings`.
         settings:
           type: object
           additionalProperties: true
@@ -10311,6 +10315,7 @@ components:
             Non-secret provider settings safe to display in edit forms.
             IB exposes host, port and clientId.
             OKX exposes site, never apiKey, apiSecret or passphrase values.
+            OpenAlgo exposes url and wsUrl.
         instruments:
           type: array
           items:
@@ -10883,7 +10888,7 @@ components:
         type:
           type: string
           description: Provider type identifier.
-          enum: [ib, binance, kraken, coinbase, alpaca, okx, bybit, oanda, finnhub, byo, mock]
+          enum: [ib, binance, kraken, coinbase, alpaca, okx, bybit, oanda, finnhub, openalgo, byo, mock]
         title:
           type: string
 
@@ -10901,7 +10906,7 @@ components:
         provider:
           type: string
           description: Provider discriminator.
-          enum: [ib, binance, kraken, coinbase, alpaca, okx, bybit, oanda, finnhub, byo, mock]
+          enum: [ib, binance, kraken, coinbase, alpaca, okx, bybit, oanda, finnhub, openalgo, byo, mock]
         label:
           type: string
           description: Unique human-readable label shown in the operator panel.
@@ -10925,6 +10930,7 @@ components:
             Opaque provider-specific connection settings JSON. During update,
             blank string fields preserve existing stored values so secret
             placeholders can be submitted without exposing stored secrets.
+            An OpenAlgo update that changes url or wsUrl must carry apiKey.
 
     MarketDataInstance:
       type: object
@@ -10955,6 +10961,7 @@ components:
             - bybit
             - oanda
             - finnhub
+            - openalgo
             - byo
             - mock
         label:
@@ -11423,6 +11430,8 @@ components:
                     timeInForce GTC, IOC or FOK for a limit order and an empty
                     object for a market order. eToro uses {} for market or
                     {"timeInForce":"ioc"} for an IOC limit buy.
+                    OpenAlgo requires {"product":"CNC"}
+                    or {"product":"MIS"}, with no default or timeInForce field.
                   additionalProperties: true
               additionalProperties: false
       unevaluatedProperties: false

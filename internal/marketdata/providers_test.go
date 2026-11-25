@@ -44,6 +44,7 @@ func TestFirstPartyRegistryOrderTitlesAndCapabilities(t *testing.T) {
 		{domain.MarketDataProviderBybit, "Bybit", true, true},
 		{domain.MarketDataProviderOANDA, "OANDA", false, false},
 		{domain.MarketDataProviderFinnhub, "Finnhub", true, true},
+		{domain.MarketDataProviderOpenAlgo, "OpenAlgo", true, true},
 		{domain.MarketDataProviderBYO, "BYO", false, false},
 		{domain.MarketDataProviderMock, "Mock", false, false},
 	}
@@ -119,6 +120,7 @@ func TestFirstPartyRegistryBuildsFirstPartyConnectors(t *testing.T) {
 			instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderFinnhub, Credentials: `{"token":"token"}`},
 			wantType: (*finnhubConnector)(nil),
 		},
+		{name: "openalgo", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderOpenAlgo, Credentials: `{"url":"http://localhost:5000","wsUrl":"ws://localhost:8765","apiKey":"fake-key"}`}, wantType: (*openAlgoConnector)(nil)},
 		{name: "byo", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBYO}, wantType: (*byoConnector)(nil)},
 		{name: "mock", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderMock}, wantType: (*mockConnector)(nil)},
 	}
@@ -155,6 +157,7 @@ func TestFirstPartyRegistryCapabilitiesMatchConnectors(t *testing.T) {
 		{name: "bybit", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBybit, Credentials: `{"category":"linear"}`}},
 		{name: "oanda", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderOANDA, Credentials: `{"token":"token","accountID":"account","environment":"practice"}`}},
 		{name: "finnhub", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderFinnhub, Credentials: `{"token":"token"}`}},
+		{name: "openalgo", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderOpenAlgo, Credentials: `{"url":"http://localhost:5000","wsUrl":"ws://localhost:8765","apiKey":"fake-key"}`}},
 		{name: "byo", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBYO}},
 		{name: "mock", instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderMock}},
 	}

@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"time"
 
 	"github.com/coder/websocket"
@@ -38,12 +37,6 @@ const (
 	etoroReconnectMin     = 100 * time.Millisecond
 	etoroReconnectMax     = 5 * time.Second
 	etoroHandshakeTimeout = 10 * time.Second
-
-	// 256 distinct orders cover an acknowledgement race burst without letting
-	// unrelated account traffic grow the queue indefinitely. Eviction is safe:
-	// an acknowledged order leaves the runtime's pending set, but the next
-	// EventConnected reconciliation resolves it from REST history.
-	etoroHeldLimit = 256
 
 	etoroPushUnreadable = "An eToro stream push could not be decoded."
 	etoroPushUnknown    = "An eToro stream push had an unknown type."
@@ -75,62 +68,8 @@ func (c *etoroConnector) Close() {
 	c.lifecycle.close()
 }
 
-// mapOrder wakes the stream instead of publishing on the runtime's channel:
-// Send and Lookup run on the same worker that consumes that channel.
-func (c *etoroConnector) mapOrder(venueID, clientID string) {
-	c.ordersMu.Lock()
-	c.orderIDs[venueID] = clientID
-	c.ordersMu.Unlock()
-	select {
-	case c.mapped <- struct{}{}:
-	default:
-		// A pending wake already covers every mapping installed so far.
-	}
-}
-
 func (c *etoroConnector) orderUpdate(venueID string) (fwtrading.Event, bool) {
-	c.ordersMu.Lock()
-	if slices.Contains(c.finished, venueID) {
-		c.ordersMu.Unlock()
-		return fwtrading.Event{}, false
-	}
-	if clientID := c.orderIDs[venueID]; clientID != "" {
-		c.ordersMu.Unlock()
-		return fwtrading.Event{Kind: fwtrading.EventOrder,
-			Ref: fwtrading.OrderRef{ClientOrderID: clientID, VenueOrderID: venueID}}, true
-	}
-	if slices.Contains(c.held, venueID) {
-		c.ordersMu.Unlock()
-		return fwtrading.Event{}, false
-	}
-	evicted := len(c.held) == etoroHeldLimit
-	if evicted {
-		c.held = slices.Delete(c.held, 0, 1)
-	}
-	c.held = append(c.held, venueID)
-	c.ordersMu.Unlock()
-	if evicted {
-		c.reportDiag(health.Diagnostic{
-			Code: health.CodeInternalError, Kind: health.DiagKindProvider, Level: health.DiagWarn,
-			Title: "The correlation queue for stream updates is full", Detail: etoroHeldEvicted,
-			Remediation: "Updates for orders placed outside Officer can fill this queue. " +
-				"An affected Officer order is resolved at the next stream reconnect or restart.",
-		})
-	}
-	return fwtrading.Event{}, false
-}
-
-func (c *etoroConnector) nextMappedUpdate() (fwtrading.Event, bool) {
-	c.ordersMu.Lock()
-	defer c.ordersMu.Unlock()
-	for i, venueID := range c.held {
-		if clientID := c.orderIDs[venueID]; clientID != "" {
-			c.held = slices.Delete(c.held, i, i+1)
-			return fwtrading.Event{Kind: fwtrading.EventOrder,
-				Ref: fwtrading.OrderRef{ClientOrderID: clientID, VenueOrderID: venueID}}, true
-		}
-	}
-	return fwtrading.Event{}, false
+	return correlateOrderUpdate(c.orderCorrelator, venueID, c.reportDiag, etoroHeldEvicted)
 }
 
 type etoroFrame struct {
@@ -220,49 +159,15 @@ func (c *etoroConnector) stream(ctx context.Context, out chan<- fwtrading.Event)
 		return false, err
 	}
 
-	// One reader lets a newly installed mapping wake the stream while the
-	// socket is idle. Cancel and join it on every session exit, including Close.
-	readCtx, stopRead := context.WithCancel(ctx)
-	type result struct {
-		frame etoroFrame
-		err   error
-	}
-	frames := make(chan result)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			frame, err := readEtoroFrame(readCtx, conn)
-			select {
-			case frames <- result{frame, err}:
-			case <-readCtx.Done():
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-	defer func() { stopRead(); <-done }()
 	report := venueStreamReporter(c.reportDiag)
-	for {
-		for event, ok := c.nextMappedUpdate(); ok; event, ok = c.nextMappedUpdate() {
-			if err := session.deliver(event); err != nil {
-				return session.healthy(), err
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return session.healthy(), ctx.Err()
-		case <-c.mapped:
-		case next := <-frames:
-			if next.err != nil {
-				return session.healthy(), next.err
-			}
+	return runOrderStream(session, c.orderCorrelator, c.orderUpdate,
+		func(readCtx context.Context) (etoroFrame, error) {
+			return readEtoroFrame(readCtx, conn)
+		}, func(frame etoroFrame, emit func(venueID string) error) error {
 			var messages []json.RawMessage
-			if next.frame.Operation != "" || json.Unmarshal(next.frame.Messages, &messages) != nil || messages == nil {
+			if frame.Operation != "" || json.Unmarshal(frame.Messages, &messages) != nil || messages == nil {
 				report(venueStreamUnparsable(health.DiagWarn, etoroPushUnreadable, venueStreamSkipped))
-				continue
+				return nil
 			}
 			for _, raw := range messages {
 				var push struct {
@@ -284,7 +189,9 @@ func (c *etoroConnector) stream(ctx context.Context, out chan<- fwtrading.Event)
 					report(venueStreamUnparsable(health.DiagWarn, etoroPushUnknown, etoroPushRefresh))
 					known = false
 				}
-				// eToro demo probe P9: v1 single-position market-close updates are assumed to arrive as Trading.OrderForCloseMultiple.Update; an unknown type carrying an OrderID still triggers Lookup.
+				// eToro demo probe P9: v1 single-position market-close updates
+				// are assumed to arrive as Trading.OrderForCloseMultiple.Update;
+				// an unknown type carrying an OrderID still triggers Lookup.
 				var update struct {
 					OrderID json.Number `json:"OrderID"`
 				}
@@ -304,12 +211,10 @@ func (c *etoroConnector) stream(ctx context.Context, out chan<- fwtrading.Event)
 				// eToro demo probe P1: RequestGuid is not a reliable client
 				// reference. Only REST establishes OrderID -> ClientOrderID;
 				// stream status, quantity and fills never enter accounting.
-				if event, ok := c.orderUpdate(orderID.String()); ok {
-					if err := session.deliver(event); err != nil {
-						return session.healthy(), err
-					}
+				if err := emit(orderID.String()); err != nil {
+					return err
 				}
 			}
-		}
-	}
+			return nil
+		})
 }

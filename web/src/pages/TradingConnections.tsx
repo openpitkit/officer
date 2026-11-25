@@ -250,6 +250,46 @@ const OKX_KEEP_PAGE_OPEN: TradingGuideStep = {
   links: [],
 };
 
+const OPENALGO_INSTALL: TradingGuideStep = {
+  textKey: "create.openalgo.install",
+  values: { selectBroker: "Select Broker", loginWith: "Login with" },
+  links: [
+    {
+      labelKey: "create.openalgo.installationGuide",
+      href: "https://docs.openalgo.in/installation-guidelines/getting-started",
+    },
+    {
+      labelKey: "create.openalgo.brokerConfiguration",
+      href: "https://docs.openalgo.in/connect-brokers/broker-configuration",
+    },
+  ],
+};
+const OPENALGO_API_KEY: TradingGuideStep = {
+  textKey: "create.openalgo.apiKey",
+  values: {
+    apiKeyPage: "API Key",
+    orderMode: "Order Execution Mode",
+    auto: "Auto",
+    semiAuto: "Semi-Auto",
+    actionCenter: "Action Center",
+  },
+  links: [
+    {
+      labelKey: "create.openalgo.orderExecutionModes",
+      href: "https://docs.openalgo.in/new-features/action-center",
+    },
+  ],
+};
+const OPENALGO_ADDRESSES: TradingGuideStep = {
+  textKey: "create.openalgo.addresses",
+  values: { hostServer: "HOST_SERVER", websocketUrl: "WEBSOCKET_URL" },
+  links: [],
+};
+const OPENALGO_ANALYZER_LINK = {
+  labelKey: "create.openalgo.aboutAnalyzer",
+  href: "https://docs.openalgo.in/new-features/api-analyzer",
+};
+
 /**
  * Venue links and account preparation steps for each supported trading mode.
  * The provider picker links the docs for the mode its draft opens in.
@@ -262,6 +302,40 @@ const TRADING_PROVIDER_GUIDES: Record<
     steps?: Partial<Record<TradingMode, TradingGuideStep[]>>;
   }
 > = {
+  openalgo: {
+    docsUrl: {
+      paper: OPENALGO_ANALYZER_LINK.href,
+      live: "https://docs.openalgo.in/installation-guidelines/getting-started",
+    },
+    steps: {
+      paper: [
+        OPENALGO_INSTALL,
+        {
+          textKey: "create.openalgo.paperMode",
+          values: { analyzer: "Analyzer" },
+          links: [OPENALGO_ANALYZER_LINK],
+        },
+        OPENALGO_API_KEY,
+        OPENALGO_ADDRESSES,
+        {
+          textKey: "create.openalgo.paperTradingDay",
+          values: { analyzer: "Analyzer" },
+          links: [],
+        },
+      ],
+      live: [
+        OPENALGO_INSTALL,
+        {
+          textKey: "create.openalgo.liveMode",
+          values: { analyzer: "Analyzer" },
+          links: [OPENALGO_ANALYZER_LINK],
+        },
+        OPENALGO_API_KEY,
+        OPENALGO_ADDRESSES,
+        { textKey: "create.openalgo.liveTradingDay", links: [] },
+      ],
+    },
+  },
   test: {
     steps: {
       paper: [{ textKey: "create.test.prepare", links: [] }],
@@ -612,8 +686,8 @@ const API_KEY_SECRET_FIELDS: TradingCredentialField[] = [
   },
 ];
 
-// IB takes connection settings instead; any other provider without an entry
-// must be blocked: guessing fields could send the wrong credentials.
+// A known provider has settings, credentials, or both. Providers with neither
+// are blocked: guessing fields could send the wrong credentials.
 const TRADING_PROVIDER_CREDENTIAL_FIELDS = new Map<
   string,
   TradingCredentialField[]
@@ -640,6 +714,7 @@ const TRADING_PROVIDER_CREDENTIAL_FIELDS = new Map<
       },
     ],
   ],
+  ["openalgo", [API_KEY_SECRET_FIELDS[0]]],
   [
     "okx",
     [
@@ -685,15 +760,65 @@ const IB_GATEWAY_PORTS: Record<TradingMode, string> = {
   live: "4001",
 };
 
-function ibSettingsReady(draft: Record<string, string>): boolean {
-  const port = Number(draft.port);
-  return (
-    draft.host.trim() !== "" &&
-    Number.isInteger(port) &&
-    port >= 1 &&
-    port <= 65535 &&
-    isOptionalJSONInt64(draft.clientId)
-  );
+type TradingSettingField = {
+  key: string;
+  labelKey: string;
+  kind: "text" | "port" | "optionalInt64";
+  placeholder?: string;
+  placeholderKey?: string;
+  hint?: { create?: string; settings: string };
+  fixed?: boolean;
+};
+
+const TRADING_PROVIDER_SETTING_FIELDS = new Map<string, TradingSettingField[]>([
+  [
+    "ib",
+    [
+      { key: "host", labelKey: "marketData:settings.host", kind: "text" },
+      { key: "port", labelKey: "marketData:settings.port", kind: "port" },
+      {
+        key: "clientId",
+        labelKey: "marketData:settings.clientId",
+        kind: "optionalInt64",
+        placeholderKey: "marketData:settings.autoClientId",
+      },
+    ],
+  ],
+  [
+    "openalgo",
+    [
+      {
+        key: "url",
+        labelKey: "settings.openalgo.url",
+        kind: "text",
+        placeholder: "http://127.0.0.1:5000",
+        fixed: true,
+        hint: {
+          create: "settings.openalgo.urlCreateHint",
+          settings: "settings.openalgo.urlHint",
+        },
+      },
+      {
+        key: "wsUrl",
+        labelKey: "settings.openalgo.wsUrl",
+        kind: "text",
+        placeholder: "ws://127.0.0.1:8765",
+        hint: { settings: "settings.openalgo.addressKeyHint" },
+      },
+    ],
+  ],
+]);
+
+function settingsReady(
+  fields: TradingSettingField[],
+  draft: Record<string, string>,
+): boolean {
+  return fields.every(({ key, kind }) => {
+    if (kind === "optionalInt64") return isOptionalJSONInt64(draft[key]);
+    if (kind === "text") return draft[key].trim() !== "";
+    const port = Number(draft[key]);
+    return Number.isInteger(port) && port >= 1 && port <= 65535;
+  });
 }
 
 const OKX_SITES = [
@@ -750,54 +875,79 @@ function ConnectionSiteField({
   );
 }
 
-function IBConnectionFields({
+function putSettingIfFilled(
+  credentials: Record<string, string | number>,
+  field: TradingSettingField,
+  value: string,
+) {
+  if (field.kind === "text") putIfFilled(credentials, field.key, value);
+  else putNumberIfFilled(credentials, field.key, value);
+}
+
+function ConnectionSettingFields({
   id,
+  fields,
   draft,
   busy,
   onChange,
+  existing = false,
 }: {
   id: string;
+  fields: TradingSettingField[];
   draft: Record<string, string>;
   busy: boolean;
   onChange: (patch: Record<string, string>) => void;
+  existing?: boolean;
 }) {
   const { t } = useTranslation("trading");
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      <div className="flex flex-col gap-y-2">
-        <Label htmlFor={`${id}-host`}>{t("marketData:settings.host")}</Label>
-        <Input
-          id={`${id}-host`}
-          value={draft.host}
-          onChange={(event) => onChange({ host: event.target.value })}
-          disabled={busy}
-        />
-      </div>
-      <div className="flex flex-col gap-y-2">
-        <Label htmlFor={`${id}-port`}>{t("marketData:settings.port")}</Label>
-        <NumberStepper
-          id={`${id}-port`}
-          integerOnly
-          min="1"
-          max={65535}
-          value={draft.port}
-          onChange={(port) => onChange({ port })}
-          disabled={busy}
-        />
-      </div>
-      <div className="flex flex-col gap-y-2">
-        <Label htmlFor={`${id}-client-id`}>
-          {t("marketData:settings.clientId")}
-        </Label>
-        <NumberStepper
-          id={`${id}-client-id`}
-          integerOnly
-          value={draft.clientId}
-          placeholder={t("marketData:settings.autoClientId")}
-          onChange={(clientId) => onChange({ clientId })}
-          disabled={busy}
-        />
-      </div>
+      {fields.map((field) => {
+        const fieldId = `${id}-${field.key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
+        const hint = field.hint?.[existing ? "settings" : "create"];
+        return (
+          <div key={field.key} className="flex flex-col gap-y-2">
+            <Label htmlFor={fieldId}>{t(field.labelKey)}</Label>
+            {field.kind === "text" ? (
+              <Input
+                id={fieldId}
+                value={draft[field.key]}
+                placeholder={
+                  field.placeholderKey
+                    ? t(field.placeholderKey)
+                    : field.placeholder
+                }
+                readOnly={existing && field.fixed}
+                aria-describedby={hint ? `${fieldId}-hint` : undefined}
+                onChange={(event) =>
+                  onChange({ [field.key]: event.target.value })
+                }
+                disabled={busy}
+              />
+            ) : (
+              <NumberStepper
+                id={fieldId}
+                integerOnly
+                min={field.kind === "port" ? "1" : undefined}
+                max={field.kind === "port" ? 65535 : undefined}
+                value={draft[field.key]}
+                placeholder={
+                  field.placeholderKey
+                    ? t(field.placeholderKey)
+                    : field.placeholder
+                }
+                onChange={(value) => onChange({ [field.key]: value })}
+                disabled={busy}
+              />
+            )}
+            {hint && (
+              <p id={`${fieldId}-hint`} className="text-xs text-muted">
+                {t(hint)}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -880,28 +1030,31 @@ function AddTradingConnectionDialog({
   const { createTradingConnection } = useOfficerApi();
   const id = useId();
   const fields = TRADING_PROVIDER_CREDENTIAL_FIELDS.get(provider.type);
+  const settingFields = TRADING_PROVIDER_SETTING_FIELDS.get(provider.type);
   const [label, setLabel] = useState(provider.title);
   const [createdWithError, setCreatedWithError] = useState(false);
   const [mode, setMode] = useState<TradingMode>(draftMode(provider));
   const [credentialDraft, setCredentialDraft] = useState<
     Record<string, string>
   >(() => Object.fromEntries(fields ? fields.map(({ key }) => [key, ""]) : []));
-  const [ibSettings, setIBSettings] = useState({
-    host: "127.0.0.1",
-    port: IB_GATEWAY_PORTS.paper,
-    clientId: "",
-  });
+  const [settingDraft, setSettingDraft] = useState<Record<string, string>>(
+    () =>
+      provider.type === "ib"
+        ? { host: "127.0.0.1", port: IB_GATEWAY_PORTS.paper, clientId: "" }
+        : Object.fromEntries(
+            settingFields ? settingFields.map(({ key }) => [key, ""]) : [],
+          ),
+  );
   // The prefilled gateway port follows the mode; a port the operator typed
   // stays as typed.
   const changeMode = (next: TradingMode) => {
     setMode(next);
-    setIBSettings((draft) =>
-      draft.port === IB_GATEWAY_PORTS[mode]
+    setSettingDraft((draft) =>
+      provider.type === "ib" && draft.port === IB_GATEWAY_PORTS[mode]
         ? { ...draft, port: IB_GATEWAY_PORTS[next] }
         : draft,
     );
   };
-  const isIB = provider.type === "ib";
   const siteProvider =
     provider.type === "okx" || (provider.type === "bybit" && mode === "paper")
       ? provider.type
@@ -914,10 +1067,11 @@ function AddTradingConnectionDialog({
   const ready =
     label.trim() !== "" &&
     (siteProvider === null || site !== "") &&
-    (isIB
-      ? ibSettingsReady(ibSettings)
-      : fields !== undefined &&
-        fields.every(({ key }) => credentialDraft[key].trim() !== ""));
+    (settingFields !== undefined || fields !== undefined) &&
+    (settingFields === undefined ||
+      settingsReady(settingFields, settingDraft)) &&
+    (fields === undefined ||
+      fields.every(({ key }) => credentialDraft[key].trim() !== ""));
 
   useEffect(() => {
     if (error !== "") errorBanner.current?.scrollIntoView({ block: "nearest" });
@@ -929,11 +1083,10 @@ function AddTradingConnectionDialog({
     setError("");
     try {
       const credentials: Record<string, string | number> = {};
-      if (isIB) {
-        putIfFilled(credentials, "host", ibSettings.host);
-        putNumberIfFilled(credentials, "port", ibSettings.port);
-        putNumberIfFilled(credentials, "clientId", ibSettings.clientId);
-      } else if (fields) {
+      for (const field of settingFields ?? []) {
+        putSettingIfFilled(credentials, field, settingDraft[field.key]);
+      }
+      if (fields) {
         for (const { key } of fields) {
           credentials[key] = credentialDraft[key].trim();
         }
@@ -987,7 +1140,7 @@ function AddTradingConnectionDialog({
             void submit();
           }}
         >
-          {!isIB && !fields && (
+          {!settingFields && !fields && (
             <ErrorBanner message={t("settings.unknownProviderCredentials")} />
           )}
           <div className="flex flex-col gap-y-2">
@@ -1063,33 +1216,16 @@ function AddTradingConnectionDialog({
               </ol>
             )}
           </div>
-          {isIB ? (
-            <IBConnectionFields
+          {settingFields && (
+            <ConnectionSettingFields
               id={id}
-              draft={ibSettings}
+              fields={settingFields}
+              draft={settingDraft}
               busy={busy}
               onChange={(patch) =>
-                setIBSettings((draft) => ({ ...draft, ...patch }))
+                setSettingDraft((draft) => ({ ...draft, ...patch }))
               }
             />
-          ) : (
-            fields?.map((field) => (
-              <CredentialField
-                key={field.key}
-                id={`${id}-${field.key}`}
-                label={t(field.labelKey)}
-                multiline={field.multiline}
-                value={credentialDraft[field.key]}
-                required
-                disabled={busy}
-                onChange={(value) =>
-                  setCredentialDraft({
-                    ...credentialDraft,
-                    [field.key]: value,
-                  })
-                }
-              />
-            ))
           )}
           {siteProvider !== null && (
             <ConnectionSiteField
@@ -1100,6 +1236,23 @@ function AddTradingConnectionDialog({
               onChange={setSite}
             />
           )}
+          {fields?.map((field) => (
+            <CredentialField
+              key={field.key}
+              id={`${id}-${field.key}`}
+              label={t(field.labelKey)}
+              multiline={field.multiline}
+              value={credentialDraft[field.key]}
+              required
+              disabled={busy}
+              onChange={(value) =>
+                setCredentialDraft({
+                  ...credentialDraft,
+                  [field.key]: value,
+                })
+              }
+            />
+          ))}
           {error && (
             <div ref={errorBanner}>
               <ErrorBanner message={error} />
@@ -1141,38 +1294,47 @@ function ConnectionSettingsDialog({
   const { updateTradingConnectionSettings } = useOfficerApi();
   const id = useId();
   const fields = TRADING_PROVIDER_CREDENTIAL_FIELDS.get(connection.provider);
+  const settingFields = TRADING_PROVIDER_SETTING_FIELDS.get(
+    connection.provider,
+  );
   const [initialLabel] = useState(connection.label);
   const [label, setLabel] = useState(initialLabel);
   const [credentialDraft, setCredentialDraft] = useState<
     Record<string, string>
   >(() => Object.fromEntries(fields ? fields.map(({ key }) => [key, ""]) : []));
-  const isIB = connection.provider === "ib";
   const isOKX = connection.provider === "okx";
   const [initialOKXSite] = useState(() =>
     settingString(connection.settings, "site"),
   );
   const [okxSite, setOKXSite] = useState(initialOKXSite);
   const siteChanged = isOKX && okxSite !== initialOKXSite;
-  const [initialIBSettings] = useState(() => ({
-    host: settingString(connection.settings, "host"),
-    port: settingString(connection.settings, "port"),
-    clientId: settingString(connection.settings, "clientId"),
-  }));
-  const [ibSettings, setIBSettings] = useState(initialIBSettings);
+  const [initialSettings] = useState(() =>
+    Object.fromEntries(
+      settingFields
+        ? settingFields.map(({ key }) => [
+            key,
+            settingString(connection.settings, key),
+          ])
+        : [],
+    ),
+  );
+  const [settingDraft, setSettingDraft] = useState(initialSettings);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const labelChanged = label.trim() !== "" && label.trim() !== initialLabel;
-  const changed = isIB
-    ? label.trim() !== "" &&
-      ibSettingsReady(ibSettings) &&
-      (labelChanged ||
-        ibSettings.host !== initialIBSettings.host ||
-        ibSettings.port !== initialIBSettings.port ||
-        ibSettings.clientId !== initialIBSettings.clientId)
-    : fields !== undefined &&
-      (labelChanged ||
-        siteChanged ||
-        fields.some(({ key }) => credentialDraft[key].trim() !== ""));
+  const changed =
+    (settingFields !== undefined || fields !== undefined) &&
+    (settingFields === undefined ||
+      (label.trim() !== "" && settingsReady(settingFields, settingDraft))) &&
+    (connection.provider !== "openalgo" ||
+      settingDraft.wsUrl.trim() === initialSettings.wsUrl.trim() ||
+      credentialDraft.apiKey.trim() !== "") &&
+    (labelChanged ||
+      siteChanged ||
+      settingFields?.some(
+        ({ key }) => settingDraft[key] !== initialSettings[key],
+      ) ||
+      fields?.some(({ key }) => credentialDraft[key].trim() !== ""));
 
   const submit = async () => {
     if (busy || !changed) return;
@@ -1182,17 +1344,12 @@ function ConnectionSettingsDialog({
     } = {};
     if (labelChanged) body.label = label.trim();
     const credentials: Record<string, string | number> = {};
-    if (isIB) {
-      if (ibSettings.host !== initialIBSettings.host) {
-        putIfFilled(credentials, "host", ibSettings.host);
+    for (const field of settingFields ?? []) {
+      if (settingDraft[field.key] !== initialSettings[field.key]) {
+        putSettingIfFilled(credentials, field, settingDraft[field.key]);
       }
-      if (ibSettings.port !== initialIBSettings.port) {
-        putNumberIfFilled(credentials, "port", ibSettings.port);
-      }
-      if (ibSettings.clientId !== initialIBSettings.clientId) {
-        putNumberIfFilled(credentials, "clientId", ibSettings.clientId);
-      }
-    } else if (fields) {
+    }
+    if (fields) {
       for (const { key } of fields) {
         const value = credentialDraft[key].trim();
         if (value !== "") credentials[key] = value;
@@ -1238,7 +1395,7 @@ function ConnectionSettingsDialog({
             )}
           </DialogHeader>
           {error && <ErrorBanner message={error} />}
-          {!isIB && !fields && (
+          {!settingFields && !fields && (
             <ErrorBanner message={t("settings.unknownProviderCredentials")} />
           )}
           <div className="flex flex-col gap-y-2">
@@ -1251,16 +1408,19 @@ function ConnectionSettingsDialog({
               disabled={busy}
             />
           </div>
-          {isIB ? (
-            <IBConnectionFields
+          {settingFields && (
+            <ConnectionSettingFields
               id={id}
-              draft={ibSettings}
+              fields={settingFields}
+              draft={settingDraft}
+              existing
               busy={busy}
               onChange={(patch) =>
-                setIBSettings((draft) => ({ ...draft, ...patch }))
+                setSettingDraft((draft) => ({ ...draft, ...patch }))
               }
             />
-          ) : (
+          )}
+          {fields && (
             <>
               {fields?.length !== 0 && (
                 <UnsealedKeysWarning storage={credentialStorage} />
@@ -3097,18 +3257,30 @@ function ConnectionCard({
                 })}
               </p>
             </>
-          ) : (
-            TRADING_PROVIDER_CREDENTIAL_FIELDS.get(connection.provider)?.map(
-              (field) => (
-                <p key={field.key}>
-                  {t(
-                    connection.secrets[field.key]
-                      ? field.storedKey
-                      : field.notSetKey,
-                  )}
-                </p>
-              ),
-            )
+          ) : connection.provider === "openalgo" ? (
+            <>
+              <p>
+                {t("connection.openalgo.url", {
+                  url: settingString(connection.settings, "url"),
+                })}
+              </p>
+              <p>
+                {t("connection.openalgo.wsUrl", {
+                  wsUrl: settingString(connection.settings, "wsUrl"),
+                })}
+              </p>
+            </>
+          ) : null}
+          {TRADING_PROVIDER_CREDENTIAL_FIELDS.get(connection.provider)?.map(
+            (field) => (
+              <p key={field.key}>
+                {t(
+                  connection.secrets[field.key]
+                    ? field.storedKey
+                    : field.notSetKey,
+                )}
+              </p>
+            ),
           )}
         </div>
         {!connection.enabled && (

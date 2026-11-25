@@ -72,14 +72,18 @@ rules:
         | Create\ New\ Key | Generated\ Keys | Generate\ Key
         | API\ Keys | API\ key\ ID | API\ key | API\ secret | Secret
         | Paper\ Trading | Live\ Trading | Regenerate | Passphrase
+        | Analyzer
         | Client\ ID | Con\ ID | Account\ ID | Host | Port | Token
+        # External symbol format and example, before their shorter venue codes.
+        | EXCHANGE:SYMBOL | NSE:RELIANCE
         # Product, venue, provider, company and Pit dialect names.
         | Pit\ Officer | OpenPit | Officer | The\ Pit\ Project\ Owners | Pit
         | Spot\ Funds | eSign | Tape | Ladder | BYO | Mock
         | Interactive\ Brokers | IB\ Gateway | IB | TWS | IEX
         | Alpaca | Binance | Bybit\ Global | Bybit\ EU | Bybit
         | Coinbase\ Exchange | Coinbase | Kraken | eToro
-        | OKX | OANDA | Finnhub
+        | OKX | OANDA | Finnhub | OpenAlgo
+        | NSE | BSE
         | Claude\ Desktop | Claude\ Agent\ Skill | Claude\ Skill | Claude
         | Docker\ Desktop
         | ChatGPT | GPT | Codex | Cursor | GitHub | OpenSSH
@@ -98,7 +102,7 @@ rules:
         | API | SDK | CLI | URL | CPU | LTO | AI | ID | GET | FX
         | P&L | PX | QTY | NTL | MTM | TIF | CCY
         | STK | CASH | OPT | FUT | IND | CRYPTO
-        | DAY | GTC | OPG | CLS | IOC | FOK
+        | DAY | GTC | OPG | CLS | IOC | FOK | CNC | MIS
         | BTC | USDT | USDC | USD | EUR | AAPL | BTCUSDT | EUR_USD | YYYYMMDD
         | v2 | v5 | v20
         # Domain identifiers: wire and configuration names, never translated.

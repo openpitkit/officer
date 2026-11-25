@@ -162,6 +162,87 @@ func connectStream(ctx context.Context, out chan<- fwtrading.Event,
 	return session, nil
 }
 
+// correlateOrderUpdate fulfills orderCorrelator.correlate's eviction contract.
+func correlateOrderUpdate(c *orderCorrelator, venueID string,
+	report health.DiagnosticReporter, evictionDetail string,
+) (fwtrading.Event, bool) {
+	event, ready, evicted := c.correlate(venueID)
+	if evicted {
+		report(orderCorrelationEvicted(evictionDetail))
+	}
+	return event, ready
+}
+
+// runOrderStream reads frames and delivers correlated order updates.
+// read runs on its own goroutine and must return when its context is cancelled.
+// Every session exit, including Close, cancels and joins that goroutine.
+// handle runs on the session goroutine. State it publishes before calling emit
+// is in place before that ID is correlated and delivered, and before held
+// updates are later drained. emit calls correlate and delivers a ready event
+// before returning; handle must return emit's error immediately.
+// correlate must report evictions by orderCorrelator.correlate's contract,
+// normally by wrapping correlateOrderUpdate with the venue's detail.
+// Any handle error ends the session.
+// Drain all ready held updates before blocking: mapping wakes coalesce, so one
+// signal can stand for several newly mapped orders.
+func runOrderStream[Frame any](session *streamSession, c *orderCorrelator,
+	correlate func(venueID string) (fwtrading.Event, bool),
+	read func(context.Context) (Frame, error),
+	handle func(frame Frame, emit func(venueID string) error) error,
+) (bool, error) {
+	// One reader lets a newly installed mapping wake the stream while the
+	// socket is idle. Cancel and join it on every session exit, including Close.
+	readCtx, stopRead := context.WithCancel(session.ctx)
+	type result struct {
+		frame Frame
+		err   error
+	}
+	frames := make(chan result)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			frame, err := read(readCtx)
+			select {
+			case frames <- result{frame, err}:
+			case <-readCtx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	defer func() { stopRead(); <-done }()
+	emit := func(venueID string) error {
+		if event, ready := correlate(venueID); ready {
+			return session.deliver(event)
+		}
+		return nil
+	}
+	for {
+		// Drain every ready held update before blocking: mapping wakeups
+		// coalesce, so one signal can stand for several newly mapped orders.
+		for event, ok := c.nextMappedUpdate(); ok; event, ok = c.nextMappedUpdate() {
+			if err := session.deliver(event); err != nil {
+				return session.healthy(), err
+			}
+		}
+		select {
+		case <-session.ctx.Done():
+			return session.healthy(), session.ctx.Err()
+		case <-c.mapped:
+		case next := <-frames:
+			if next.err != nil {
+				return session.healthy(), next.err
+			}
+			if err := handle(next.frame, emit); err != nil {
+				return session.healthy(), err
+			}
+		}
+	}
+}
+
 // deliver selects on the ctx passed to connectStream. EventConnected neither
 // marks the session healthy nor restarts its clock.
 func (s *streamSession) deliver(event fwtrading.Event) error {
