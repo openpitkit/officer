@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -649,6 +650,48 @@ class RecipeTestCase(unittest.TestCase):
             for line in recipe["body"]
         )
 
+    def body_commands(self, recipe: dict[str, object]) -> Iterator[list]:
+        punctuation = ";&|()"
+        for line in recipe["body"]:
+            expressions = {}
+            text = ""
+            for part in line:
+                if isinstance(part, str):
+                    if "\\" in part:
+                        raise ValueError(
+                            f"{recipe['name']}: cannot lex a literal backslash "
+                            "in a recipe body with POSIX shlex"
+                        )
+                    text += part
+                else:
+                    # Keep each Just expression intact while splitting shell words.
+                    token = f"\0{len(expressions)}\0"
+                    (expression,) = part
+                    expressions[token] = expression
+                    text += token
+
+            lexer = shlex.shlex(text, posix=True, punctuation_chars=punctuation)
+            lexer.whitespace_split = True
+            try:
+                words = list(lexer)
+            except ValueError as error:
+                raise ValueError(f"{recipe['name']}: {error}") from error
+            command = []
+            for word in words:
+                if word and not word.strip(punctuation):
+                    if command:
+                        yield command
+                        command = []
+                else:
+                    if not command:
+                        word = word.lstrip("@-")
+                    command.append(expressions.get(word, word))
+            if command:
+                yield command
+
+    def just_call(self, command: list) -> bool:
+        return command[0] in ("just", ["call", "just_executable"])
+
     def variables(self, expression: object) -> set[str]:
         # The JSON dump nests a variable as ["variable", name] inside the
         # fragments of a body line, the arguments of a call and an assignment.
@@ -668,21 +711,153 @@ class FrontendRecipeTests(RecipeTestCase):
     # A whole word: the helper subcommand ensure-node is not the node binary.
     FRONTEND_TOOLCHAIN = re.compile(r"(?<![\w-])(?:npm|npx|node)(?![\w-])")
     INSTALL_RECIPE = "frontend-ci-install"
-    # The only recipe running the toolchain that installs it instead of using it:
-    # it installs from package.json, and frontend-ci-install from the lockfile.
-    TOOLCHAIN_INSTALLERS = {"frontend-install"}
+    MANUAL_LOCKFILE_REWRITERS = frozenset({"frontend-install"})
+    # npm 11.19.1 docs: configuring-npm/package-lock-json.md and commands/npm-*.md.
+    LOCKFILE_WRITING_SUBCOMMANDS = {
+        "add",
+        "ddp",
+        "dedupe",
+        "i",
+        "in",
+        "ins",
+        "inst",
+        "insta",
+        "instal",
+        "install",
+        "install-test",
+        "isnt",
+        "isnta",
+        "isntal",
+        "isntall",
+        "it",
+        "link",
+        "ln",
+        "prune",
+        "r",
+        "remove",
+        "rm",
+        "shrinkwrap",
+        "u",
+        "udpate",
+        "un",
+        "uninstall",
+        "unlink",
+        "up",
+        "update",
+        "upgrade",
+        "verison",
+        "version",
+    }
+
+    @staticmethod
+    def executable_name(word: str) -> str:
+        return word.replace("\\", "/").rsplit("/", 1)[-1]
+
+    def rewrites_lockfile(self, command: list, recipe_name: str) -> bool:
+        while (
+            command
+            and isinstance(command[0], str)
+            and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", command[0])
+        ):
+            command = command[1:]
+        if not command or not isinstance(command[0], str):
+            return False
+
+        executable = self.executable_name(command[0])
+        command = command[1:]
+        if executable in ("npx", "npx.cmd"):
+            while (
+                command and isinstance(command[0], str) and command[0].startswith("-")
+            ):
+                option = command[0]
+                if option in ("-y", "--yes") or option.startswith("--package="):
+                    command = command[1:]
+                elif option in ("-p", "--package"):
+                    command = command[2:]
+                else:
+                    self.fail(
+                        f"{recipe_name}: unrecognised npx option {option!r}. "
+                        "The parser must learn it."
+                    )
+            if not command or not isinstance(command[0], str):
+                return False
+            executable = self.executable_name(command[0])
+            if re.fullmatch(r"npm@.+", executable):
+                executable = "npm"
+            command = command[1:]
+
+        if executable not in ("npm", "npm.cmd"):
+            return False
+        while command and isinstance(command[0], str) and command[0].startswith("-"):
+            option = command[0]
+            if option == "--":
+                command = command[1:]
+                break
+            if option in ("--prefix", "-C"):
+                command = command[2:]
+            elif option.startswith("--prefix="):
+                command = command[1:]
+            else:
+                self.fail(
+                    f"{recipe_name}: unrecognised npm option {option!r}. "
+                    "The parser must learn it."
+                )
+        return (
+            bool(command)
+            and isinstance(command[0], str)
+            and (
+                command[0] in self.LOCKFILE_WRITING_SUBCOMMANDS
+                or command[:2] == ["audit", "fix"]
+            )
+        )
+
+    def lockfile_rewriters(self, recipes: dict[str, dict[str, object]]) -> set[str]:
+        return {
+            name
+            for name, recipe in recipes.items()
+            for command in self.body_commands(recipe)
+            if self.rewrites_lockfile(command, name)
+        }
+
+    def test_lockfile_rewriting_install_is_only_invoked_by_name(self) -> None:
+        recipes = self.recipes()
+        manual_rewriters = self.MANUAL_LOCKFILE_REWRITERS
+        self.assertSetEqual(
+            self.lockfile_rewriters(recipes),
+            manual_rewriters,
+            "only manual install recipes may rewrite the frontend lockfile",
+        )
+        for name in sorted(recipes.keys() - manual_rewriters):
+            with self.subTest(recipe=name):
+                dependencies = self.reachable(recipes, name) - {name}
+                installers = sorted(dependencies & manual_rewriters)
+                self.assertFalse(
+                    installers,
+                    f"{name} depends on {', '.join(installers)}, "
+                    "which may rewrite the frontend lockfile",
+                )
+                for command in self.body_commands(recipes[name]):
+                    if (
+                        self.just_call(command)
+                        and len(command) > 1
+                        and isinstance(command[1], str)
+                    ):
+                        self.assertNotIn(
+                            command[1],
+                            manual_rewriters,
+                            f"{name} invokes {command[1]}, "
+                            "which may rewrite the frontend lockfile",
+                        )
 
     def test_every_recipe_running_the_frontend_toolchain_installs_its_dependencies(
         self,
     ) -> None:
         recipes = self.recipes()
         self.assertIn(self.INSTALL_RECIPE, recipes)
-        for installer in self.TOOLCHAIN_INSTALLERS:
-            self.assertIn(installer, recipes)
         users = [
             name
             for name, recipe in recipes.items()
-            if name not in self.TOOLCHAIN_INSTALLERS
+            if name not in self.MANUAL_LOCKFILE_REWRITERS
             and self.FRONTEND_TOOLCHAIN.search(self.body_text(recipe))
         ]
         self.assertTrue(users, "no recipe runs the frontend toolchain")
@@ -698,6 +873,67 @@ class FrontendRecipeTests(RecipeTestCase):
 
 class PythonToolRecipeTests(RecipeTestCase):
     INSTALL_RECIPE = "install-python-tools"
+    SHELL_QUOTES = re.compile(r'''\\.|'[^']*'|"(?:[^"\\]|\\.)*"''')
+
+    def uses_path(self, expression: object, paths: set[str]) -> bool:
+        if not isinstance(expression, list):
+            return False
+        if expression[0] == "call" and expression[1] in (
+            "justfile_directory",
+            "justfile_dir",
+        ):
+            return True
+        if expression[0] == "variable":
+            return expression[1] in paths
+        return any(self.uses_path(part, paths) for part in expression[1:])
+
+    def path_variables(self, assignments: dict[str, dict[str, object]]) -> set[str]:
+        paths = {"python"}
+        while True:
+            derived = {
+                name
+                for name, assignment in assignments.items()
+                if self.uses_path(assignment["value"], paths)
+            }
+            if derived <= paths:
+                return paths
+            paths.update(derived)
+
+    def test_recipe_path_interpolations_are_quoted(self) -> None:
+        dump = self.dump()
+        paths = self.path_variables(dump["assignments"])
+        path_count = 0
+        for name, recipe in dump["recipes"].items():
+            # Recipe parameters still use POSIX quote() on Windows.
+            recipe_paths = paths - {
+                parameter["name"] for parameter in recipe["parameters"]
+            }
+            for line_number, line in enumerate(recipe["body"], start=1):
+                # Only literal fragments determine the quote boundaries.
+                text = ""
+                interpolations = []
+                for fragment in line:
+                    if isinstance(fragment, str):
+                        text += fragment
+                    else:
+                        (expression,) = fragment
+                        if self.uses_path(expression, recipe_paths):
+                            interpolations.append((len(text), expression))
+                        text += "x"
+                spans = [
+                    match.span()
+                    for match in self.SHELL_QUOTES.finditer(text)
+                    if match[0].startswith('"')
+                ]
+                for offset, expression in interpolations:
+                    path_count += 1
+                    with self.subTest(recipe=name, line=line_number):
+                        self.assertTrue(
+                            any(start < offset < end for start, end in spans),
+                            f"{name} body line {line_number}: {expression!r} "
+                            "needs double quotes",
+                        )
+        self.assertGreater(path_count, 0, "no recipe path interpolations found")
 
     def venv_variables(self, assignments: dict[str, dict[str, object]]) -> set[str]:
         # The venv exists only once install-python-tools has run, so every
@@ -732,6 +968,96 @@ class PythonToolRecipeTests(RecipeTestCase):
                     f"{name} runs a venv interpreter or tool without creating "
                     f"the venv first",
                 )
+
+
+class LocalPitRecipeTests(RecipeTestCase):
+    def fixed_mode_go_calls(self, recipe: dict[str, object]) -> list[tuple[list, int]]:
+        dispatchers = ("_go-dev-mode", "_go-tool-dev-mode")
+        prior_count = recipe["priors"]
+        calls = [
+            (dependency["arguments"], min(index, prior_count))
+            for index, dependency in enumerate(recipe["dependencies"])
+            if dependency["recipe"] in dispatchers
+        ]
+        for command in self.body_commands(recipe):
+            if (
+                self.just_call(command)
+                and len(command) > 1
+                and command[1] in dispatchers
+            ):
+                calls.append((command[2:], prior_count))
+            elif (
+                len(command) >= 3
+                and command[1]
+                in (["variable", "just_helper"], "scripts/just_helpers.py")
+                and command[2] in ("go-dev", "go-tool-dev")
+            ):
+                calls.append((command[3:], prior_count))
+        return [
+            (arguments, prior_limit)
+            for arguments, prior_limit in calls
+            if arguments and isinstance(arguments[0], str)
+        ]
+
+    def test_go_against_local_pit_builds_the_library_first(self) -> None:
+        recipes = self.recipes()
+        subjects = 0
+        for name, recipe in recipes.items():
+            calls = self.fixed_mode_go_calls(recipe)
+            if not calls:
+                continue
+            subjects += 1
+            for (mode, *arguments), prior_limit in calls:
+                with self.subTest(recipe=name, mode=mode):
+                    if (
+                        prior_limit < recipe["priors"]
+                        and "parallel" in recipe["attributes"]
+                    ):
+                        prior_limit = 0
+                    self.assertTrue(arguments, f"{name} must pass a checkout to Go")
+                    checkout = arguments[0]
+                    if isinstance(checkout, list) and checkout[:2] == ["call", "quote"]:
+                        checkout = checkout[2]
+                    library_recipe = f"dylib-{mode}-dev"
+                    libraries = [
+                        dependency["arguments"]
+                        for dependency in recipe["dependencies"][:prior_limit]
+                        if dependency["recipe"] == library_recipe
+                    ]
+                    self.assertTrue(
+                        libraries,
+                        f"{name} must list {library_recipe} as a direct prior "
+                        "before running Go",
+                    )
+                    self.assertIn(
+                        checkout,
+                        [arguments[0] for arguments in libraries if arguments],
+                        f"{name} must build {library_recipe} with Go checkout "
+                        f"{checkout!r}",
+                    )
+        self.assertGreater(subjects, 0, "no recipe runs Go with a fixed local Pit mode")
+
+
+class CIRecipeTests(RecipeTestCase):
+    def test_ci_invokes_every_aggregate_and_runs_python_tests(self) -> None:
+        recipes = self.recipes()
+        aggregates = {name for name in recipes if name.startswith("ci-")}
+        workflow = (helpers.ROOT / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        invoked = set(
+            re.findall(
+                r"^\s*(?:run:\s+)?just\s+--justfile\s+pipeline\.just\s+(ci-[\w-]+)\b",
+                workflow,
+                re.MULTILINE,
+            )
+        )
+        missing = sorted(aggregates - invoked)
+        self.assertFalse(missing, f"CI does not invoke: {', '.join(missing)}")
+        self.assertTrue(
+            any("test-python" in self.reachable(recipes, name) for name in aggregates),
+            "no CI aggregate depends on test-python",
+        )
 
 
 class FrontendInstallTests(unittest.TestCase):

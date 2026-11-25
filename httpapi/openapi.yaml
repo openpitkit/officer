@@ -9020,8 +9020,12 @@ components:
           description: The trading request the attestation binds.
           enum: [submit, execution_report, confirm, cancel, review_confirm, review_cancel, review_force]
         mode:
-          type: string
-          description: Submit mode the attestation was issued for.
+          $ref: "#/components/schemas/SubmitMode"
+          description: >-
+            The submit mode of the order this attestation belongs to.
+            Every attestation of that order carries that mode, whatever its
+            request type. Execution-report attestations signed by Officer
+            0.3.1 and earlier carry `immediate` whatever the order's mode.
         issuedAt:
           type: string
           format: date-time

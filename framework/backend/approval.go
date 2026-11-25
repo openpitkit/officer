@@ -185,6 +185,22 @@ func persistedEventAttestation(
 	return Attestation{}, false, nil
 }
 
+func recordedSubmitMode(detail domain.OrderDetail) (string, error) {
+	for _, event := range detail.Events {
+		attestation := event.Attestation
+		if attestation == nil || attestation.RequestType != domain.AttestationRequestSubmit {
+			continue
+		}
+		switch attestation.Mode {
+		case SubmitModeHold, SubmitModeImmediate:
+			return attestation.Mode, nil
+		default:
+			return "", fmt.Errorf("backend: invalid submit attestation mode %q", attestation.Mode)
+		}
+	}
+	return "", missingAttestationError(domain.AttestationRequestSubmit)
+}
+
 func signingMode(
 	ctx context.Context, signer fwsigning.Service,
 ) (bool, string, error) {
@@ -691,7 +707,7 @@ func (s *Service) ConfirmExecution(
 			confirmedOrder.Source = caller.Source
 			confirmedOrder.Principal = caller.Principal
 			p, err := s.buildLifecyclePayload(
-				confirmedOrder, domain.AttestationRequestConfirm,
+				confirmedOrder, SubmitModeHold, domain.AttestationRequestConfirm,
 				"confirmed", "", payload.ApprovalID)
 			if err != nil {
 				return domain.ApprovalPayload{}, false, err
@@ -812,11 +828,10 @@ func (s *Service) CancelOrder(
 			cancelledOrder.Status = status
 			cancelledOrder.Source = caller.Source
 			cancelledOrder.Principal = caller.Principal
-			p, err := s.buildExecutionReportPayload(cancelledOrder, persistence)
+			p, err := s.buildExecutionReportPayload(cancelledOrder, SubmitModeHold, persistence)
 			if err != nil {
 				return domain.ApprovalPayload{}, false, err
 			}
-			p.Mode = SubmitModeHold
 			p.ApprovalRef = payload.ApprovalID
 			p.PolicySummary = "order cancelled by shortcut"
 			p.ExecutionReport = event.Payload.ExecutionReport
@@ -1014,13 +1029,12 @@ func (s *Service) buildDecisionEventPayload(
 		committed := order
 		committed.Status = domain.OrderStatusCommitted
 		p, err := s.buildLifecyclePayload(
-			committed, domain.AttestationRequestSubmit,
+			committed, decision.mode, domain.AttestationRequestSubmit,
 			"committed", "", decision.approvalID,
 		)
 		if err != nil {
 			return domain.ApprovalPayload{}, false, err
 		}
-		p.Mode = decision.mode
 		return p, true, nil
 	// An immediate settling event must never travel unattested. The commission
 	// variant is defensive: no immediate path populates a commission today, but
@@ -1219,7 +1233,9 @@ func (s *Service) buildImmediateSettlementPayload(
 	}
 	settled := order
 	settled.Status = persistence.OrderStatus
-	payload, err := s.buildExecutionReportEventPayload(settled, event, *persistence)
+	payload, err := s.buildExecutionReportEventPayload(
+		settled, SubmitModeImmediate, event, *persistence,
+	)
 	if err != nil {
 		return domain.ApprovalPayload{}, err
 	}
@@ -1235,6 +1251,7 @@ func (s *Service) buildImmediateSettlementPayload(
 // too, mirroring the fill event.
 func (s *Service) buildExecutionReportPayload(
 	order domain.Order,
+	mode string,
 	persistence engine.ExecutionReportPersistence,
 ) (domain.ApprovalPayload, error) {
 	approvalID, err := newNonce()
@@ -1248,7 +1265,7 @@ func (s *Service) buildExecutionReportPayload(
 	issuedAt := time.Now().UTC()
 
 	payload := baseAttestationPayload(
-		order, SubmitModeImmediate, issuedAt, approvalID, nonce)
+		order, mode, issuedAt, approvalID, nonce)
 	payload.Verdict = domain.VerdictAccept
 	payload.PolicySummary = "execution report applied"
 	fillQuantity := ""
@@ -1292,6 +1309,7 @@ func (s *Service) buildExecutionReportPayload(
 // approval it acts on. reason, when present, is bound onto RejectReason.
 func (s *Service) buildLifecyclePayload(
 	order domain.Order,
+	mode string,
 	requestType domain.AttestationRequestType,
 	outcome, reason, approvalRef string,
 ) (domain.ApprovalPayload, error) {
@@ -1306,7 +1324,7 @@ func (s *Service) buildLifecyclePayload(
 	issuedAt := time.Now().UTC()
 
 	payload := baseAttestationPayload(
-		order, SubmitModeHold, issuedAt, approvalID, nonce)
+		order, mode, issuedAt, approvalID, nonce)
 	payload.Verdict = domain.VerdictAccept
 	payload.ApprovalRef = approvalRef
 	payload.PolicySummary = "order lifecycle recorded"

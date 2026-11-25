@@ -300,12 +300,12 @@ npx depends on it and runs that runtime, whatever node is on the caller's PATH.
 
 `just frontend-ci-install` installs from the committed lockfile (`npm ci`) and
 skips the install when `web/node_modules` was already installed from the current
-`package.json`, `package-lock.json`, pinned Node.js version and platform. Every recipe that runs the frontend
-toolchain depends on it, so the gates need no earlier install and never rewrite
-the lockfile. `just frontend-install` runs `npm install` and is what the binary
-build recipes use. `just build-js` builds the SPA into `web/dist`, and `just build-js-lib`
-builds the publishable framework library into `web/lib`. Only
-`web/dist/embed-placeholder.txt` is committed; the rest of `web/dist` is build
+`package.json`, `package-lock.json`, pinned Node.js version and platform. Checks
+and builds use this install and never rewrite the lockfile. Run
+`just frontend-install` explicitly to update dependencies with `npm install`,
+which may rewrite the lockfile. `just build-js` builds the SPA into `web/dist`,
+and `just build-js-lib` builds the publishable framework library into `web/lib`.
+Only `web/dist/embed-placeholder.txt` is committed; the rest of `web/dist` is build
 output, and `//go:embed dist` takes whatever is in that directory when the
 Go build runs.
 
@@ -324,9 +324,9 @@ Semgrep and ruff run from a virtualenv in `.venv`, created and populated by
 afterwards while the installed versions match the pins.
 
 CI does not call `just check` directly. It runs the aggregates in
-`pipeline.just` (`ci-go`, `ci-js`), which import this justfile; tool versions
-come from `.github/ci-versions.env`, which the justfile loads as its dotenv
-file.
+`pipeline.just` (`ci-go`, `ci-js`, `ci-python`), which import this justfile;
+tool versions come from `.github/ci-versions.env`, which the justfile loads as
+its dotenv file.
 
 ## Container image
 

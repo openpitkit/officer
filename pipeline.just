@@ -25,3 +25,6 @@ ci-go: check-semgrep lint-python check-go-dry-release
 
 # JS/TypeScript install, lint, build, and unit tests.
 ci-js: install-python-tools frontend-ci-install check-js
+
+# Python helper and recipe tests.
+ci-python: test-python

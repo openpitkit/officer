@@ -163,7 +163,14 @@ func TestOrderAwaitingReview_RealConflictGate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler, realm, eng, _ := newRealServiceRouterWithEngine(t)
 			ctx := context.Background()
-			before := newReviewGateOrder(t, realm, true)
+			const account domain.AccountID = "acc-1"
+			seedRealAccountAndAssets(t, realm, account)
+			eng.reviews = restReviewMarks()
+			orderID := submitRealGateHoldOrder(t, handler, account, "2", "400")
+			before, err := realm.GetOrder(ctx, orderID)
+			if err != nil {
+				t.Fatalf("GetOrder: %v", err)
+			}
 			rec := httptest.NewRecorder()
 			path := "/api/v1/orders/" + before.Order.ExternalID.String() + "/" + tc.route
 			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path,
@@ -197,34 +204,15 @@ func TestOrderAwaitingReview_RealConflictGate(t *testing.T) {
 // returns 201.
 func TestApplyExecutionReport_RealTerminalGate(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-
 	handler, realm := newRealServiceRouter(t)
 
-	// Seed the order in the store already in a terminal (filled) status. The gate
-	// lives in node.ApplyExecutionReport -> RequireOrderModifiable, which reads the
-	// authoritative persisted status; the fake engine is never consulted for the
-	// rejected case.
 	const acct domain.AccountID = "acc-1"
 	seedRealAccountAndAssets(t, realm, acct)
-	order, err := realm.CreateOrder(ctx, domain.Order{
-		Account:          acct,
-		Source:           domain.SourceAPI,
-		Principal:        domain.PrincipalOperator,
-		BaseAsset:        "AAPL",
-		QuoteAsset:       "USD",
-		Side:             domain.OrderSideBuy,
-		AmountKind:       domain.OrderAmountKindQuantity,
-		AmountValue:      "2",
-		Price:            "400",
-		Status:           domain.OrderStatusFilled,
-		ReservedQuantity: "0",
-	})
-	if err != nil {
-		t.Fatalf("CreateOrder (terminal): %v", err)
-	}
-
-	path := "/api/v1/orders/" + order.ExternalID.String() + "/execution-reports"
+	orderID := submitRealGateHoldOrder(t, handler, acct, "2", "400")
+	reports := "/orders/" + orderID.String() + "/execution-reports"
+	serveJSON(t, handler, http.MethodPost, reports,
+		`{"quantity":"2","price":"400","leavesQuantity":"0","status":"filled"}`, http.StatusCreated)
+	path := "/api/v1" + reports
 
 	// Without force: the real node gate rejects the terminal order -> 409.
 	rec := httptest.NewRecorder()
@@ -269,28 +257,13 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	handler, realm := newRealServiceRouter(t)
+	handler, realm, eng, _ := newRealServiceRouterWithEngine(t)
 
 	const acct domain.AccountID = "acc-1"
 	seedRealAccountAndAssets(t, realm, acct)
-	order, err := realm.CreateOrder(ctx, domain.Order{
-		Account:          acct,
-		Source:           domain.SourceAPI,
-		Principal:        domain.PrincipalOperator,
-		BaseAsset:        "AAPL",
-		QuoteAsset:       "USD",
-		Side:             domain.OrderSideBuy,
-		AmountKind:       domain.OrderAmountKindQuantity,
-		AmountValue:      "10",
-		Price:            "150",
-		Status:           domain.OrderStatusSubmitted,
-		ReservedQuantity: "10",
-	})
-	if err != nil {
-		t.Fatalf("CreateOrder: %v", err)
-	}
-
-	path := "/api/v1/orders/" + order.ExternalID.String() + "/execution-reports"
+	orderID := submitRealGateReservedOrder(t, handler, eng, acct, "10", "150")
+	reports := "/orders/" + orderID.String() + "/execution-reports"
+	path := "/api/v1" + reports
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path,
 		bytes.NewBufferString(
@@ -325,7 +298,7 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 		env.Approval.ExecutionReport.FillQuantity != "3.5" ||
 		env.Approval.ExecutionReport.FillPrice != "150.20" ||
 		env.Approval.ExecutionReport.LeavesQuantity != "6.5" ||
-		env.Approval.ExecutionReport.Order != order.ExternalID {
+		env.Approval.ExecutionReport.Order != orderID {
 		t.Fatalf("fresh attestation missing original report: %+v",
 			env.Approval.ExecutionReport)
 	}
@@ -340,18 +313,19 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 
 	// The commission persisted on the fill event's JSON payload blob must round-trip
 	// through the store unchanged (no dedicated column).
-	events, err := realm.ListOrderEvents(ctx, order.ExternalID)
+	detail, err := realm.GetOrder(ctx, orderID)
 	if err != nil {
-		t.Fatalf("ListOrderEvents: %v", err)
+		t.Fatalf("GetOrder: %v", err)
 	}
+	assertStoredAttestationMode(t, detail, domain.SubmitModeHold)
 	var fill domain.OrderEvent
-	for _, ev := range events {
+	for _, ev := range detail.Events {
 		if ev.Type == domain.OrderEventFill {
 			fill = ev
 		}
 	}
 	if fill.ExternalID.IsZero() {
-		t.Fatalf("no fill event recorded; events=%+v", events)
+		t.Fatalf("no fill event recorded; events=%+v", detail.Events)
 	}
 	if fill.Payload.Commission == nil ||
 		fill.Payload.Commission.Amount != "-0.30" ||
@@ -363,7 +337,7 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 		fill.Payload.ExecutionReport.FillQuantity != "3.5" ||
 		fill.Payload.ExecutionReport.FillPrice != "150.20" ||
 		fill.Payload.ExecutionReport.LeavesQuantity != "6.5" ||
-		fill.Payload.ExecutionReport.Order != order.ExternalID ||
+		fill.Payload.ExecutionReport.Order != orderID ||
 		fill.Payload.ExecutionReport.Account != "" ||
 		fill.Payload.ExecutionReport.BaseAsset != "" ||
 		fill.Payload.ExecutionReport.QuoteAsset != "" ||
@@ -376,7 +350,7 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 	// Replay-from-event reconstruction path: the reproduction bundle decodes the
 	// persisted envelope and surfaces the bound commission both in the byte-identical
 	// canonicalApproval and in the reconstructed request result DTO.
-	reproPath := "/api/v1/orders/" + order.ExternalID.String() +
+	reproPath := "/api/v1/orders/" + orderID.String() +
 		"/events/" + fill.ExternalID.String() + "/reproduction"
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, reproPath, nil))
@@ -413,30 +387,19 @@ func TestApplyExecutionReport_RealWorkflowCarriesRecordedReservation(t *testing.
 
 	const account domain.AccountID = "acc-1"
 	seedRealAccountAndAssets(t, realm, account)
-	order, err := realm.CreateOrder(ctx, domain.Order{
-		Account:          account,
-		Source:           domain.SourceAPI,
-		Principal:        domain.PrincipalOperator,
-		BaseAsset:        "AAPL",
-		QuoteAsset:       "USD",
-		Side:             domain.OrderSideBuy,
-		AmountKind:       domain.OrderAmountKindQuantity,
-		AmountValue:      "10",
-		Price:            "150",
-		Status:           domain.OrderStatusSubmitted,
-		Leaves:           "10",
-		ReservedQuantity: "10",
-	})
+	orderID := submitRealGateReservedOrder(t, handler, eng, account, "10", "150")
+	reports := "/orders/" + orderID.String() + "/execution-reports"
+	before, err := realm.GetOrder(ctx, orderID)
 	if err != nil {
-		t.Fatalf("CreateOrder: %v", err)
+		t.Fatalf("GetOrder: %v", err)
 	}
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/orders/"+order.ExternalID.String()+"/execution-reports",
+		"/api/v1"+reports,
 		bytes.NewBufferString(
-			`{"status":"accepted","leavesQuantity":"6.500",`+
+			`{"status":"committed","leavesQuantity":"6.500",`+
 				`"commission":{"amount":"-0.30","currency":"USD"}}`,
 		),
 	))
@@ -449,17 +412,40 @@ func TestApplyExecutionReport_RealWorkflowCarriesRecordedReservation(t *testing.
 			eng.executionReportLeaves,
 		)
 	}
-	detail, err := realm.GetOrder(ctx, order.ExternalID)
+	detail, err := realm.GetOrder(ctx, orderID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
+	assertStoredAttestationMode(t, detail, domain.SubmitModeHold)
 	if detail.Order.Leaves != "6.500" {
 		t.Fatalf("recorded leaves = %q, want caller value 6.500", detail.Order.Leaves)
 	}
-	if len(detail.Events) != 1 || detail.Events[0].Payload.ExecutionReport == nil ||
-		detail.Events[0].Payload.ExecutionReport.LeavesQuantity != "6.500" {
+	reportEventIndex := len(before.Events)
+	if len(detail.Events) != reportEventIndex+1 || detail.Events[reportEventIndex].Payload.ExecutionReport == nil ||
+		detail.Events[reportEventIndex].Payload.ExecutionReport.LeavesQuantity != "6.500" {
 		t.Fatalf("event request leaves = %+v, want caller value 6.500", detail.Events)
 	}
+}
+
+func submitRealGateHoldOrder(t *testing.T, handler http.Handler, account domain.AccountID, quantity, price string) domain.ExternalID {
+	t.Helper()
+	body := fmt.Sprintf(`{"account":%q,"baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":%q,"price":%q,"mode":"hold"}`,
+		account, quantity, price)
+	response := serveJSON(t, handler, http.MethodPost, "/orders/submit?missingAccount=reject", body, http.StatusCreated)
+	return domain.ExternalID(response["id"].(string))
+}
+
+func submitRealGateReservedOrder(
+	t *testing.T, handler http.Handler, eng *realGateEngine,
+	account domain.AccountID, quantity, price string,
+) domain.ExternalID {
+	t.Helper()
+	// The fake's accept path carries no lock; a held review then force is its only path to a reserved order.
+	eng.reviews = heldReviewMarks()
+	orderID := submitRealGateHoldOrder(t, handler, account, quantity, price)
+	eng.reviews = nil
+	serveJSON(t, handler, http.MethodPost, "/orders/"+orderID.String()+"/review/force", "", http.StatusOK)
+	return orderID
 }
 
 // TestSubmitOrder_RealStoreRequiresRegisteredCallerPrincipal proves the caller
@@ -695,10 +681,7 @@ func TestOrderReviewForce_RealServiceREST(t *testing.T) {
 			if err := realm.SetSetting(ctx, domain.SettingKeyNoESign, "0"); err != nil {
 				t.Fatal(err)
 			}
-			eng.reviews = []domain.ReviewMark{{
-				OrderReject: domain.OrderReject{Code: "order_size_limit", Scope: "account", Policy: "order-size", Reason: "large order"},
-				Mode:        domain.RuleModeReviewWithHold,
-			}}
+			eng.reviews = heldReviewMarks()
 			submit := serveJSON(t, handler, http.MethodPost, "/orders/submit?missingAccount=reject",
 				`{"id":"real-rest-force","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100","mode":"hold"}`, http.StatusCreated)
 			if submit["verdict"] != "review" {
@@ -961,7 +944,11 @@ func (e *realGateEngine) ExecutionReportModel(
 	}
 	fill.SetIsFinal(domain.OrderStatusTerminal(in.OrderStatus))
 	if len(in.Lock) > 0 {
-		if err := fill.SetLock(in.Lock); err != nil {
+		lock, err := pretrade.NewLockFromMsgPack(in.Lock)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		if err := fill.SetLock(lock.Bytes()); err != nil {
 			return model.ExecutionReport{}, err
 		}
 	}

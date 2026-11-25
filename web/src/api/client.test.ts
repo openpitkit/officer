@@ -5388,6 +5388,7 @@ describe("event reproduction client", () => {
     // Signed artifacts are carried through verbatim.
     expect(result.requestType).toBe("submit");
     expect(result.attestation?.signedEnvelope).toBe("env-verbatim");
+    expect(result.attestation?.mode).toBe("immediate");
     expect(result.response?.submitResponse?.signedApproval).toBe(
       "env-verbatim",
     );
@@ -5417,13 +5418,49 @@ describe("event reproduction client", () => {
   it("decodes a snake_case signed envelope", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
-        attestation: { signed_envelope: "env-snake-envelope" },
+        attestation: {
+          signed_envelope: "env-snake-envelope",
+          mode: "hold",
+        },
       }),
     );
 
     const result = await fetchEventReproduction("ord-1", "evt-1");
 
     expect(result.attestation?.signedEnvelope).toBe("env-snake-envelope");
+  });
+
+  it("rejects an attestation with an unknown submit mode", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        requestType: "submit",
+        event: {
+          id: "evt-1",
+          order: "ord-1",
+          at: "2026-06-24T00:00:00Z",
+          type: "submitted",
+          source: "api",
+          alg: "ed25519",
+          signed: true,
+        },
+        attestation: {
+          signedEnvelope: "env-verbatim",
+          keyId: "key-1",
+          alg: "ed25519",
+          requestType: "submit",
+          mode: "unexpected",
+          issuedAt: "2026-06-24T00:00:00Z",
+          signed: true,
+        },
+      }),
+    );
+
+    const result = fetchEventReproduction("ord-1", "evt-1");
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "internal",
+      message: "Invalid submit mode in the API response",
+    });
   });
 
   it("decodes a snake_case signed approval response", async () => {
@@ -5489,7 +5526,7 @@ describe("event reproduction client", () => {
           keyId: "key-1",
           alg: "ed25519",
           requestType: "execution_report",
-          mode: "immediate",
+          mode: "hold",
           issuedAt: "2026-06-24T00:01:00Z",
           signed: true,
         },
@@ -5576,6 +5613,7 @@ describe("event reproduction client", () => {
 
     const result = await fetchEventReproduction("ord-1", "evt-fill");
     expect(result.requestType).toBe("execution_report");
+    expect(result.attestation?.mode).toBe("hold");
     expect(result.event).toMatchObject({
       fillQuantity: "10",
       fillPrice: "150.25",
