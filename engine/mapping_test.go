@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net/http"
 	"reflect"
 	"slices"
 	"strconv"
@@ -51,6 +52,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/logtest"
 )
 
@@ -1144,8 +1146,8 @@ func TestNewIDResolver_RejectsUnassignedEngineID(t *testing.T) {
 	t.Parallel()
 	_, err := newIDResolver(
 		[]domain.Account{{Code: "acc-1", EngineAccountID: 0}}, nil, nil)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for unassigned engine id, got %v", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("want internal error for unassigned engine id, got %v", err)
 	}
 }
 
@@ -1211,15 +1213,15 @@ func TestIDResolver_RejectsInvalidAssetPublicationsWithoutPartialChange(t *testi
 		{
 			name:  "duplicate engine id",
 			asset: domain.Asset{Code: "eur", EngineAssetID: 2},
-			want:  domain.ErrInvalid,
+			want:  nil,
 		},
 		{
 			name:  "unassigned engine id",
 			asset: domain.Asset{Code: "eur", EngineAssetID: 0},
-			want:  domain.ErrInvalid,
+			want:  nil,
 		},
 	} {
-		if err := res.addAssetResolverEntry(mutation.asset); !errors.Is(err, mutation.want) {
+		if err := res.addAssetResolverEntry(mutation.asset); (mutation.want == nil && (!internalFailureAnswer(err))) || (mutation.want != nil && !errors.Is(err, mutation.want)) {
 			t.Errorf("%s error = %v, want %v", mutation.name, err, mutation.want)
 		}
 	}
@@ -1338,12 +1340,12 @@ func TestIDResolver_AssetRenameRejectsWithoutChangingAliases(t *testing.T) {
 		asset   domain.Asset
 		wantErr error
 	}{
-		{oldCode: "missing", asset: domain.Asset{Code: "asset-c", EngineAssetID: 11}, wantErr: domain.ErrInvalid},
-		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 99}, wantErr: domain.ErrInvalid},
+		{oldCode: "missing", asset: domain.Asset{Code: "asset-c", EngineAssetID: 11}},
+		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 99}},
 		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-b", EngineAssetID: 11}, wantErr: domain.ErrAlreadyExists},
-		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 0}, wantErr: domain.ErrInvalid},
+		{oldCode: "asset-a", asset: domain.Asset{Code: "asset-c", EngineAssetID: 0}},
 	} {
-		if err := res.renameAssetResolverEntry(rename.oldCode, rename.asset); !errors.Is(err, rename.wantErr) {
+		if err := res.renameAssetResolverEntry(rename.oldCode, rename.asset); (rename.wantErr == nil && (!internalFailureAnswer(err))) || (rename.wantErr != nil && !errors.Is(err, rename.wantErr)) {
 			t.Errorf("rename %+v: got %v, want %v", rename, err, rename.wantErr)
 		}
 	}
@@ -1391,21 +1393,21 @@ func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
 		},
 		{
 			name: "duplicate engine id",
-			want: domain.ErrInvalid,
+			want: nil,
 			err: res.addAccountResolverEntry(domain.Account{
 				Code: "account-c", EngineAccountID: 7,
 			}),
 		},
 		{
 			name: "unknown old alias",
-			want: domain.ErrInvalid,
+			want: nil,
 			err: res.renameAccountResolverEntry("account-missing", domain.Account{
 				Code: "account-c", EngineAccountID: 7,
 			}),
 		},
 		{
 			name: "mismatched target id",
-			want: domain.ErrInvalid,
+			want: nil,
 			err: res.renameAccountResolverEntry("account-a", domain.Account{
 				Code: "account-c", EngineAccountID: 12,
 			}),
@@ -1419,14 +1421,14 @@ func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
 		},
 		{
 			name: "corrupt target id",
-			want: domain.ErrInvalid,
+			want: nil,
 			err: res.renameAccountResolverEntry("account-a", domain.Account{
 				Code: "account-c", EngineAccountID: 0,
 			}),
 		},
 	}
 	for _, mutation := range accountMutations {
-		if !errors.Is(mutation.err, mutation.want) {
+		if (mutation.want == nil && (!internalFailureAnswer(mutation.err))) || (mutation.want != nil && !errors.Is(mutation.err, mutation.want)) {
 			t.Errorf("%s: got %v, want %v", mutation.name, mutation.err, mutation.want)
 		}
 	}
@@ -1465,10 +1467,10 @@ func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
 	}
 	for i, mutationErr := range groupMutations {
 		want := []error{
-			domain.ErrAlreadyExists, domain.ErrInvalid, domain.ErrInvalid,
-			domain.ErrInvalid, domain.ErrAlreadyExists, domain.ErrInvalid,
+			domain.ErrAlreadyExists, nil, nil,
+			nil, domain.ErrAlreadyExists, nil,
 		}[i]
-		if !errors.Is(mutationErr, want) {
+		if (want == nil && (!internalFailureAnswer(mutationErr))) || (want != nil && !errors.Is(mutationErr, want)) {
 			t.Errorf("group mutation %d: got %v, want %v", i, mutationErr, want)
 		}
 	}
@@ -1497,8 +1499,8 @@ func TestIDResolver_RemovesAssetAliasWithStableIDValidation(t *testing.T) {
 
 	if err := res.removeAssetResolverEntry(domain.Asset{
 		Code: asset.Code, EngineAssetID: 12,
-	}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("mismatched removal error = %v, want ErrInvalid", err)
+	}); !internalFailureAnswer(err) {
+		t.Fatalf("mismatched removal error = %v, want internal error", err)
 	}
 	current, err := res.asset(asset.Code)
 	if err != nil || !current.Equal(ready) {
@@ -1549,8 +1551,8 @@ func TestIDResolver_AssetRemovalRejectsWithoutChangingAliases(t *testing.T) {
 		{Code: "missing", EngineAssetID: asset.EngineAssetID},
 		{Code: asset.Code, EngineAssetID: 12},
 	} {
-		if err := res.removeAssetResolverEntry(removal); !errors.Is(err, domain.ErrInvalid) {
-			t.Errorf("remove %+v error = %v, want ErrInvalid", removal, err)
+		if err := res.removeAssetResolverEntry(removal); !internalFailureAnswer(err) {
+			t.Errorf("remove %+v error = %v, want internal error", removal, err)
 		}
 	}
 	current, err := res.asset(asset.Code)
@@ -1619,8 +1621,8 @@ func TestIDResolver_AssetRemovalRejectsCorruptReverseAlias(t *testing.T) {
 	before := captureAssetResolverState(res)
 
 	err = res.removeAssetResolverEntry(asset)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("remove error = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("remove error = %v, want internal error", err)
 	}
 	if !strings.Contains(err.Error(), "corrupt engine id mapping") {
 		t.Fatalf("remove error = %q, want corrupt mapping detail", err)
@@ -1768,7 +1770,7 @@ func applyAssetResolverMutation(
 		t.Fatalf("%s error = %v, want success %t", mutation, err, wantSuccess)
 	}
 	if err != nil {
-		wantErr := domain.ErrInvalid
+		var wantErr error
 		if idValid {
 			_, targetExists := model[mutation.asset.Code]
 			currentID, oldExists := model[mutation.oldCode]
@@ -1779,7 +1781,7 @@ func applyAssetResolverMutation(
 				wantErr = domain.ErrAlreadyExists
 			}
 		}
-		if !errors.Is(err, wantErr) {
+		if (wantErr == nil && errors.Is(err, domain.ErrInvalid)) || (wantErr != nil && !errors.Is(err, wantErr)) {
 			t.Fatalf("%s: got %v, want %v", mutation, err, wantErr)
 		}
 		after := captureAssetResolverState(res)
@@ -1862,8 +1864,8 @@ func TestIDResolver_RemovesGroupAliasWithStableIDValidation(t *testing.T) {
 
 	if err := res.removeGroupResolverEntry(domain.AccountGroup{
 		Code: "group-a", EngineGroupID: 10,
-	}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("mismatched removal error = %v, want ErrInvalid", err)
+	}); !internalFailureAnswer(err) {
+		t.Fatalf("mismatched removal error = %v, want internal error", err)
 	}
 	if id, err := res.group("group-a"); err != nil || uint32(id.Handle()) != 9 {
 		t.Fatalf("mismatched removal changed alias = (%v, %v)", id, err)
@@ -1879,8 +1881,8 @@ func TestIDResolver_RemovesGroupAliasWithStableIDValidation(t *testing.T) {
 	}
 	if err := res.removeGroupResolverEntry(domain.AccountGroup{
 		Code: "group-a", EngineGroupID: 9,
-	}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("unknown removal error = %v, want ErrInvalid", err)
+	}); !internalFailureAnswer(err) {
+		t.Fatalf("unknown removal error = %v, want internal error", err)
 	}
 }
 
@@ -2032,6 +2034,156 @@ func (h *fakeCurrencyAccounts) SetCurrency(
 		currency: currency.String(),
 	})
 	return nil
+}
+
+func TestLivePolicyStoredSetFailuresAreInternal(t *testing.T) {
+	for _, policy := range []string{
+		domain.PolicyRateLimit, domain.PolicyOrderSizeLimit,
+		domain.PolicyPositionLimit, domain.PolicySpotFundsPnlBoundsKillSwitch,
+	} {
+		t.Run(policy, func(t *testing.T) {
+			snapshot := positionLimitSnapshot()
+			snapshot.RateLimits = []domain.LimitRate{rateLimit(domain.ScopeAccount, "acc-1", "", 10, time.Second)}
+			snapshot.OrderSizeLimits = []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")}
+			snapshot.PositionLimits = []domain.LimitPosition{positionLimit("acc-1", "AAPL", "100")}
+			snapshot.SpotFundsPnlBoundsLimits = []domain.LimitSpotFundsPnlBounds{{
+				Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized,
+				Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-100",
+			}}
+			eng, err := newTestOpenPitEngineBuildFunc(t)(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer eng.Stop()
+			limits := fwengine.LimitSet{
+				RateLimits: snapshot.RateLimits, OrderSizeLimits: snapshot.OrderSizeLimits,
+				PositionLimits: snapshot.PositionLimits, SpotFundsPnlBoundsLimits: snapshot.SpotFundsPnlBoundsLimits,
+			}
+			switch policy {
+			case domain.PolicyRateLimit:
+				limits.RateLimits[0].Account = "missing"
+			case domain.PolicyOrderSizeLimit:
+				limits.OrderSizeLimits[0].MaxQuantity = "broken"
+			case domain.PolicyPositionLimit:
+				limits.PositionLimits[0].MaxPosition = "-1"
+			case domain.PolicySpotFundsPnlBoundsKillSwitch:
+				limits.SpotFundsPnlBoundsLimits[0].Currency = "missing"
+			}
+			_, err = eng.ConfigurePolicy(context.Background(), policy, limits)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("live %s over corrupt stored set = %v, want 500 internal", policy, err)
+			}
+		})
+	}
+}
+
+func TestEngineInvariantFailuresAreInternal(t *testing.T) {
+	for _, defect := range []string{"immediate amount kind", "immediate side", "pnl axis"} {
+		t.Run(defect, func(t *testing.T) {
+			var err error
+			if defect == "pnl axis" {
+				engine := newTestEngine(t)
+				_, err = configureSpotFundsPnlBounds(engine.configurator, engine.res, "unknown", nil)
+			} else {
+				order := testOrder()
+				order.AmountKind, order.AmountValue, order.Price = domain.OrderAmountKindVolume, "100", "100"
+				if defect == "immediate amount kind" {
+					order.AmountKind = "unknown"
+				} else {
+					order.Side = "unknown"
+				}
+				_, err = immediateFillQuantity(order, []fwengine.BalanceOutcome{{
+					Asset: order.BaseAsset, Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "1"},
+				}})
+			}
+			if !internalFailureAnswer(err) {
+				t.Fatalf("broken engine invariant = %v, want internal error", err)
+			}
+		})
+	}
+}
+
+func TestEngineBuildStoredDataFailuresAreInternal(t *testing.T) {
+	for _, defect := range []string{"balance account", "balance asset", "balance amount", "account pnl", "account currency", "group currency", "group membership", "rate account", "rate asset", "order-size account", "order-size asset", "position account", "position asset", "pnl account", "pnl group"} {
+		t.Run(defect, func(t *testing.T) {
+			snapshot := fwengine.Snapshot{
+				SpotFundsLimitMode: domain.SpotFundsLimitModeEnforce,
+				Assets:             testAssets(), Accounts: []domain.Account{account("acc-1")},
+			}
+			balance := domain.Balance{Account: "acc-1", Asset: "USD", Available: "100"}
+			switch defect {
+			case "balance account":
+				balance.Account = "missing"
+			case "balance asset":
+				balance.Asset = "missing"
+			case "balance amount":
+				balance.Available = "broken"
+			case "account pnl":
+				snapshot.Accounts[0].Pnl = "broken"
+			case "account currency":
+				snapshot.Accounts[0].Currency = "missing"
+			case "group currency":
+				snapshot.Groups = []domain.AccountGroup{{Code: "group", EngineGroupID: 1, Currency: "missing"}}
+			case "group membership":
+				snapshot.Accounts[0].GroupCode = "missing"
+			case "rate account":
+				snapshot.RateLimits = []domain.LimitRate{rateLimit(domain.ScopeAccount, "missing", "", 10, time.Second)}
+			case "rate asset":
+				snapshot.RateLimits = []domain.LimitRate{rateLimit(domain.ScopeAsset, "", "missing", 10, time.Second)}
+			case "order-size account":
+				snapshot.OrderSizeLimits = []domain.LimitOrderSize{orderSize(domain.ScopeAccountUnderlyingAsset, "missing", "USD", "10", "")}
+			case "order-size asset":
+				snapshot.OrderSizeLimits = []domain.LimitOrderSize{orderSize(domain.ScopeUnderlyingAsset, "", "missing", "10", "")}
+			case "position account", "position asset":
+				limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "USD", MaxPosition: "10"}
+				if defect == "position account" {
+					limit.Account = "missing"
+				} else {
+					limit.Asset = "missing"
+				}
+				snapshot.PositionLimits = []domain.LimitPosition{limit}
+			case "pnl account", "pnl group":
+				limit := domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeAccount, Account: "missing", Currency: "USD", LowerBound: "-100"}
+				if defect == "pnl group" {
+					limit.Scope, limit.Account, limit.AccountGroup = domain.ScopeAccountGroup, "", "missing"
+				}
+				snapshot.SpotFundsPnlBoundsLimits = []domain.LimitSpotFundsPnlBounds{limit}
+			}
+			for _, limit := range snapshot.RateLimits {
+				if err := limit.Validate(); err != nil {
+					t.Fatalf("rate fixture must be schema-valid: %v", err)
+				}
+			}
+			for _, limit := range snapshot.OrderSizeLimits {
+				if err := limit.Validate(); err != nil {
+					t.Fatalf("order-size fixture must be schema-valid: %v", err)
+				}
+			}
+			for _, limit := range snapshot.PositionLimits {
+				if err := limit.Validate(); err != nil {
+					t.Fatalf("position fixture must be schema-valid: %v", err)
+				}
+			}
+			for _, limit := range snapshot.SpotFundsPnlBoundsLimits {
+				if err := limit.Validate(); err != nil {
+					t.Fatalf("P&L bounds fixture must be schema-valid: %v", err)
+				}
+			}
+			snapshot.Balances = []domain.Balance{balance}
+			engine, err := NewOpenPitEngineBuildFunc()(snapshot)
+			if engine != nil {
+				engine.Stop()
+			}
+			if !internalFailureAnswer(err) {
+				t.Fatalf("corrupt stored snapshot = %v, want 500 internal", err)
+			}
+			for _, sentinel := range []error{domain.ErrInvalid, domain.ErrNotFound, domain.ErrConflict, domain.ErrAlreadyExists, domain.ErrForbidden, domain.ErrLoosening, domain.ErrUpstream} {
+				if errors.Is(err, sentinel) {
+					t.Errorf("stored snapshot error %v matches %v", err, sentinel)
+				}
+			}
+		})
+	}
 }
 
 // TestOpenPitEngineBuilder_SeedsFromSnapshot builds one engine from a seeded
@@ -4305,4 +4457,12 @@ func TestExecutionReportPersistenceFrom_KeepsEveryBlockOffTheEventPayload(t *tes
 			t.Fatalf("event %q payload carries reject fields: %+v", event.Type, payload)
 		}
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

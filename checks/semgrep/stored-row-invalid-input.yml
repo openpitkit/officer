@@ -1,0 +1,93 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# Classify corrupt stored values as internal without reclassifying input
+# lookups or shared archive consistency checks. Bind parsers to scanned columns.
+rules:
+  - id: stored-row-invalid-input
+    message: >-
+      A stored-row scan or decode exposes a validation error as client input.
+      Internal failures must not wrap domain.ErrInvalid; drop the wrap or use
+      domain.Internal for a stored-value parser's cause.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-not-inside: domain.Internal(...)
+      - pattern-not-inside: |
+          func ($RESTORE *restoreTx) $METHOD(...) $RESULT { ... }
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      func $FUNC(...) $RET { ... }
+                  - pattern-inside: |
+                      func ($RECV $TYPE) $FUNC(...) $RET { ... }
+              - metavariable-regex:
+                  metavariable: $FUNC
+                  regex: '^(?:scan|decode)'
+              - pattern-either: &invalid
+                  - pattern: errors.Join(..., domain.ErrInvalid, ...)
+                  - pattern: fmt.Errorf(..., domain.ErrInvalid, ...)
+                  - pattern: return domain.ErrInvalid
+                  - pattern: return ..., domain.ErrInvalid
+          - patterns:
+              - pattern-either: &scanned-column
+                  - pattern-inside: |
+                      func $FUNC(...) $RET {
+                        ...
+                        $ROW.Scan(..., &$RAW, ...)
+                        ...
+                      }
+                  - pattern-inside: |
+                      func ($RECV $TYPE) $FUNC(...) $RET {
+                        ...
+                        $ROW.Scan(..., &$RAW, ...)
+                        ...
+                      }
+              - pattern-either:
+                  - pattern-inside: |
+                      if $ERR := json.Unmarshal([]byte($RAW), ...); $ERR != nil { ... }
+                  - pattern-inside: |
+                      if $ERR := json.Unmarshal($RAW, ...); $ERR != nil { ... }
+                  - pattern-inside: |
+                      if !json.Valid([]byte($RAW)) { ... }
+                  - pattern-inside: |
+                      if !json.Valid($RAW) { ... }
+              - pattern-either: *invalid
+          - patterns:
+              - pattern-either: *scanned-column
+              - pattern-either:
+                  - pattern-inside: |
+                      $ID, $ERR := domain.ExternalIDFromBytes($RAW)
+                      if $ERR != nil { ... }
+                  - pattern-inside: |
+                      $ID, $ERR = domain.ExternalIDFromBytes($RAW)
+                      if $ERR != nil { ... }
+                  - pattern-inside: |
+                      if $ID, $ERR := domain.ExternalIDFromBytes($RAW); $ERR != nil { ... }
+                  - pattern-inside: |
+                      if $ID, $ERR = domain.ExternalIDFromBytes($RAW); $ERR != nil { ... }
+              - pattern: fmt.Errorf($FMT, ..., $ERR)
+              - metavariable-regex:
+                  metavariable: $FMT
+                  regex: '.*%w[^%]*"$'
+    paths:
+      include:
+        - "/internal/store/sqlite/**"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

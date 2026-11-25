@@ -24,8 +24,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-
-	"go.openpit.dev/officer/framework/domain"
 )
 
 // CredentialRedactor is the credential redactor that connectors and the
@@ -39,7 +37,7 @@ import (
 func CredentialRedactor(credentials string) (map[string]bool, *strings.Replacer, error) {
 	var values map[string]any
 	if err := json.Unmarshal([]byte(credentials), &values); err != nil || values == nil {
-		return nil, nil, fmt.Errorf("secret: stored credentials are not a JSON object: %w", domain.ErrInvalid)
+		return nil, nil, fmt.Errorf("secret: stored credentials are not a JSON object")
 	}
 	secrets := make(map[string]bool)
 	var credentialStrings []string

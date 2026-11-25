@@ -1315,6 +1315,9 @@ func (rt *restoreTx) validateTradingAccessFeeAccounts(ctx context.Context) (resu
 
 func (rt *restoreTx) restoreOrderReviews(ctx context.Context, reviews []backup.OrderReview) error {
 	for _, archived := range reviews {
+		if archived.Mode != domain.SubmitModeHold && archived.Mode != domain.SubmitModeImmediate {
+			return fmt.Errorf("store: restore %s order review %q: unknown review mode %q: %w", backup.SectionActivityHistory, archived.Order, archived.Mode, domain.ErrInvalid)
+		}
 		orderID, err := lookupOrderID(ctx, rt.tx, archived.Order)
 		if err != nil {
 			return fmt.Errorf("store: restore %s order review %q: %w", backup.SectionActivityHistory, archived.Order, err)

@@ -20,6 +20,7 @@ package trading_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -309,9 +310,79 @@ func TestRuntimeSearchSymbols(t *testing.T) {
 	}
 }
 
+func TestRuntimePreCheckSeparatesInternalAndVenueFailures(t *testing.T) {
+	for _, unknownProvider := range []bool{false, true} {
+		t.Run(fmt.Sprint(unknownProvider), func(t *testing.T) {
+			f := newFixture(t)
+			cause := errors.New("venue connection failed")
+			if unknownProvider {
+				f.registry = trading.NewRegistry()
+			} else {
+				f.venue.preErr = cause
+			}
+			f.start()
+			err := f.runtime.PreCheck(testCtx, f.draft("1"), f.dest)
+			if err == nil || errors.Is(err, domain.ErrUpstream) == unknownProvider || (unknownProvider && !internalFailureAnswer(err)) {
+				t.Fatalf("pre-check = %v, want upstream=%t", err, !unknownProvider)
+			}
+			if !unknownProvider && !errors.Is(err, cause) {
+				t.Fatalf("venue cause missing: %v", err)
+			}
+		})
+	}
+}
+
+func TestRegistryMissingBuilderIsInternal(t *testing.T) {
+	if err := trading.NewRegistry().Register(trading.Provider{Type: "venue"}); !internalFailureAnswer(err) {
+		t.Fatalf("missing builder = %v, want internal error", err)
+	}
+}
+
+func TestRuntimeMissingDependenciesAreInternal(t *testing.T) {
+	f := newFixture(t)
+	for _, missing := range []string{"registry", "store", "reports", "adjustments", "fee skips", "logger"} {
+		t.Run(missing, func(t *testing.T) {
+			registry, st := f.registry, f.st
+			var sink trading.ReportSink = f.sink
+			var adjust trading.AdjustmentSink = f.adjustmentSink
+			var feeSkip trading.FeeSkipSink = f.feeSkipSink
+			logger := slog.Default()
+			switch missing {
+			case "registry":
+				registry = nil
+			case "store":
+				st = nil
+			case "reports":
+				sink = nil
+			case "adjustments":
+				adjust = nil
+			case "fee skips":
+				feeSkip = nil
+			case "logger":
+				logger = nil
+			}
+			_, err := trading.NewRuntime(registry, st, nil, sink, adjust, feeSkip, logger)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("missing %s = %v, want internal error", missing, err)
+			}
+		})
+	}
+}
+
+func TestRegistryNilConnectorIsInternal(t *testing.T) {
+	registry := trading.NewRegistry()
+	must(t, registry.Register(trading.Provider{
+		Type: "broken", Build: func(trading.BuildContext) (trading.Connector, error) { return nil, nil },
+	}))
+	_, err := registry.Build(trading.BuildContext{Connection: domain.TradingConnection{Provider: "broken"}})
+	if !internalFailureAnswer(err) {
+		t.Fatalf("nil connector error = %v, want internal error", err)
+	}
+}
+
 func TestRegistryAndFreshSymbolVerification(t *testing.T) {
 	registry := trading.NewRegistry()
-	if err := registry.Register(trading.Provider{}); !errors.Is(err, domain.ErrInvalid) {
+	if err := registry.Register(trading.Provider{}); !internalFailureAnswer(err) {
 		t.Fatalf("invalid registration=%v", err)
 	}
 	if _, err := registry.Build(trading.BuildContext{Connection: domain.TradingConnection{Provider: "unknown"}}); !errors.Is(err, domain.ErrInvalid) {

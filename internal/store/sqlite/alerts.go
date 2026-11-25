@@ -217,7 +217,7 @@ func scanAlert(row interface{ Scan(...any) error }) (alerts.Alert, error) {
 		return a, err
 	}
 	if !json.Valid([]byte(payload)) {
-		return a, fmt.Errorf("store: malformed alert payload: %w", domain.ErrInvalid)
+		return a, fmt.Errorf("store: malformed alert payload")
 	}
 	a.Payload = json.RawMessage(payload)
 	a.Deliveries = []alerts.Delivery{}

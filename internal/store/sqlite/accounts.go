@@ -1515,11 +1515,11 @@ func (r *realmStore) SetAccountPnl(
 func setAccountPnl(ctx context.Context, q sqlExecer, code domain.AccountID, pnl string, haltReason domain.PnlHaltReason) error {
 	if pnl != "" {
 		if _, err := domain.AddDecimals("", pnl); err != nil {
-			return fmt.Errorf("store: account pnl %q: %w", code, err)
+			return fmt.Errorf("store: account pnl %q: %w", code, domain.Internal(err))
 		}
 	}
 	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
-		return fmt.Errorf("store: account pnl halt %q: %w", code, err)
+		return fmt.Errorf("store: account pnl halt %q: %w", code, domain.Internal(err))
 	}
 	// NULL is the absence of a P&L value: a halted accumulator, or no value
 	// reported at all. Never substitute a number.

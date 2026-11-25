@@ -1223,7 +1223,7 @@ func TestVenueOrderCreateGetFindAndUniqueness(t *testing.T) {
 	acknowledgedAtCreate.VenueOrderID = "venue-2"
 	if _, err := rs.CreateVenueOrder(
 		ctx, acknowledgedAtCreate,
-	); !errors.Is(err, domain.ErrInvalid) {
+	); !internalFailureAnswer(err) {
 		t.Fatalf("pre-acknowledged create error = %v", err)
 	}
 	sendAttemptedAtCreate := link
@@ -1232,7 +1232,7 @@ func TestVenueOrderCreateGetFindAndUniqueness(t *testing.T) {
 	sendAttemptedAtCreate.SendAttempted = true
 	if _, err := rs.CreateVenueOrder(
 		ctx, sendAttemptedAtCreate,
-	); !errors.Is(err, domain.ErrInvalid) {
+	); !internalFailureAnswer(err) {
 		t.Fatalf("send-attempted create error = %v", err)
 	}
 	unknownOrder := link
@@ -1266,7 +1266,7 @@ func TestVenueOrderAcknowledgementAndDelete(t *testing.T) {
 			t.Fatalf("CreateVenueOrder(%d): %v", i, err)
 		}
 	}
-	if err := rs.SetVenueOrderID(ctx, firstOrder.ExternalID, ""); !errors.Is(err, domain.ErrInvalid) {
+	if err := rs.SetVenueOrderID(ctx, firstOrder.ExternalID, ""); !internalFailureAnswer(err) {
 		t.Fatalf("empty venue order id error = %v", err)
 	}
 	if err := rs.SetVenueOrderID(ctx, "missing", "venue-missing"); !errors.Is(err, domain.ErrNotFound) {

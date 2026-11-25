@@ -276,7 +276,7 @@ func (n *localNode) applyExecutionReport(
 	}
 	persist := func(state *executionReportChainState) error {
 		if state.result.Persistence == nil {
-			return fmt.Errorf("apply execution report returned no persistence write set: %w", domain.ErrInvalid)
+			return fmt.Errorf("apply execution report returned no persistence write set")
 		}
 		persistence := stampExecutionReportPersistence(
 			*state.result.Persistence, caller, request,

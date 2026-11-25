@@ -360,20 +360,20 @@ func buildOpenPitEngine(
 	positionLimits := make(map[accountAssetKey]positionLimitValue)
 	instances, err := splitOrderSizeLimits(snap.OrderSizeLimits)
 	if err != nil {
-		return releaseOnErr(err)
+		return releaseOnErr(domain.Internal(err))
 	}
 	orderSizeLimits := make(map[string]map[orderSizeLimitKey]orderSizeLimitValue, len(instances))
 	for _, instance := range instances {
 		values, err := orderSizeLimitValues(instance.limits, res)
 		if err != nil {
-			return releaseOnErr(err)
+			return releaseOnErr(domain.Internal(err))
 		}
 		orderSizeLimits[instance.name] = values
 	}
 	if err := configurePositionLimits(
 		eng.Configure(), res, snap.PositionLimits, positionLimits,
 	); err != nil {
-		return releaseOnErr(err)
+		return releaseOnErr(domain.Internal(err))
 	}
 	// Group membership and group currency are exclusive operations. They are
 	// hydrated on the bare handle before the dispatcher exists, so no other call
@@ -666,7 +666,7 @@ func classifyConfigureError(err error) error {
 func (e *openPitEngine) configureRateLimitLocked(limits []domain.LimitRate) error {
 	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits, e.res)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if err := e.configurator.RateLimit(
 		nameRateLimit, broker, assets, accounts, accountAssets,
@@ -708,7 +708,7 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize)
 	for _, instance := range instances {
 		broker, assets, accountAssets, err := orderSizeAxes(instance.limits, e.res)
 		if err != nil {
-			return err
+			return domain.Internal(err)
 		}
 		values, err := orderSizeLimitValues(instance.limits, e.res)
 		if err != nil {
@@ -745,7 +745,7 @@ func configurePositionLimits(
 ) error {
 	desired, err := positionLimitValues(limits, res)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	for key, value := range desired {
 		if current, exists := applied[key]; exists && current.maxPosition == value.maxPosition {
@@ -819,7 +819,7 @@ func configureSpotFundsPnlBounds(
 ) (fwengine.PolicyConfigurationResult, error) {
 	global, groups, accounts, err := spotFundsPnlBoundsAxes(axis, limits, res)
 	if err != nil {
-		return fwengine.PolicyConfigurationResult{}, err
+		return fwengine.PolicyConfigurationResult{}, domain.Internal(err)
 	}
 	var outcomes configure.AccountBlockOutcomes
 	switch axis {
@@ -841,7 +841,7 @@ func configureSpotFundsPnlBounds(
 		)
 	default:
 		return fwengine.PolicyConfigurationResult{}, fmt.Errorf(
-			"engine: unknown spot funds pnl axis %q: %w", axis, domain.ErrInvalid,
+			"engine: unknown spot funds pnl axis %q", axis,
 		)
 	}
 	if err != nil {
@@ -1026,7 +1026,7 @@ func heldSettlementPrice(
 	}
 	quantity, err := domain.ParseOpenQuantity(held.Quantity)
 	if err != nil {
-		return "", fmt.Errorf("engine: held reservation quantity is invalid: %w", err)
+		return "", fmt.Errorf("engine: held reservation quantity is invalid: %w", domain.Internal(err))
 	}
 	if quantity.IsZero() {
 		return "", fmt.Errorf("engine: held reservation quantity is zero")
@@ -1348,7 +1348,7 @@ func buildEngine(
 		if err != nil {
 			builder.Close()
 			closeCreatedService()
-			return nil, nil, nil, nil, false, err
+			return nil, nil, nil, nil, false, domain.Internal(err)
 		}
 		builder = builder.Builtin(ready)
 		registered[nameRateLimit] = struct{}{}
@@ -1357,14 +1357,14 @@ func buildEngine(
 	if err != nil {
 		builder.Close()
 		closeCreatedService()
-		return nil, nil, nil, nil, false, err
+		return nil, nil, nil, nil, false, domain.Internal(err)
 	}
 	for _, instance := range instances {
 		ready, err := orderSizeReady(instance.limits, res)
 		if err != nil {
 			builder.Close()
 			closeCreatedService()
-			return nil, nil, nil, nil, false, err
+			return nil, nil, nil, nil, false, domain.Internal(err)
 		}
 		if instance.mode == domain.RuleModeReject {
 			builder = builder.Builtin(ready)
@@ -1437,7 +1437,7 @@ func configureStoredSpotFundsPnlAxes(
 		}
 		configuration, err := configureSpotFundsPnlBounds(configurator, res, axis, limits)
 		if err != nil {
-			return nil, err
+			return nil, domain.Internal(err)
 		}
 		blocks = append(blocks, configuration.AccountBlocks...)
 	}
@@ -1510,7 +1510,7 @@ func hydrateGroups(eng *openpit.Engine, accounts []domain.Account, res idResolve
 	for _, groupCode := range order {
 		group, err := res.group(groupCode)
 		if err != nil {
-			return err
+			return domain.Internal(err)
 		}
 		if err := handle.RegisterGroup(byGroup[groupCode], group); err != nil {
 			return fmt.Errorf("engine: register group %q: %w", groupCode, err)
@@ -1581,11 +1581,11 @@ func applyCurrencies(
 		}
 		groupID, err := res.group(group.Code)
 		if err != nil {
-			return err
+			return domain.Internal(err)
 		}
 		asset, err := res.asset(group.Currency)
 		if err != nil {
-			return fmt.Errorf("engine: group %q currency %q: %w", group.Code, group.Currency, err)
+			return fmt.Errorf("engine: group %q currency %q: %w", group.Code, group.Currency, domain.Internal(err))
 		}
 		if err := handle.SetGroupCurrency(groupID, asset); err != nil {
 			return fmt.Errorf("engine: set group %q currency: %w", group.Code, err)
@@ -1597,7 +1597,7 @@ func applyCurrencies(
 		}
 		accountID, err := res.account(account.Code)
 		if err != nil {
-			return err
+			return domain.Internal(err)
 		}
 		asset, err := res.asset(account.Currency)
 		if err != nil {
@@ -1605,7 +1605,7 @@ func applyCurrencies(
 				"engine: account %q currency %q: %w",
 				account.Code,
 				account.Currency,
-				err,
+				domain.Internal(err),
 			)
 		}
 		if err := handle.SetCurrency(accountID, asset); err != nil {
@@ -1624,11 +1624,11 @@ func seedBalances(eng *openpit.Engine, balances []domain.Balance, res idResolver
 	for _, balance := range balances {
 		account, err := res.account(balance.Account)
 		if err != nil {
-			return fmt.Errorf("engine: seed balance account %q: %w", balance.Account, err)
+			return fmt.Errorf("engine: seed balance account %q: %w", balance.Account, domain.Internal(err))
 		}
 		adjustment, err := balanceSeedAdjustment(balance, res)
 		if err != nil {
-			return err
+			return domain.Internal(err)
 		}
 		batch, err := eng.ApplyAccountAdjustment(account, []model.AccountAdjustment{adjustment})
 		if err != nil {
@@ -1636,8 +1636,8 @@ func seedBalances(eng *openpit.Engine, balances []domain.Balance, res idResolver
 				balance.Account, balance.Asset, err)
 		}
 		if rej, ok := batch.BatchError.Get(); ok {
-			return fmt.Errorf("engine: seed balance %s/%s rejected: %s: %w",
-				balance.Account, balance.Asset, seedRejectReason(rej), domain.ErrInvalid)
+			return fmt.Errorf("engine: seed balance %s/%s rejected: %s",
+				balance.Account, balance.Asset, seedRejectReason(rej))
 		}
 	}
 	return nil
@@ -1661,11 +1661,11 @@ func spotFundsAccountPnlSeeds(
 		accountID, err := res.account(account.Code)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"engine: seed account pnl account %q: %w", account.Code, err)
+				"engine: seed account pnl account %q: %w", account.Code, domain.Internal(err))
 		}
 		state, err := pnlStateFrom(account.Pnl, account.PnlHaltReason)
 		if err != nil {
-			return nil, fmt.Errorf("engine: seed account pnl %q: %w", account.Code, err)
+			return nil, fmt.Errorf("engine: seed account pnl %q: %w", account.Code, domain.Internal(err))
 		}
 		seeds = append(seeds, spotFundsAccountPnlSeed{
 			code:    account.Code,

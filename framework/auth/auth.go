@@ -62,7 +62,7 @@ func ContextWithCaller(ctx context.Context, caller domain.Caller) context.Contex
 func CallerFromContext(ctx context.Context) (domain.Caller, error) {
 	c, ok := ctx.Value(callerContextKey{}).(domain.Caller)
 	if !ok {
-		return domain.Caller{}, fmt.Errorf("auth: no caller in context: %w", domain.ErrInvalid)
+		return domain.Caller{}, fmt.Errorf("auth: no caller in context")
 	}
 	return c, nil
 }

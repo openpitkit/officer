@@ -970,8 +970,9 @@ func TestPublicPanelRouteRunsWithoutCaller(t *testing.T) {
 		t.Fatalf("public route = %d %s, served %q; want 204 from its handler",
 			rec.Code, rec.Body, served)
 	}
-	if !errors.Is(callerErr, domain.ErrInvalid) {
-		t.Fatalf("public route caller: got %v, want domain.ErrInvalid", callerErr)
+	public := DescribeErr(callerErr)
+	if callerErr == nil || public.Status != http.StatusInternalServerError || public.Code != "internal" {
+		t.Fatalf("public route caller: got %v, described as %+v, want 500 internal", callerErr, public)
 	}
 
 	for _, path := range []string{

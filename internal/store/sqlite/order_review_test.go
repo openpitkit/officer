@@ -151,8 +151,9 @@ func TestOrderReviewInvalidSettlementRollsBack(t *testing.T) {
 				Order: order.ExternalID, Account: order.Account, OrderStatus: tc.status, Review: tc.review,
 				Events: []domain.OrderEvent{{Type: domain.OrderEventPreTradeReview, Source: domain.SourcePanel}},
 			})
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("invalid settlement error = %v, want ErrInvalid", err)
+			wantInvalid := tc.name == "unknown connection"
+			if (wantInvalid && !errors.Is(err, domain.ErrInvalid)) || (!wantInvalid && !internalFailureAnswer(err)) {
+				t.Fatalf("invalid settlement error = %v, want validation=%t", err, wantInvalid)
 			}
 			after, err := rs.GetOrder(ctx, order.ExternalID)
 			if err != nil || !reflect.DeepEqual(before, after) {
@@ -205,8 +206,8 @@ func TestOrderReviewInvalidSubmissionRollsBack(t *testing.T) {
 		func(domain.Order) (domain.OrderSettlement, error) {
 			return domain.OrderSettlement{OrderStatus: domain.OrderStatusAwaitingReview}, nil
 		})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("submission error = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("submission error = %v, want internal error", err)
 	}
 	if _, err := rs.GetOrder(ctx, order.ExternalID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("failed submission persisted order: %v", err)
@@ -214,6 +215,42 @@ func TestOrderReviewInvalidSubmissionRollsBack(t *testing.T) {
 	archive, err := rs.ExportBackup(ctx, backup.Scope{All: true})
 	if err != nil || len(archive.Data.Orders) != 0 || len(archive.Data.OrderEvents) != 0 || len(archive.Data.OrderReviews) != 0 {
 		t.Fatalf("failed submission left history: %+v err=%v", archive.Data, err)
+	}
+}
+
+func TestOrderReviewInvariantErrorClassification(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		rawID       []byte
+		wantInvalid bool
+	}{
+		{name: "malformed stored ID", rawID: []byte{}},
+		{name: "inconsistent archive", rawID: []byte("inconsistent-order"), wantInvalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, rs := seedOrderFixtures(t)
+			order := submitReviewOrder(t, ctx, rs, domain.OrderReview{Mode: "hold"})
+			realm := rs.(*realmStore)
+			db, err := realm.db()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx,
+				`DELETE FROM order_review WHERE order_id = (SELECT id FROM order_record WHERE external_id = ?)`,
+				order.ExternalID.Bytes()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx, `UPDATE order_record SET external_id = ? WHERE external_id = ?`,
+				tc.rawID, order.ExternalID.Bytes()); err != nil {
+				t.Fatal(err)
+			}
+			err = checkOrderReviewInvariant(ctx, realm.store.enumCodes.Load(), db, domain.ExternalID(""))
+			if (tc.wantInvalid && !errors.Is(err, domain.ErrInvalid)) || (!tc.wantInvalid && !internalFailureAnswer(err)) {
+				t.Fatalf("checkOrderReviewInvariant error = %v, want invalid = %t", err, tc.wantInvalid)
+			}
+		})
 	}
 }
 
@@ -241,7 +278,7 @@ func TestOrderReviewDirectStatusWritesRefused(t *testing.T) {
 		t.Fatalf("direct update changed order: %+v err=%v", after, err)
 	}
 	waiting := submitReviewOrder(t, ctx, rs, domain.OrderReview{Mode: "hold"})
-	if err := rs.UpdateOrderStatus(ctx, waiting.ExternalID, domain.OrderStatusCancelled); !errors.Is(err, domain.ErrInvalid) {
+	if err := rs.UpdateOrderStatus(ctx, waiting.ExternalID, domain.OrderStatusCancelled); !internalFailureAnswer(err) {
 		t.Fatalf("direct departure from review error = %v", err)
 	}
 }

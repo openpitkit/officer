@@ -1832,8 +1832,8 @@ func TestLocalNode_SubmitOrderRejectsPersistedAccountMismatchBeforeEngine(
 		domain.MissingAccountCreate,
 		testCaller,
 	)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SubmitOrder error = %v, want ErrInvalid", err)
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitOrder error = %v, want internal error", err)
 	}
 	if len(eng.submitCalls) != 0 {
 		t.Fatalf("engine mutations = %+v, want none", eng.submitCalls)
@@ -1852,8 +1852,8 @@ func TestLocalNode_SubmitImmediateReservationRejectsPersistedAccountMismatchBefo
 		domain.MissingAccountCreate,
 		testCaller,
 	)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SubmitImmediate error = %v, want ErrInvalid", err)
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitImmediate error = %v, want internal error", err)
 	}
 	if len(eng.submitCalls) != 0 {
 		t.Fatalf("engine mutations = %+v, want none", eng.submitCalls)
@@ -1872,8 +1872,8 @@ func TestLocalNode_SubmitImmediateDropCopyRejectsPersistedAccountMismatchBeforeE
 		domain.MissingAccountCreate,
 		testCaller,
 	)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SubmitImmediate error = %v, want ErrInvalid", err)
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitImmediate error = %v, want internal error", err)
 	}
 	if len(eng.submitCalls) != 0 {
 		t.Fatalf("engine mutations = %+v, want none", eng.submitCalls)

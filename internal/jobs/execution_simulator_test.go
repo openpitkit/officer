@@ -21,12 +21,42 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/scheduler"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+func TestTestExecutionMissingRegistrationArgumentsAreInternal(t *testing.T) {
+	r, _, _, _, _ := resetTaskFixture(t)
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, missing := range []string{"context", "deadline", "handler"} {
+		t.Run(missing, func(t *testing.T) {
+			ctx := context.Background()
+			at := time.Now().Add(time.Hour)
+			run := func(time.Time) {}
+			switch missing {
+			case "context":
+				ctx = nil
+			case "deadline":
+				at = time.Time{}
+			case "handler":
+				run = nil
+			}
+			_, err := r.Schedule(ctx, at, run)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("registration error = %v, want internal error", err)
+			}
+		})
+	}
+}
 
 func TestTestExecutionUsesOnce(t *testing.T) {
 	_, n, _, host, st := resetTaskFixture(t)
@@ -190,4 +220,12 @@ func TestTestExecutionRegistrationAfterClose(t *testing.T) {
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("closed registration = %v", err)
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

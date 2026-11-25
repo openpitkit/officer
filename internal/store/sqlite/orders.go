@@ -132,11 +132,11 @@ func createOrderTx(
 	}
 	principalID, err := resolveOptionalPrincipalID(ctx, q, o.Principal)
 	if err != nil {
-		return o, err
+		return o, domain.Internal(err)
 	}
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(o.Source))
 	if err != nil {
-		return o, err
+		return o, domain.Internal(err)
 	}
 	sideID, err := dictionaries.id(orderSideTable, "order side", string(o.Side))
 	if err != nil {
@@ -150,7 +150,7 @@ func createOrderTx(
 	}
 	statusID, err := dictionaries.id(orderStatusTable, "order status", string(o.Status))
 	if err != nil {
-		return o, err
+		return o, domain.Internal(err)
 	}
 	xid, err := externalIDForInsert(o.ExternalID)
 	if err != nil {
@@ -293,7 +293,7 @@ func (r *realmStore) UpdateOrderStatus(
 	}
 	statusID, err := dictionaries.id(orderStatusTable, "order status", string(status))
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	tx, err := beginTx(ctx, db, nil)
 	if err != nil {
@@ -312,7 +312,7 @@ func (r *realmStore) UpdateOrderStatus(
 		return err
 	}
 	if err := checkOrderReviewInvariant(ctx, dictionaries, tx, id); err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	return tx.Commit()
 }
@@ -380,17 +380,17 @@ func putEventAttestationTx(
 	}
 	algID, err := dictionaries.id(attestationAlgTable, "attestation algorithm", att.Alg)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	requestTypeID, err := dictionaries.id(
 		attestationRequestTypeTable, "attestation request type", string(att.RequestType),
 	)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	modeID, err := dictionaries.id(attestationModeTable, "attestation mode", att.Mode)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if _, err := q.ExecContext(
 		ctx,
@@ -691,7 +691,7 @@ func (r *realmStore) activeOrderStatusIDs(ctx context.Context) ([]any, error) {
 	for _, status := range statuses {
 		id, err := dictionaries.id(orderStatusTable, "order status", string(status))
 		if err != nil {
-			return nil, err
+			return nil, domain.Internal(err)
 		}
 		statusIDs = append(statusIDs, id)
 	}
@@ -904,15 +904,15 @@ func (r *realmStore) AppendOrderEvent(
 	}
 	typeID, err := dictionaries.id(orderEventTypeTable, "order event type", string(ev.Type))
 	if err != nil {
-		return ev, err
+		return ev, domain.Internal(err)
 	}
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(ev.Source))
 	if err != nil {
-		return ev, err
+		return ev, domain.Internal(err)
 	}
 	principalID, err := resolveOptionalPrincipalID(ctx, db, ev.Principal)
 	if err != nil {
-		return ev, err
+		return ev, domain.Internal(err)
 	}
 	xid, err := newExternalID()
 	if err != nil {
@@ -1124,19 +1124,19 @@ func (r *realmStore) insertTrade(
 	}
 	accountID, err := resolveAccountID(ctx, exec, t.Account)
 	if err != nil {
-		return domain.ExternalID(""), time.Time{}, err
+		return domain.ExternalID(""), time.Time{}, domain.Internal(err)
 	}
 	baseID, err := resolveAssetID(ctx, exec, t.BaseAsset)
 	if err != nil {
-		return domain.ExternalID(""), time.Time{}, err
+		return domain.ExternalID(""), time.Time{}, domain.Internal(err)
 	}
 	quoteID, err := resolveAssetID(ctx, exec, t.QuoteAsset)
 	if err != nil {
-		return domain.ExternalID(""), time.Time{}, err
+		return domain.ExternalID(""), time.Time{}, domain.Internal(err)
 	}
 	principalID, err := resolveOptionalPrincipalID(ctx, exec, t.Principal)
 	if err != nil {
-		return domain.ExternalID(""), time.Time{}, err
+		return domain.ExternalID(""), time.Time{}, domain.Internal(err)
 	}
 	dictionaries, err := r.dictionaries()
 	if err != nil {
@@ -1144,11 +1144,11 @@ func (r *realmStore) insertTrade(
 	}
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(t.Source))
 	if err != nil {
-		return domain.ExternalID(""), time.Time{}, err
+		return domain.ExternalID(""), time.Time{}, domain.Internal(err)
 	}
 	sideID, err := dictionaries.id(orderSideTable, "order side", string(t.Side))
 	if err != nil {
-		return domain.ExternalID(""), time.Time{}, err
+		return domain.ExternalID(""), time.Time{}, domain.Internal(err)
 	}
 	xid, err := newExternalID()
 	if err != nil {
@@ -1922,13 +1922,13 @@ func (r *realmStore) recordOrderSettlementTx(
 	attest fwstore.EventAttestor,
 ) (domain.ExternalID, error) {
 	if st.Order.IsZero() {
-		return "", fmt.Errorf("store: settlement order is required: %w", domain.ErrInvalid)
+		return "", fmt.Errorf("store: settlement order is required")
 	}
 	// Resolve the settling account once; balance and blocks reuse it. The
 	// account is the fill's account, always present on a settlement.
 	accountID, err := resolveAccountID(ctx, tx, st.Account)
 	if err != nil {
-		return "", err
+		return "", domain.Internal(err)
 	}
 	// Resolve the order surrogate id before any writes. Events, the optional
 	// report, lock rewrite and status advance all reuse it.
@@ -1938,17 +1938,17 @@ func (r *realmStore) recordOrderSettlementTx(
 	}
 	if attest != nil && len(st.Events) == 0 {
 		return "", fmt.Errorf(
-			"store: settlement has no event to attest: %w", domain.ErrInvalid,
+			"store: settlement has no event to attest",
 		)
 	}
 	if st.ReportID != nil && len(st.Events) == 0 {
 		return "", fmt.Errorf(
-			"store: execution report has no events: %w", domain.ErrInvalid,
+			"store: execution report has no events",
 		)
 	}
 	if st.AccountPnl != "" {
 		if _, err := domain.AddDecimals("", st.AccountPnl); err != nil {
-			return "", fmt.Errorf("store: settlement account pnl %q: %w", st.Account, err)
+			return "", fmt.Errorf("store: settlement account pnl %q: %w", st.Account, domain.Internal(err))
 		}
 	}
 	reportID, reportRowID, err := insertExecutionReportTx(
@@ -1991,7 +1991,7 @@ func (r *realmStore) recordOrderSettlementTx(
 	for _, blk := range st.Blocks {
 		blkAccountID, err := resolveAccountID(ctx, tx, blk.Account)
 		if err != nil {
-			return "", err
+			return "", domain.Internal(err)
 		}
 		// The cause is engine-composed, never operator input: refusing a newer
 		// engine code or malformed text would drop a real kill-switch record. Keep
@@ -2075,7 +2075,7 @@ func (r *realmStore) recordOrderSettlementTx(
 
 	if st.ReservedQuantity != "" {
 		if _, err := domain.ParseOpenQuantity(st.ReservedQuantity); err != nil {
-			return "", fmt.Errorf("store: settlement reservation: %w", err)
+			return "", fmt.Errorf("store: settlement reservation: %w", domain.Internal(err))
 		}
 		if _, err := tx.ExecContext(
 			ctx,
@@ -2108,7 +2108,7 @@ func (r *realmStore) recordOrderSettlementTx(
 		}
 	}
 	if err := checkOrderReviewInvariant(ctx, dictionaries, tx, st.Order); err != nil {
-		return "", err
+		return "", domain.Internal(err)
 	}
 
 	return reportID, nil
@@ -2167,7 +2167,7 @@ func guardedOrderStatus(
 ) error {
 	statusID, err := dictionaries.id(orderStatusTable, "order status", string(status))
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	args := []any{statusID, orderID}
 	q := `UPDATE order_record SET status_id = ? WHERE id = ?`
@@ -2177,7 +2177,7 @@ func guardedOrderStatus(
 		for _, s := range allowedFrom {
 			id, err := dictionaries.id(orderStatusTable, "order status", string(s))
 			if err != nil {
-				return err
+				return domain.Internal(err)
 			}
 			args = append(args, id)
 		}
@@ -2225,15 +2225,15 @@ func appendOrderEventReturningTx(
 	}
 	principalID, err := resolveOptionalPrincipalID(ctx, tx, ev.Principal)
 	if err != nil {
-		return domain.OrderEvent{}, 0, err
+		return domain.OrderEvent{}, 0, domain.Internal(err)
 	}
 	typeID, err := dictionaries.id(orderEventTypeTable, "order event type", string(ev.Type))
 	if err != nil {
-		return domain.OrderEvent{}, 0, err
+		return domain.OrderEvent{}, 0, domain.Internal(err)
 	}
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(ev.Source))
 	if err != nil {
-		return domain.OrderEvent{}, 0, err
+		return domain.OrderEvent{}, 0, domain.Internal(err)
 	}
 	xid, err := newExternalID()
 	if err != nil {
@@ -2280,8 +2280,8 @@ func attestOrderEventTx(
 	}
 	if !ok {
 		return fmt.Errorf(
-			"store: event %s has no attestation payload: %w",
-			event.Type, domain.ErrInvalid,
+			"store: event %s has no attestation payload",
+			event.Type,
 		)
 	}
 	return putEventAttestationTx(ctx, dictionaries, tx, event.ExternalID, att)
@@ -2301,7 +2301,7 @@ func settleBalanceTx(
 ) error {
 	assetID, err := resolveAssetID(ctx, tx, bal.Asset)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	var prevAvail, prevHeld, prevIncoming, prevPnlHaltReason, prevAvgPx string
 	var prevRealized sql.NullString

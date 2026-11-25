@@ -327,15 +327,11 @@ func TestSetAccountPnlRejectsInvalidInput(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := rs.SetAccountPnl(ctx, "acc-1", "not-a-number", ""); !errors.Is(
-		err, domain.ErrInvalid,
-	) {
-		t.Fatalf("SetAccountPnl(non-decimal) = %v, want ErrInvalid", err)
+	if err := rs.SetAccountPnl(ctx, "acc-1", "not-a-number", ""); !internalFailureAnswer(err) {
+		t.Fatalf("SetAccountPnl(non-decimal) = %v, want internal error", err)
 	}
-	if err := rs.SetAccountPnl(ctx, "acc-1", "0", "no-such-reason"); !errors.Is(
-		err, domain.ErrInvalid,
-	) {
-		t.Fatalf("SetAccountPnl(unknown halt) = %v, want ErrInvalid", err)
+	if err := rs.SetAccountPnl(ctx, "acc-1", "0", "no-such-reason"); !internalFailureAnswer(err) {
+		t.Fatalf("SetAccountPnl(unknown halt) = %v, want internal error", err)
 	}
 	if err := rs.SetAccountPnl(ctx, "missing", "0", ""); !errors.Is(
 		err, domain.ErrNotFound,

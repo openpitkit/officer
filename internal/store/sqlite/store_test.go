@@ -881,8 +881,8 @@ func TestMigrateRefusesIncompleteBookkeeping(t *testing.T) {
 
 				reopened := openSQLiteStoreForTest(t, path)
 				err = reopened.Migrate(ctx)
-				if !errors.Is(err, domain.ErrInvalid) {
-					t.Errorf("Migrate with only %s recorded = %v, want ErrInvalid", recorded, err)
+				if !internalFailureAnswer(err) {
+					t.Errorf("Migrate with only %s recorded = %v, want internal error", recorded, err)
 				} else {
 					for _, want := range []string{strconv.Quote(path), "shared and application migration records that disagree", "created before the application tables existed", "first start interrupted", "must be recreated"} {
 						if !strings.Contains(err.Error(), want) {
@@ -1058,14 +1058,14 @@ func TestForRealmSingleRealmEnforcement(t *testing.T) {
 	s, _ := newTestStore(t)
 
 	// The empty realm id is not served; it is never replaced by the bound realm.
-	if _, err := s.ForRealm(ctx, ""); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ForRealm(empty) error = %v, want ErrInvalid", err)
+	if _, err := s.ForRealm(ctx, ""); !internalFailureAnswer(err) {
+		t.Fatalf("ForRealm(empty) error = %v, want internal error", err)
 	}
 
-	// A foreign realm id is rejected with ErrInvalid.
+	// A foreign realm id is an internal realm-binding failure.
 	_, err := s.ForRealm(ctx, domain.RealmID("other"))
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ForRealm(other) error = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("ForRealm(other) error = %v, want internal error", err)
 	}
 }
 
@@ -1097,8 +1097,8 @@ func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 		t.Fatalf("ForRealm(desk-a) = %v, want nil", err)
 	}
 	// The default realm is now foreign to a connector bound to desk-a.
-	if _, err := s.ForRealm(ctx, domain.DefaultRealm); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ForRealm(default) error = %v, want ErrInvalid", err)
+	if _, err := s.ForRealm(ctx, domain.DefaultRealm); !internalFailureAnswer(err) {
+		t.Fatalf("ForRealm(default) error = %v, want internal error", err)
 	}
 }
 
@@ -1243,8 +1243,8 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 		t.Fatalf("open(a) on a fresh database = %v, %v, want nil", migrateErr, bindErr)
 	}
 	migrateErr, _ := open("b")
-	if !errors.Is(migrateErr, domain.ErrInvalid) {
-		t.Fatalf("Migrate(b) on a database bound to a = %v, want ErrInvalid", migrateErr)
+	if !internalFailureAnswer(migrateErr) {
+		t.Fatalf("Migrate(b) on a database bound to a = %v, want internal error", migrateErr)
 	}
 	if !strings.Contains(migrateErr.Error(), `"a"`) ||
 		!strings.Contains(migrateErr.Error(), `"b"`) {
@@ -1258,8 +1258,8 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 	if err := foreign.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(bindErr, domain.ErrInvalid) {
-		t.Fatalf("ForRealm(b) on a database bound to a = %v, want ErrInvalid", bindErr)
+	if !internalFailureAnswer(bindErr) {
+		t.Fatalf("ForRealm(b) on a database bound to a = %v, want internal error", bindErr)
 	}
 	if migrateErr, bindErr := open("a"); migrateErr != nil || bindErr != nil {
 		t.Fatalf("open(a) after the rejected open = %v, %v, want nil", migrateErr, bindErr)

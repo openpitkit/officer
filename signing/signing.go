@@ -88,7 +88,7 @@ var _ fwsigning.Service = (*Service)(nil)
 // the in-memory cache.
 func New(st Store) (*Service, error) {
 	if st == nil {
-		return nil, fmt.Errorf("signing: nil store: %w", domain.ErrInvalid)
+		return nil, fmt.Errorf("signing: nil store")
 	}
 	s := &Service{store: st}
 	if err := s.reloadActive(context.Background()); err != nil {
@@ -436,7 +436,7 @@ func seedToPrivate(material []byte) (ed25519.PrivateKey, error) {
 	case ed25519.PrivateKeySize:
 		return ed25519.PrivateKey(append([]byte(nil), material...)), nil
 	default:
-		return nil, fmt.Errorf("unexpected key length %d: %w", len(material), domain.ErrInvalid)
+		return nil, fmt.Errorf("unexpected key length %d", len(material))
 	}
 }
 
