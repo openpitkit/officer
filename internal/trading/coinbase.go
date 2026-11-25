@@ -158,7 +158,7 @@ func (c *coinbaseConnector) PreCheck(ctx context.Context, order fwtrading.Order)
 		return fmt.Errorf("%w: Coinbase requires quantity orders", fwtrading.ErrUnsupported)
 	}
 	limit := order.LimitPrice != ""
-	if _, err := parseVenueRoute(order.Route, limit, "Coinbase"); err != nil {
+	if _, err := parseSpotRoute(order.Route, "Coinbase", limit); err != nil {
 		return err
 	}
 	p, found, err := c.fetchSymbol(ctx, order.Symbol)
@@ -209,7 +209,7 @@ func (c *coinbaseConnector) Send(ctx context.Context, order fwtrading.Order) (fw
 	if order.AmountKind != domain.OrderAmountKindQuantity {
 		return fwtrading.Ack{}, fmt.Errorf("%w: Coinbase requires quantity orders", fwtrading.ErrUnsupported)
 	}
-	tif, err := parseVenueRoute(order.Route, order.LimitPrice != "", "Coinbase")
+	tif, err := parseSpotRoute(order.Route, "Coinbase", order.LimitPrice != "")
 	if err != nil {
 		return fwtrading.Ack{}, err
 	}

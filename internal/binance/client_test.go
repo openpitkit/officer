@@ -39,6 +39,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/secret"
+	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
 var testCredentials = Credentials{
@@ -82,7 +83,7 @@ func TestSignPublishedVector(t *testing.T) {
 	payload := "symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&" +
 		"quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559"
 	want := "c8db56825ae71d6d79447849e617115f4a920fa2acdcab2b053c4b2838bd6b71"
-	if got := sign(payload, secret); got != want {
+	if got := vendorhttp.SignHex(payload, secret); got != want {
 		t.Fatalf("published signature = %q, want %q", got, want)
 	}
 }

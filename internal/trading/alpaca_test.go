@@ -62,7 +62,11 @@ func testOrder() fwtrading.Order {
 
 func TestProvidersAndEndpoints(t *testing.T) {
 	providers := FirstPartyProviders()
-	want := []string{domain.TradingProviderAlpaca, domain.TradingProviderBinance, domain.TradingProviderCoinbase, domain.TradingProviderIB, domain.TradingProviderEtoro, domain.TradingProviderOKX, "test"}
+	want := []string{
+		domain.TradingProviderAlpaca, domain.TradingProviderBinance, domain.TradingProviderCoinbase,
+		domain.TradingProviderIB, domain.TradingProviderEtoro, domain.TradingProviderBybit,
+		domain.TradingProviderOKX, "test",
+	}
 	if len(providers) != len(want) {
 		t.Fatalf("got %d providers, want %d", len(providers), len(want))
 	}

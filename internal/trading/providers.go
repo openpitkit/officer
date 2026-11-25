@@ -25,7 +25,10 @@ import (
 
 // FirstPartyProviders returns the built-in trading factories.
 func FirstPartyProviders() []fwtrading.Provider {
-	return []fwtrading.Provider{AlpacaProvider(), BinanceProvider(), CoinbaseProvider(), IBProvider(), EtoroProvider(), OKXProvider(), TestProvider()}
+	return []fwtrading.Provider{
+		AlpacaProvider(), BinanceProvider(), CoinbaseProvider(), IBProvider(),
+		EtoroProvider(), BybitProvider(), OKXProvider(), TestProvider(),
+	}
 }
 
 // IBProvider trades stocks, spot FX and crypto through TWS/IB Gateway.
@@ -241,6 +244,47 @@ func EtoroProvider() fwtrading.Provider {
 		UnlinkedFees: false,
 		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
 			return NewEtoroConnector(ctx.Connection)
+		},
+	}
+}
+
+// BybitProvider trades one account per HMAC key pair and verifies spot symbols.
+//
+// Credentials are {apiKey, apiSecret, site} with site "global" or "eu".
+// Credentials without site use the original Global endpoints. Paper mode
+// uses the selected site's REST and private WebSocket endpoints. Live mode
+// uses Bybit Global. The EU site scopes userID with a "bybit.eu:" prefix.
+// VenueAccount is empty. Route JSON for a limit order is
+// {"timeInForce": "GTC"|"IOC"|"FOK"}; a market order requires {}. Only quantity
+// orders are supported. Symbol verification and search read GET
+// /v5/market/instruments-info?category=spot on the connection's host and take
+// each symbol's base and quote assets and status from it; a symbol whose
+// status is not Trading exists but is not tradable. Account check reads GET
+// /v5/user/query-api for userID, uta, readOnly and Spot permissions. It
+// refuses an unusable userID or unreadable status; it reports classic/unified,
+// read-only and missing SpotTrade permission.
+//
+// Pre-check requires a Trading symbol, positive quantity and, for a limit
+// order, a positive price. Quantity must respect basePrecision and the order
+// type's maximum quantity; limit orders also apply tickSize and minOrderAmt.
+// The venue's own refusal is definitive for all other restrictions. Fills are
+// identified by cumulative filled quantity. Commission is retained in the
+// reported asset and booked in the order's base or quote when it is one of
+// them; nonempty extraFees are refused. There are no unlinked fees.
+//
+// The private stream subscribes to order.spot and execution.spot.
+// Reconciliation reads GET /v5/order/realtime, GET /v5/order/history and GET
+// /v5/execution/list, using the order's symbol and creation time for history.
+// Bybit retains cancelled or rejected orders without fills for only 24 hours;
+// when neither order lookup finds one, Lookup returns an empty snapshot,
+// found=false and no error.
+func BybitProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderBybit, Title: "Bybit",
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewBybitConnector(ctx.Connection)
 		},
 	}
 }

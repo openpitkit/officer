@@ -52,6 +52,16 @@ func ParseWithSecretField(raw, vendor, secretField string) (Credentials, error) 
 	return Credentials{APIKey: values[0], APISecret: values[1]}, nil
 }
 
+// ParseWithOptionalField accepts apiKey, apiSecret and one optional non-secret
+// field. An explicitly supplied field must be non-blank after trimming.
+func ParseWithOptionalField(raw, vendor, field string) (Credentials, string, error) {
+	values, err := parseFieldsWithOptional(raw, vendor, field, "apiKey", "apiSecret", field)
+	if err != nil {
+		return Credentials{}, "", err
+	}
+	return Credentials{APIKey: values[0], APISecret: values[1]}, values[2], nil
+}
+
 // PassphraseCredentials identifies an account by its API key, secret and
 // passphrase.
 type PassphraseCredentials struct{ APIKey, APISecret, Passphrase string }
@@ -121,6 +131,10 @@ func ParseCDP(raw, vendor string) (CDPCredentials, error) {
 }
 
 func parseFields(raw, vendor string, names ...string) ([]string, error) {
+	return parseFieldsWithOptional(raw, vendor, "", names...)
+}
+
+func parseFieldsWithOptional(raw, vendor, optional string, names ...string) ([]string, error) {
 	var fields map[string]string
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
 		return nil, domain.NewValidationError("", "type", vendor+": invalid credentials JSON")
@@ -132,8 +146,9 @@ func parseFields(raw, vendor string, names ...string) ([]string, error) {
 	}
 	values := make([]string, len(names))
 	for i, name := range names {
-		values[i] = strings.TrimSpace(fields[name])
-		if values[i] == "" {
+		value, present := fields[name]
+		values[i] = strings.TrimSpace(value)
+		if values[i] == "" && (name != optional || present) {
 			return nil, domain.NewValidationError("/"+name, "required", vendor+": "+name+" is required")
 		}
 	}

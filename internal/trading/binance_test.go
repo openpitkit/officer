@@ -214,7 +214,7 @@ func TestBinanceRouteAndOrderValidation(t *testing.T) {
 	for _, field := range []string{"quantity", "price"} {
 		for _, value := range []string{
 			"0", "-1", "1e3", "NaN", " 1", "+1", "1e-2147483647",
-			strings.Repeat("1", venueDecimalMaxLength+1),
+			strings.Repeat("1", plainDecimalMaxLength+1),
 		} {
 			order := binanceTestOrder()
 			if field == "quantity" {

@@ -201,6 +201,19 @@ const BINANCE_KEEP_PAGE_OPEN: TradingGuideStep = {
   textKey: "create.binance.keepPageOpen",
   links: [],
 };
+const BYBIT_DOCS_URL = "https://bybit-exchange.github.io/docs/v5/guide";
+const BYBIT_GLOBAL_API_KEY_GUIDE = {
+  labelKey: "create.bybit.globalApiKeyGuide",
+  href: "https://www.bybit.com/en/help-center/article/How-to-create-your-API-key",
+};
+const BYBIT_EU_API_KEY_GUIDE = {
+  labelKey: "create.bybit.euApiKeyGuide",
+  href: "https://www.bybit.eu/en-EU/learn/bybit-guide/what-is-api-trading-and-how-to-set-it-up-on-bybit-eu",
+};
+const BYBIT_KEEP_PAGE_OPEN: TradingGuideStep = {
+  textKey: "create.bybit.keepPageOpen",
+  links: [],
+};
 const KEEP_DIALOG_OPEN: TradingGuideStep = {
   textKey: "create.keepDialogOpen",
   links: [],
@@ -480,6 +493,56 @@ const TRADING_PROVIDER_GUIDES: Record<
       ],
     },
   },
+  bybit: {
+    siteUrl: "https://www.bybit.com",
+    docsUrl: { paper: BYBIT_DOCS_URL, live: BYBIT_DOCS_URL },
+    steps: {
+      paper: [
+        {
+          textKey: "create.bybit.openTestnet",
+          links: [
+            {
+              labelKey: "create.bybit.openGlobalTestnet",
+              href: "https://testnet.bybit.com/",
+            },
+            {
+              labelKey: "create.bybit.openEuTestnet",
+              href: "https://testnet.bybit.eu/en-EU/",
+            },
+          ],
+        },
+        {
+          textKey: "create.bybit.generateKeys",
+          links: [
+            {
+              labelKey: "create.bybit.openGlobalApiManagement",
+              href: "https://testnet.bybit.com/app/user/api-management",
+            },
+            {
+              labelKey: "create.bybit.openEuApiManagement",
+              href: "https://testnet.bybit.eu/en-EU/app/user/api-management",
+            },
+            BYBIT_GLOBAL_API_KEY_GUIDE,
+            BYBIT_EU_API_KEY_GUIDE,
+          ],
+        },
+        BYBIT_KEEP_PAGE_OPEN,
+      ],
+      live: [
+        {
+          textKey: "create.bybit.generateKeys",
+          links: [
+            {
+              labelKey: "create.bybit.openGlobalApiManagement",
+              href: "https://www.bybit.com/app/user/api-management",
+            },
+            BYBIT_GLOBAL_API_KEY_GUIDE,
+          ],
+        },
+        { textKey: "create.bybit.liveKeepPageOpen", links: [] },
+      ],
+    },
+  },
   okx: {
     siteUrl: "https://www.okx.com",
     docsUrl: { paper: OKX_PAPER_DOCS_URL, live: OKX_LIVE_DOCS_URL },
@@ -532,7 +595,8 @@ type TradingCredentialField = {
   multiline?: boolean;
 };
 
-// Alpaca and Binance take an {apiKey, apiSecret} pair; OKX adds a passphrase.
+// Alpaca, Binance and Bybit take an {apiKey, apiSecret} pair.
+// OKX also requires a passphrase.
 const API_KEY_SECRET_FIELDS: TradingCredentialField[] = [
   {
     key: "apiKey",
@@ -557,6 +621,7 @@ const TRADING_PROVIDER_CREDENTIAL_FIELDS = new Map<
   ["test", []],
   ["alpaca", API_KEY_SECRET_FIELDS],
   ["binance", API_KEY_SECRET_FIELDS],
+  ["bybit", API_KEY_SECRET_FIELDS],
   [
     "coinbase",
     [
@@ -637,27 +702,44 @@ const OKX_SITES = [
   { value: "app.okx.com", labelKey: "settings.okx.sites.us" },
 ];
 
-function OKXConnectionFields({
+const BYBIT_PAPER_SITES = [
+  { value: "global", labelKey: "create.bybit.openGlobalTestnet" },
+  { value: "eu", labelKey: "create.bybit.openEuTestnet" },
+];
+
+function ConnectionSiteField({
   id,
+  provider,
   site,
   busy,
   onChange,
 }: {
   id: string;
+  provider: "okx" | "bybit";
   site: string;
   busy: boolean;
   onChange: (site: string) => void;
 }) {
   const { t } = useTranslation("trading");
+  const isOKX = provider === "okx";
+  const sites = isOKX ? OKX_SITES : BYBIT_PAPER_SITES;
   return (
     <div className="flex flex-col gap-y-2">
-      <Label htmlFor={`${id}-site`}>{t("settings.okx.site")}</Label>
+      <Label htmlFor={`${id}-site`}>
+        {t(isOKX ? "settings.okx.site" : "create.bybit.site")}
+      </Label>
       <Select value={site} onValueChange={onChange} disabled={busy} required>
         <SelectTrigger id={`${id}-site`}>
-          <SelectValue placeholder={t("settings.okx.sitePlaceholder")} />
+          <SelectValue
+            placeholder={t(
+              isOKX
+                ? "settings.okx.sitePlaceholder"
+                : "create.bybit.sitePlaceholder",
+            )}
+          />
         </SelectTrigger>
         <SelectContent>
-          {OKX_SITES.map(({ value, labelKey }) => (
+          {sites.map(({ value, labelKey }) => (
             <SelectItem key={value} value={value}>
               {t(labelKey, { site: value })}
             </SelectItem>
@@ -820,15 +902,18 @@ function AddTradingConnectionDialog({
     );
   };
   const isIB = provider.type === "ib";
-  const isOKX = provider.type === "okx";
-  const [okxSite, setOKXSite] = useState("");
+  const siteProvider =
+    provider.type === "okx" || (provider.type === "bybit" && mode === "paper")
+      ? provider.type
+      : null;
+  const [site, setSite] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const errorBanner = useRef<HTMLDivElement>(null);
   const guide = TRADING_PROVIDER_GUIDES[provider.type];
   const ready =
     label.trim() !== "" &&
-    (!isOKX || okxSite !== "") &&
+    (siteProvider === null || site !== "") &&
     (isIB
       ? ibSettingsReady(ibSettings)
       : fields !== undefined &&
@@ -853,7 +938,7 @@ function AddTradingConnectionDialog({
           credentials[key] = credentialDraft[key].trim();
         }
       }
-      if (isOKX) credentials.site = okxSite;
+      if (siteProvider !== null) credentials.site = site;
       const connection = await createTradingConnection({
         provider: provider.type,
         label: label.trim(),
@@ -1006,12 +1091,13 @@ function AddTradingConnectionDialog({
               />
             ))
           )}
-          {isOKX && (
-            <OKXConnectionFields
+          {siteProvider !== null && (
+            <ConnectionSiteField
               id={id}
-              site={okxSite}
+              provider={siteProvider}
+              site={site}
               busy={busy}
-              onChange={setOKXSite}
+              onChange={setSite}
             />
           )}
           {error && (
@@ -1203,8 +1289,9 @@ function ConnectionSettingsDialog({
             </>
           )}
           {isOKX && (
-            <OKXConnectionFields
+            <ConnectionSiteField
               id={id}
+              provider="okx"
               site={okxSite}
               busy={busy}
               onChange={setOKXSite}

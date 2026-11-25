@@ -32,6 +32,11 @@ import (
 	"go.openpit.dev/officer/internal/polltest"
 )
 
+type bybitOpRequest struct {
+	Op   string   `json:"op"`
+	Args []string `json:"args,omitempty"`
+}
+
 func TestNormalizeBybitSubscriptions(t *testing.T) {
 	t.Parallel()
 

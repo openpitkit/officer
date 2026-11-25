@@ -319,6 +319,13 @@ const binanceDestination: TradingDestination = {
   venueAccount: "",
 };
 
+const bybitDestination: TradingDestination = {
+  ...binanceDestination,
+  connection: "bybit-paper",
+  label: "Bybit testnet",
+  provider: "bybit",
+};
+
 const linkedVenueOrder: VenueOrder = {
   connection: "alpaca-paper",
   venueAccount: "PA-1",
@@ -3976,6 +3983,15 @@ describe("Orders venue sending", () => {
       otherSendMock: sendLiveOrderMock,
       docsUrl:
         "https://developers.binance.com/docs/binance-spot-api-docs/enums",
+    },
+    {
+      venue: "Bybit",
+      destination: bybitDestination,
+      modeButton: "Paper",
+      submitLabel: "Submit PAPER order",
+      sendMock: sendPaperOrderMock,
+      otherSendMock: sendLiveOrderMock,
+      docsUrl: "https://bybit-exchange.github.io/docs/v5/enum#timeinforce",
     },
     {
       venue: "OKX",
