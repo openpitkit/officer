@@ -473,7 +473,11 @@ func TestAlertsLateDeliveryAfterResolution(t *testing.T) {
 	defer cancel()
 	published := make(chan error, 1)
 	go func() { published <- s.Publish(ctx, alertEvent("late")) }()
-	<-started // Slow channel started.
+	select {
+	case <-started: // Slow channel started.
+	case err := <-published:
+		t.Fatalf("Publish returned before delivery started: %v", err)
+	}
 	if _, err := s.Resolve(ctx, "late", "accept", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}

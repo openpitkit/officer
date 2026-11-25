@@ -227,6 +227,41 @@ This rule has no approval marker or baseline.
 
 The liveness deadline rule covers integration tests, SQLite store tests, and
 trading e2e tests. It allows short windows that prove an event did not happen.
+`checks/semgrep/integration-test-wall-clock-deadline.yml` requires waits without
+wall-clock deadlines. Await a goroutine's signal together with its result in
+one `select`, so an early return reports the result instead of hanging.
+
+Trading tests other than the e2e files are deliberately outside this rule.
+Their deadlines on in-process venue stubs have not been swept; that sweep is
+required before bringing them under the rule. Until then, the rule does not
+protect those tests from load-sensitive deadlines.
+
+### `goroutine-signal-without-result`
+
+`checks/semgrep/goroutine-signal-without-result.yml` covers the same integration,
+SQLite and trading e2e paths. After a goroutine sends its result on a channel,
+it rejects a blocking receive on another channel, including assignments, and
+direct `time.Sleep` polling loops that omit the result. Use
+`select { case <-signal: case err := <-result: t.Fatalf("early return: %v", err) }`
+and keep the later result check. Polling loops need a non-blocking result check
+inside the loop. If completion is legitimate, check the result and then assert
+the signal without blocking; before the awaited call returns, the signal must
+be receivable with nobody waiting: its channel is closed, or the value is in a
+buffer whose capacity allowed the send to complete. Its fixtures run through
+`check-semgrep`.
+
+The rule follows direct goroutine sends and subsequent receive/assignment,
+select, channel-range (including local `ch := make(chan T)`) or sleep-loop
+statements, including comma-ok receives,
+not result aliases passed into goroutines, receives in `if`
+initializers, channel ranges through fields whose type cannot be inferred, or
+waits hidden behind helper calls. Those waits still require
+review and are pinned with `todoruleid` fixtures. A blocking signal receive
+after the result was already received is still flagged, pinned with `todook`.
+The safe buffered collect idiom with sends to both channels, `wg.Wait()`,
+`close(b)` and `for v := range b` is also flagged, pinned with `todook`.
+Non-blocking selects and short observation windows are allowed.
+This rule has no approval marker or baseline.
 
 ### `sqlite-test-parallel`
 

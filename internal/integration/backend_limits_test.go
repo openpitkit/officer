@@ -298,7 +298,11 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 		_, err := svc.PutRateLimit(systemCtx(), limit, domain.LimitWriteReplace, domain.MissingAccountCreate)
 		putDone <- err
 	}()
-	<-md.stopEntered // PutRateLimit entered market-data reconnect.
+	select {
+	case <-md.stopEntered: // PutRateLimit entered market-data reconnect.
+	case err := <-putDone:
+		t.Fatalf("PutRateLimit returned before market-data reconnect: %v", err)
+	}
 
 	restartDone := make(chan error, 1)
 	go func() {
@@ -314,9 +318,13 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 	if err := <-putDone; err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
-	<-md.stopEntered // RestartMarketData continued after PutRateLimit reconnect.
 	if err := <-restartDone; err != nil {
 		t.Fatalf("RestartMarketData: %v", err)
+	}
+	select {
+	case <-md.stopEntered:
+	default:
+		t.Fatal("RestartMarketData returned without market-data reconnect")
 	}
 }
 
@@ -348,7 +356,11 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 		}, domain.LimitWriteReplace, domain.MissingAccountCreate)
 		rateDone <- err
 	}()
-	<-rateEntered // PutRateLimit entered node mutation.
+	select {
+	case <-rateEntered: // PutRateLimit entered node mutation.
+	case err := <-rateDone:
+		t.Fatalf("PutRateLimit returned before node mutation: %v", err)
+	}
 
 	orderDone := make(chan error, 1)
 	go func() {
@@ -372,9 +384,13 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 	if err := <-rateDone; err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
-	<-orderEntered // PutOrderSizeLimit continued after first reconnect.
 	if err := <-orderDone; err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
+	}
+	select {
+	case <-orderEntered:
+	default:
+		t.Fatal("PutOrderSizeLimit returned without node mutation")
 	}
 }
 

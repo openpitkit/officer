@@ -23,8 +23,9 @@
 # the test fails without a defect ("context deadline exceeded").
 #
 # A request runs under testCtx(t) in internal/integration, which carries the
-# system caller, and under t.Context() elsewhere. Use a plain receive for an
-# awaited goroutine.
+# system caller, and under t.Context() elsewhere. Await a goroutine's signal
+# together with its result in one select: an early return fails with its result
+# instead of hanging the test.
 # A wait that really hangs is caught by go test's -timeout, which also prints
 # every goroutine's stack. A short window that proves something does NOT
 # happen is not this rule's business: load cannot turn it red.
@@ -35,8 +36,9 @@ rules:
       A test bounds a wait by wall-clock time, which a loaded machine can spend
       before the awaited call runs. Use testCtx(t) for requests in
       internal/integration to carry the system caller, and t.Context()
-      elsewhere. Use a plain receive to await a goroutine. go test's -timeout
-      catches a hang.
+      elsewhere. Await a goroutine's signal together with its result in one
+      select, so an early return fails with its result instead of hanging the
+      test. go test's -timeout catches a hang.
     severity: ERROR
     languages: [go]
     pattern-either:

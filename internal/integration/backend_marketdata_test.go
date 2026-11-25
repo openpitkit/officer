@@ -372,7 +372,11 @@ func TestService_ListMarketDataSerializesManagerLifecycle(t *testing.T) {
 		_, err := svc.ListMarketData(systemCtx())
 		listDone <- err
 	}()
-	<-md.statusEntered // ListMarketData entered runtime status read.
+	select {
+	case <-md.statusEntered: // ListMarketData entered runtime status read.
+	case err := <-listDone:
+		t.Fatalf("ListMarketData returned before runtime status read: %v", err)
+	}
 
 	restartDone := make(chan error, 1)
 	go func() {
@@ -388,9 +392,13 @@ func TestService_ListMarketDataSerializesManagerLifecycle(t *testing.T) {
 	if err := <-listDone; err != nil {
 		t.Fatalf("ListMarketData: %v", err)
 	}
-	<-md.stopCalled // RestartMarketData continued after ListMarketData.
 	if err := <-restartDone; err != nil {
 		t.Fatalf("RestartMarketData: %v", err)
+	}
+	select {
+	case <-md.stopCalled:
+	default:
+		t.Fatal("RestartMarketData returned without stopping market data")
 	}
 }
 

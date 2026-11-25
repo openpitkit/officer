@@ -1437,6 +1437,11 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 			// Reset waits for the live connection only after closing the migrated
 			// temporary database. Block its cleanup without changing that database.
 			for db.Stats().WaitCount == waitCount { // Reset queued for a connection.
+				select {
+				case err := <-result:
+					t.Fatalf("Reset returned before queuing for a connection: %v", err)
+				default:
+				}
 				time.Sleep(time.Millisecond)
 			}
 			temporary, err := filepath.Glob(s.Path() + ".reset-*.db")

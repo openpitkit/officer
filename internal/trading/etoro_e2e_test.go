@@ -545,11 +545,20 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 			_, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest)
 			result <- err
 		}()
-		<-accepted // Venue accepted the POST.
+		select {
+		case <-accepted: // Venue accepted the POST.
+		case err := <-result:
+			t.Fatalf("Send returned before venue accepted the POST: %v", err)
+		}
 		for range 3 {
 			h.push()
 		}
 		waitForTrading(func() bool {
+			select {
+			case err := <-result:
+				t.Fatalf("Send returned before update was held: %v", err)
+			default:
+			}
 			h.c.ordersMu.Lock()
 			defer h.c.ordersMu.Unlock()
 			return len(h.c.held) == 1

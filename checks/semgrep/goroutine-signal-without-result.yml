@@ -1,0 +1,144 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# A goroutine may return before reaching the signal or state a test awaits.
+# Read its result during the wait, so an early failure is reported instead of
+# hanging until the package timeout. Polling covers direct sleep loops; waits
+# hidden behind a helper still require review.
+
+rules:
+  - id: goroutine-signal-without-result
+    message: >-
+      Await the signal together with the goroutine's result in one select,
+      and fail with that result if it returns before the awaited signal or state.
+      Keep checking the actual result after the signal path.
+    severity: ERROR
+    languages: [go]
+    options:
+      go_deeper_stmt: false
+    pattern-either:
+      - patterns:
+          - pattern: |
+              go func() {
+                ...
+                $R <- $V
+                ...
+              }()
+              ...
+              $WAIT
+          # A receive nested in another goroutine or an if initializer is not
+          # the subsequent signal-wait statement. Keep the outer statement shape.
+          - metavariable-regex:
+              metavariable: $WAIT
+              regex: '^(?:<-|[A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)?\s*(?::=|=)\s*<-|for\b|select\b)'
+          - metavariable-pattern:
+              metavariable: $WAIT
+              pattern-either:
+              - patterns:
+                  - pattern: <-$S
+                  - metavariable-comparison:
+                      metavariable: $S
+                      comparison: str($S) != str($R)
+                  - pattern-not-inside: |
+                      select {
+                      case <-$R:
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      select {
+                      case $X := <-$R:
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      select {
+                      case $X = <-$R:
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      select {
+                      case $X, $OK := <-$R:
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      select {
+                      case $X, $OK = <-$R:
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      select {
+                      default:
+                        ...
+                      }
+                  # A bounded observation window proves absence, not liveness.
+                  - pattern-not-inside: |
+                      select {
+                      case <-time.After(...):
+                        ...
+                      }
+              - patterns:
+                  - pattern: |
+                      for $COND {
+                        ...
+                        time.Sleep(...)
+                        ...
+                      }
+                  - pattern-not: |
+                      for $COND {
+                        ...
+                        select {
+                        case $ERR := <-$R:
+                          ...
+                        }
+                        ...
+                      }
+          - focus-metavariable: $WAIT
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  go func() {
+                    ...
+                    $R <- $V
+                    ...
+                  }()
+                  ...
+                  for range $S {
+                    ...
+                  }
+              - pattern: |
+                  go func() {
+                    ...
+                    $R <- $V
+                    ...
+                  }()
+                  ...
+                  for $X := range $S {
+                    ...
+                  }
+          # Integer and collection ranges do not block on a signal.
+          - pattern: '($S : $CHANNEL)'
+          - metavariable-regex:
+              metavariable: $CHANNEL
+              regex: '^(?:<-\s*)?chan\b'
+          - metavariable-comparison:
+              metavariable: $S
+              comparison: str($S) != str($R)
+          - focus-metavariable: $S
+    paths:
+      include:
+        - "/internal/integration/**/*_test.go"
+        - "/internal/store/sqlite/**/*_test.go"
+        - "/internal/trading/*e2e_test.go"
