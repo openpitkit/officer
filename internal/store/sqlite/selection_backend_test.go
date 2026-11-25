@@ -122,6 +122,7 @@ func seedSelectionOrders(t *testing.T, ctx context.Context, realm fwstore.RealmS
 }
 
 func TestSelectionLegacyLists(t *testing.T) {
+	t.Parallel()
 	ctx, realm, accounts, groups := selectionFixture(t)
 	ctx = auth.ContextWithCaller(ctx, domain.Caller{Source: domain.SourcePanel})
 	seedSelectionOrders(t, ctx, realm, accounts)
@@ -188,6 +189,7 @@ func TestSelectionLegacyLists(t *testing.T) {
 }
 
 func TestSelectionTradesBeforeLimit(t *testing.T) {
+	t.Parallel()
 	ctx, realm, accounts, _ := selectionFixture(t)
 	ctx = auth.ContextWithCaller(ctx, domain.Caller{Source: domain.SourcePanel})
 	seedSelectionOrders(t, ctx, realm, accounts)
@@ -210,6 +212,7 @@ func TestSelectionTradesBeforeLimit(t *testing.T) {
 }
 
 func TestSelectionGetGroupMembers(t *testing.T) {
+	t.Parallel()
 	ctx, realm, accounts, groups := selectionFixture(t)
 	ctx = auth.ContextWithCaller(ctx, domain.Caller{Source: domain.SourcePanel})
 	alias, err := realm.CreateGroup(ctx, domain.AccountGroup{Code: "alias", Title: groups[0].Code})
@@ -255,6 +258,7 @@ func TestSelectionGetGroupMembers(t *testing.T) {
 }
 
 func TestSelectionOrderCounts(t *testing.T) {
+	t.Parallel()
 	ctx, realm, accounts, groups := selectionFixture(t)
 	seedSelectionOrders(t, ctx, realm, accounts)
 	for _, tc := range []struct {

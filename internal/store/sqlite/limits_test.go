@@ -54,6 +54,7 @@ func seedLimitFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 // --- Rate limits (limit_rate) -------------------------------------------------
 
 func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	limit := domain.LimitRate{Mode: domain.RuleModeReject,
@@ -104,6 +105,7 @@ func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
 }
 
 func TestRateLimitUpsertUpdatesValue(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
@@ -132,6 +134,7 @@ func TestRateLimitUpsertUpdatesValue(t *testing.T) {
 }
 
 func TestRateLimitBrokerScopeNullAxes(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	// broker scope: no account, no asset.
@@ -155,6 +158,7 @@ func TestRateLimitBrokerScopeNullAxes(t *testing.T) {
 }
 
 func TestRateLimitInvalidScopeRejected(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
@@ -166,6 +170,7 @@ func TestRateLimitInvalidScopeRejected(t *testing.T) {
 }
 
 func TestRateLimitUnknownAccountIsInvalid(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
@@ -178,6 +183,7 @@ func TestRateLimitUnknownAccountIsInvalid(t *testing.T) {
 }
 
 func TestRateLimitUnknownAssetIsInvalid(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
@@ -190,6 +196,7 @@ func TestRateLimitUnknownAssetIsInvalid(t *testing.T) {
 }
 
 func TestRateLimitCascadeOnAccountDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutRateLimit(ctx, domain.LimitRate{Mode: domain.RuleModeReject,
@@ -218,6 +225,7 @@ func TestRateLimitCascadeOnAccountDelete(t *testing.T) {
 // --- Order-size limits (limit_order_size) ------------------------------------
 
 func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	limit := domain.LimitOrderSize{
@@ -283,8 +291,10 @@ func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
 }
 
 func TestOrderSizeLimitModeRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
 		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedLimitFixtures(t)
 			limit := domain.LimitOrderSize{
 				Mode: mode, Scope: domain.ScopeAccountUnderlyingAsset,
@@ -307,12 +317,14 @@ func TestOrderSizeLimitModeRoundTrip(t *testing.T) {
 }
 
 func TestOrderSizeLimitModeKey(t *testing.T) {
+	t.Parallel()
 	for _, target := range []domain.LimitOrderSize{
 		{Scope: domain.ScopeBroker},
 		{Scope: domain.ScopeUnderlyingAsset, Asset: "AAPL"},
 		{Scope: domain.ScopeAccountUnderlyingAsset, Account: "acc-1", Asset: "AAPL"},
 	} {
 		t.Run(string(target.Scope), func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedLimitFixtures(t)
 			reject, review := target, target
 			reject.Mode, reject.MaxQuantity = domain.RuleModeReject, "10"
@@ -378,6 +390,7 @@ func TestOrderSizeLimitModeKey(t *testing.T) {
 }
 
 func TestListPolicyRowsOrderSizeModeFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 	for _, scope := range []domain.LimitScope{domain.ScopeBroker, domain.ScopeUnderlyingAsset} {
 		for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithoutHold} {
@@ -406,6 +419,7 @@ func TestListPolicyRowsOrderSizeModeFilter(t *testing.T) {
 }
 
 func TestPositionLimitPutListDeleteRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
 		t.Fatal(err)
@@ -457,6 +471,7 @@ func TestPositionLimitPutListDeleteRoundTrip(t *testing.T) {
 }
 
 func TestPositionLimitInvalidRejected(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 	for _, tc := range []struct {
 		name  string
@@ -486,6 +501,7 @@ func TestPositionLimitInvalidRejected(t *testing.T) {
 }
 
 func TestPositionLimitScopeConstraint(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 	db := rs.(*realmStore).rawDB()
 	const insert = `INSERT INTO limit_position (scope, account_id, asset_id, max_position)
@@ -506,8 +522,10 @@ func TestPositionLimitScopeConstraint(t *testing.T) {
 }
 
 func TestPositionLimitDependents(t *testing.T) {
+	t.Parallel()
 	for _, entity := range []string{"account", "asset"} {
 		t.Run(entity, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedLimitFixtures(t)
 			limit := domain.LimitPosition{Mode: domain.RuleModeReject,
 				Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxPosition: "0",
@@ -546,6 +564,7 @@ func TestPositionLimitDependents(t *testing.T) {
 }
 
 func TestOrderSizeLimitAccountFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	// One broker barrier and one account-underlying-asset barrier.
@@ -574,6 +593,7 @@ func TestOrderSizeLimitAccountFilter(t *testing.T) {
 }
 
 func TestOrderSizeLimitInvalidRejected(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	// Both max_quantity and max_notional empty is invalid.
@@ -587,6 +607,7 @@ func TestOrderSizeLimitInvalidRejected(t *testing.T) {
 }
 
 func TestOrderSizeLimitCascadeOnAssetDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
@@ -611,6 +632,7 @@ func TestOrderSizeLimitCascadeOnAssetDelete(t *testing.T) {
 }
 
 func TestDeleteAccountWithoutForceRejectsSpotFundsPnlBoundsDependent(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
@@ -641,6 +663,7 @@ func TestDeleteAccountWithoutForceRejectsSpotFundsPnlBoundsDependent(t *testing.
 }
 
 func TestDeleteAccountForceCascadesSpotFundsPnlBoundsDependent(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
@@ -712,6 +735,7 @@ func seedPolicyFixtures(t *testing.T) (context.Context, fwstore.RealmStore) {
 }
 
 func TestListPolicyRowsUnionOrderAndTotal(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedPolicyFixtures(t)
 
 	// Unfiltered: all three barriers, ordered by the default key (kind, then the
@@ -746,6 +770,7 @@ func TestListPolicyRowsUnionOrderAndTotal(t *testing.T) {
 }
 
 func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedPolicyFixtures(t)
 
 	// Exact account filter narrows to acc-1's two barriers.
@@ -785,6 +810,7 @@ func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
 }
 
 func TestListPolicyRowsScopeFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedPolicyFixtures(t)
 
 	page, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{
@@ -804,6 +830,7 @@ func TestListPolicyRowsScopeFilter(t *testing.T) {
 }
 
 func TestListPolicyRowsRejectsUnknownScope(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedPolicyFixtures(t)
 
 	_, err := rs.ListPolicyRows(ctx, fwstore.PolicyListFilter{Scope: "unknown"})
@@ -813,6 +840,7 @@ func TestListPolicyRowsRejectsUnknownScope(t *testing.T) {
 }
 
 func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -877,6 +905,7 @@ func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 }
 
 func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedPolicyFixtures(t)
 	for _, code := range []string{"USD", "EUR"} {
 		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
@@ -954,6 +983,7 @@ func TestListPolicyRowsAssetFilterIncludesPnlCurrency(t *testing.T) {
 }
 
 func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
@@ -1011,6 +1041,7 @@ func TestSpotFundsPnlBoundsCurrencyRoundTripAllScopes(t *testing.T) {
 }
 
 func TestSpotFundsPnlBoundsUpsertOverwritesCurrency(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
 		t.Fatalf("CreateAsset(EUR): %v", err)
@@ -1040,6 +1071,7 @@ func TestSpotFundsPnlBoundsUpsertOverwritesCurrency(t *testing.T) {
 }
 
 func TestDeleteAssetRequiresForceForSpotFundsPnlBoundsCurrencyDependent(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
@@ -1072,6 +1104,7 @@ func TestDeleteAssetRequiresForceForSpotFundsPnlBoundsCurrencyDependent(t *testi
 }
 
 func TestListPolicyRowsSortAndPage(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedPolicyFixtures(t)
 
 	// Sort by account ascending: the global mode, then the account barriers.
@@ -1126,6 +1159,7 @@ func TestListPolicyRowsSortAndPage(t *testing.T) {
 // by an account restriction that keeps no unowned row, and counts in the
 // total, sort and paging like any other global barrier.
 func TestListPolicyRowsSpotFundsLimitModeRow(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedPolicyFixtures(t)
 	list := func(filter fwstore.PolicyListFilter) fwstore.PolicyListPage {
 		t.Helper()

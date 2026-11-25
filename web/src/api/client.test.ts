@@ -507,6 +507,7 @@ describe("trading client", () => {
         verifiesSymbols: true,
         searchesSymbols: true,
         unlinkedFees: true,
+        liveOnly: false,
       },
     ],
     connections: [connection],
@@ -599,14 +600,14 @@ describe("trading client", () => {
   };
 
   it.each([
-    [true, "desk/1 #paper"],
-    [false, ""],
+    [true, "desk/1 #paper", true],
+    [false, "", false],
   ] as const)(
-    "normalizes the trading snapshot with unlinkedFees %s and feeAccount %s",
-    async (unlinkedFees, feeAccount) => {
+    "normalizes the trading snapshot with unlinkedFees %s, feeAccount %s and liveOnly %s",
+    async (unlinkedFees, feeAccount, liveOnly) => {
       const snapshot = {
         ...trading,
-        providers: [{ ...trading.providers[0], unlinkedFees }],
+        providers: [{ ...trading.providers[0], unlinkedFees, liveOnly }],
         connections: [{ ...connection, feeAccount }],
       };
       const signal = new AbortController().signal;
@@ -754,6 +755,29 @@ describe("trading client", () => {
         code: "internal",
         message:
           "Invalid or missing trading provider unlinkedFees in the API response",
+      });
+    },
+  );
+
+  it.each([undefined, null, "true"])(
+    "rejects missing or invalid provider liveOnly %s",
+    async (liveOnly) => {
+      vi.mocked(fetch).mockResolvedValue(
+        jsonResponse({
+          trading: {
+            ...trading,
+            providers: [{ ...trading.providers[0], liveOnly }],
+          },
+        }),
+      );
+
+      const result = api().fetchTrading();
+
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message:
+          "Invalid or missing trading provider liveOnly in the API response",
       });
     },
   );
@@ -2367,6 +2391,30 @@ describe("limits client", () => {
     maxQuantity: "10",
     maxNotional: "",
   };
+
+  it("reports an unknown policy kind without treating it as a rate limit", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        policies: [
+          {
+            kind: "exposure_limit",
+            mode: "reject",
+            scope: "broker",
+            account: "",
+            asset: "",
+            values: { exposure: { maxNotional: "10000" } },
+          },
+        ],
+        total: 1,
+      }),
+    );
+    const result = api().fetchPoliciesPage();
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "internal",
+      message: expect.stringContaining('"exposure_limit"'),
+    });
+  });
 
   it.each(["addLimit", "putLimit"] as const)(
     "refuses an order-size write with null mode on %s without fetching",
@@ -5340,6 +5388,7 @@ describe("event reproduction client", () => {
     // Signed artifacts are carried through verbatim.
     expect(result.requestType).toBe("submit");
     expect(result.attestation?.signedEnvelope).toBe("env-verbatim");
+    expect(result.attestation?.mode).toBe("immediate");
     expect(result.response?.submitResponse?.signedApproval).toBe(
       "env-verbatim",
     );
@@ -5369,7 +5418,10 @@ describe("event reproduction client", () => {
   it("decodes a snake_case signed envelope", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
-        attestation: { signed_envelope: "env-snake-envelope" },
+        attestation: {
+          signed_envelope: "env-snake-envelope",
+          mode: "hold",
+        },
       }),
     );
 
@@ -5378,11 +5430,49 @@ describe("event reproduction client", () => {
     expect(result.attestation?.signedEnvelope).toBe("env-snake-envelope");
   });
 
+  it("rejects an attestation with an unknown submit mode", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        requestType: "submit",
+        event: {
+          id: "evt-1",
+          order: "ord-1",
+          at: "2026-06-24T00:00:00Z",
+          type: "submitted",
+          source: "api",
+          alg: "ed25519",
+          signed: true,
+        },
+        attestation: {
+          signedEnvelope: "env-verbatim",
+          keyId: "key-1",
+          alg: "ed25519",
+          requestType: "submit",
+          mode: "unexpected",
+          issuedAt: "2026-06-24T00:00:00Z",
+          signed: true,
+        },
+      }),
+    );
+
+    const result = fetchEventReproduction("ord-1", "evt-1");
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({
+      code: "internal",
+      message: "Invalid submit mode in the API response",
+    });
+  });
+
   it("decodes a snake_case signed approval response", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
         response: {
-          submitResponse: { signed_approval: "env-snake-response" },
+          submitResponse: {
+            signed_approval: "env-snake-response",
+            keyId: "key-1",
+            id: "ord-1",
+            verdict: "accept",
+          },
         },
       }),
     );
@@ -5436,7 +5526,7 @@ describe("event reproduction client", () => {
           keyId: "key-1",
           alg: "ed25519",
           requestType: "execution_report",
-          mode: "immediate",
+          mode: "hold",
           issuedAt: "2026-06-24T00:01:00Z",
           signed: true,
         },
@@ -5523,6 +5613,7 @@ describe("event reproduction client", () => {
 
     const result = await fetchEventReproduction("ord-1", "evt-fill");
     expect(result.requestType).toBe("execution_report");
+    expect(result.attestation?.mode).toBe("hold");
     expect(result.event).toMatchObject({
       fillQuantity: "10",
       fillPrice: "150.25",
@@ -6043,38 +6134,48 @@ describe("Orders createOrder submit lifecycle", () => {
     },
   );
 
-  it("keeps an empty submitResponse verdict", async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            order: { id: "ord_legacy_0000001" },
-            submitResponse: {
-              signedApproval: "legacy-envelope",
-              keyId: "key-1",
-              id: "ord_legacy_0000001",
-              verdict: "",
-            },
-          }),
-          { status: 201, headers: { "Content-Type": "application/json" } },
-        ),
-      )
-      .mockResolvedValueOnce(orderResponse("ord_legacy_0000001"));
-    const { createOrder } = api();
-    const result = await createOrder(
-      {
-        account: "desk-alpha",
-        baseAsset: "AAPL",
-        quoteAsset: "USD",
-        side: "buy",
-        amountKind: "quantity",
-        amountValue: "100",
-      },
-      "reject",
-    );
-    expect(result.approval?.verdict).toBe("");
-    expect(result.approval?.reasons).toEqual([]);
-  });
+  it.each([
+    ["defer", '"defer"'],
+    [undefined, "undefined"],
+    ["", '""'],
+  ])(
+    "reports an invalid submitResponse verdict %j",
+    async (verdict, received) => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              order: { id: "ord_invalid_0000001" },
+              submitResponse: {
+                signedApproval: "order-envelope",
+                keyId: "key-1",
+                id: "ord_invalid_0000001",
+                verdict,
+              },
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(orderResponse("ord_invalid_0000001"));
+      const { createOrder } = api();
+      const result = createOrder(
+        {
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "100",
+        },
+        "reject",
+      );
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      await expect(result).rejects.toMatchObject({
+        code: "internal",
+        message: expect.stringContaining(received),
+      });
+    },
+  );
 
   it("normalizes displayPrice from the fetched order", async () => {
     vi.mocked(fetch)

@@ -449,24 +449,18 @@ func TestHostConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Subscribe: %v", err)
 			}
-			waitCtx, stopWaiting := context.WithTimeout(t.Context(), time.Second)
-			defer stopWaiting()
-			select {
-			case update, ok := <-updates:
-				if !ok {
-					t.Fatal("subscription channel closed before its update")
-				}
-				if update.Base != base || update.Quote != quote {
-					t.Fatalf(
-						"update asset ids = %d/%d, want %d/%d",
-						update.Base,
-						update.Quote,
-						base,
-						quote,
-					)
-				}
-			case <-waitCtx.Done():
-				t.Fatal("timed out waiting for subscription update")
+			update, ok := <-updates // Subscription delivers its first quote.
+			if !ok {
+				t.Fatal("subscription channel closed before its update")
+			}
+			if update.Base != base || update.Quote != quote {
+				t.Fatalf(
+					"update asset ids = %d/%d, want %d/%d",
+					update.Base,
+					update.Quote,
+					base,
+					quote,
+				)
 			}
 			select {
 			case _, ok := <-updates:
@@ -477,18 +471,8 @@ func TestHostConnectorSubscribeReturnsRequestedAssetIDs(t *testing.T) {
 			default:
 			}
 			test.stop(connector, cancel)
-			closeWaitCtx, stopCloseWait := context.WithTimeout(
-				t.Context(),
-				time.Second,
-			)
-			defer stopCloseWait()
-			select {
-			case _, ok := <-updates:
-				if ok {
-					t.Fatal("subscription channel remained open after stop")
-				}
-			case <-closeWaitCtx.Done():
-				t.Fatal("timed out waiting for subscription channel close")
+			if _, ok := <-updates; ok { // Subscription closes after stop.
+				t.Fatal("subscription channel remained open after stop")
 			}
 		})
 	}
@@ -1167,26 +1151,26 @@ func (s *customHostSource) ApplyAdjustment(ctx context.Context, account domain.A
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitRate, error) {
+	return domain.LimitRate{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitOrderSize, error) {
+	return domain.LimitOrderSize{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitPosition, error) {
+	return domain.LimitPosition{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitSpotFundsPnlBounds, error) {
+	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotImplemented
 }
 
 func (s *customHostSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
 	return domain.SpotFundsLimitModeState{}, domain.ErrNotImplemented
 }
 
-func (s *customHostSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
-	return domain.ErrNotImplemented
+func (s *customHostSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
+	return domain.LimitSpotFundsLimitMode{}, domain.ErrNotImplemented
 }

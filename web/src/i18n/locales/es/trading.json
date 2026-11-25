@@ -75,6 +75,12 @@
       "passphraseStored": "Passphrase: guardada",
       "passphraseNotSet": "Passphrase: sin definir"
     },
+    "coinbase": {
+      "apiKeyIdStored": "API key ID: guardado",
+      "apiKeyIdNotSet": "API key ID: sin definir",
+      "apiKeySecretStored": "Secret: guardado",
+      "apiKeySecretNotSet": "Secret: sin definir"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "Habilitada",
@@ -97,7 +103,7 @@
   },
   "deleteConnection": {
     "title": "¿Eliminar la conexión de trading?",
-    "description": "{{label}} y su configuración se eliminarán permanentemente. Desactive primero la conexión. Las conexiones con historial de órdenes no se pueden eliminar."
+    "description": "{{label}} y su configuración se eliminarán permanentemente. Las conexiones con historial de órdenes no se pueden eliminar."
   },
   "create": {
     "okx": {
@@ -109,6 +115,16 @@
         "createKey": "Cree una clave de API en su cuenta de OKX con el permiso {{tradePermission}}, sin permiso de retiro, y establezca una Passphrase. Copie la API key, la clave secreta y la Passphrase - OKX no puede recuperar una Passphrase perdida.",
         "bindIp": "Vincule a la clave la dirección IPv4 pública del equipo en el que se ejecuta Officer: OKX hace caducar las claves con permiso de negociación y sin una dirección IP vinculada tras 14 días de inactividad."
       }
+    },
+    "keepDialogOpen": "Mantenga abierto este diálogo - los campos de abajo piden ambos valores.",
+    "coinbase": {
+      "logIn": "Inicie sesión en el portal de {{portal}} y compruebe que {{live}} está seleccionado en el menú con el nombre de su cuenta, en la parte superior del portal: las claves creadas en {{sandbox}} no funcionan con la API de negociación.",
+      "openPortal": "Abrir el portal para desarrolladores de Coinbase",
+      "authenticationGuide": "Guía de autenticación con clave API",
+      "keyTypes": "Acerca de los tipos de clave admitidos",
+      "createKey": "En {{apiKeys}}, seleccione {{secretApiKeys}} y haga clic en {{createApiKey}}. Rellene {{nickname}}. Si lo desea, introduzca en {{ipAllowlist}} la dirección IP pública del equipo que ejecuta Officer.",
+      "restrictKey": "En {{permissions}}, despliegue {{advancedTrade}}, seleccione la cartera y marque {{read}} y {{trade}}, sin marcar {{transfer}}. En {{signatureAlgorithm}}, elija {{ecdsa}}: la API de negociación de Coinbase no acepta claves {{ed25519}}. Haga clic en {{create}} para generar la clave.",
+      "copyKeys": "Copie {{apiKeyId}} y {{secret}} del diálogo de Coinbase tal como se muestran, o haga clic en {{downloadApiKey}} para guardarlos en un archivo."
     },
     "test": {
       "prepare": "Esta conexión ejecuta órdenes de prueba localmente y no necesita claves. Después de crearla, conceda acceso a una cuenta de prueba, configure las máscaras de símbolos y sus reglas de ejecución y habilite la conexión."
@@ -177,7 +193,6 @@
       "copyUserKey": "Copie la nueva clave de la lista Generated Keys en el campo User key.",
       "publicApiKey": "La Public API key identifica la aplicación. Introdúzcala en el campo Public API key.",
       "authenticationGuide": "Guía de autenticación de eToro",
-      "keepDialogOpen": "Mantenga abierto este diálogo - los campos de abajo piden ambos valores.",
       "live": {
         "createUserKey": "Cree una clave de usuario: en eToro, abra Configuración y luego Negociación, desplácese hasta API Key Management y haga clic en Create New Key. Seleccione el entorno real - cada clave funciona en un solo entorno y Officer conecta la cuenta real en modo real. Seleccione el permiso de escritura - el permiso de solo lectura muestra datos de la cartera y no permite enviar órdenes. Haga clic en Generate Key e introduzca el código de verificación que eToro envía a su teléfono. API Key Management solo aparece cuando su cuenta de eToro está verificada."
       }
@@ -203,6 +218,10 @@
         "eea": "Cuenta del EEE ({{site}})",
         "us": "Cuenta de EE. UU. o Australia ({{site}})"
       }
+    },
+    "coinbase": {
+      "apiKeyId": "API key ID",
+      "apiKeySecret": "Secret"
     },
     "description": "Deje los campos vacíos para conservar los valores guardados.",
     "unknownProviderCredentials": "Este panel no conoce los campos de credenciales de este proveedor.",

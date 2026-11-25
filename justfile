@@ -68,11 +68,11 @@ check-cgo-toolchain:
     "{{ python }}" {{ just_helper }} check-cgo-toolchain
 
 # Build the pit-officer binary with debug compiler flags.
-build-debug: check-cgo-toolchain frontend-install build-js
+build-debug: check-cgo-toolchain build-js
     "{{ python }}" {{ just_helper }} go build "-gcflags=all=-N -l" "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" -o {{ officer_binary }} ./cmd/pit-officer
 
 # Build the optimized pit-officer binary.
-build-release: check-cgo-toolchain frontend-install build-js
+build-release: check-cgo-toolchain build-js
     "{{ python }}" {{ just_helper }} go build "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" -o {{ officer_binary }} ./cmd/pit-officer
 
 # Build all Go packages (no frontend; uses the committed web/dist placeholder).
@@ -202,15 +202,12 @@ install-python-tools:
 # semgrep error except PartialParsing.
 # Run the Semgrep invariant rule set over the whole tree.
 check-semgrep: install-python-tools
-    {{ python }} {{ just_helper }} semgrep-scan {{ semgrep }} --config checks/semgrep/ --error --timeout 0 --metrics=off --disable-version-check .
-    {{ semgrep }} --test --config checks/semgrep/ --metrics=off --disable-version-check checks/semgrep/testdata/
+    "{{ python }}" {{ just_helper }} semgrep-scan "{{ semgrep }}" --config checks/semgrep/ --error --timeout 0 --metrics=off --disable-version-check .
+    "{{ semgrep }}" --test --config checks/semgrep/ --metrics=off --disable-version-check checks/semgrep/testdata/
 
 # Lint all.
-lint-all: frontend-ci-install _lint-all-parallel
-
-# The install runs before this fan-out: lint-go walks web/node_modules, which npm ci rebuilds.
 [parallel]
-_lint-all-parallel: lint-go lint-js lint-python check-semgrep
+lint-all: lint-go lint-js lint-python check-semgrep
 
 # Lint all against a local Pit checkout.
 lint-all-dev pit_checkout="../pit": (lint-all-release-dev pit_checkout)
@@ -282,7 +279,7 @@ test-all-release-dev pit_checkout="../pit": (test-go-release-dev pit_checkout) (
 
 # Test the release tooling without cutting a release.
 test-python: install-python-tools
-    "{{ python }}" -m unittest discover -s scripts -p '*_test.py'
+    "{{ python }}" -m unittest discover -s scripts -p "*_test.py"
 
 # Run all Go tests.
 test-go: test-go-release
@@ -359,7 +356,7 @@ run-serve: build-release
 
 # Move the existing database aside and initialize a fresh serve configuration.
 run-serve-reset init_config="examples/setup/simple.json": build-release
-    {{ python }} {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve {{ sqlite_path_args }}
+    "{{ python }}" {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve {{ sqlite_path_args }}
 
 # Run pit-officer in serve mode with debug compiler flags.
 run-serve-debug: build-debug
@@ -367,7 +364,7 @@ run-serve-debug: build-debug
 
 # Reset and initialize serve with debug compiler flags.
 run-serve-reset-debug init_config="examples/setup/simple.json": build-debug
-    {{ python }} {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve {{ sqlite_path_args }}
+    "{{ python }}" {{ just_helper }} run-officer --reset-init {{ quote(init_config) }} serve {{ sqlite_path_args }}
 
 # Print the running serve URL and open it (no rebuild; serve must be up).
 dashboard:
@@ -377,7 +374,7 @@ dashboard:
 ensure-node:
     "{{ python }}" {{ just_helper }} ensure-node "{{ node_dir }}"
 
-# Install frontend dependencies only (no build).
+# Run npm install to update frontend dependencies. May rewrite the lockfile.
 frontend-install: ensure-node
     cd web && npm install
 
@@ -387,7 +384,7 @@ frontend-ci-install: ensure-node
 
 # Build the stable Docker image from the published OpenPit module.
 docker-build tag="pit-officer:local":
-    docker build --build-arg GO_VERSION={{ go_version }} --build-arg NODE_VERSION={{ node_version }} --build-arg OFFICER_COMMIT={{ `git rev-parse HEAD` }} -f {{ justfile_directory() }}/Dockerfile -t {{ tag }} {{ justfile_directory() }}
+    docker build --build-arg GO_VERSION={{ go_version }} --build-arg NODE_VERSION={{ node_version }} --build-arg OFFICER_COMMIT={{ `git rev-parse HEAD` }} -f "{{ justfile_directory() }}/Dockerfile" -t {{ tag }} "{{ justfile_directory() }}"
 
 # Start a local image for one platform; wait until it is healthy and /healthz answers 200.
 docker-start-check image platform:
@@ -429,11 +426,11 @@ dylib-release-dev pit_checkout="../pit":
 build-dev pit_checkout="../pit": (build-release-dev pit_checkout)
 
 # Build the pit-officer binary against a debug local Pit checkout.
-build-debug-dev pit_checkout="../pit": frontend-install build-js (dylib-debug-dev pit_checkout)
+build-debug-dev pit_checkout="../pit": build-js (dylib-debug-dev pit_checkout)
     just _go-dev-mode debug {{ quote(pit_checkout) }} "build" "-gcflags=all=-N -l" "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" "-o" {{ officer_binary }} "./cmd/pit-officer"
 
 # Build the pit-officer binary against an optimized local Pit checkout.
-build-release-dev pit_checkout="../pit": frontend-install build-js (dylib-release-dev pit_checkout)
+build-release-dev pit_checkout="../pit": build-js (dylib-release-dev pit_checkout)
     just _go-dev-mode release {{ quote(pit_checkout) }} "build" "-ldflags=-X=go.openpit.dev/officer/framework/backend.buildCommit={{ `git rev-parse HEAD` }}" "-o" {{ officer_binary }} "./cmd/pit-officer"
 
 # Build all Go packages against a local Pit checkout.
@@ -481,7 +478,7 @@ run-serve-dev pit_checkout="../pit": (build-release-dev pit_checkout)
 
 # Reset and initialize serve against a local Pit checkout.
 run-serve-reset-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-release-dev pit_checkout)
-    {{ python }} {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} release {{ quote(pit_checkout) }} serve {{ sqlite_path_args }}
+    "{{ python }}" {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} release {{ quote(pit_checkout) }} serve {{ sqlite_path_args }}
 
 # Run pit-officer in serve mode against a debug local Pit checkout.
 run-serve-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
@@ -489,9 +486,9 @@ run-serve-debug-dev pit_checkout="../pit": (build-debug-dev pit_checkout)
 
 # Reset and initialize debug serve against a local Pit checkout.
 run-serve-reset-debug-dev pit_checkout="../pit" init_config="examples/setup/simple.json": (build-debug-dev pit_checkout)
-    {{ python }} {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} debug {{ quote(pit_checkout) }} serve {{ sqlite_path_args }}
+    "{{ python }}" {{ just_helper }} run-officer-dev --reset-init {{ quote(init_config) }} debug {{ quote(pit_checkout) }} serve {{ sqlite_path_args }}
 # Run a Go command with a temporary workspace using the local OpenPit binding.
-_go-dev pit_checkout +go_args:
+_go-dev pit_checkout +go_args: (dylib-release-dev pit_checkout)
     just _go-dev-mode release {{ quote(pit_checkout) }} {{ go_args }}
 
 # Run a Go command with a temporary workspace using the local OpenPit binding.
@@ -499,7 +496,7 @@ _go-dev-mode mode pit_checkout +go_args:
     "{{ python }}" {{ just_helper }} go-dev {{ mode }} {{ quote(pit_checkout) }} {{ go_args }}
 
 # Run a Go-adjacent tool with a temporary workspace using the local OpenPit binding.
-_go-tool-dev pit_checkout +tool_args:
+_go-tool-dev pit_checkout +tool_args: (dylib-release-dev pit_checkout)
     just _go-tool-dev-mode release {{ quote(pit_checkout) }} {{ tool_args }}
 
 # Run a Go-adjacent tool with a temporary workspace using the local OpenPit binding.
@@ -508,4 +505,4 @@ _go-tool-dev-mode mode pit_checkout +tool_args:
 
 # Seed a running Officer instance with demo accounts, balances, orders, and trades.
 seed:
-    "{{ python }}" {{ justfile_directory() }}/tools/seed/seed.py
+    "{{ python }}" "{{ justfile_directory() }}/tools/seed/seed.py"

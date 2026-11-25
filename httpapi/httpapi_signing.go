@@ -212,7 +212,7 @@ func handleSubmitOrder(svc backend.ControlPlane) http.HandlerFunc {
 			httpx.WriteValidationProblem(w, "mode is required", "/mode", "required")
 			return
 		}
-		if mode != "hold" && mode != "immediate" {
+		if mode != backend.SubmitModeHold && mode != backend.SubmitModeImmediate {
 			httpx.WriteValidationProblem(
 				w, "mode must be hold or immediate", "/mode", "enum",
 			)

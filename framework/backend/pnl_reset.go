@@ -82,7 +82,7 @@ func resetOperator(ctx context.Context) (domain.Caller, error) {
 		return domain.Caller{}, err
 	}
 	if err := domain.ValidateSource(caller.Source); err != nil {
-		return domain.Caller{}, err
+		return domain.Caller{}, domain.Internal(err)
 	}
 	if caller.TightenOnly() {
 		return domain.Caller{}, fmt.Errorf("reset P&L or change its schedule: %w", domain.ErrLoosening)

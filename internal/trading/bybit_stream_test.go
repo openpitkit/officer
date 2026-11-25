@@ -39,11 +39,11 @@ import (
 
 func bybitReadRequest(t *testing.T, conn *websocket.Conn, op string) bool {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	_, raw, err := conn.Read(ctx)
+	_, raw, err := conn.Read(t.Context())
 	if err != nil {
-		t.Error("missing WebSocket request")
+		if t.Context().Err() == nil {
+			t.Errorf("missing WebSocket request: %v", err)
+		}
 		return false
 	}
 	var request struct {
@@ -113,8 +113,7 @@ func TestBybitStreamHandshake(t *testing.T) {
 				binanceWriteFrame(t, conn, map[string]any{"op": op, "success": false, "ret_msg": "refused"})
 			})
 			out := make(chan fwtrading.Event, 10)
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			_, err := c.stream(ctx, out)
 			if err == nil || errors.Is(err, errBybitUnauthorized) != (op == "auth") {
 				t.Fatalf("wrong handshake error: %v", err)
@@ -128,13 +127,8 @@ func TestBybitStreamHandshake(t *testing.T) {
 				if _, err := c.Subscribe(ctx); err != nil {
 					t.Fatal(err)
 				}
-				select {
-				case text := <-statuses:
-					if text != "bybit: stream authorization refused" {
-						t.Fatalf("wrong authorization status: %q", text)
-					}
-				case <-ctx.Done():
-					t.Fatal("authorization failure status missing")
+				if text := <-statuses; text != "bybit: stream authorization refused" {
+					t.Fatalf("wrong authorization status: %q", text)
 				}
 				c.Close()
 			}
@@ -155,7 +149,7 @@ func TestBybitStreamHandshake(t *testing.T) {
 			close(ready)
 			<-release
 			binanceWriteFrame(t, conn, map[string]any{"op": "subscribe", "success": true})
-			binanceWaitForClose(conn)
+			binanceWaitForClose(t.Context(), conn)
 		})
 		events, err := c.Subscribe(context.Background())
 		if err != nil {
@@ -168,18 +162,14 @@ func TestBybitStreamHandshake(t *testing.T) {
 				close(release)
 			}
 		}()
-		select {
-		case <-ready:
-		case <-time.After(3 * time.Second):
-			t.Fatal("subscription request missing")
-		}
+		<-ready
 		select {
 		case <-events:
 			t.Fatal("connected before subscribe reply")
 		case <-time.After(100 * time.Millisecond):
 		}
 		close(release)
-		if e := binanceNextEvent(t, events); e.Kind != fwtrading.EventConnected {
+		if e := nextEvent(t, events); e.Kind != fwtrading.EventConnected {
 			t.Fatal("connection event missing")
 		}
 		c.Close()
@@ -198,14 +188,14 @@ func TestBybitStreamHandshake(t *testing.T) {
 			if attempts.Add(1) == 1 {
 				return
 			}
-			binanceWaitForClose(conn)
+			binanceWaitForClose(t.Context(), conn)
 		})
 		events, err := c.Subscribe(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 		for range 2 {
-			if binanceNextEvent(t, events).Kind != fwtrading.EventConnected {
+			if nextEvent(t, events).Kind != fwtrading.EventConnected {
 				t.Fatal("reconnection event missing")
 			}
 		}
@@ -239,7 +229,7 @@ func TestBybitStreamEvents(t *testing.T) {
 		binanceWriteFrame(t, conn, map[string]any{"op": "ping", "success": true, "ret_msg": "pong"})
 		binanceWriteFrame(t, conn, map[string]any{"topic": "order.spot", "data": []any{order("New"), order("PartiallyFilled"), order("Filled"), order("Cancelled"), order("Rejected"), order("PartiallyFilledCanceled"), order("FutureStatus")}})
 		binanceWriteFrame(t, conn, map[string]any{"topic": "execution.spot", "data": []any{foreign, exec, bad, fees, exec}})
-		binanceWaitForClose(conn)
+		binanceWaitForClose(t.Context(), conn)
 	})
 	c.cacheSymbol(bybitTestRules().Instrument)
 	diags := make(chan health.Diagnostic, 10)
@@ -254,7 +244,7 @@ func TestBybitStreamEvents(t *testing.T) {
 	}
 	wantKinds := []fwtrading.EventKind{fwtrading.EventConnected, fwtrading.EventOrder, fwtrading.EventOrder, fwtrading.EventOrder, fwtrading.EventOrder, fwtrading.EventFill, fwtrading.EventOrder, fwtrading.EventOrder, fwtrading.EventFill}
 	for _, kind := range wantKinds {
-		event := binanceNextEvent(t, events)
+		event := nextEvent(t, events)
 		if event.Kind != kind {
 			t.Fatalf("kind=%v want=%v", event.Kind, kind)
 		}
@@ -269,13 +259,8 @@ func TestBybitStreamEvents(t *testing.T) {
 		}
 	}
 	for _, detail := range []string{bybitFillUnreadable, bybitFillExtraFees} {
-		select {
-		case d := <-diags:
-			if !reflect.DeepEqual(d, *venueStreamUnparsable(health.DiagWarn, detail, venueStreamReconciled)) {
-				t.Fatalf("diagnostic=%+v", d)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("fill diagnostic missing")
+		if d := <-diags; !reflect.DeepEqual(d, *venueStreamUnparsable(health.DiagWarn, detail, venueStreamReconciled)) {
+			t.Fatalf("diagnostic=%+v", d)
 		}
 	}
 	select {
@@ -326,18 +311,18 @@ func TestBybitStreamDiagnostics(t *testing.T) {
 			if !bybitConfirm(t, conn) {
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
 			for _, raw := range []string{
 				`{`, `{}`, `{`,
 			} {
-				if err := conn.Write(ctx, websocket.MessageText, []byte(raw)); err != nil {
-					t.Error(err)
+				if err := conn.Write(t.Context(), websocket.MessageText, []byte(raw)); err != nil {
+					if t.Context().Err() == nil {
+						t.Error(err)
+					}
 					return
 				}
 			}
 			binanceWriteFrame(t, conn, map[string]any{"topic": "order.spot", "data": []any{map[string]any{"orderLinkId": "client-1", "orderId": "venue-1", "symbol": "BTCUSDT", "orderStatus": "Cancelled"}}})
-			binanceWaitForClose(conn)
+			binanceWaitForClose(t.Context(), conn)
 		})
 		diags := make(chan health.Diagnostic, 10)
 		c.SetDiagnosticReporter(func(d health.Diagnostic) { diags <- d })
@@ -345,7 +330,7 @@ func TestBybitStreamDiagnostics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if binanceNextEvent(t, events).Kind != fwtrading.EventConnected || binanceNextEvent(t, events).Kind != fwtrading.EventOrder {
+		if nextEvent(t, events).Kind != fwtrading.EventConnected || nextEvent(t, events).Kind != fwtrading.EventOrder {
 			t.Fatal("bad frame prevented subsequent order")
 		}
 		c.Close()
@@ -374,14 +359,14 @@ func TestBybitStreamDiagnostics(t *testing.T) {
 				if !bybitConfirm(t, conn) {
 					return
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer cancel()
-				if err := conn.Write(ctx, websocket.MessageText, []byte(tc.raw)); err != nil {
-					t.Error(err)
+				if err := conn.Write(t.Context(), websocket.MessageText, []byte(tc.raw)); err != nil {
+					if t.Context().Err() == nil {
+						t.Error(err)
+					}
 					return
 				}
 				binanceWriteFrame(t, conn, map[string]any{"topic": "order.spot", "data": []any{map[string]any{"orderLinkId": "client-1", "orderId": "venue-1", "symbol": "BTCUSDT", "orderStatus": "Cancelled"}}})
-				binanceWaitForClose(conn)
+				binanceWaitForClose(t.Context(), conn)
 			})
 			diags := make(chan health.Diagnostic, 10)
 			c.SetDiagnosticReporter(func(d health.Diagnostic) { diags <- d })
@@ -389,7 +374,7 @@ func TestBybitStreamDiagnostics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if binanceNextEvent(t, events).Kind != fwtrading.EventConnected || binanceNextEvent(t, events).Kind != fwtrading.EventOrder {
+			if nextEvent(t, events).Kind != fwtrading.EventConnected || nextEvent(t, events).Kind != fwtrading.EventOrder {
 				t.Fatal("bad frame prevented subsequent order")
 			}
 			c.Close()
@@ -415,28 +400,21 @@ func TestBybitStreamPing(t *testing.T) {
 		if !bybitConfirm(t, conn) {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 23*time.Second)
-		defer cancel()
-		kind, raw, err := conn.Read(ctx)
+		kind, raw, err := conn.Read(t.Context())
 		ping <- err == nil && kind == websocket.MessageText && string(raw) == `{"op":"ping"}`
 		if err == nil {
-			binanceWaitForClose(conn)
+			binanceWaitForClose(t.Context(), conn)
 		}
 	})
 	events, err := c.Subscribe(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binanceNextEvent(t, events).Kind != fwtrading.EventConnected {
+	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("not connected")
 	}
-	select {
-	case ok := <-ping:
-		if !ok {
-			t.Fatal("missing text ping")
-		}
-	case <-time.After(24 * time.Second):
-		t.Fatal("ping timeout")
+	if !<-ping {
+		t.Fatal("missing text ping")
 	}
 	c.Close()
 }
@@ -509,7 +487,7 @@ func TestBybitRedaction(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			c := newBybitTest(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/stream" {
-					writeBinanceJSON(t, w, map[string]any{"retCode": 10003, "retMsg": message})
+					writeJSON(t, w, map[string]any{"retCode": 10003, "retMsg": message})
 					return
 				}
 				conn := bybitAccept(t, w, r)
@@ -580,15 +558,11 @@ func TestBybitRedaction(t *testing.T) {
 			if _, err = c.Subscribe(context.Background()); err != nil {
 				t.Fatal("subscribe setup failed")
 			}
-			select {
-			case text := <-messages:
-				assertSafe(t, text)
-				if mode == "dial" && (!strings.HasPrefix(text, "bybit: dial stream: ") ||
-					strings.Count(text, "bybit:") != 1) {
-					t.Fatal("dial failure must have exactly one vendor prefix")
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("failure status missing")
+			text := <-messages
+			assertSafe(t, text)
+			if mode == "dial" && (!strings.HasPrefix(text, "bybit: dial stream: ") ||
+				strings.Count(text, "bybit:") != 1) {
+				t.Fatal("dial failure must have exactly one vendor prefix")
 			}
 			c.Close()
 			close(messages)

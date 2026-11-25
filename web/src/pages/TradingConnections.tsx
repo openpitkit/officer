@@ -54,6 +54,8 @@ import { useTrading } from "@/api/useTrading";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ClearableInput } from "@/components/ClearableInput";
 import { CodeSuggestionFailure } from "@/components/CodeSuggestionFailure";
+import { SecretInput } from "@/components/SecretInput";
+import { SecretTextarea } from "@/components/SecretTextarea";
 import { ChoiceCards } from "@/components/ChoiceCards";
 import { Notice } from "@/components/Notice";
 import { AssetCodeField } from "@/components/AssetCodeField";
@@ -206,6 +208,10 @@ const BYBIT_KEEP_PAGE_OPEN: TradingGuideStep = {
   textKey: "create.bybit.keepPageOpen",
   links: [],
 };
+const KEEP_DIALOG_OPEN: TradingGuideStep = {
+  textKey: "create.keepDialogOpen",
+  links: [],
+};
 const ETORO_DOCS_URL =
   "https://api-portal.etoro.com/core/getting-started/authentication";
 const ETORO_LOG_IN: TradingGuideStep = {
@@ -225,10 +231,9 @@ const ETORO_PUBLIC_API_KEY: TradingGuideStep = {
     { labelKey: "create.etoro.authenticationGuide", href: ETORO_DOCS_URL },
   ],
 };
-const ETORO_KEEP_DIALOG_OPEN: TradingGuideStep = {
-  textKey: "create.etoro.keepDialogOpen",
-  links: [],
-};
+
+const COINBASE_DOCS_URL =
+  "https://docs.cdp.coinbase.com/coinbase-app/authentication-authorization/api-key-authentication";
 
 const OKX_PAPER_DOCS_URL =
   "https://www.okx.com/docs-v5/en/#overview-demo-trading-services";
@@ -240,17 +245,15 @@ const OKX_KEEP_PAGE_OPEN: TradingGuideStep = {
 };
 
 /**
- * Venue links and account preparation steps, per trading mode: a live
- * connection needs a real account, which the venues set up differently from
- * a paper one. The provider picker opens a paper draft, so it links the paper
- * docs.
+ * Venue links and account preparation steps for each supported trading mode.
+ * The provider picker links the docs for the mode its draft opens in.
  */
 const TRADING_PROVIDER_GUIDES: Record<
   string,
   {
     siteUrl?: string;
-    docsUrl?: Record<TradingMode, string>;
-    steps?: Record<TradingMode, TradingGuideStep[]>;
+    docsUrl?: Partial<Record<TradingMode, string>>;
+    steps?: Partial<Record<TradingMode, TradingGuideStep[]>>;
   }
 > = {
   test: {
@@ -397,6 +400,73 @@ const TRADING_PROVIDER_GUIDES: Record<
       ],
     },
   },
+  coinbase: {
+    siteUrl: "https://www.coinbase.com",
+    docsUrl: { live: COINBASE_DOCS_URL },
+    steps: {
+      live: [
+        {
+          textKey: "create.coinbase.logIn",
+          values: {
+            portal: "Coinbase Developer Platform",
+            live: "Live",
+            sandbox: "Sandbox",
+          },
+          links: [
+            {
+              labelKey: "create.coinbase.openPortal",
+              href: "https://portal.cdp.coinbase.com",
+            },
+            {
+              labelKey: "create.coinbase.authenticationGuide",
+              href: COINBASE_DOCS_URL,
+            },
+          ],
+        },
+        {
+          textKey: "create.coinbase.createKey",
+          values: {
+            apiKeys: "API Keys",
+            secretApiKeys: "Secret API Keys",
+            createApiKey: "Create API key",
+            nickname: "API key nickname",
+            ipAllowlist: "IP allowlist",
+          },
+          links: [],
+        },
+        {
+          textKey: "create.coinbase.restrictKey",
+          values: {
+            permissions: "Permissions",
+            advancedTrade: "Coinbase App & Advanced Trade",
+            read: "Read",
+            trade: "Trade",
+            transfer: "Transfer",
+            signatureAlgorithm: "Signature algorithm",
+            ecdsa: "ECDSA",
+            ed25519: "Ed25519",
+            create: "Create",
+          },
+          links: [
+            {
+              labelKey: "create.coinbase.keyTypes",
+              href: `${COINBASE_DOCS_URL}#creating-api-keys`,
+            },
+          ],
+        },
+        {
+          textKey: "create.coinbase.copyKeys",
+          values: {
+            apiKeyId: "API key ID",
+            secret: "Secret",
+            downloadApiKey: "Download API key",
+          },
+          links: [],
+        },
+        KEEP_DIALOG_OPEN,
+      ],
+    },
+  },
   etoro: {
     siteUrl: "https://www.etoro.com",
     docsUrl: { paper: ETORO_DOCS_URL, live: ETORO_DOCS_URL },
@@ -406,14 +476,14 @@ const TRADING_PROVIDER_GUIDES: Record<
         { textKey: "create.etoro.createUserKey", links: [] },
         ETORO_COPY_USER_KEY,
         ETORO_PUBLIC_API_KEY,
-        ETORO_KEEP_DIALOG_OPEN,
+        KEEP_DIALOG_OPEN,
       ],
       live: [
         ETORO_LOG_IN,
         { textKey: "create.etoro.live.createUserKey", links: [] },
         ETORO_COPY_USER_KEY,
         ETORO_PUBLIC_API_KEY,
-        ETORO_KEEP_DIALOG_OPEN,
+        KEEP_DIALOG_OPEN,
       ],
     },
   },
@@ -508,6 +578,7 @@ type TradingCredentialField = {
   labelKey: string;
   storedKey: string;
   notSetKey: string;
+  multiline?: boolean;
 };
 
 // Alpaca, Binance and Bybit take an {apiKey, apiSecret} pair.
@@ -537,6 +608,24 @@ const TRADING_PROVIDER_CREDENTIAL_FIELDS = new Map<
   ["alpaca", API_KEY_SECRET_FIELDS],
   ["binance", API_KEY_SECRET_FIELDS],
   ["bybit", API_KEY_SECRET_FIELDS],
+  [
+    "coinbase",
+    [
+      {
+        key: "apiKeyId",
+        labelKey: "settings.coinbase.apiKeyId",
+        storedKey: "connection.coinbase.apiKeyIdStored",
+        notSetKey: "connection.coinbase.apiKeyIdNotSet",
+      },
+      {
+        key: "apiKeySecret",
+        labelKey: "settings.coinbase.apiKeySecret",
+        storedKey: "connection.coinbase.apiKeySecretStored",
+        notSetKey: "connection.coinbase.apiKeySecretNotSet",
+        multiline: true,
+      },
+    ],
+  ],
   [
     "okx",
     [
@@ -688,6 +777,59 @@ function tradingConnectionLinks(provider: string, mode: TradingMode) {
   return { siteUrl: guide?.siteUrl, docsUrl: guide?.docsUrl?.[mode] };
 }
 
+function draftMode(provider: TradingProvider): TradingMode {
+  return provider.liveOnly ? "live" : "paper";
+}
+
+/** A labelled, masked credential field with a Show/Hide toggle. */
+function CredentialField({
+  id,
+  label,
+  multiline,
+  value,
+  onChange,
+  disabled,
+  required,
+  placeholder,
+}: {
+  id: string;
+  label: string;
+  multiline?: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  disabled: boolean;
+  required?: boolean;
+  placeholder?: string;
+}) {
+  if (!multiline) {
+    return (
+      <SecretInput
+        id={id}
+        label={label}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        required={required}
+        placeholder={placeholder}
+        autoComplete="new-password"
+      />
+    );
+  }
+  return (
+    <div className="flex flex-col gap-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <SecretTextarea
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        required={required}
+        placeholder={placeholder}
+      />
+    </div>
+  );
+}
+
 function AddTradingConnectionDialog({
   provider,
   credentialStorage,
@@ -709,7 +851,7 @@ function AddTradingConnectionDialog({
   const fields = TRADING_PROVIDER_CREDENTIAL_FIELDS.get(provider.type);
   const [label, setLabel] = useState(provider.title);
   const [createdWithError, setCreatedWithError] = useState(false);
-  const [mode, setMode] = useState<TradingMode>("paper");
+  const [mode, setMode] = useState<TradingMode>(draftMode(provider));
   const [credentialDraft, setCredentialDraft] = useState<
     Record<string, string>
   >(() => Object.fromEntries(fields ? fields.map(({ key }) => [key, ""]) : []));
@@ -833,10 +975,14 @@ function AddTradingConnectionDialog({
               <Segmented
                 value={mode}
                 onChange={(value) => changeMode(value as TradingMode)}
-                options={[
-                  { value: "paper", label: t("mode.paper") },
-                  { value: "live", label: t("mode.live") },
-                ]}
+                options={
+                  provider.liveOnly
+                    ? [{ value: "live", label: t("mode.live") }]
+                    : [
+                        { value: "paper", label: t("mode.paper") },
+                        { value: "live", label: t("mode.live") },
+                      ]
+                }
               />
             </fieldset>
           )}
@@ -847,7 +993,7 @@ function AddTradingConnectionDialog({
             <h2 className="text-sm font-bold">
               {t("create.prepareAccount", { provider: provider.title })}
             </h2>
-            {guide?.steps && (
+            {guide?.steps?.[mode] && (
               <ol className="list-outside list-decimal flex flex-col gap-y-4 pl-5 text-sm">
                 {guide.steps[mode].map((instruction) => (
                   <li
@@ -894,25 +1040,21 @@ function AddTradingConnectionDialog({
             />
           ) : (
             fields?.map((field) => (
-              <div key={field.key} className="flex flex-col gap-y-2">
-                <Label htmlFor={`${id}-${field.key}`}>
-                  {t(field.labelKey)}
-                </Label>
-                <Input
-                  id={`${id}-${field.key}`}
-                  type="password"
-                  autoComplete="new-password"
-                  value={credentialDraft[field.key]}
-                  required
-                  disabled={busy}
-                  onChange={(event) =>
-                    setCredentialDraft({
-                      ...credentialDraft,
-                      [field.key]: event.target.value,
-                    })
-                  }
-                />
-              </div>
+              <CredentialField
+                key={field.key}
+                id={`${id}-${field.key}`}
+                label={t(field.labelKey)}
+                multiline={field.multiline}
+                value={credentialDraft[field.key]}
+                required
+                disabled={busy}
+                onChange={(value) =>
+                  setCredentialDraft({
+                    ...credentialDraft,
+                    [field.key]: value,
+                  })
+                }
+              />
             ))
           )}
           {isOKX && (
@@ -1089,29 +1231,25 @@ function ConnectionSettingsDialog({
                 <UnsealedKeysWarning storage={credentialStorage} />
               )}
               {fields?.map((field) => (
-                <div key={field.key} className="flex flex-col gap-y-2">
-                  <Label htmlFor={`${id}-${field.key}`}>
-                    {t(field.labelKey)}
-                  </Label>
-                  <Input
-                    id={`${id}-${field.key}`}
-                    type="password"
-                    autoComplete="new-password"
-                    value={credentialDraft[field.key]}
-                    placeholder={
-                      connection.secrets[field.key]
-                        ? tv("settings.keepStoredSecret")
-                        : ""
-                    }
-                    onChange={(event) =>
-                      setCredentialDraft({
-                        ...credentialDraft,
-                        [field.key]: event.target.value,
-                      })
-                    }
-                    disabled={busy}
-                  />
-                </div>
+                <CredentialField
+                  key={field.key}
+                  id={`${id}-${field.key}`}
+                  label={t(field.labelKey)}
+                  multiline={field.multiline}
+                  value={credentialDraft[field.key]}
+                  placeholder={
+                    connection.secrets[field.key]
+                      ? tv("settings.keepStoredSecret")
+                      : ""
+                  }
+                  onChange={(value) =>
+                    setCredentialDraft({
+                      ...credentialDraft,
+                      [field.key]: value,
+                    })
+                  }
+                  disabled={busy}
+                />
               ))}
             </>
           )}
@@ -3251,7 +3389,10 @@ export function TradingConnections() {
             type: provider.type,
             title: provider.title,
             siteUrl: TRADING_PROVIDER_GUIDES[provider.type]?.siteUrl,
-            docsUrl: TRADING_PROVIDER_GUIDES[provider.type]?.docsUrl?.paper,
+            docsUrl:
+              TRADING_PROVIDER_GUIDES[provider.type]?.docsUrl?.[
+                draftMode(provider)
+              ],
           }))}
           onOpenChange={setAddOpen}
           onSelect={(entry) => {

@@ -18,11 +18,24 @@
 package secret_test
 
 import (
+	"net/http"
 	"reflect"
 	"testing"
 
 	"go.openpit.dev/officer/framework/secret"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+func TestCredentialRedactorRejectsMalformedStoredCredentialsAsInternal(t *testing.T) {
+	for _, credentials := range []string{`null`, `[]`, `"token"`, `{`} {
+		t.Run(credentials, func(t *testing.T) {
+			_, _, err := secret.CredentialRedactor(credentials)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("stored credentials error = %v, want internal error", err)
+			}
+		})
+	}
+}
 
 func TestCredentialRedactorSpellings(t *testing.T) {
 	// The apiKey is stored padded; its raw, JSON-escaped (HTML-escaped or
@@ -71,4 +84,12 @@ func TestCredentialRedactorLongestFirst(t *testing.T) {
 			}
 		})
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

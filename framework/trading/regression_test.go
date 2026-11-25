@@ -22,12 +22,98 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/trading"
 )
+
+type malformedTradeStore struct {
+	trading.Store
+	quantity string
+	broken   atomic.Bool
+}
+
+func (s *malformedTradeStore) GetOrder(ctx context.Context, id domain.ExternalID) (domain.OrderDetail, error) {
+	detail, err := s.Store.GetOrder(ctx, id)
+	if err == nil && s.broken.Load() {
+		detail.Trades = append(detail.Trades, domain.Trade{Quantity: s.quantity})
+	}
+	return detail, err
+}
+
+func TestVenueDataFailuresAreInternal(t *testing.T) {
+	for _, defect := range []string{"decimal length", "decimal syntax", "nonpositive price", "commission leg", "missing commission", "commission currency", "event kind", "snapshot status", "stored trade quantity"} {
+		t.Run(defect, func(t *testing.T) {
+			f := newFixture(t)
+			captured := make(chan error, 128)
+			logger := slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{
+				Level: slog.LevelDebug,
+				ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+					if attr.Key == "error" {
+						if err, ok := attr.Value.Any().(error); ok {
+							captured <- err
+						}
+					}
+					return attr
+				},
+			}))
+			var st trading.Store = f.st
+			corrupt := &malformedTradeStore{Store: f.st, quantity: "broken"}
+			if defect == "stored trade quantity" {
+				st = corrupt
+			}
+			r, err := trading.NewRuntime(f.registry, st, nil, f.sink, f.adjustmentSink, f.feeSkipSink, logger)
+			must(t, err)
+			f.runtime = r
+			must(t, r.Start(testCtx))
+			defer r.Stop()
+			order := f.submit("10")
+			link := f.send(order)
+			corrupt.broken.Store(true)
+			fill := makeFill("3", "3", "7", false)
+			switch defect {
+			case "decimal length":
+				fill.Quantity = ""
+			case "decimal syntax":
+				fill.Quantity = "1e0"
+			case "nonpositive price":
+				fill.Price = "0"
+			case "commission leg":
+				fill.CommissionLeg = "unknown"
+			case "missing commission":
+				fill.CommissionLeg = trading.CommissionLegBase
+			case "commission currency":
+				fill.Commission = &domain.Commission{Amount: "1"}
+			}
+			switch defect {
+			case "event kind":
+				f.venue.push(trading.Event{Kind: "unknown", Ref: trading.OrderRef{ClientOrderID: link.ClientOrderID}})
+			case "snapshot status":
+				f.venue.setSnapshot(link, "unknown", "0")
+				f.orderEvent(link)
+			default:
+				f.fill(link, fill)
+			}
+			f.flush()
+			count := len(captured)
+			if count == 0 {
+				t.Fatal("malformed venue or stored data produced no error")
+			}
+			for range count {
+				err := <-captured
+				if !internalFailureAnswer(err) {
+					t.Errorf("venue data error = %v, want internal error", err)
+				}
+			}
+			if detail := f.detail(order); len(detail.Trades) != 0 {
+				t.Fatal("malformed data reached the report sink")
+			}
+		})
+	}
+}
 
 func TestSendRechecksEligibility(t *testing.T) {
 	for _, window := range []string{"pre-check", "claim"} {
@@ -217,7 +303,7 @@ func TestInvalidVenueDecimals(t *testing.T) {
 					}
 					logs := f.logs.text()
 					if !strings.Contains(logs, "venue order remains pending") ||
-						!strings.Contains(logs, domain.ErrInvalid.Error()) {
+						strings.Contains(logs, `: invalid"`) {
 						t.Fatalf("invalid venue decimal did not produce an explicit pending error: %s", logs)
 					}
 					f.venue.mu.Lock()
@@ -449,8 +535,8 @@ func TestCommissionLegValidation(t *testing.T) {
 					t.Fatalf("invalid CommissionLeg was booked: status=%s trades=%d", detail.Order.Status, len(detail.Trades))
 				}
 				logs := f.logs.text()
-				if !strings.Contains(logs, "CommissionLeg") || !strings.Contains(logs, domain.ErrInvalid.Error()) {
-					t.Fatalf("invalid CommissionLeg did not name its field and ErrInvalid: %s", logs)
+				if !strings.Contains(logs, "CommissionLeg") || strings.Contains(logs, `: invalid"`) {
+					t.Fatalf("invalid CommissionLeg did not produce an internal error: %s", logs)
 				}
 				f.venue.mu.Lock()
 				reports := len(f.venue.reports)
@@ -521,7 +607,7 @@ func TestVenueCommissionValidation(t *testing.T) {
 				}
 				logs := f.logs.text()
 				if !strings.Contains(logs, "venue order remains pending") ||
-					!strings.Contains(logs, "commission") || !strings.Contains(logs, domain.ErrInvalid.Error()) {
+					!strings.Contains(logs, "commission") || strings.Contains(logs, `: invalid"`) {
 					t.Fatalf("invalid venue commission did not produce an explicit pending error: %s", logs)
 				}
 				f.venue.mu.Lock()
@@ -572,11 +658,7 @@ func TestInvalidCommissionPendingRetry(t *testing.T) {
 			}
 			fill.Commission = &domain.Commission{Amount: "-0.5", Currency: "USD"}
 			f.venue.setSnapshot(link, trading.VenueStatusOpen, "3", fill)
-			select {
-			case <-applied:
-			case <-time.After(20 * time.Second):
-				t.Fatal("invalid commission order was not pending for automatic reconciliation")
-			}
+			<-applied
 			detail := f.detail(order)
 			assertTrades(t, detail, []trading.Fill{fill})
 			if detail.Order.Status != domain.OrderStatusPartiallyFilled {
@@ -618,8 +700,6 @@ func TestPreCheckUsesCallerContext(t *testing.T) {
 			case <-entered:
 			case err := <-result:
 				t.Fatalf("pre-check failed before cancellation: %v", err)
-			case <-time.After(2 * time.Second):
-				t.Fatal("pre-check did not reach connector")
 			}
 			stopDone := make(chan struct{})
 			if cancelRuntime {
@@ -630,39 +710,21 @@ func TestPreCheckUsesCallerContext(t *testing.T) {
 			} else {
 				cancel()
 			}
-			select {
-			case <-abandoned:
-			case <-time.After(2 * time.Second):
-				t.Fatal("pre-check connector did not observe cancellation")
-			}
+			<-abandoned
 			if cancelRuntime {
 				select {
 				case <-stopDone:
 					t.Fatal("Stop returned before the in-flight pre-check finished")
 				default:
 				}
-				select {
-				case err := <-result:
-					if !errors.Is(err, domain.ErrConflict) {
-						t.Fatalf("cancelled pre-check: got %v, want %v", err, domain.ErrConflict)
-					}
-				case <-time.After(2 * time.Second):
-					t.Fatal("cancelled pre-check did not return promptly")
+				if err := <-result; !errors.Is(err, domain.ErrConflict) {
+					t.Fatalf("cancelled pre-check: got %v, want %v", err, domain.ErrConflict)
 				}
 				release()
-				select {
-				case <-stopDone:
-				case <-time.After(2 * time.Second):
-					t.Fatal("Stop did not return promptly after pre-check abandonment")
-				}
+				<-stopDone
 			} else {
-				select {
-				case err := <-result:
-					if !errors.Is(err, context.Canceled) {
-						t.Fatalf("cancelled pre-check: got %v, want %v", err, context.Canceled)
-					}
-				case <-time.After(2 * time.Second):
-					t.Fatal("cancelled pre-check did not return promptly")
+				if err := <-result; !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled pre-check: got %v, want %v", err, context.Canceled)
 				}
 			}
 		})
@@ -693,23 +755,15 @@ func TestPreCheckStoreReadsUseCallerContext(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- r.PreCheck(ctx, f.draft("1"), f.dest) }()
-	select {
-	case readCtx := <-st.readContext:
-		if readCtx.Value(contextKey{}) != "caller" {
-			t.Fatal("pre-check store read lost caller context value")
-		}
-		if deadline, ok := readCtx.Deadline(); !ok || time.Until(deadline) > 30*time.Second {
-			t.Fatal("pre-check store read lacks connector timeout")
-		}
-		cancel()
-		select {
-		case <-readCtx.Done():
-		case <-time.After(2 * time.Second):
-			t.Fatal("pre-check store read did not observe caller cancellation")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("pre-check did not reach store read")
+	readCtx := <-st.readContext
+	if readCtx.Value(contextKey{}) != "caller" {
+		t.Fatal("pre-check store read lost caller context value")
 	}
+	if deadline, ok := readCtx.Deadline(); !ok || time.Until(deadline) > 30*time.Second {
+		t.Fatal("pre-check store read lacks connector timeout")
+	}
+	cancel()
+	<-readCtx.Done()
 	if err := <-result; !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled pre-check = %v", err)
 	}

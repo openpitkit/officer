@@ -28,6 +28,7 @@ import (
 )
 
 func TestResetReceiptAtomicAndInsertMissingAccountOwnership(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, source := newRealmStore(t, domain.DefaultRealm)
 	account, err := source.CreateAccount(ctx, domain.Account{Code: "desk", Pnl: "12"})
@@ -82,10 +83,12 @@ func TestResetReceiptAtomicAndInsertMissingAccountOwnership(t *testing.T) {
 }
 
 func TestResetReceiptRestoreModeAndSelectionMatrix(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 		for _, selected := range []string{"a", "new", "all"} {
 			t.Run(fmt.Sprintf("%s/%s", mode, selected), func(t *testing.T) {
+				t.Parallel()
 				_, source := newRealmStore(t, domain.DefaultRealm)
 				_, target := newRealmStore(t, domain.DefaultRealm)
 				record := func(st fwstore.RealmStore, code domain.AccountID, run string, pnl string) {

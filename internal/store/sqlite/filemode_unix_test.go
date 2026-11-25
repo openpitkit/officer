@@ -176,6 +176,7 @@ func TestEnsurePrivateDatabaseFileNarrowsExistingSidecars(t *testing.T) {
 }
 
 func TestNewRejectsDanglingDatabaseSymlink(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "officer.db")
 	target := filepath.Join(dir, "volume.db")
@@ -192,8 +193,10 @@ func TestNewRejectsDanglingDatabaseSymlink(t *testing.T) {
 }
 
 func TestNewRejectsSymlinkedSidecarWithoutTouchingItsTarget(t *testing.T) {
+	t.Parallel()
 	for _, sidecar := range []string{"-wal", "-shm", "-journal"} {
 		t.Run(sidecar, func(t *testing.T) {
+			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, "officer.db")
 			outside := filepath.Join(t.TempDir(), "outside")
@@ -216,6 +219,7 @@ func TestNewRejectsSymlinkedSidecarWithoutTouchingItsTarget(t *testing.T) {
 }
 
 func TestNewNarrowsTheTargetOfADatabaseSymlink(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "volume.db")
@@ -277,6 +281,7 @@ func TestNewNarrowsWiderDatabaseFileMode(t *testing.T) {
 }
 
 func TestNewRejectsDatabasePathThatIsNotARegularFile(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("Mkdir: %v", err)

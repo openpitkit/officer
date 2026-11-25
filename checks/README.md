@@ -87,6 +87,82 @@ which review still catches:
 
 A miss or a false positive found in practice is a rule bug, fixed in the rule.
 
+### `account-chain-finally`
+
+`checks/semgrep/account-chain-finally.yml` checks for `Finally` before `Run`
+in production Go under `framework/`. It covers inline chains, local short
+declarations initialized with `asyncengine.Chain`, and typed `ChainBuilder`
+parameters of functions and methods. It exempts a `CheckOrder` chain run inline
+or run directly from its local declaration with no write step called on it
+before `Run`.
+
+Known misses include reassignments, extra aliases, steps added in another
+function, and builders returned by helpers, read from struct fields, or
+received as a function-literal parameter. For
+split `CheckOrder` chains, a step in an `else`, `for`, `switch`, or closure body
+escapes detection. The rule checks the same block and the then-branch of one
+enclosing `if`.
+
+`account-chain-finally-outcome` in the same file requires a function literal
+at each `Finally` call and rejects literals whose `asyncengine.ChainOutcome`
+parameter is blank, unnamed, or never referenced in the body. Named functions,
+method values, and function variables are rejected. It does not verify correct
+escalation after an outcome reference or detect calls through a `Finally`
+method alias such as `f := builder.Finally`.
+
+Their fixtures run through `check-semgrep`.
+
+These rules have no approval marker or baseline.
+
+### `error-type-one-form`
+
+`checks/semgrep/error-type-one-form.yml` requires a single probe form for an
+error type. A type switch case that lists both `T` and `*T`, or a function
+that probes both with `errors.As`, can keep a dead path and obscure which
+form the code actually returns. The rule scans production Go across the
+repository, excluding `*_test.go` and `testdata` directories.
+
+The switch check compares type spellings within one case. The `errors.As`
+check looks for addressed local variables with explicit types in one function
+body, in either order. Known misses include type aliases, parenthesised types,
+the two forms in separate cases of one switch, a switch or type assertion in
+one form with `errors.As` in the other, inferred or inline `errors.As` targets,
+targets that are parameters, fields or package variables, and a case list
+whose earlier item contains braces. Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
+### Internal failures and invalid input
+
+Four rules keep internal failures out of the client validation classification:
+
+- `internal-error-mapper` rejects another package's `Err*` sentinel translated
+  to `domain.ErrInvalid` in a single-error mapper's `errors.Is` switch or
+  conditional chain. Parsing and input translation belongs at the validation
+  call site, including errors from parsing packages, rather than in a general
+  single-error mapper.
+- `nil-dependency-invalid-input` rejects `domain.ErrInvalid` inside a nil
+  guard on a pointer method receiver or its field, including compound conditions.
+  Value-receiver DTO validation and request parameter fields are input;
+  constructor parameters and field aliases remain
+  with review because their role is not syntactically distinguishable.
+- `stored-row-invalid-input` rejects explicit `domain.ErrInvalid` in SQLite
+  `scan*`/`decode*` helpers and in JSON validation of a scanned column. It also
+  rejects a trailing `%w` wrapping `domain.ExternalIDFromBytes` errors for a
+  scanned column. Restore transaction methods validate archive input. Input
+  reference lookups and shared archive consistency checks may use `Scan`
+  without turning their input errors into stored-value errors. Shared DTO
+  decoders may propagate validation errors; their stored callers must
+  classify those errors as internal.
+- `node-internal-invalid-input` checks the post-commit scope helpers and
+  errors passed inline or constructed locally for `fatalReconciliation`.
+
+All four rules include `errors.Join` constructions of `domain.ErrInvalid`.
+Each rule has a fixture run by `check-semgrep`. Production scans exclude
+`*_test.go` and the fixtures. There is no approval marker or baseline.
+Aliases, error construction across functions, and arbitrary validators called
+on stored values remain with review.
+
 ### `store-transaction-helper`
 
 `checks/semgrep/store-transaction-helper.yml` requires SQLite store transactions
@@ -96,6 +172,28 @@ so statement and commit errors receive the same classification. Raw `BeginTx`
 selectors, including method values, are allowed only inside the helper; tests
 and rule fixtures are excluded.
 Its fixture runs through `check-semgrep`.
+
+This rule has no approval marker or baseline.
+
+### `store-composite-read-snapshot`
+
+`checks/semgrep/store-transaction-helper.yml` requires one read transaction
+when a SQLite `*realmStore` method queries its pool twice or queries it and
+passes it to a helper. It matches Go calls after a local `r.db()` assignment,
+including calls through a `var reader sqlQueryer = pool` alias after that
+declaration. Passing the pool to `beginTx` is allowed. Two hand-offs with no
+direct query are allowed because write methods pass the pool to several
+helpers. The fixtures run through `check-semgrep`.
+
+The rule skips `Prepare*` reads, other receiver types, and free functions. It
+does not follow calls to other methods that open their own pool, or see reads
+in a transaction followed by one pool read after commit. It looks for calls
+in separate statements at method-body level, so it can miss a pair inside a
+single statement, and the `r.db()` assignment and the alias must be direct
+statements of the method body; the alias is only the typed `var` form. It does
+not track control flow or alias reassignment.
+Queries on mutually exclusive paths, or a query paired with a write-only
+helper hand-off, can therefore be flagged.
 
 This rule has no approval marker or baseline.
 
@@ -135,9 +233,10 @@ arguments; keys assigned before indexing and map-literal keys; declaration/new
 zero keys; query-to-DTO handler shapes; formatted SQL columns or predicates
 without scope/axis; other encodings/accessor chains. Package-level value fields
 such as `packageError.ErrCause` still receive the sentinel exemption; parameter
-and receiver qualifiers are checked. Mixed member/parameter
-pairs remain omitted: they need a new member-position/signature product.
-Both misses are pinned with `todoruleid` fixtures.
+and receiver qualifiers are checked. Mixed member/parameter pairs remain
+omitted: they need a new member-position/signature product. The package-level
+sentinel field and the mixed member/parameter pair are pinned with `todoruleid`
+fixtures.
 
 Known rule bugs marked `todook`: early-success/switch proofs on zero-key error
 returns, panel prose templates/concatenations over two axes, and derived Go
@@ -160,6 +259,84 @@ with other tests that log or capture logs. Its fixture runs through
 `check-semgrep`.
 
 This rule has no approval marker or baseline.
+
+### `integration-test-wall-clock-deadline`
+
+The liveness deadline rule covers every Go test in the module. Waits receive
+an event or use `polltest.Until` for state; requests use `testCtx(t)` in
+`internal/integration` and `t.Context()` elsewhere. A real hang is caught by
+`go test -timeout`, which prints every goroutine's stack.
+
+Short windows proving an event did not happen, fake or injected clocks, and
+timestamps used as data are exempt. A deadline that is the input under test
+stays: `context.WithTimeout` or `context.WithDeadline` inside a function
+referencing `context.DeadlineExceeded` is exempt structurally. Success paths
+in such a function still use `t.Context()`; only paths asserting expiry keep
+the short deadline. Production timeouts and backoffs remain unchanged.
+
+The rule catches request deadlines, clock failure arms in selects (including
+timers, deadline channels, and multiple event cases), and wall-clock polling
+bounds. Clock arms are checked for failure calls at any statement position and
+for error construction with `errors.New` or `fmt.Errorf`; all rule branches
+exempt virtual time inside `synctest.Test` bubbles. Its fixtures run through
+`check-semgrep`, with no baseline.
+
+### `test-deferred-receive-after-consumed`
+
+`checks/semgrep/integration-test-wall-clock-deadline.yml` also flags a select
+arm that consumes a channel value needed by a receive in `defer` or
+`t.Cleanup` and then calls `Fatal`, `Fatalf`, `Error` or `Errorf`. Send the
+consumed value back before failing so the deferred receive does not hang until
+`go test -timeout`. Channels closed anywhere in the enclosing function,
+including a nested function or goroutine, are exempt because receiving does
+not consume closure. Its fixtures run through `check-semgrep`, with no approval marker or baseline.
+
+### `goroutine-signal-without-result`
+
+`checks/semgrep/goroutine-signal-without-result.yml` covers Go tests under
+`internal/integration` and `internal/store/sqlite`, and `internal/trading/*e2e_test.go`.
+After a goroutine sends its result on a channel,
+it rejects a blocking receive on another channel, including assignments, and
+direct `time.Sleep` polling loops that omit the result. Use
+`select { case <-signal: case err := <-result: t.Fatalf("early return: %v", err) }`
+and keep the later result check. Polling loops need a non-blocking result check
+inside the loop; `polltest.Until` callbacks need the same non-blocking result
+check. If completion is legitimate, check the result and then assert
+the signal without blocking; before the awaited call returns, the signal must
+be receivable with nobody waiting: its channel is closed, or the value is in a
+buffer whose capacity allowed the send to complete. Its fixtures run through
+`check-semgrep`.
+
+The rule follows direct goroutine sends and subsequent receive/assignment,
+select, channel-range (including local `ch := make(chan T)`), sleep-loop
+statements or `polltest.Until` calls, including comma-ok receives,
+not result aliases passed into goroutines, receives in `if`
+initializers, channel ranges through fields whose type cannot be inferred, or
+waits hidden behind helper calls. Those waits still require
+review and are pinned with `todoruleid` fixtures. Non-literal `polltest.Until`
+callbacks are flagged because their result check cannot be inspected here.
+A blocking signal receive or `polltest.Until` call after the result was
+already received is still flagged, pinned with `todook`.
+The safe buffered collect idiom with sends to both channels, `wg.Wait()`,
+`close(b)` and `for v := range b` is also flagged, pinned with `todook`.
+Non-blocking selects and short observation windows are allowed.
+This rule has no approval marker or baseline.
+
+### `sqlite-test-parallel`
+
+`checks/semgrep/sqlite-test-parallel.yml` requires SQLite tests to start with
+`t.Parallel()` so the race run stays within the package timeout. Tests that
+change the process environment, working directory, umask, or default logger
+run serially. The companion rule `sqlite-test-parallel-global-state` flags
+parallel tests that make one of those changes, including inside a subtest.
+Their fixtures run through `check-semgrep`.
+
+Known misses include global mutations one helper call deeper than the listed
+names, indirect mutations through code under test, and global mutations in
+serial tests with parallel subtests. The companion rule looks for
+`t.Parallel()` only among the top-level test's own statements.
+
+These rules have no approval marker or baseline.
 
 ### `discarded-error`
 
@@ -193,6 +370,34 @@ Its fixture runs through `check-semgrep`.
 
 This rule has no approval marker.
 
+### `test-stub-close-guard`
+
+`checks/semgrep/test-stub-close-guard.yml` flags every call named `Error`,
+`Errorf`, `Fatal`, or `Fatalf`, on any receiver, in the failure branch of a
+`Read(ctx)`, `Write(ctx, kind, data)`, or `Close(status, reason)` check. The
+operation is matched by method name and arity on any receiver, in Go HTTP
+test handlers and helpers that take a `*websocket.Conn`.
+
+The rule accepts a nested `if` around the report inside the failure branch.
+Its entire condition must be `t.Context().Err() == nil` on the reporting test
+or `!harness.isClosing()`.
+
+```go
+if err := conn.Close(status, reason); err != nil {
+    if t.Context().Err() == nil { t.Error(err) } }
+```
+
+Known misses include checks without a direct `!= nil` comparison, reports
+routed through another helper, and functions that take neither a
+`*websocket.Conn` nor the HTTP handler parameters.
+
+False positives: an overwritten error can tie the check to an earlier call,
+and `fmt.Errorf`, `log.Fatal` or `err.Error()` in the failure branch counts as
+a report, also inside an accepted guard. Pass `err` with `%v` rather than
+`err.Error()`.
+
+This rule has no approval marker or baseline.
+
 ### `default-domain-status`
 
 `checks/semgrep/default-domain-status.yml` forbids a `default` arm or a map
@@ -210,6 +415,17 @@ Two sites are deliberately not findings:
   runtime status map, which is what that state means.
 
 This rule has no approval marker.
+
+### `empty-order-status-default`
+
+`checks/semgrep/empty-order-status-default.yml` rejects an empty-status guard
+that assigns a replacement to the same status, including a caller-supplied
+variable. It covers `OrderStatus` and `Status` fields and locals bound from
+`domain.OrderStatus(...)`, in either comparison order. Return an explicit
+error for the missing status. Other field names, initialisers, package aliases
+and helper-based emptiness checks are outside this syntactic rule.
+Its fixture runs through `check-semgrep`; tests and fixtures are excluded
+from the production scan. There is no approval marker or baseline.
 
 ### `locale-latin-words`
 
@@ -339,9 +555,25 @@ prepared message and cause to `vendorhttp.NewRequestError`. Redacting text alone
 and error types with other fields or behavior are allowed. The framework
 backend boundary is outside the rules' paths.
 
+`checks/semgrep/no-private-key-formatting.yml` forbids passing ECDSA private
+keys or whole credentials values to formatting, logging, error-text construction or JSON
+encoding in production Go under `internal/`. Taint sources are values typed as
+`*ecdsa.PrivateKey`, `apikey.CDPCredentials`, `CDPCredentials` or `Credentials`,
+`PrivateKey` fields and `x509.ParseECPrivateKey` results. Taint follows local
+assignments, scalar fields and composite literals. Sinks include `fmt`, `log`,
+`slog`, `*slog.Logger`, `errors.New`, JSON marshal calls and encoder `Encode`
+calls, plus `String` and `Text` on a private key's `D` scalar. Field selections
+other than `PrivateKey` and `D` are safe unless the field itself is typed as a
+private key or credentials, allowing the identifier fields sent by venue
+protocols, including CDP `APIKeyID` and Binance `APIKey`. Individual HMAC
+secret fields of other venues are outside this rule. Function results, including
+builtins such as `append` and conversions such as `any(...)`, do not inherit
+argument taint, so signatures and JWT subscribe frames remain allowed.
+Go tests and rule fixtures are excluded; its fixture runs through `check-semgrep`.
+
 The credential rule keeps vendor credential parsing in `internal/apikey`. It
 matches map reads, comparisons and switch arms on `"apiKey"`, `"apiSecret"`,
-`"passphrase"`, `"keyName"` and `"privateKey"` outside `internal/apikey/`, and JSON
+`"passphrase"`, `"apiKeyId"` and `"apiKeySecret"` outside `internal/apikey/`, and JSON
 decoding inside a function named `ParseCredentials` outside that package, in Go
 files under `internal/`, excluding Go tests.
 Deliberate limits: decoding credentials into a struct tagged with any of the
@@ -377,12 +609,15 @@ rule needs narrowing, not a marker.
 
 `checks/public-packages.txt` is the sorted allowlist of importable packages
 and commands, one import path per line. The gate lists the module with
-`go list ./...` from the module root, drops `web/node_modules/` (npm install
-output, never committed) and every path with an `internal` element, and fails
-on any difference in either direction, printing each offending path. A path
+`go list ./...` from the module root, drops every path with an `internal`
+element, and fails on any difference in either direction, printing each
+offending path. A path
 `./...` does not match - see `go help packages`; a directory whose Go files are
 all excluded by build constraints is skipped too - is neither listed nor
 checked.
+
+The module's `go.mod` ignore directive keeps npm's `web/node_modules` tree out
+of `go list ./...`.
 
 It runs right after the gofmt check in `lint-go`, `lint-go-debug-dev`, and
 `lint-go-release-dev`, so every gate that lints Go runs it, CI included.

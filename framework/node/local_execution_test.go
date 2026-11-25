@@ -492,6 +492,94 @@ func TestLocalNode_ApplyExecutionReportDuplicateIDDoesNotReachEngineOrFatal(t *t
 	}
 }
 
+func TestLocalNode_WorkflowExecutionReportPanicPhases(t *testing.T) {
+	for _, phase := range []string{"persistence", "audit"} {
+		t.Run(phase, func(t *testing.T) {
+			t.Parallel()
+			cause := errors.New("workflow " + phase + " panic")
+			st := newRealmWrapStore(newMemoryStore("node.db"), func(realm store.RealmStore) store.RealmStore {
+				if phase == "persistence" {
+					return &panicOrderSettlementRealm{RealmStore: realm, err: cause}
+				}
+				return &panicActionAuditRealm{
+					RealmStore: realm,
+					action:     domain.AuditActionExecutionReport,
+					err:        cause,
+				}
+			})
+			ctx := context.Background()
+			if err := st.Migrate(ctx); err != nil {
+				t.Fatalf("Migrate: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			eng := newFakeEngine()
+			var fatalErr error
+			fatalCalls := 0
+			n := newTestNodeWithStore(t, st, eng, func(err error) {
+				fatalErr = err
+				fatalCalls++
+			})
+			t.Cleanup(func() { _ = n.Close() })
+			order := testOrder(t, st.realm, "acc-1")
+			const reportID domain.ExternalID = "workflow-panic-report"
+			_, err := n.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+				ExternalID: reportID, Order: order.ExternalID,
+				OrderStatus: domain.OrderStatusAccepted,
+			}, testCaller)
+			if !errors.Is(err, cause) || !strings.Contains(err.Error(), cause.Error()) {
+				t.Fatalf("ApplyExecutionReport = %v, want panic cause %v", err, cause)
+			}
+			wantRecorded := phase == "audit"
+			wantStatus := domain.OrderStatusCommitted
+			wantEvents := 0
+			if wantRecorded {
+				wantStatus = domain.OrderStatusAccepted
+				wantEvents = 1
+				if fatalErr == nil || !errors.Is(fatalErr, cause) ||
+					!strings.Contains(fatalErr.Error(), "post-commit audit failure") {
+					t.Fatalf("fatal error = %v, want panic cause and family %q", fatalErr, "post-commit audit failure")
+				}
+				if fatalCalls != 1 {
+					t.Fatalf("fatal calls = %d, want 1", fatalCalls)
+				}
+			} else {
+				if fatalErr != nil || fatalCalls != 0 {
+					t.Fatalf("fatal error = %v, calls = %d, want none", fatalErr, fatalCalls)
+				}
+				if errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
+					t.Fatalf("ApplyExecutionReport = %v, want plain persistence error", err)
+				}
+			}
+			detail, err := st.realm.GetOrder(ctx, order.ExternalID)
+			if err != nil {
+				t.Fatalf("GetOrder: %v", err)
+			}
+			if detail.Order.Status != wantStatus || len(detail.Events) != wantEvents {
+				t.Fatalf("workflow settlement status = %q, events = %d, want %q and %d", detail.Order.Status, len(detail.Events), wantStatus, wantEvents)
+			}
+			recorded, err := st.realm.ExecutionReportExists(ctx, reportID)
+			if err != nil {
+				t.Fatalf("ExecutionReportExists: %v", err)
+			}
+			if recorded != wantRecorded {
+				t.Fatalf("report recorded = %v, want %v", recorded, wantRecorded)
+			}
+			rows, err := st.realm.ListAuditFiltered(ctx, domain.AuditFilter{
+				Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
+			}, 10)
+			if err != nil {
+				t.Fatalf("ListAuditFiltered: %v", err)
+			}
+			if len(rows) != 0 {
+				t.Fatalf("execution report audit rows = %+v, want none", rows)
+			}
+			if len(eng.execReportCalls) != 0 {
+				t.Fatalf("workflow status reached engine: %+v", eng.execReportCalls)
+			}
+		})
+	}
+}
+
 func TestLocalNode_ApplyExecutionReportWorkflowAuditFailureFatalsAfterCommit(
 	t *testing.T,
 ) {
@@ -2181,7 +2269,7 @@ func TestLocalNode_ApplyExecutionReportNilPersistenceErrors(t *testing.T) {
 	if !errors.Is(err, asyncengine.ErrChainRetryUnsafe) {
 		t.Fatalf("ApplyExecutionReport nil persistence = %v, want retry-unsafe marker", err)
 	}
-	if !errors.Is(fatalErr, domain.ErrInvalid) || !strings.Contains(
+	if fatalErr == nil || errors.Is(fatalErr, domain.ErrInvalid) || !strings.Contains(
 		fatalErr.Error(), "post-engine persistence failure",
 	) {
 		t.Fatalf("fatal error = %v, want post-engine persistence failure", fatalErr)

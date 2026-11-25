@@ -138,6 +138,7 @@ func assertNoPreMigrationTemps(t *testing.T, path string) {
 }
 
 func TestPreMigrationPendingCopy(t *testing.T) {
+	t.Parallel()
 	path := preMigrationFixture(t)
 	assertPreMigrationState(t, path, 0, 0)
 	st := preMigrationStore(t, path, sqlite.WithPreMigrationCopy())
@@ -171,6 +172,7 @@ func TestPreMigrationPendingCopy(t *testing.T) {
 }
 
 func TestPreMigrationNoPendingCopy(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	st := preMigrationStore(t, path, sqlite.WithPreMigrationCopy())
 	for range 2 {
@@ -185,6 +187,7 @@ func TestPreMigrationNoPendingCopy(t *testing.T) {
 }
 
 func TestPreMigrationOptionOff(t *testing.T) {
+	t.Parallel()
 	path := preMigrationFixture(t)
 	st := preMigrationStore(t, path)
 	if err := st.Migrate(context.Background()); err != nil {
@@ -198,6 +201,7 @@ func TestPreMigrationOptionOff(t *testing.T) {
 }
 
 func TestPreMigrationUnwritableDirectory(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission bits do not deny writes on Windows")
 	}
@@ -235,6 +239,7 @@ func TestPreMigrationUnwritableDirectory(t *testing.T) {
 }
 
 func TestPreMigrationExistingName(t *testing.T) {
+	t.Parallel()
 	path := preMigrationFixture(t)
 	st := preMigrationStore(t, path, sqlite.WithPreMigrationCopy())
 	before, err := os.ReadFile(path)
@@ -275,6 +280,7 @@ func TestPreMigrationExistingName(t *testing.T) {
 }
 
 func TestPreMigrationCopies(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "officer.db")
 	oldName := "officer.db.pre-migration-20260101T010203Z"

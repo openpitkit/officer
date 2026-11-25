@@ -106,9 +106,32 @@ jobs:
       - name: Check JS/TypeScript
         run: just --justfile pipeline.just ci-js
 
+  python:
+    name: Python tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Check out officer
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      - name: Test Python
+        run: just --justfile pipeline.just ci-python
+
   docker:
     name: Docker build and publish (serve mode)
-    needs: [go, frontend]
+    needs: [go, frontend, python]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     # The ceiling for every job of the called workflow, including its GitHub
     # release job, which needs contents: write and is skipped on main; each

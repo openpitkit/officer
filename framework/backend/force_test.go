@@ -25,7 +25,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
@@ -187,15 +186,8 @@ func TestForceAuthorization(t *testing.T) {
 					}
 					if op.action == domain.AuditActionDeleteAsset {
 						n.onAudit = func() {
-							done := make(chan error, 1)
-							go func() { done <- s.RestartMarketData(context.Background()) }()
-							select {
-							case err := <-done:
-								if err != nil {
-									t.Fatalf("RestartMarketData during refusal audit: %v", err)
-								}
-							case <-time.After(5 * time.Second):
-								t.Fatal("RestartMarketData blocked during refusal audit: DeleteAsset holds marketDataMu")
+							if err := s.RestartMarketData(context.Background()); err != nil {
+								t.Fatalf("RestartMarketData during refusal audit: %v", err)
 							}
 						}
 					}

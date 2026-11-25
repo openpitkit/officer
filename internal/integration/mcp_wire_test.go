@@ -29,6 +29,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"go.openpit.dev/officer/framework/domain"
 	frameworkmcp "go.openpit.dev/officer/framework/mcp"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/mcptools"
@@ -297,11 +298,21 @@ func officerSession(
 	t *testing.T, ctx context.Context, src frameworkmcp.Source,
 ) (session *sdkmcp.ClientSession, closeSession func()) {
 	t.Helper()
+	return officerSessionOver(t, ctx, officerToolRegistry(), src, operatorCaller())
+}
+
+// officerSessionOver is officerSession over the tool registry reg, for the
+// caller the server serves.
+func officerSessionOver(
+	t *testing.T, ctx context.Context, reg *frameworkmcp.ToolRegistry,
+	src frameworkmcp.Source, caller domain.Caller,
+) (session *sdkmcp.ClientSession, closeSession func()) {
+	t.Helper()
 	// The caller's context bounds connection setup, not the server's lifetime.
 	// Each request has its own context; closeSession explicitly stops the server.
 	serverCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	server, err := frameworkmcp.Build(
-		officerToolRegistry(), src, nil, httpx.AllowAll{}, operatorCaller(),
+		reg, src, nil, httpx.AllowAll{}, caller,
 	)
 	if err != nil {
 		cancel()
@@ -367,18 +378,9 @@ func callTool[Out any](
 	t.Helper()
 	session, closeSession := officerSession(t, testCtx(t), src)
 	defer closeSession()
-	res, callErr := session.CallTool(testCtx(t), &sdkmcp.CallToolParams{Name: name, Arguments: in})
-	if callErr != nil {
-		t.Fatalf("%s returned protocol error: %v", name, callErr)
-	}
-
-	out := &toolResult[Out]{IsError: res.IsError, Content: res.Content}
+	res, wire := callSessionTool(t, session, name, in)
+	out := &toolResult[Out]{IsError: res.IsError, Content: res.Content, Wire: wire}
 	if res.StructuredContent != nil {
-		wire, err := json.Marshal(res.StructuredContent)
-		if err != nil {
-			t.Fatalf("marshal %s structured content: %v", name, err)
-		}
-		out.Wire = wire
 		if err := json.Unmarshal(wire, &out.StructuredContent); err != nil {
 			t.Fatalf("decode %s structured content: %v", name, err)
 		}
@@ -413,4 +415,22 @@ func requireTextCarriesStructuredContent(
 	if !reflect.DeepEqual(fromText, fromStructure) {
 		t.Fatalf("%s text carries %s, structured content is %s", name, serialized, wire)
 	}
+}
+
+func callSessionTool(
+	t *testing.T, session *sdkmcp.ClientSession, name string, in any,
+) (*sdkmcp.CallToolResult, json.RawMessage) {
+	t.Helper()
+	res, err := session.CallTool(testCtx(t), &sdkmcp.CallToolParams{Name: name, Arguments: in})
+	if err != nil {
+		t.Fatalf("%s returned protocol error: %v", name, err)
+	}
+	var wire json.RawMessage
+	if res.StructuredContent != nil {
+		wire, err = json.Marshal(res.StructuredContent)
+		if err != nil {
+			t.Fatalf("marshal %s structured content: %v", name, err)
+		}
+	}
+	return res, wire
 }

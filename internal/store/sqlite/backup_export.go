@@ -526,10 +526,10 @@ func (r *realmStore) exportTestExecutionPolicies(ctx context.Context) (result []
 		}
 		connection, err := domain.ExternalIDFromBytes(rawID)
 		if err != nil {
-			return nil, fmt.Errorf("store: decode test policy connection for export: %w", err)
+			return nil, fmt.Errorf("store: decode test policy connection for export: %w", domain.Internal(err))
 		}
 		if _, err := decodeStoredTestExecutionPolicy(revision, rules); err != nil {
-			return nil, fmt.Errorf("store: export test policy for connection %s: %w", connection, err)
+			return nil, fmt.Errorf("store: export test policy for connection %s: %w", connection, domain.Internal(err))
 		}
 		result = append(result, backup.TestExecutionPolicy{
 			Connection: connection, Revision: revision, Rules: json.RawMessage(rules),
@@ -616,12 +616,12 @@ func (r *realmStore) exportOrderReviews(ctx context.Context) (result []backup.Or
 		review.Held = &held
 		review.Order, err = domain.ExternalIDFromBytes(order)
 		if err != nil {
-			return nil, fmt.Errorf("store: decode order review for export: %w", err)
+			return nil, fmt.Errorf("store: decode order review for export: %w", domain.Internal(err))
 		}
 		if connection != nil {
 			review.Connection, err = domain.ExternalIDFromBytes(connection)
 			if err != nil {
-				return nil, fmt.Errorf("store: decode order review connection for export: %w", err)
+				return nil, fmt.Errorf("store: decode order review connection for export: %w", domain.Internal(err))
 			}
 			review.VenueAccount, review.Route = account.String, route.String
 		}

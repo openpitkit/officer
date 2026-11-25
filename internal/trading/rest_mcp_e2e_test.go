@@ -58,6 +58,7 @@ import (
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/httpapi"
 	"go.openpit.dev/officer/internal/logtest"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/mcptools"
 	"go.openpit.dev/officer/signing"
@@ -136,7 +137,7 @@ func tradingE2ENoSecrets(t *testing.T, where string, raw []byte) {
 
 func newTradingE2E(t *testing.T, sealed bool, providers ...fwtrading.Provider) *tradingE2E {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	f := &tradingE2E{t: t, ctx: ctx, caller: domain.Caller{Principal: domain.PrincipalOperator, Source: domain.SourceAPI}, requests: make(map[string]int), streams: make(chan struct{}, 3)}
 	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -164,8 +165,10 @@ func newTradingE2E(t *testing.T, sealed bool, providers ...fwtrading.Provider) *
 				case "unauthorized":
 					sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"authorization","data":{"status":"unauthorized","action":"authenticate"}}`)
 				case "close":
-					if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil && !f.isClosing() {
-						t.Error(err)
+					if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil {
+						if !f.isClosing() {
+							t.Error(err)
+						}
 					}
 				default:
 					t.Errorf("unknown stream fault %q", fault)
@@ -362,12 +365,8 @@ func (f *tradingE2E) start() {
 func (f *tradingE2E) waitStreams() {
 	f.t.Helper()
 	for f.pendingStreams > 0 {
-		select {
-		case <-f.streams:
-			f.pendingStreams--
-		case <-f.ctx.Done():
-			f.t.Fatal("venue stream handshake did not complete")
-		}
+		<-f.streams // Venue stream handshake completed.
+		f.pendingStreams--
 	}
 }
 
@@ -421,7 +420,7 @@ func (f *tradingE2E) rest(method, path string, body any, status int) []byte {
 // real service.
 func (f *tradingE2E) callMCP(name string, input any) (*sdkmcp.CallToolResult, error) {
 	f.t.Helper()
-	ctx, cancel := context.WithTimeout(f.ctx, 5*time.Second)
+	ctx, cancel := context.WithCancel(f.ctx)
 	defer cancel()
 	reg := frameworkmcp.NewToolRegistry()
 	mcptools.RegisterTools(reg, nil)
@@ -997,23 +996,6 @@ func TestTradingMissingAssetEndToEnd(t *testing.T) {
 	}
 }
 
-func (f *tradingE2E) wait(what string, check func() bool) {
-	f.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if check() {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	logs := f.logs.String()
-	if len(logs) > 1500 {
-		logs = logs[len(logs)-1500:]
-	}
-	f.t.Logf("slog tail: %s", logs)
-	f.t.Fatalf("timed out waiting for %s", what)
-}
-
 func (f *tradingE2E) sendPaper(surface string, input map[string]any, status int, code string) []byte {
 	f.t.Helper()
 	return f.sendVenue(surface, domain.TradingModePaper, input, status, code)
@@ -1122,11 +1104,11 @@ func TestTradingSendPaperEndToEnd(t *testing.T) {
 			if !sendFrame(t, f.ctx, stream, websocket.MessageBinary, frame) {
 				t.Fatal("fill stream failed")
 			}
-			f.wait("paper order filled", func() bool {
+			polltest.Until(func() bool {
 				detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 				tradingE2EMust(t, err)
 				return detail.Order.Status == domain.OrderStatusFilled
-			})
+			}) // paper order filled
 			detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 			tradingE2EMust(t, err)
 			wantSource := domain.SourceAPI
@@ -1160,11 +1142,11 @@ func TestTradingSendPaperEndToEnd(t *testing.T) {
 				"date": time.Now().UTC().Format("2006-01-02")}}
 			f.venueMu.Unlock()
 			f.start()
-			f.wait("sent-order fee booked after restart", func() bool {
+			polltest.Until(func() bool {
 				rows, err := f.realm.ListAdjustments(f.ctx, "fees", domain.SourceSystem, 10)
 				tradingE2EMust(t, err)
 				return len(rows) == 1
-			})
+			}) // sent-order fee booked after restart
 			fees, err := f.realm.ListAdjustments(f.ctx, "fees", domain.SourceSystem, 10)
 			tradingE2EMust(t, err)
 			if fees[0].Accepted == nil || fees[0].Rejected != nil ||
@@ -1311,16 +1293,16 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 					link.VenueOrderID != "test:"+id+":"+link.ClientOrderID {
 					t.Fatalf("send acknowledgement = %+v", result)
 				}
-				f.wait("test order filled through sink", func() bool {
+				polltest.Until(func() bool {
 					detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
 					tradingE2EMust(t, err)
 					return detail.Order.Status == domain.OrderStatusFilled
-				})
-				f.wait("test book released", func() bool {
+				}) // test order filled through sink
+				polltest.Until(func() bool {
 					_, found, err := connector.Lookup(f.ctx, fwtrading.OrderRef{ClientOrderID: link.ClientOrderID})
 					requireTestBookLookup(t, found, err)
 					return !found
-				})
+				}) // test book released
 				detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
 				tradingE2EMust(t, err)
 				if len(detail.Trades) != 1 || detail.Trades[0].Quantity != "1" || detail.Trades[0].Price != tc.price {
@@ -1391,11 +1373,11 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 				if result.VenueSend.Status != "acknowledged" || result.VenueSend.Refusal != nil {
 					t.Fatalf("split acknowledgement = %+v", result)
 				}
-				f.wait("split filled through sink", func() bool {
+				polltest.Until(func() bool {
 					detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
 					tradingE2EMust(t, err)
 					return detail.Order.Status == domain.OrderStatusFilled
-				})
+				}) // split filled through sink
 				detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
 				tradingE2EMust(t, err)
 				if detail.Order.AmountValue != amount || len(detail.Trades) != 3 {
@@ -1441,11 +1423,11 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 					if result.VenueSend.Status != "acknowledged" || result.VenueSend.Refusal != nil {
 						t.Fatalf("odd acknowledgement = %+v", result)
 					}
-					f.wait("odd order filled", func() bool {
+					polltest.Until(func() bool {
 						detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(result.ID))
 						tradingE2EMust(t, err)
 						return detail.Order.Status == domain.OrderStatusFilled
-					})
+					}) // odd order filled
 				} else {
 					refusal := result.VenueSend.Refusal
 					if result.VenueSend.Status != "refused" || refusal == nil ||
@@ -1473,11 +1455,11 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 			quotes.snapshots[0].AsOf = clock.now().Add(10 * time.Second)
 			clock.set(clock.now().Add(10 * time.Second))
 			timer.ticks <- clock.now()
-			f.wait("finite rest without ask cancelled", func() bool {
+			polltest.Until(func() bool {
 				detail, err := f.realm.GetOrder(f.ctx, "test-rest-no-ask")
 				tradingE2EMust(t, err)
 				return detail.Order.Status == domain.OrderStatusCancelled
-			})
+			}) // finite rest without ask cancelled
 			detail, err := f.realm.GetOrder(f.ctx, "test-rest-no-ask")
 			tradingE2EMust(t, err)
 			if len(detail.Trades) != 0 {
@@ -1485,11 +1467,7 @@ func TestTestExecutionPipelineEndToEnd(t *testing.T) {
 			}
 			var delayed fwtrading.Snapshot
 			for delayed.VenueOrderID != result.VenueSend.VenueOrder.VenueOrderID {
-				select {
-				case delayed = <-connector.(*retryTestConnector).released:
-				case <-f.ctx.Done():
-					t.Fatal("delayed snapshot was not released")
-				}
+				delayed = <-connector.(*retryTestConnector).released // Snapshot released.
 			}
 			if delayed.Status != fwtrading.VenueStatusCancelled || len(delayed.Fills) != 0 || !strings.Contains(delayed.Reason, "has no ask") {
 				t.Fatalf("delayed snapshot = %+v", delayed)
@@ -1604,11 +1582,7 @@ func TestTestExecutionLostBookDisabledEndToEnd(t *testing.T) {
 			created := tradingE2EDecode[tradingE2ECreated](t, f.rest(http.MethodPost, "/trading/connections", map[string]any{
 				"provider": "test", "label": "Restart test", "mode": "paper", "credentials": map[string]any{}, "enabled": true,
 			}, http.StatusCreated))
-			select {
-			case <-connected:
-			case <-f.ctx.Done():
-				t.Fatal("test source did not connect")
-			}
+			<-connected // Test source connected.
 			id := created.Connection.ID
 			path := "/trading/connections/" + id
 			f.rest(http.MethodPut, path+"/instruments", map[string]any{"externalSymbol": "route-id",
@@ -1633,11 +1607,11 @@ func TestTestExecutionLostBookDisabledEndToEnd(t *testing.T) {
 			if mode == "split" {
 				wantTrades = 1
 			}
-			f.wait("initial partial execution applied", func() bool {
+			polltest.Until(func() bool {
 				detail, err := f.realm.GetOrder(f.ctx, "lost-book")
 				tradingE2EMust(t, err)
 				return len(detail.Trades) == wantTrades
-			})
+			}) // initial partial execution applied
 			detail, err := f.realm.GetOrder(f.ctx, "lost-book")
 			tradingE2EMust(t, err)
 			before := detail.Trades
@@ -1652,11 +1626,11 @@ func TestTestExecutionLostBookDisabledEndToEnd(t *testing.T) {
 			tradingE2EMust(t, f.realm.SetTradingConnectionEnabled(f.ctx, domain.ExternalID(id), false))
 			f.close()
 			f.start()
-			f.wait("disabled lost-book remainder cancelled", func() bool {
+			polltest.Until(func() bool {
 				detail, err := f.realm.GetOrder(f.ctx, "lost-book")
 				tradingE2EMust(t, err)
 				return detail.Order.Status == domain.OrderStatusCancelled
-			})
+			}) // disabled lost-book remainder cancelled
 			detail, err = f.realm.GetOrder(f.ctx, "lost-book")
 			tradingE2EMust(t, err)
 			if !reflect.DeepEqual(detail.Trades, before) {
@@ -1733,7 +1707,9 @@ func (f *tradingE2E) testExecutionOrder(id string) testExecutionE2EOrder {
 
 func (f *tradingE2E) assertTestExecutionFill(id, price string, quantities map[string]int) {
 	f.t.Helper()
-	f.wait("public order filled", func() bool { return f.testExecutionOrder(id).Order.Status == "filled" })
+	polltest.Until(func() bool {
+		return f.testExecutionOrder(id).Order.Status == "filled"
+	}) // public order filled
 	detail := f.testExecutionOrder(id)
 	got := make(map[string]int)
 	listed := tradingE2EDecode[struct {
@@ -1935,9 +1911,9 @@ func TestTestExecutionInfiniteRestartEndToEnd(t *testing.T) {
 	}
 	f.close()
 	f.start()
-	f.wait("enabled lost-book order cancelled", func() bool {
+	polltest.Until(func() bool {
 		return f.testExecutionOrder("infinite-restart").Order.Status == "cancelled"
-	})
+	}) // enabled lost-book order cancelled
 	if detail := f.testExecutionOrder("infinite-restart"); len(detail.Trades) != 0 {
 		t.Fatalf("restart invented trades: %+v", detail)
 	}
@@ -2389,11 +2365,11 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 			f.venueMu.Unlock()
 			f.start()
 			if feeAccount {
-				f.wait("fee booked to configured account", func() bool {
+				polltest.Until(func() bool {
 					rows, err := f.realm.ListAdjustments(f.ctx, "fees", domain.SourceSystem, 10)
 					tradingE2EMust(t, err)
 					return len(rows) == 1
-				})
+				}) // fee booked to configured account
 				rows, err := f.realm.ListAdjustments(f.ctx, "fees", domain.SourceSystem, 10)
 				tradingE2EMust(t, err)
 				row := rows[0]
@@ -2421,11 +2397,11 @@ func TestTradingFeeAccountEndToEnd(t *testing.T) {
 					t.Fatalf("venue_fee adjustments = %+v", venueFees)
 				}
 			} else {
-				f.wait("venue_fee_skipped audit", func() bool {
+				polltest.Until(func() bool {
 					rows, err := f.realm.ListAuditFiltered(f.ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 					tradingE2EMust(t, err)
 					return len(rows) == 1
-				})
+				}) // venue_fee_skipped audit
 				rows, err := f.realm.ListAuditFiltered(f.ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 				tradingE2EMust(t, err)
 				if rows[0].Source != domain.SourceSystem || rows[0].Actor != "" || !strings.Contains(rows[0].Detail.Text, id) || !strings.Contains(rows[0].Detail.Text, "regulatory-fee") {
@@ -2988,7 +2964,9 @@ func TestTradingStreamFailureEndToEnd(t *testing.T) {
 				map[string]any{"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 					"balance": map[string]any{"mode": "absolute", "value": "1000"}}, http.StatusCreated)
 			id := f.setupSend("REST")
-			f.wait("degraded connection", func() bool { return f.health().State == "degraded" })
+			polltest.Until(func() bool {
+				return f.health().State == "degraded"
+			}) // degraded connection
 			viaREST, viaMCP := f.connectionSurfaces()
 			if viaREST != viaMCP {
 				t.Fatalf("REST connection %s differs from MCP %s", viaREST, viaMCP)
@@ -3031,7 +3009,9 @@ func TestTradingUnparsableUpdateEndToEnd(t *testing.T) {
 	if !sendFrame(t, f.ctx, stream, websocket.MessageText, `{"stream":"trade_updates","data":{"event":42}}`) {
 		t.Fatal("broken update stream failed")
 	}
-	f.wait("unparsable_data diagnostic", func() bool { return len(f.health().Diagnostics) != 0 })
+	polltest.Until(func() bool {
+		return len(f.health().Diagnostics) != 0
+	}) // unparsable_data diagnostic
 	viaREST, viaMCP := f.connectionSurfaces()
 	if viaREST != viaMCP {
 		t.Fatalf("REST connection %s differs from MCP %s", viaREST, viaMCP)

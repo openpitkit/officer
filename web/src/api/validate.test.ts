@@ -39,6 +39,22 @@ describe("validateLimit barrier mode", () => {
     expect(validateLimit({ ...barrier, mode })).toBeNull();
   });
 
+  it("accepts a rate counter only on a rate limit", () => {
+    expect(
+      validateLimit({
+        ...barrier,
+        policy: "rate_limit",
+        values: { max_orders: "20", window: "1m" },
+      }),
+    ).toBeNull();
+    expect(validateLimit({ ...barrier, values: { max_orders: "20" } })).toEqual(
+      {
+        key: "kind.notAllowed",
+        values: { kind: "max_orders", policy: "order_size_limit" },
+      },
+    );
+  });
+
   it.each([undefined, null, "unknown", 1])(
     "rejects invalid order-size mode %s",
     (mode) => {

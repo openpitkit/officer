@@ -93,6 +93,8 @@ func pnlBoundV1Fixture(t *testing.T) string {
 		CREATE UNIQUE INDEX uq_limit_rate ON limit_rate
 			(scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
 		ALTER TABLE limit_rate DROP COLUMN mode;
+		DROP INDEX idx_trades_venue_trade_id;
+		ALTER TABLE trade DROP COLUMN venue_trade_id;
 		DROP TABLE limit_position;
 		DROP TABLE alert_delivery;
 		DROP TABLE alert_read_state;
@@ -143,6 +145,7 @@ func pnlBoundAxes(t *testing.T, db *sql.DB) map[string]string {
 }
 
 func TestPnlBoundAxisMigrationKeepsV1BoundsRealized(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := pnlBoundV1Fixture(t)
 	st := preMigrationStore(t, path, sqlite.WithPreMigrationCopy())

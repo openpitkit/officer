@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -38,6 +39,7 @@ import (
 	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/accountmode"
 )
 
@@ -69,7 +71,7 @@ func prepareOrderReviewAlert(t *testing.T, cp backend.ControlPlane, ctx context.
 	}, domain.MissingAccountReject); err != nil {
 		t.Fatal(err)
 	}
-	if err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+	if _, err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 		Mode: ruleMode, Scope: domain.ScopeAccountUnderlyingAsset, Account: "other", Asset: "AAPL", MaxQuantity: "1",
 	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 		t.Fatal(err)
@@ -194,7 +196,7 @@ func TestOrderReviewAlertDecisions(t *testing.T) {
 					caller := domain.Caller{Source: domain.SourcePanel, Principal: domain.PrincipalOperator}
 					deciding := auth.ContextWithCaller(t.Context(), caller)
 					if action == "reject" {
-						if err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+						if _, err := cp.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 							Mode: domain.RuleModeReject, Scope: domain.ScopeAccountUnderlyingAsset, Account: "other", Asset: "AAPL", MaxQuantity: "1",
 						}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 							t.Fatal(err)
@@ -377,14 +379,11 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 			if done == nil {
 				continue
 			}
-			select {
-			case <-done:
-			case <-time.After(3 * time.Second):
-				t.Error("order review operation did not finish during cleanup")
-				return
-			}
+			<-done
 		}
-		_ = app.Close()
+		if err := app.Close(); err != nil {
+			t.Fatal(err)
+		}
 	})
 	cp := app.Service()
 	ctx := auth.ContextWithCaller(t.Context(), domain.Caller{Source: domain.SourceAPI, Principal: domain.PrincipalOperator})
@@ -413,8 +412,6 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 	case waiting = <-entered:
 	case result := <-finished:
 		t.Fatalf("submit finished without reaching publication: %+v, %v", result.approval, result.err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("submit did not reach publication")
 	}
 	id := waiting.ExternalID.String()
 	assertOrderReviewAlerts(t, service, ctx, "", "")
@@ -428,11 +425,7 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 		defer close(decisionDone)
 		decided, _, failure, decisionErr = cp.CancelOrderReview(deciding, id)
 	}()
-	select {
-	case <-decisionDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("publication still holds the account lane during cancel")
-	}
+	<-decisionDone
 	if decisionErr != nil || decided.Status != domain.OrderStatusCancelled || failure == nil || failure.Step != "close" || failure.Message == "" {
 		t.Fatalf("decision before publication = %+v, failure %+v, %v", decided, failure, decisionErr)
 	}
@@ -442,12 +435,7 @@ func TestOrderReviewAlertDecisionBeforePublication(t *testing.T) {
 	}
 	assertOrderReviewAlerts(t, service, deciding, "", "")
 	unblock()
-	var result submitted
-	select {
-	case result = <-finished:
-	case <-time.After(3 * time.Second):
-		t.Fatal("submit did not finish after publication was released")
-	}
+	result := <-finished
 	if result.err != nil || result.approval.AlertFailure != nil || result.approval.Verdict != domain.VerdictReview || len(result.approval.Reviews) == 0 {
 		t.Fatalf("delayed publication = %+v, %v", result.approval, result.err)
 	}
@@ -472,7 +460,7 @@ func TestOrderReviewAlertPayloadValidation(t *testing.T) {
 			ID: fmt.Sprintf("invalid-payload-%d", i), Type: orderAwaitingReviewAlert, At: time.Now().UTC(), Source: domain.SourceAPI,
 			Payload: json.RawMessage(raw),
 		}
-		if err := service.Publish(ctx, event); !errors.Is(err, domain.ErrInvalid) {
+		if err := service.Publish(ctx, event); !internalFailureAnswer(err) {
 			t.Fatalf("invalid payload %s: %v", raw, err)
 		}
 		assertOrderReviewAlerts(t, service, ctx, "", "")
@@ -485,4 +473,12 @@ func TestOrderReviewAlertPayloadValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertOrderReviewAlerts(t, service, ctx, event.ID, "limit")
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

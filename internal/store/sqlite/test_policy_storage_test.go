@@ -26,7 +26,6 @@ import (
 	"math"
 	"reflect"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
@@ -92,6 +91,7 @@ func requirePolicyState(t *testing.T, realm store.RealmStore, id domain.External
 }
 
 func TestTestPolicyCreateInitialState(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	ctx := context.Background()
 	testID := createPolicyConnection(t, realm, "test-fixture", "test")
@@ -115,6 +115,7 @@ func TestTestPolicyCreateInitialState(t *testing.T) {
 }
 
 func TestTestPolicyCreateIsAtomic(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	if _, err := realm.rawDB().Exec(`CREATE TRIGGER fail_test_policy BEFORE INSERT ON trading_test_policy BEGIN SELECT RAISE(ABORT, 'policy insert refused'); END`); err != nil {
 		t.Fatal(err)
@@ -136,8 +137,10 @@ func TestTestPolicyCreateIsAtomic(t *testing.T) {
 }
 
 func TestTestPolicyCreateRequiresClassifier(t *testing.T) {
+	t.Parallel()
 	for _, bound := range []bool{false, true} {
 		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			t.Parallel()
 			st := newClassifierStore(t)
 			if bound {
 				if err := st.BindExecutionPolicyProviders(policyFixtureClassifier); err != nil {
@@ -164,6 +167,7 @@ func TestTestPolicyCreateRequiresClassifier(t *testing.T) {
 }
 
 func TestTestPolicyReplaceRevisionsAndCopies(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	id := createPolicyConnection(t, realm, "test-fixture", "replace")
 	ctx := context.Background()
@@ -212,6 +216,7 @@ func TestTestPolicyReplaceRevisionsAndCopies(t *testing.T) {
 }
 
 func TestTestPolicyReplaceOverflowAndValidation(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	id := createPolicyConnection(t, realm, "test-fixture", "overflow")
 	ctx := context.Background()
@@ -244,11 +249,13 @@ func TestTestPolicyReplaceOverflowAndValidation(t *testing.T) {
 }
 
 func TestTestPolicyStrictStoredRead(t *testing.T) {
+	t.Parallel()
 	for _, rules := range []string{
 		`[{"mask":{"baseAsset":"*","quoteAsset":"USD"},"mode":"execute","priceVariant":"normal","unknown":true}]`, `[] []`, `[] invalid`, `null`,
 		`[{"mask":{"baseAsset":"*","quoteAsset":"USD"},"mode":"split","priceVariant":"normal","fills":1}]`,
 	} {
 		t.Run(rules, func(t *testing.T) {
+			t.Parallel()
 			_, realm := newPolicyRealm(t)
 			id := createPolicyConnection(t, realm, "test-fixture", "strict")
 			if _, err := realm.rawDB().Exec(`UPDATE trading_test_policy SET rules = ?`, rules); err != nil {
@@ -263,6 +270,7 @@ func TestTestPolicyStrictStoredRead(t *testing.T) {
 		})
 	}
 	t.Run("missing", func(t *testing.T) {
+		t.Parallel()
 		_, realm := newPolicyRealm(t)
 		id := createPolicyConnection(t, realm, "test-fixture", "missing")
 		if _, err := realm.rawDB().Exec(`DELETE FROM trading_test_policy`); err != nil {
@@ -278,6 +286,7 @@ func TestTestPolicyStrictStoredRead(t *testing.T) {
 }
 
 func TestTestPolicyReplaceTransaction(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	id := createPolicyConnection(t, realm, "test-fixture", "transaction")
 	if _, err := realm.rawDB().Exec(`CREATE TRIGGER fail_policy_rules BEFORE UPDATE OF rules ON trading_test_policy BEGIN SELECT RAISE(ABORT, 'rules refused'); END`); err != nil {
@@ -300,10 +309,10 @@ func TestTestPolicyReplaceTransaction(t *testing.T) {
 }
 
 func TestTestPolicyConcurrentReplace(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	id := createPolicyConnection(t, realm, "test-fixture", "concurrent")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	type result struct {
 		old, next domain.TestExecutionPolicyState
 		err       error
@@ -337,6 +346,7 @@ func TestTestPolicyConcurrentReplace(t *testing.T) {
 }
 
 func TestTestPolicyIndependentHandleWriteConflict(t *testing.T) {
+	t.Parallel()
 	st, realm := newPolicyRealm(t)
 	id := createPolicyConnection(t, realm, "test-fixture", "locked")
 	second, err := New(st.Path(), domain.DefaultRealm)
@@ -379,6 +389,7 @@ func TestTestPolicyIndependentHandleWriteConflict(t *testing.T) {
 }
 
 func TestTestPolicyDeleteCascades(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	id := createPolicyConnection(t, realm, "test-fixture", "delete")
 	var foreignKeys int
@@ -404,6 +415,7 @@ func exportPolicyArchive(t *testing.T, realm store.RealmStore) backup.Archive {
 }
 
 func TestTestPolicyBackupRoundTripAndModes(t *testing.T) {
+	t.Parallel()
 	_, source := newPolicyRealm(t)
 	id := createPolicyConnection(t, source, "test-fixture", "source")
 	venue := createPolicyConnection(t, source, domain.TradingProviderAlpaca, "venue")
@@ -416,6 +428,7 @@ func TestTestPolicyBackupRoundTripAndModes(t *testing.T) {
 		t.Fatalf("exported policies = %+v", archive.Data.TestExecutionPolicies)
 	}
 	t.Run("canonical rules", func(t *testing.T) {
+		t.Parallel()
 		_, target := newPolicyRealm(t)
 		formatted := cloneBackupArchive(t, archive)
 		var indented bytes.Buffer
@@ -432,6 +445,7 @@ func TestTestPolicyBackupRoundTripAndModes(t *testing.T) {
 	})
 	for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
 			_, target := newPolicyRealm(t)
 			opts := backup.RestoreOptions{Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll}
 			if _, err := target.RestoreBackup(ctx, archive, opts); err != nil {
@@ -473,6 +487,7 @@ func TestTestPolicyBackupRoundTripAndModes(t *testing.T) {
 	}
 
 	t.Run("venue-only archive", func(t *testing.T) {
+		t.Parallel()
 		_, venueSource := newPolicyRealm(t)
 		createPolicyConnection(t, venueSource, domain.TradingProviderIB, "venue-only")
 		venueArchive := exportPolicyArchive(t, venueSource)
@@ -487,6 +502,7 @@ func TestTestPolicyBackupRoundTripAndModes(t *testing.T) {
 }
 
 func TestTestPolicyBackupRestoreRejectsInvalidAndRollsBack(t *testing.T) {
+	t.Parallel()
 	_, source := newPolicyRealm(t)
 	id := createPolicyConnection(t, source, "test-fixture", "source")
 	venue := createPolicyConnection(t, source, domain.TradingProviderAlpaca, "venue")
@@ -494,6 +510,7 @@ func TestTestPolicyBackupRestoreRejectsInvalidAndRollsBack(t *testing.T) {
 	for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 		for _, defect := range []string{"missing", "venue", "unknown-provider", "unknown-field", "case-alias", "optional-null", "trailing", "null", "invalid-rule", "zero-revision", "revision-overflow", "duplicate"} {
 			t.Run(string(mode)+"/"+defect, func(t *testing.T) {
+				t.Parallel()
 				_, target := newPolicyRealm(t)
 				targetID := createPolicyConnection(t, target, "test-fixture", "keep")
 				if _, _, err := target.ReplaceTestExecutionPolicy(context.Background(), targetID, policyFixture(t)); err != nil {
@@ -539,8 +556,10 @@ func TestTestPolicyBackupRestoreRejectsInvalidAndRollsBack(t *testing.T) {
 }
 
 func TestTestPolicyRestoreChecksExistingAffectedConnections(t *testing.T) {
+	t.Parallel()
 	for _, defect := range []string{"missing", "corrupt", "venue", "unknown-provider"} {
 		t.Run(defect, func(t *testing.T) {
+			t.Parallel()
 			_, target := newPolicyRealm(t)
 			id := createPolicyConnection(t, target, "test-fixture", "affected")
 			archive := exportPolicyArchive(t, target)
@@ -579,6 +598,7 @@ func TestTestPolicyRestoreChecksExistingAffectedConnections(t *testing.T) {
 }
 
 func TestTestPolicySnapshotAndExportValidation(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	id := createPolicyConnection(t, realm, "test-fixture", "snapshot")
 	_, want, err := realm.ReplaceTestExecutionPolicy(context.Background(), id, policyFixture(t))
@@ -609,6 +629,7 @@ func TestTestPolicySnapshotAndExportValidation(t *testing.T) {
 }
 
 func TestTestPolicyExportDoesNotClassify(t *testing.T) {
+	t.Parallel()
 	_, realm := newPolicyRealm(t)
 	id := createPolicyConnection(t, realm, "test-fixture", "stored")
 	_, want, err := realm.ReplaceTestExecutionPolicy(context.Background(), id, policyFixture(t))

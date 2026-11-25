@@ -220,7 +220,7 @@ func TestSetAccountCurrencyOnControlPlane(t *testing.T) {
 	if _, err := service.CreateAccount(ctx, domain.Account{Code: "desk-2", Currency: "USD"}); err != nil {
 		t.Fatalf("create account desk-2: %v", err)
 	}
-	if err := service.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
+	if _, err := service.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccount, Account: "desk-2", Currency: "USD", LowerBound: "-1",
 	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
@@ -459,7 +459,7 @@ func TestUpdateAssetToolRefusesCodeChangeOfBarrierAsset(t *testing.T) {
 	if _, err := service.CreateAsset(ctx, domain.Asset{Code: "ETH"}); err != nil {
 		t.Fatalf("create asset ETH: %v", err)
 	}
-	if err := service.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+	if _, err := service.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 		Mode:  domain.RuleModeReject,
 		Scope: domain.ScopeUnderlyingAsset, Asset: "ETH", MaxQuantity: "1",
 	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {

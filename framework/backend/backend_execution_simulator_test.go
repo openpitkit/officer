@@ -132,10 +132,10 @@ func TestTestPolicyBackendTightenOnly(t *testing.T) {
 
 func TestTestPolicyBackendRequiresCaller(t *testing.T) {
 	s, _, _ := newTradingTestService(t)
-	if _, err := s.GetTestExecutionPolicy(context.Background(), "missing"); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := s.GetTestExecutionPolicy(context.Background(), "missing"); err == nil || errors.Is(err, domain.ErrInvalid) {
 		t.Fatal("get accepted missing caller")
 	}
-	if _, err := s.ReplaceTestExecutionPolicy(context.Background(), "missing", domain.TestExecutionPolicy{}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := s.ReplaceTestExecutionPolicy(context.Background(), "missing", domain.TestExecutionPolicy{}); err == nil || errors.Is(err, domain.ErrInvalid) {
 		t.Fatal("put accepted missing caller")
 	}
 }

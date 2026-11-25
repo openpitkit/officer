@@ -159,30 +159,30 @@ func inspectNewCredentialFields(fields map[string]string, field string) {
 	// ruleid: shared-vendor-credentials
 	_ = fields["passphrase"]
 	// ruleid: shared-vendor-credentials
-	_ = fields["keyName"]
+	_ = fields["apiKeyId"]
 	// ruleid: shared-vendor-credentials
-	_ = fields["privateKey"]
+	_ = fields["apiKeySecret"]
 	// ruleid: shared-vendor-credentials
 	_ = field == "passphrase"
 	// ruleid: shared-vendor-credentials
 	_ = field != "passphrase"
 	// ruleid: shared-vendor-credentials
-	_ = field == "keyName"
+	_ = field == "apiKeyId"
 	// ruleid: shared-vendor-credentials
-	_ = field != "keyName"
+	_ = field != "apiKeyId"
 	// ruleid: shared-vendor-credentials
-	_ = field == "privateKey"
+	_ = field == "apiKeySecret"
 	// ruleid: shared-vendor-credentials
-	_ = field != "privateKey"
+	_ = field != "apiKeySecret"
 	switch field {
 	// ruleid: shared-vendor-credentials
 	case "passphrase":
 		return
 	// ruleid: shared-vendor-credentials
-	case "keyName":
+	case "apiKeyId":
 		return
 	// ruleid: shared-vendor-credentials
-	case "privateKey":
+	case "apiKeySecret":
 		return
 	}
 	// ok: shared-vendor-credentials

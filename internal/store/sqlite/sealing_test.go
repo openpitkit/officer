@@ -43,6 +43,7 @@ import (
 const sealingExposureWarning = "previously stored secrets must be considered exposed"
 
 func TestSecretColumnsSealedRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x11)
 	_, rs := newTestStore(t, WithMasterKey(key))
@@ -138,6 +139,7 @@ func TestSecretColumnsSealedRoundTrip(t *testing.T) {
 }
 
 func TestSecretColumnsPlaintextRoundTripWithoutSealer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -192,6 +194,7 @@ func TestSecretColumnsPlaintextRoundTripWithoutSealer(t *testing.T) {
 }
 
 func TestSecretColumnRejectsDifferentMasterKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	firstKey := mustStoreMasterKey(t, 0x21)
 	store, rs := newTestStore(t, WithMasterKey(firstKey))
@@ -224,6 +227,7 @@ func TestSecretColumnRejectsDifferentMasterKey(t *testing.T) {
 }
 
 func TestCredentialsRejectRowMove(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x31)
 	_, rs := newTestStore(t, WithMasterKey(key))
@@ -269,6 +273,7 @@ func TestCredentialsRejectRowMove(t *testing.T) {
 }
 
 func TestTradingCredentialsRejectRowMove(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x32)
 	_, rs := newTestStore(t, WithMasterKey(key))
@@ -318,6 +323,7 @@ func TestTradingCredentialsRejectRowMove(t *testing.T) {
 }
 
 func TestSigningKeyRejectsRowMove(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x32)
 	_, rs := newTestStore(t, WithMasterKey(key))
@@ -365,6 +371,7 @@ func TestSigningKeyRejectsRowMove(t *testing.T) {
 }
 
 func TestCredentialsRemainReadableAfterRawLabelChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x42)
 	_, rs := newTestStore(t, WithMasterKey(key))
@@ -393,6 +400,7 @@ func TestCredentialsRemainReadableAfterRawLabelChange(t *testing.T) {
 }
 
 func TestUpdateMarketDataInstanceSettingsResealsAfterLabelChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x41)
 	_, rs := newTestStore(t, WithMasterKey(key))
@@ -438,6 +446,7 @@ func TestUpdateMarketDataInstanceSettingsResealsAfterLabelChange(t *testing.T) {
 }
 
 func TestMigrateWithoutVerifierOrMasterKeyLeavesStorePlaintext(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	store := openSQLiteStoreForTest(t, path)
@@ -467,6 +476,7 @@ func TestMigrateWithoutVerifierOrMasterKeyLeavesStorePlaintext(t *testing.T) {
 }
 
 func TestMigrateWithoutMasterKeyServesClearSigningKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	plaintextStore := openSQLiteStoreForTest(t, path)
@@ -897,6 +907,7 @@ func TestMigrateMatchingKeyCompletesOwedVacuumBeforeInstallingSealer(t *testing.
 }
 
 func TestMigrateMatchingKeyRefusesSealedDatabaseWithoutSealReport(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		vacuumed bool
@@ -905,6 +916,7 @@ func TestMigrateMatchingKeyRefusesSealedDatabaseWithoutSealReport(t *testing.T) 
 		{name: "vacuum owed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "officer.db")
 			key := mustStoreMasterKey(t, 0x5f)
@@ -929,8 +941,8 @@ func TestMigrateMatchingKeyRefusesSealedDatabaseWithoutSealReport(t *testing.T) 
 
 			reopened := openSQLiteStoreForTest(t, path, WithMasterKey(key))
 			err := reopened.Migrate(ctx)
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("Migrate without a seal report = %v, want ErrInvalid", err)
+			if !internalFailureAnswer(err) {
+				t.Fatalf("Migrate without a seal report = %v, want internal error", err)
 			}
 			for _, want := range []string{strconv.Quote(path), "inconsistent sealing data", "holds no seal report", "must be recreated"} {
 				if !strings.Contains(err.Error(), want) {
@@ -958,6 +970,7 @@ func TestMigrateMatchingKeyRefusesSealedDatabaseWithoutSealReport(t *testing.T) 
 }
 
 func TestMigrateSealedRealmWithMatchingMasterKeyInstallsSealer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	key := mustStoreMasterKey(t, 0x52)
@@ -976,6 +989,7 @@ func TestMigrateSealedRealmWithMatchingMasterKeyInstallsSealer(t *testing.T) {
 }
 
 func TestMigrateSealedRealmWithoutMasterKeyRefuses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	key := mustStoreMasterKey(t, 0x53)
@@ -995,6 +1009,7 @@ func TestMigrateSealedRealmWithoutMasterKeyRefuses(t *testing.T) {
 }
 
 func TestMigrateSealedRealmWithDifferentMasterKeyRefuses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	firstKey := mustStoreMasterKey(t, 0x54)
@@ -1027,6 +1042,7 @@ func TestMigrateSealedRealmWithDifferentMasterKeyRefuses(t *testing.T) {
 }
 
 func TestMigrateSealingFailureRollsBackEverySecretAndVerifier(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	plaintextStore := openSQLiteStoreForTest(t, path)
@@ -1088,6 +1104,7 @@ func TestMigrateSealingFailureRollsBackEverySecretAndVerifier(t *testing.T) {
 }
 
 func TestResetWithMasterKeyRecreatesSealedDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	key := mustStoreMasterKey(t, 0x57)
@@ -1122,6 +1139,7 @@ func TestResetWithMasterKeyRecreatesSealedDatabase(t *testing.T) {
 }
 
 func TestTradingCredentialsSealedRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := mustStoreMasterKey(t, 0x71)
 	_, rs := newTestStore(t, WithMasterKey(key))

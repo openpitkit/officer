@@ -30,6 +30,7 @@ import {
   TableSkeleton,
 } from "@/components/PageStates";
 import { StatRow } from "@/components/StatRow";
+import { SecretTextarea } from "@/components/SecretTextarea";
 import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
@@ -51,7 +52,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { ApiError, useOfficerApi } from "@/framework";
 import { formatDateTime } from "@/i18n/format";
 
@@ -313,16 +313,11 @@ function ManageKeyCard({ onDone }: { onDone: () => void }) {
             </div>
             <div className="flex flex-col gap-y-1.5">
               <Label className="text-xs">{t("manageKey.importKeyLabel")}</Label>
-              <Textarea
+              <SecretTextarea
                 value={importKey}
                 onChange={(e) => setImportKey(e.target.value)}
                 placeholder={t("manageKey.importKeyPlaceholder")}
                 disabled={importBusy}
-                rows={5}
-                className="resize-none font-mono text-xs"
-                autoComplete="off"
-                autoCorrect="off"
-                spellCheck={false}
               />
             </div>
             {importError && (

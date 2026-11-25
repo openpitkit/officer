@@ -62,7 +62,7 @@ type Runtime struct {
 // New constructs the explicitly installed local task owner without starting it.
 func New(n node.Node, host node.PnlResetHost, st scheduler.Store) (*Runtime, error) {
 	if n == nil || host == nil || st == nil {
-		return nil, domain.ErrInvalid
+		return nil, fmt.Errorf("P&L reset requires node, host and store")
 	}
 	r := &Runtime{node: n, host: host, executions: make(map[domain.ExternalID]testExecutionCall)}
 	now := time.Now().UTC()
@@ -158,7 +158,11 @@ func (r *Runtime) definition(ctx context.Context) (*scheduler.Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	return r.validateDefinitions(rows)
+	job, err := r.validateDefinitions(rows)
+	if errors.Is(err, domain.ErrInvalid) {
+		err = domain.Internal(err)
+	}
+	return job, err
 }
 
 func (r *Runtime) validateDefinitions(rows []scheduler.Job) (*scheduler.Job, error) {
@@ -217,6 +221,9 @@ func (r *Runtime) ValidateRestore(ctx context.Context, archive backup.Archive, o
 		return domain.ErrInvalid
 	}
 	_, err := r.validateDefinitions(rows)
+	if errors.Is(err, scheduler.ErrInvalid) || errors.Is(err, scheduler.ErrUnknownKind) {
+		return fmt.Errorf("reset schedule: %v: %w", err, domain.ErrInvalid)
+	}
 	return scheduleError(err)
 }
 
@@ -259,8 +266,6 @@ func (r *Runtime) Close() error {
 
 func scheduleError(err error) error {
 	switch {
-	case errors.Is(err, scheduler.ErrInvalid), errors.Is(err, scheduler.ErrUnknownKind):
-		return fmt.Errorf("reset schedule: %v: %w", err, domain.ErrInvalid)
 	case errors.Is(err, scheduler.ErrConflict):
 		return fmt.Errorf("reset schedule changed or is running: %w", domain.ErrConflict)
 	case errors.Is(err, scheduler.ErrNotFound):
@@ -332,7 +337,7 @@ func (r *Runtime) Save(ctx context.Context, input backend.AccountPnlResetSchedul
 	spec := scheduler.JobSpec{Kind: PnlResetKind, Config: json.RawMessage(`{}`),
 		Schedule: scheduler.Schedule{Kind: scheduler.Daily, StartAt: start, Time: input.Time, Timezone: input.Timezone}, Termination: input.Termination}
 	if err := spec.Validate(); err != nil {
-		return backend.AccountPnlResetScheduleState{}, scheduleError(err)
+		return backend.AccountPnlResetScheduleState{}, fmt.Errorf("reset schedule: %v: %w", err, domain.ErrInvalid)
 	}
 	var job scheduler.Job
 	if previous == nil {
@@ -387,6 +392,9 @@ func (r *Runtime) Recover(ctx context.Context, revision int64, action string, ca
 		return backend.AccountPnlResetScheduleState{}, domain.ErrNotFound
 	}
 	if err := r.worker.Resume(ctx, job.ID, revision, action, time.Now().UTC()); err != nil {
+		if errors.Is(err, scheduler.ErrInvalid) {
+			return backend.AccountPnlResetScheduleState{}, fmt.Errorf("recover pnl reset schedule: %v: %w", err, domain.ErrInvalid)
+		}
 		return backend.AccountPnlResetScheduleState{}, scheduleError(err)
 	}
 	ctx = context.WithoutCancel(ctx)

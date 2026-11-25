@@ -26,6 +26,7 @@ import (
 )
 
 func TestSQLiteAccountCurrencyCascadeAndAssetDependents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 

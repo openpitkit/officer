@@ -38,6 +38,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/etoro"
 )
 
@@ -285,7 +286,7 @@ func TestEtoroLookupRoutesBySide(t *testing.T) {
 	t.Run("no-side", func(t *testing.T) {
 		v := newEtoroTestVenue(t, true, nil)
 		_, found, err := v.c.Lookup(context.Background(), fwtrading.OrderRef{ClientOrderID: etoroTestCOID, VenueOrderID: "9007199254740993"})
-		if !found || !errors.Is(err, domain.ErrInvalid) || len(v.recorded()) != 0 {
+		if !found || !internalFailureAnswer(err) || len(v.recorded()) != 0 {
 			t.Fatalf("a lookup without a side must fail without a request: found=%t err=%v", found, err)
 		}
 	})
@@ -445,8 +446,12 @@ func TestEtoroLookupResponseErrors(t *testing.T) {
 				}
 				var diagnostics []health.Diagnostic
 				c.reportDiag = func(d health.Diagnostic) { diagnostics = append(diagnostics, d) }
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
+				ctx := t.Context()
+				if tc.name == "body-deadline" {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, time.Second)
+					defer cancel()
+				}
 				_, found, err := c.Lookup(ctx, site.ref)
 				if !found || err == nil {
 					t.Fatalf("response failure must leave the order pending: found=%t err=%v", found, err)
@@ -1572,4 +1577,12 @@ func TestEtoroCatalogueCredentialRedaction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

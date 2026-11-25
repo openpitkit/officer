@@ -67,8 +67,9 @@ is a command or under `internal/`, and cannot be imported:
 
 `checks/public-packages.txt` is meant to hold these packages and the two
 commands, `cmd/pit-officer` and `examples/customhost`; `just lint-go` fails
-when the paths `go list ./...` reports outside `web/node_modules/` and without
-an `internal` path element drift from the list.
+when the paths `go list ./...` reports without an `internal` path element drift
+from the list. The module's `go.mod` ignore directive keeps npm's
+`web/node_modules` tree out of `go list ./...`.
 
 ### Composing your own Officer
 
@@ -300,12 +301,20 @@ npx depends on it and runs that runtime, whatever node is on the caller's PATH.
 
 `just frontend-ci-install` installs from the committed lockfile (`npm ci`) and
 skips the install when `web/node_modules` was already installed from the current
-`package.json`, `package-lock.json`, pinned Node.js version and platform. Every recipe that runs the frontend
-toolchain depends on it, so the gates need no earlier install and never rewrite
-the lockfile. `just frontend-install` runs `npm install` and is what the binary
-build recipes use. `just build-js` builds the SPA into `web/dist`, and `just build-js-lib`
-builds the publishable framework library into `web/lib`. Only
-`web/dist/embed-placeholder.txt` is committed; the rest of `web/dist` is build
+`package.json`, `package-lock.json`, pinned Node.js version and platform. The
+stamp also covers the installed tree as npm records it in
+`web/node_modules/.package-lock.json`. Manual edits inside `node_modules` are
+not detected; delete `web/node_modules` to force a reinstall. Checks and builds
+use this install and never rewrite the lockfile. Run
+`just frontend-install` explicitly to update dependencies with `npm install`,
+which may rewrite the lockfile. Do not run `frontend-install` while gates are
+running: it writes the tree outside the CI install lock.
+On Windows, killing the helper process alone during `npm ci` can leave npm
+running unlocked; end the orphaned npm/node process before the next run, which
+reinstalls on its own.
+`just build-js` builds the SPA into `web/dist`,
+and `just build-js-lib` builds the publishable framework library into `web/lib`.
+Only `web/dist/embed-placeholder.txt` is committed; the rest of `web/dist` is build
 output, and `//go:embed dist` takes whatever is in that directory when the
 Go build runs.
 
@@ -324,9 +333,9 @@ Semgrep and ruff run from a virtualenv in `.venv`, created and populated by
 afterwards while the installed versions match the pins.
 
 CI does not call `just check` directly. It runs the aggregates in
-`pipeline.just` (`ci-go`, `ci-js`), which import this justfile; tool versions
-come from `.github/ci-versions.env`, which the justfile loads as its dotenv
-file.
+`pipeline.just` (`ci-go`, `ci-js`, `ci-python`), which import this justfile;
+tool versions come from `.github/ci-versions.env`, which the justfile loads as
+its dotenv file.
 
 ## Container image
 

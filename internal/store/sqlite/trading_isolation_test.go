@@ -193,6 +193,7 @@ func isolationModeCount(t testing.TB, r *realmStore, account domain.AccountID) i
 }
 
 func TestTradingIsolationGrants(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, firstGroup, secondGroup string
 		first, second                 int
@@ -203,6 +204,7 @@ func TestTradingIsolationGrants(t *testing.T) {
 		{"group_then_own", "g", "", 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, r, c := isolationFixture(t)
 			ctx := context.Background()
 			if err := r.SetAccountGroup(ctx, "A", "g"); err != nil {
@@ -228,8 +230,10 @@ func TestTradingIsolationGrants(t *testing.T) {
 }
 
 func TestTradingIsolationSameModeDifferentProviders(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []domain.TradingMode{domain.TradingModePaper, domain.TradingModeLive} {
 		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
 			_, r, c := isolationFixture(t)
 			primary, opposite := c[0], c[1]
 			provider := "fixture-venue"
@@ -251,6 +255,7 @@ func TestTradingIsolationSameModeDifferentProviders(t *testing.T) {
 }
 
 func TestTradingIsolationMove(t *testing.T) {
+	t.Parallel()
 	_, r, c := isolationFixture(t)
 	isolationGrant(t, r, c[0], "A", "")
 	isolationGrant(t, r, c[1], "", "g")
@@ -262,6 +267,7 @@ func TestTradingIsolationMove(t *testing.T) {
 }
 
 func TestTradingIsolationCreateInMixedGroup(t *testing.T) {
+	t.Parallel()
 	_, r, c := isolationFixture(t)
 	for _, connection := range c {
 		isolationGrant(t, r, connection, "", "g")
@@ -274,12 +280,14 @@ func TestTradingIsolationCreateInMixedGroup(t *testing.T) {
 }
 
 func TestTradingIsolationDisabledCounts(t *testing.T) {
+	t.Parallel()
 	_, r, c := isolationFixture(t)
 	isolationGrant(t, r, c[0], "A", "")
 	isolationRefused(t, r.PutTradingAccess(context.Background(), domain.TradingAccess{Account: "A", Connection: c[1]}), "A")
 }
 
 func TestTradingIsolationUnknownAffectedOnly(t *testing.T) {
+	t.Parallel()
 	_, r, c := isolationFixture(t)
 	ctx := context.Background()
 	isolationGrant(t, r, c[0], "A", "")
@@ -305,12 +313,14 @@ func TestTradingIsolationUnknownAffectedOnly(t *testing.T) {
 }
 
 func TestTradingIsolationRestoreRollback(t *testing.T) {
+	t.Parallel()
 	for _, site := range []string{"membership", "grant"} {
 		for _, mode := range []backup.RestoreMode{backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 			if site == "membership" && mode == backup.RestoreModeInsertMissing {
 				continue
 			}
 			t.Run(site+"/"+string(mode), func(t *testing.T) {
+				t.Parallel()
 				_, r, c := isolationFixture(t)
 				ctx := context.Background()
 				isolationGrant(t, r, c[0], "A", "")
@@ -341,6 +351,7 @@ func TestTradingIsolationRestoreRollback(t *testing.T) {
 }
 
 func TestTradingIsolationRestoreUnknownAffectedOnly(t *testing.T) {
+	t.Parallel()
 	_, r, c := isolationFixture(t)
 	ctx := context.Background()
 	isolationGrant(t, r, c[0], "A", "")
@@ -377,8 +388,10 @@ func TestTradingIsolationRestoreUnknownAffectedOnly(t *testing.T) {
 }
 
 func TestTradingIsolationIndependentHandles(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"grants", "group_move", "own_group", "disabled"} {
 		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
 			st, r, c := isolationFixture(t)
 			_, other := isolationHandle(t, st.Path())
 			ctx := context.Background()

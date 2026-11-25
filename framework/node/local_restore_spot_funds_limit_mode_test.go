@@ -165,7 +165,7 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeWaitsForActiveLane(t *testing.
 
 	endLane()
 	laneEnded = true
-	if err := waitLivePolicyResult(t, done, "settings restore did not finish after lane left"); err != nil {
+	if err := <-done; err != nil { // Settings restore finishes after the lane leaves.
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 	select {
@@ -218,17 +218,17 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeSerializesAssetClassificationW
 		}, testCaller)
 		restored <- err
 	}()
-	waitLivePolicySignal(t, classified, "settings restore did not reach asset classification")
+	<-classified // Settings restore reaches asset classification.
 	deleted := make(chan error, 1)
 	go func() {
 		deleted <- n.DeleteAsset(ctx, asset.Code, false, testCaller)
 	}()
 	assertLivePolicyBlocked(t, deleted, "DeleteAsset passed the gate during restore asset classification")
 	releaseClassification()
-	if err := waitLivePolicyResult(t, restored, "settings restore did not finish after classification"); err != nil {
+	if err := <-restored; err != nil { // Settings restore finishes after classification.
 		t.Fatalf("RestoreBackup: %v", err)
 	}
-	if err := waitLivePolicyResult(t, deleted, "DeleteAsset did not finish after settings restore"); err != nil {
+	if err := <-deleted; err != nil { // DeleteAsset finishes after settings restore.
 		t.Fatalf("DeleteAsset: %v", err)
 	}
 
@@ -313,13 +313,13 @@ func TestLocalNode_RestoreBackupSpotFundsLimitModeAssetAdditionRejectsReservedRe
 				restored <- err
 			}()
 			if !reserveBeforeCall {
-				waitLivePolicySignal(t, classified, "settings restore did not reach asset classification")
+				<-classified // Settings restore reaches asset classification.
 				// The initial gate rejects an earlier reservation. Reserve here to
 				// exercise the failed in-place upgrade while both gates are held.
 				n.restarting.Store(true)
 				releaseClassification()
 			}
-			err := waitLivePolicyResult(t, restored, "settings restore did not reject reserved restart")
+			err := <-restored // Settings restore rejects the reserved restart.
 			if !errors.Is(err, domain.ErrEngineRestarting) {
 				t.Fatalf("RestoreBackup error = %v, want ErrEngineRestarting", err)
 			}

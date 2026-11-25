@@ -38,25 +38,26 @@ import (
 
 // fakeSource is a controllable fake for the Source interface.
 type fakeSource struct {
-	testPolicy    domain.TestExecutionPolicyState
-	testPolicyErr error
-	status        frameworkmcp.Status
-	statusErr     error
-	account       domain.Account
-	groups        []domain.AccountGroup
-	listGroupsErr error
-	limits        node.AccountLimits
-	orderDetail   domain.OrderDetail
-	getOrderErr   error
-	auditRows     []domain.AuditRow
-	auditFilter   domain.AuditFilter
-	checkResult   domain.CheckResult
-	checkProbes   []domain.OrderProbe
-	accStateErr   error
-	listLimitsErr error
-	listAuditErr  error
-	checkErr      error
-	setMDCalls    []setMDCall
+	testPolicy      domain.TestExecutionPolicyState
+	testPolicyErr   error
+	status          frameworkmcp.Status
+	statusErr       error
+	account         domain.Account
+	groups          []domain.AccountGroup
+	listGroupsErr   error
+	limits          node.AccountLimits
+	limitModeResult domain.LimitSpotFundsLimitMode
+	orderDetail     domain.OrderDetail
+	getOrderErr     error
+	auditRows       []domain.AuditRow
+	auditFilter     domain.AuditFilter
+	checkResult     domain.CheckResult
+	checkProbes     []domain.OrderProbe
+	accStateErr     error
+	listLimitsErr   error
+	listAuditErr    error
+	checkErr        error
+	setMDCalls      []setMDCall
 
 	spotFundsLimitMode       domain.SpotFundsLimitModeState
 	spotFundsLimitModeErr    error
@@ -778,19 +779,41 @@ func TestGetSpotFundsLimitModeMapsSourceState(t *testing.T) {
 
 func TestSpotFundsLimitModeSourceFailures(t *testing.T) {
 	t.Parallel()
-	src := &fakeSource{
-		spotFundsLimitModeErr:    fmt.Errorf("read unavailable"),
-		putSpotFundsLimitModeErr: fmt.Errorf("write unavailable"),
-	}
-	for name, in := range map[string]map[string]any{
-		"get_spot_funds_limit_mode": {},
-		"update_limit":              {"policy": "spot_funds_limit_mode", "scope": "global", "mode": "enforce"},
+	for _, tc := range []struct {
+		name string
+		tool string
+		mode string
+		err  error
+		want string
+	}{
+		{"read failed", "get_spot_funds_limit_mode", "", fmt.Errorf("read spot funds limit mode: read unavailable"), "internal: internal error"},
+		{"write failed", "update_limit", "enforce", fmt.Errorf("set spot funds limit mode: write unavailable"), "internal: internal error"},
+		{"read-back missing", "update_limit", "enforce", domain.Internal(fmt.Errorf("limit mode write was stored but its read-back did not find it")), "internal: internal error"},
+		{"loosening", "update_limit", "track_only",
+			fmt.Errorf("set spot funds limit mode: %w",
+				domain.SpotFundsLimitModeTrackOnly.NoLooserThan(domain.SpotFundsLimitModeEnforce)),
+			"loosening_refused: set spot funds limit mode: mode track_only is looser than the current enforce: an agent may only tighten, never loosen"},
+		{"restarting", "update_limit", "enforce",
+			fmt.Errorf("engine restart in progress; mutating requests are rejected until rebuild completes: %w", domain.ErrEngineRestarting),
+			"engine_restarting: engine restart in progress; mutating requests are rejected until rebuild completes: engine restarting"},
 	} {
-		res := callTool[map[string]any](t, src, name, in)
-		requireToolError(t, res.IsError)
-		if text := textContent(res.Content); text != "internal: internal error" {
-			t.Errorf("%s source failure = %q, want internal: internal error", name, text)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			src := &fakeSource{}
+			in := map[string]any{}
+			if tc.tool == "get_spot_funds_limit_mode" {
+				src.spotFundsLimitModeErr = tc.err
+			} else {
+				src.putSpotFundsLimitModeErr = tc.err
+				in = map[string]any{
+					"policy": "spot_funds_limit_mode", "scope": "global", "mode": tc.mode,
+				}
+			}
+			res := callTool[map[string]any](t, src, tc.tool, in)
+			requireToolError(t, res.IsError)
+			if text := textContent(res.Content); text != tc.want {
+				t.Errorf("%s source failure = %q, want %q", tc.tool, text, tc.want)
+			}
+		})
 	}
 }
 
@@ -801,10 +824,8 @@ func TestSpotFundsLimitModeSourceFailures(t *testing.T) {
 func TestUpdateLimitSpotFundsLimitModeForwardsVerbatim(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"enforce", "track_only", " enforce ", "unsupported", ""} {
-		src := &fakeSource{limits: node.AccountLimits{
-			SpotFundsLimitModes: []domain.LimitSpotFundsLimitMode{
-				{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce},
-			},
+		src := &fakeSource{limitModeResult: domain.LimitSpotFundsLimitMode{
+			Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce,
 		}}
 		wire := callToolOK(t, src, "update_limit", map[string]any{
 			"policy": "spot_funds_limit_mode", "scope": "global", "mode": mode,
@@ -1577,51 +1598,54 @@ func (s *captureNSource) ApplyAdjustment(ctx context.Context, account domain.Acc
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
 
-func (s *fakeSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *fakeSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitRate, error) {
+	return domain.LimitRate{}, domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *captureNSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitRate, error) {
+	return domain.LimitRate{}, domain.ErrNotImplemented
 }
 
-func (s *fakeSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *fakeSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitOrderSize, error) {
+	return domain.LimitOrderSize{}, domain.ErrNotImplemented
 }
 
-func (s *fakeSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *fakeSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitPosition, error) {
+	return domain.LimitPosition{}, domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *captureNSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitOrderSize, error) {
+	return domain.LimitOrderSize{}, domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *captureNSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitPosition, error) {
+	return domain.LimitPosition{}, domain.ErrNotImplemented
 }
 
-func (s *fakeSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *fakeSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitSpotFundsPnlBounds, error) {
+	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *captureNSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitSpotFundsPnlBounds, error) {
+	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotImplemented
 }
 
 func (s *fakeSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
 	return s.spotFundsLimitMode, s.spotFundsLimitModeErr
 }
 
-func (s *fakeSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
+func (s *fakeSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
 	s.putSpotFundsLimitModes = append(s.putSpotFundsLimitModes, limit)
-	return s.putSpotFundsLimitModeErr
+	if s.putSpotFundsLimitModeErr != nil {
+		return domain.LimitSpotFundsLimitMode{}, s.putSpotFundsLimitModeErr
+	}
+	return s.limitModeResult, nil
 }
 
 func (s *captureNSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
 	return domain.SpotFundsLimitModeState{}, domain.ErrNotImplemented
 }
 
-func (s *captureNSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
-	return domain.ErrNotImplemented
+func (s *captureNSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
+	return domain.LimitSpotFundsLimitMode{}, domain.ErrNotImplemented
 }

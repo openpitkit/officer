@@ -5307,6 +5307,8 @@ paths:
         validation error: a key blank after trimming is pointed at by name,
         such as `/credentials/apiKey`; an unknown member or a malformed object
         is pointed at as `/credentials`, since member names are never echoed.
+        A provider whose catalogue entry has `liveOnly` refuses `mode: paper`
+        with a 422 validation error pointed at `/mode` (constraint `unsupported_value`).
       requestBody:
         required: true
         content:
@@ -5351,9 +5353,10 @@ paths:
       summary: Delete an unused trading connection
       tags: [trading]
       description: >
-        Removes a disabled connection and its settings, instrument mappings,
-        execution policy and access grants. Refused while enabled or referenced
-        by any venue-order history. Refused for a tighten-only caller.
+        Removes a connection, enabled or not, and its settings, instrument
+        mappings, execution policy and access grants. Refused while referenced
+        by any venue-order or order-review history. Refused for a tighten-only
+        caller.
       responses:
         "204":
           description: Connection deleted.
@@ -8144,6 +8147,13 @@ components:
           description: Serialized order rows.
           items:
             type: object
+        orderReviews:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupOrderReview"
+          description: >
+            Waiting-order review rows, one per order awaiting review, carried
+            with the activity_history section.
         orderEvents:
           type: array
           description: Serialized order event rows.
@@ -8207,6 +8217,27 @@ components:
         settings:
           type: array
           description: Serialized realm setting rows.
+          items:
+            type: object
+        scheduledJobs:
+          type: array
+          description: >
+            Scheduled task definitions and progress, carried with the
+            general_settings section.
+          items:
+            type: object
+        scheduledExecutions:
+          type: array
+          description: >
+            Past scheduled task attempts, carried with the audit_log section
+            when it covers all accounts.
+          items:
+            type: object
+        accountPnlResetReceipts:
+          type: array
+          description: >
+            Completed account P&L reset receipts (run id and account code),
+            carried with the accounts_groups section.
           items:
             type: object
 
@@ -8989,8 +9020,12 @@ components:
           description: The trading request the attestation binds.
           enum: [submit, execution_report, confirm, cancel, review_confirm, review_cancel, review_force]
         mode:
-          type: string
-          description: Submit mode the attestation was issued for.
+          $ref: "#/components/schemas/SubmitMode"
+          description: >-
+            The submit mode of the order this attestation belongs to.
+            Every attestation of that order carries that mode, whatever its
+            request type. Execution-report attestations signed by Officer
+            0.3.1 and earlier carry `immediate` whatever the order's mode.
         issuedAt:
           type: string
           format: date-time
@@ -9139,6 +9174,11 @@ components:
         account:
           type: string
           description: Account code that owns the trade.
+        venueTradeId:
+          type: string
+          description: >
+            The venue's identifier of the fill, set when the connection's connector
+            records it; absent otherwise.
         principal:
           type: string
           description: Principal that caused the trade; omitted when absent.
@@ -10138,9 +10178,13 @@ components:
       additionalProperties: true
       description: >
         Provider credentials, accepted only on input. Never returned.
-        Alpaca uses {apiKey, apiSecret}; IB uses {host, port, clientId?};
-        eToro uses {apiKey, userKey}; Bybit uses {apiKey, apiSecret}, an HMAC
-        key pair.
+        Alpaca uses {apiKey, apiSecret}; Bybit uses {apiKey, apiSecret}, an HMAC
+        key pair. Coinbase uses {apiKeyId, apiKeySecret}
+        (apiKeyId: the CDP API key ID organizations/{org}/apiKeys/{id};
+        apiKeySecret: the Secret, an EC P-256 private key as an unencrypted
+        SEC1 PEM ('-----BEGIN EC PRIVATE KEY-----'), with line breaks or with
+        the \n escapes the Coinbase key dialog shows; Ed25519 keys are refused);
+        IB uses {host, port, clientId?}; eToro uses {apiKey, userKey}.
         OKX uses {apiKey, apiSecret, passphrase, site}, all required.
         site is the OKX site the account is registered on: www.okx.com for
         global accounts, my.okx.com for EEA accounts or app.okx.com for US and
@@ -10151,7 +10195,7 @@ components:
     TradingProvider:
       type: object
       additionalProperties: false
-      required: [type, title, executionPolicy, venueAccounts, verifiesSymbols, searchesSymbols, unlinkedFees]
+      required: [type, title, executionPolicy, venueAccounts, verifiesSymbols, searchesSymbols, unlinkedFees, liveOnly]
       properties:
         executionPolicy:
           type: boolean
@@ -10168,6 +10212,9 @@ components:
           type: boolean
         unlinkedFees:
           type: boolean
+        liveOnly:
+          type: boolean
+          description: The provider supports live mode only.
 
     TradingInstrument:
       type: object
@@ -10773,6 +10820,36 @@ components:
           type: string
           format: date-time
 
+    BackupOrderReview:
+      type: object
+      additionalProperties: false
+      description: >
+        The connection and route fields are present together for an order sent
+        to a venue and are absent for a gateway order. The venueAccount field
+        appears only with connection and is omitted when the grant binds no
+        venue account.
+      required: [order, mode, held]
+      dependentRequired:
+        connection: [route]
+        route: [connection]
+        venueAccount: [connection]
+      properties:
+        order:
+          $ref: "#/components/schemas/Id"
+        mode:
+          $ref: "#/components/schemas/SubmitMode"
+          description: Submission mode used when confirmation re-runs the order.
+        held:
+          type: boolean
+          description: Whether the waiting order holds a live reservation. Required even when false.
+        connection:
+          $ref: "#/components/schemas/Id"
+        venueAccount:
+          type: string
+        route:
+          type: string
+          description: Compact connector JSON text in the portable backup format.
+
     # Market data
 
     MarketData:
@@ -11290,6 +11367,11 @@ components:
           type: string
           description: Exact decimal string. Omit for market orders.
 
+    SubmitMode:
+      type: string
+      description: The order submission mode.
+      enum: [immediate, hold]
+
     SubmitOrderRequest:
       allOf:
         - $ref: "#/components/schemas/OrderSubmissionRequest"
@@ -11302,14 +11384,13 @@ components:
                 Optional caller-supplied public id. When omitted the server
                 generates and returns one. A duplicate is a 409.
             mode:
-              type: string
+              $ref: "#/components/schemas/SubmitMode"
               description: >
                 Submit mode. `immediate` commits and settles at the order's
                 own `price` and requires it: an order without `price` is
                 refused with 422 (constraint `required` at `/price`) before
                 the order is recorded or the account is created; the refused
                 attempt is audited. `hold` waits for execution reports.
-              enum: [immediate, hold]
       unevaluatedProperties: false
 
     SendVenueOrderRequest:
@@ -11338,12 +11419,10 @@ components:
                     Explicit venue route; Alpaca and IB require timeInForce
                     (IB accepts day, gtc or ioc); Binance requires timeInForce
                     GTC, IOC or FOK for a limit order and an empty object for a
-                    market order; eToro uses {} for market or {"timeInForce":"ioc"}
-                    for an IOC limit buy; Bybit requires timeInForce GTC, IOC
-                    or FOK for a limit order and an empty object for a market
-                    order.
-                    OKX requires timeInForce GTC, IOC or FOK for a limit order
-                    and an empty object for a market order.
+                    market order. Bybit, Coinbase and OKX also require
+                    timeInForce GTC, IOC or FOK for a limit order and an empty
+                    object for a market order. eToro uses {} for market or
+                    {"timeInForce":"ioc"} for an IOC limit buy.
                   additionalProperties: true
               additionalProperties: false
       unevaluatedProperties: false
@@ -11656,7 +11735,11 @@ components:
         persisted envelope cannot be decoded, `attestation` is present but
         `request`, `response`, `canonicalApproval` and `publicKey` are `null`,
         `signature` is empty, and `reason` says the envelope could not be
-        decoded. `publicKey` is also `null` and `signature` empty under alg
+        decoded. When the attestation request type is unsupported or an
+        execution-report attestation has no persisted execution report payload,
+        `response` is `null` and `reason` names the case; `attestation`, `request`,
+        `canonicalApproval`, `publicKey` and `signature` remain as for a decodable
+        envelope. `publicKey` is also `null` and `signature` empty under alg
         `none`.
       properties:
         requestType:
@@ -11687,7 +11770,9 @@ components:
           description: >
             The exact type-specific API response the robot received for this
             request (envelope verbatim), or `null` when the event has no
-            attestation or the persisted envelope cannot be decoded.
+            attestation, the persisted envelope cannot be decoded, the
+            attestation request type is unsupported, or an execution-report
+            attestation has no persisted execution report payload.
           oneOf:
             - $ref: "#/components/schemas/EventReproductionResponse"
             - type: "null"
@@ -11730,6 +11815,7 @@ components:
         reason:
           type: string
           description: >
-            Explains a `null` attestation (the event was not attested) or a
-            present attestation whose persisted envelope cannot be decoded;
-            empty otherwise.
+            Explains a `null` attestation (the event was not attested), an
+            undecodable persisted envelope, an unsupported attestation request
+            type, or a missing execution report payload for an execution-report
+            attestation. Empty otherwise.

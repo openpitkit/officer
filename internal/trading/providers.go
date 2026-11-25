@@ -25,7 +25,10 @@ import (
 
 // FirstPartyProviders returns the built-in trading factories.
 func FirstPartyProviders() []fwtrading.Provider {
-	return []fwtrading.Provider{AlpacaProvider(), BinanceProvider(), IBProvider(), EtoroProvider(), BybitProvider(), OKXProvider(), TestProvider()}
+	return []fwtrading.Provider{
+		AlpacaProvider(), BinanceProvider(), CoinbaseProvider(), IBProvider(),
+		EtoroProvider(), BybitProvider(), OKXProvider(), TestProvider(),
+	}
 }
 
 // IBProvider trades stocks, spot FX and crypto through TWS/IB Gateway.
@@ -118,6 +121,49 @@ func BinanceProvider() fwtrading.Provider {
 		UnlinkedFees: false,
 		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
 			return NewBinanceConnector(ctx.Connection)
+		},
+	}
+}
+
+// CoinbaseProvider trades one portfolio per CDP key and verifies spot symbols.
+//
+// Advanced Trade's sandbox serves only static, pre-defined responses and cannot
+// trade, so only live mode is supported. REST uses api.coinbase.com; the user
+// WebSocket host is advanced-trade-ws-user.coinbase.com. Credentials are
+// apiKeyId (organizations/{org}/apiKeys/{id}) and apiKeySecret (an EC P-256
+// PEM, with line breaks or with the \n escapes the Coinbase key dialog shows);
+// requests use ES256 JWT authentication, the only key type Advanced Trade
+// accepts, so Ed25519 keys are refused. VenueAccount is
+// empty. Route JSON for a limit order is {"timeInForce":"GTC"|"IOC"|"FOK"}; a
+// market order requires {}. Only quantity orders are supported. Symbol
+// verification reads GET /api/v3/brokerage/products/{symbol}; search reads the
+// SPOT catalogue from GET /api/v3/brokerage/products, including base and quote
+// assets. Both request get_tradability_status=true. Account check reads
+// portfolio_uuid, portfolio_type and can_trade from GET
+// /api/v3/brokerage/key_permissions.
+//
+// Pre-check requires an online SPOT product without is_disabled,
+// trading_disabled, cancel_only or view_only flags. It refuses post_only
+// products and market orders on limit_only products. Quantity must be positive,
+// within base size bounds and aligned to base_increment. Limit price must be
+// positive and aligned to price_increment, and quantity times price must meet
+// quote_min_size.
+//
+// The user and heartbeats WebSocket channels track connection health and
+// trigger REST reconciliation on order updates, reconnects and sequence gaps.
+// Reconciliation reads GET /api/v3/brokerage/orders/historical/{order_id}, or
+// searches /api/v3/brokerage/orders/historical/batch by product and side for
+// the client order id, then reads /api/v3/brokerage/orders/historical/fills.
+// History requiring an SCA proof token is refused with a diagnostic; the order
+// stays pending. Fills carry commission in the product's quote currency and are
+// identified by cumulative filled quantity. There are no unlinked fees.
+func CoinbaseProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderCoinbase, Title: "Coinbase", LiveOnly: true,
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewCoinbaseConnector(ctx.Connection)
 		},
 	}
 }

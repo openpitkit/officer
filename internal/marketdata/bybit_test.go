@@ -29,6 +29,7 @@ import (
 	"github.com/coder/websocket"
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 type bybitOpRequest struct {
@@ -246,22 +247,11 @@ func TestBybitConnector_CloseStopsSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for !conn.hasSubscribe("tickers.BTCUSDT") && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if !conn.hasSubscribe("tickers.BTCUSDT") {
-		t.Fatal("subscribe frame was not written")
-	}
+	polltest.Until(func() bool { return conn.hasSubscribe("tickers.BTCUSDT") }) // Subscription is written.
 
 	connector.Close()
-	select {
-	case _, ok := <-out:
-		if ok {
-			t.Fatal("subscription channel still open")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("subscription channel did not close")
+	if _, ok := <-out; ok { // Subscription channel closes.
+		t.Fatal("subscription channel still open")
 	}
 }
 
@@ -401,9 +391,7 @@ func TestBybitConnector_PingsAndUsesCategoryURL(t *testing.T) {
 		connector.run(ctx, subs, make(chan fwmarketdata.QuoteUpdate))
 	}()
 
-	if !conn.waitForPing(time.Second) {
-		t.Fatal("timed out waiting for Bybit ping")
-	}
+	conn.waitForPing() // Ping is written.
 	cancel()
 	<-done
 
@@ -532,26 +520,21 @@ func (c *fakeBybitConn) Close(websocket.StatusCode, string) error {
 	return nil
 }
 
-func (c *fakeBybitConn) waitForPing(timeout time.Duration) bool {
-	deadline := time.After(timeout)
+func (c *fakeBybitConn) waitForPing() {
 	for {
 		c.mu.Lock()
 		for _, write := range c.writes {
 			var req bybitOpRequest
 			if err := json.Unmarshal(write, &req); err == nil && req.Op == "ping" {
 				c.mu.Unlock()
-				return true
+				return
 			}
 		}
 		notify := make(chan struct{})
 		c.notify = notify
 		c.mu.Unlock()
 
-		select {
-		case <-deadline:
-			return false
-		case <-notify:
-		}
+		<-notify // A frame is written.
 	}
 }
 

@@ -44,6 +44,9 @@ const TradingProviderBinance = "binance"
 // TradingProviderBybit is the Bybit trading-provider discriminator.
 const TradingProviderBybit = "bybit"
 
+// TradingProviderCoinbase is the Coinbase trading-provider discriminator.
+const TradingProviderCoinbase = "coinbase"
+
 // TradingProviderIB is the Interactive Brokers trading-provider discriminator.
 const TradingProviderIB = "ib"
 

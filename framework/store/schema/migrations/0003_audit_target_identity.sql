@@ -42,6 +42,9 @@ DROP INDEX uq_limit_spot_funds_pnl_bounds;
 CREATE UNIQUE INDEX uq_limit_spot_funds_pnl_bounds
     ON limit_spot_funds_pnl_bound (axis, scope, COALESCE(account_id, 0), COALESCE(account_group_id, 0), mode);
 
+ALTER TABLE trade ADD COLUMN venue_trade_id TEXT NULL;
+CREATE INDEX idx_trades_venue_trade_id ON trade(venue_trade_id);
+
 -- Position ceilings have exactly one scope: an account and an asset.
 -- The scope column lets the shared limit-table code apply unchanged.
 CREATE TABLE limit_position (

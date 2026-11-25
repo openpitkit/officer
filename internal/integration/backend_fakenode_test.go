@@ -89,42 +89,44 @@ type fakeNode struct {
 	mdInstances                []domain.MarketDataInstance
 	mdInstruments              map[string][]domain.MarketDataInstrument
 
-	backupArchive           backup.Archive
-	backupScope             backup.Scope
-	backupCaller            domain.Caller
-	backupErr               error
-	restoreOpts             backup.RestoreOptions
-	restoreSummary          backup.RestoreSummary
-	restoreSink             marketdata.Sink
-	restoreErr              error
-	resetCaller             domain.Caller
-	resetSink               marketdata.Sink
-	resetErr                error
-	currentSink             marketdata.Sink
-	orders                  map[domain.ExternalID]domain.Order
-	orderReviews            map[domain.ExternalID]domain.OrderReview
-	allOrders               []domain.Order
-	orderEvents             map[domain.ExternalID][]domain.OrderEvent
-	attestations            map[domain.ExternalID]domain.EventAttestation
-	nextOrderSeq            byte
-	nextEventSeq            int
-	submitResult            *fwengine.OrderResult
-	immediateResult         *fwengine.ImmediateResult
-	execReports             []domain.ExecutionReportInput
-	execReportCallers       []domain.Caller
-	submitErr               error
-	confirmErr              error
-	cancelErr               error
-	getOrderErr             error
-	persistAttestationErr   error
-	skipAttestNewEvents     bool
-	cancelNoop              bool
-	execReportNoop          bool
-	confirmCalls            []string
-	cancelCalls             []string
-	persistAttestationCalls []domain.ExternalID
-	auditCalls              []store.AuditEntry
-	auditErr                error
+	backupArchive                  backup.Archive
+	backupScope                    backup.Scope
+	backupCaller                   domain.Caller
+	backupErr                      error
+	restoreOpts                    backup.RestoreOptions
+	restoreSummary                 backup.RestoreSummary
+	restoreSink                    marketdata.Sink
+	restoreErr                     error
+	resetCaller                    domain.Caller
+	resetSink                      marketdata.Sink
+	resetErr                       error
+	currentSink                    marketdata.Sink
+	orders                         map[domain.ExternalID]domain.Order
+	orderReviews                   map[domain.ExternalID]domain.OrderReview
+	allOrders                      []domain.Order
+	orderEvents                    map[domain.ExternalID][]domain.OrderEvent
+	attestations                   map[domain.ExternalID]domain.EventAttestation
+	nextOrderSeq                   byte
+	nextEventSeq                   int
+	submitResult                   *fwengine.OrderResult
+	immediateResult                *fwengine.ImmediateResult
+	execReports                    []domain.ExecutionReportInput
+	execReportCallers              []domain.Caller
+	submitErr                      error
+	confirmErr                     error
+	cancelErr                      error
+	getOrderErr                    error
+	persistAttestationErr          error
+	skipAttestNewEvents            bool
+	cancelNoop                     bool
+	omitCancelEventStatus          bool
+	omitExecutionReportEventStatus bool
+	execReportNoop                 bool
+	confirmCalls                   []string
+	cancelCalls                    []string
+	persistAttestationCalls        []domain.ExternalID
+	auditCalls                     []store.AuditEntry
+	auditErr                       error
 
 	getAccountErr error
 
@@ -598,7 +600,7 @@ func (n *fakeNode) ListPolicyRows(
 }
 
 func (n *fakeNode) PutRateLimit(
-	_ context.Context, limit domain.LimitRate, _ domain.LimitWrite,
+	_ context.Context, limit domain.LimitRate, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutRateLimit", limit.Account, missing)
@@ -607,21 +609,25 @@ func (n *fakeNode) PutRateLimit(
 		n.putRateLimitHook()
 	}
 	n.putRateLimitCalls = append(n.putRateLimitCalls, limit)
-	return n.restoreSink, nil
+	var err error
+	n.limits.RateLimits, err = putFakeLimit(n.limits.RateLimits, limit, write)
+	return n.restoreSink, err
 }
 
 func (n *fakeNode) PutPositionLimit(
-	_ context.Context, limit domain.LimitPosition, _ domain.LimitWrite,
+	_ context.Context, limit domain.LimitPosition, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutPositionLimit", limit.Account, missing)
 	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	n.putPositionLimitCalls = append(n.putPositionLimitCalls, limit)
-	return n.restoreSink, nil
+	var err error
+	n.limits.PositionLimits, err = putFakeLimit(n.limits.PositionLimits, limit, write)
+	return n.restoreSink, err
 }
 
 func (n *fakeNode) PutOrderSizeLimit(
-	_ context.Context, limit domain.LimitOrderSize, _ domain.LimitWrite,
+	_ context.Context, limit domain.LimitOrderSize, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall("PutOrderSizeLimit", limit.Account, missing)
@@ -630,11 +636,13 @@ func (n *fakeNode) PutOrderSizeLimit(
 		n.putOrderSizeLimitHook()
 	}
 	n.putOrderSizeLimitCalls = append(n.putOrderSizeLimitCalls, limit)
-	return n.restoreSink, nil
+	var err error
+	n.limits.OrderSizeLimits, err = putFakeLimit(n.limits.OrderSizeLimits, limit, write)
+	return n.restoreSink, err
 }
 
 func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
-	_ context.Context, limit domain.LimitSpotFundsPnlBounds, _ domain.LimitWrite,
+	_ context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite,
 	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.recordCall(
@@ -645,7 +653,41 @@ func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
 		n.putSpotFundsPnlBoundsLimitCalls,
 		limit,
 	)
-	return n.restoreSink, nil
+	var err error
+	n.limits.SpotFundsPnlBoundsLimits, err = putFakeLimit(n.limits.SpotFundsPnlBoundsLimits, limit, write)
+	return n.restoreSink, err
+}
+
+func putFakeLimit[Limit domain.KeyedLimit](rows []Limit, limit Limit, write domain.LimitWrite) ([]Limit, error) {
+	key, err := limit.Key()
+	if err != nil {
+		return rows, err
+	}
+	index := -1
+	for i, row := range rows {
+		storedKey, err := row.Key()
+		if err != nil {
+			return rows, err
+		}
+		if storedKey == key {
+			index = i
+			break
+		}
+	}
+	if err := write.Validate(); err != nil {
+		return rows, err
+	}
+	if write == domain.LimitWriteAdd && index >= 0 {
+		return rows, domain.ErrLimitExists
+	}
+	if write == domain.LimitWriteChange && index < 0 {
+		return rows, domain.ErrNotFound
+	}
+	if index < 0 {
+		return append(rows, limit), nil
+	}
+	rows[index] = limit
+	return rows, nil
 }
 
 func (n *fakeNode) DeleteLimit(
@@ -1186,10 +1228,7 @@ func (n *fakeNode) decideOrderReview(
 		return domain.Order{}, fwengine.OrderResult{}, n.confirmErr
 	}
 	result := fwengine.OrderResult{Verdict: domain.VerdictAccept}
-	if force {
-		result.Lock = slices.Clone(order.Lock)
-		result.SettlementLockPrice = string(order.Lock)
-	} else if n.submitResult != nil {
+	if !force && n.submitResult != nil {
 		result = *n.submitResult
 	}
 	if result.Verdict != domain.VerdictAccept && result.Verdict != domain.VerdictReject {
@@ -1200,10 +1239,13 @@ func (n *fakeNode) decideOrderReview(
 	before := len(n.orderEvents[orderID])
 	if result.Verdict == domain.VerdictAccept {
 		order.Status = domain.OrderStatusCommitted
-		order.Lock = slices.Clone(result.Lock)
-		if force {
-			order.Leaves = order.ReservedQuantity
+		// A held review reserved at submit time; deciding it makes no second
+		// reservation, so the stored leaves, reserved quantity and lock stay.
+		if review.Held {
+			result.Lock = slices.Clone(order.Lock)
+			result.SettlementLockPrice = string(order.Lock)
 		} else {
+			order.Lock = slices.Clone(result.Lock)
 			order.Leaves, order.ReservedQuantity = order.AmountValue, order.AmountValue
 		}
 		delete(n.orderReviews, orderID)
@@ -1251,11 +1293,7 @@ func (n *fakeNode) decideImmediateReview(
 		return domain.Order{}, fwengine.ImmediateResult{}, n.confirmErr
 	}
 	result := fwengine.ImmediateResult{Verdict: domain.VerdictAccept, TradePrice: order.Price, FillQuantity: order.AmountValue}
-	if force {
-		result.Lock = slices.Clone(order.Lock)
-		result.SettlementLockPrice = string(order.Lock)
-		result.FillQuantity = order.ReservedQuantity
-	} else if n.immediateResult != nil {
+	if !force && n.immediateResult != nil {
 		result = *n.immediateResult
 	}
 	if result.Verdict != domain.VerdictAccept && result.Verdict != domain.VerdictReject {
@@ -1265,6 +1303,11 @@ func (n *fakeNode) decideImmediateReview(
 	snapshot := n.snapshotOrderTxn()
 	before := len(n.orderEvents[orderID])
 	if result.Verdict == domain.VerdictAccept {
+		if review.Held {
+			result.Lock = slices.Clone(order.Lock)
+			result.SettlementLockPrice = string(order.Lock)
+			result.FillQuantity = order.ReservedQuantity
+		}
 		order.Status, order.Leaves, order.ReservedQuantity = domain.OrderStatusFilled, "0", "0"
 		order.Lock = slices.Clone(result.Lock)
 		result = completeFakeImmediateResult(order, result)
@@ -1390,9 +1433,13 @@ func (n *fakeNode) CancelOrder(
 	order.Status = domain.OrderStatusCancelled
 	order.Leaves = leavesQuantity
 	n.orders[orderID] = order
+	eventStatus := string(in.OrderStatus)
+	if n.omitCancelEventStatus {
+		eventStatus = ""
+	}
 	n.appendEvent(orderID, domain.OrderEventCancelled, domain.OrderEventPayload{
 		LeavesQuantity:  in.LeavesQuantity,
-		OrderStatus:     string(in.OrderStatus),
+		OrderStatus:     eventStatus,
 		ExecutionReport: request,
 	})
 	persistence := fwengine.ExecutionReportPersistence{
@@ -1457,6 +1504,9 @@ func (n *fakeNode) ApplyExecutionReport(
 			Commission:      in.Commission,
 			ExecutionReport: request,
 		}
+		if n.omitExecutionReportEventStatus {
+			payload.OrderStatus = ""
+		}
 		n.appendEvent(in.Order, domain.OrderEventFill, payload)
 		events = append(events, domain.OrderEvent{
 			Order:   in.Order,
@@ -1470,6 +1520,9 @@ func (n *fakeNode) ApplyExecutionReport(
 			OrderStatus:     string(in.OrderStatus),
 			Commission:      in.Commission,
 			ExecutionReport: request,
+		}
+		if n.omitExecutionReportEventStatus {
+			payload.OrderStatus = ""
 		}
 		n.appendEvent(in.Order, domain.OrderEventCommission, payload)
 		events = append(events, domain.OrderEvent{
@@ -1745,6 +1798,10 @@ func (n *fakeNode) SetSpotFundsLimitMode(
 	n.setSpotFundsLimitModeCalls = append(n.setSpotFundsLimitModeCalls,
 		setSpotFundsLimitModeCall{mode: mode, caller: caller})
 	n.spotFundsLimitMode.Mode = mode
+	n.spotFundsLimitMode.Stored = true
+	n.limits.SpotFundsLimitModes = []domain.LimitSpotFundsLimitMode{{
+		Scope: domain.ScopeGlobal, Mode: mode,
+	}}
 	return nil
 }
 

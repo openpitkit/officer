@@ -77,10 +77,11 @@ type orderSubmissionCompletion struct {
 // the SDK chain runs. The store callback publishes the assigned draft and then
 // waits for the settlement produced by the chain hook.
 type orderSubmissionBridge struct {
-	settlement chan domain.OrderSettlement
-	abort      chan struct{}
-	done       chan orderSubmissionCompletion
-	completed  bool
+	settlement           chan domain.OrderSettlement
+	abort                chan struct{}
+	done                 chan orderSubmissionCompletion
+	completed            bool
+	persistenceCompleted bool
 	// accountBlocked is the order account's block state when the chain began,
 	// read before the submission transaction opens; preTradeLatchedBlocks reads
 	// it. A drop-copy submission does not read it.
@@ -173,6 +174,9 @@ func (b *orderSubmissionBridge) complete(
 	b.completed = true
 	b.settlement <- settlement
 	completion := <-b.done
+	if completion.err == nil {
+		b.persistenceCompleted = true
+	}
 	return completion.order, completion.err
 }
 
@@ -210,9 +214,8 @@ func validatePersistedOrderChainInput(
 		return nil
 	}
 	return fmt.Errorf(
-		"store: persisted order %s does not match chain input: %w",
+		"store: persisted order %s does not match chain input",
 		field,
-		domain.ErrInvalid,
 	)
 }
 
@@ -320,6 +323,7 @@ func (n *localNode) submitOrder(
 			)
 			return nil, state.err
 		}
+		state.ctx = context.WithoutCancel(state.ctx)
 		bridge, persisted, beginErr := beginOrderSubmission(
 			state.ctx, n.realm, draft, submitted, attestSubmitted,
 		)
@@ -473,8 +477,12 @@ func (n *localNode) submitOrder(
 	}).Finally(func(
 		_ context.Context,
 		state *submitOrderChainState,
-		_ asyncengine.ChainOutcome,
+		outcome asyncengine.ChainOutcome,
 	) error {
+		state.err = n.accountChainTerminalError(
+			"submit order", o.Account, state.err,
+			state.bridge.persistenceCompleted, state.bridge.persistenceCompleted, outcome,
+		)
 		state.bridge.abortAndWait()
 		return nil
 	})
@@ -878,6 +886,7 @@ func (n *localNode) submitImmediate(
 			)
 			return nil, state.err
 		}
+		state.ctx = context.WithoutCancel(state.ctx)
 		bridge, persisted, beginErr := beginOrderSubmission(
 			state.ctx, n.realm, draft, submitted, attestSubmitted,
 		)
@@ -1116,13 +1125,19 @@ func (n *localNode) submitImmediate(
 		state *submitImmediateChainState,
 		outcome asyncengine.ChainOutcome,
 	) error {
-		if !state.heldReviewCompleted && state.err == nil && state.preTradeFinalized &&
+		if !state.heldReviewCompleted && !state.preparation.Held && state.preTradeFinalized &&
 			!state.reportSettled && outcome.Err != nil {
-			state.err = immediateReconciliationError(
+			outcome.Err = immediateReconciliationError(
 				state.order,
 				state.preparation.ReconciliationState,
 				"the execution report failed and the fill is unsettled",
 				chainRootCause(outcome.Err),
+			)
+		}
+		if !state.heldReviewCompleted {
+			state.err = n.accountChainTerminalError(
+				"submit immediate", o.Account, state.err,
+				state.preTradeFinalized || state.bridge.persistenceCompleted, state.bridge.persistenceCompleted, outcome,
 			)
 		}
 		state.bridge.abortAndWait()
@@ -1338,11 +1353,10 @@ func (n *localNode) confirmOrder(
 		}
 		if detail.Order.Account != state.account.Code {
 			state.err = fmt.Errorf(
-				"order %q account changed from %q to %q: %w",
+				"order %q account changed from %q to %q",
 				order,
 				state.account.Code,
 				detail.Order.Account,
-				domain.ErrInvalid,
 			)
 			return state.err
 		}
@@ -1539,7 +1553,7 @@ func (n *localNode) cancelOrderReport(
 		)
 		if err != nil {
 			state.err = fmt.Errorf(
-				"build %s reservation remainder: %w", operation.name, err,
+				"build %s reservation remainder: %w", operation.name, domain.Internal(err),
 			)
 			return nil, state.err
 		}
@@ -1549,7 +1563,7 @@ func (n *localNode) cancelOrderReport(
 		)
 		if err != nil {
 			state.err = fmt.Errorf(
-				"apply %s execution report: %w", operation.name, err,
+				"apply %s execution report: %w", operation.name, domain.Internal(err),
 			)
 			return nil, state.err
 		}

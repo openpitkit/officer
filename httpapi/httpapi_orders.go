@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -147,7 +148,7 @@ func handleGetOrder(svc backend.ControlPlane) http.HandlerFunc {
 			"trades": trades,
 		}
 		if detail.Venue != nil {
-			venue, err := toVenueOrderDTO(*detail.Venue)
+			venue, err := httpx.ToVenueOrderDTO(*detail.Venue, storedTradingRouteDTO)
 			if err != nil {
 				httpx.WriteErr(w, err)
 				return
@@ -281,9 +282,10 @@ func buildEventReproduction(
 		return bundle, nil
 	}
 	bundle.Request = toEventReproductionRequestDTO(env.Approval)
-	bundle.Response = toEventReproductionResponseDTO(
-		event, through, att, env.Approval,
-	)
+	bundle.Response, err = toEventReproductionResponseDTO(event, through, att, env.Approval)
+	if err != nil {
+		bundle.Reason = err.Error()
+	}
 
 	canon, err := fwsigning.CanonicalBytes(env.Approval)
 	if err != nil {
@@ -369,10 +371,12 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 // Review confirm and force are reproduced as their signed decision alone: the
 // order and venue outcome they returned are not signed by the decision.
 // detail is the order the event belongs to, its events ending with that one.
+// An unsupported request type or an execution-report attestation without its
+// persisted report payload returns an error instead of a response.
 func toEventReproductionResponseDTO(
 	event domain.OrderEvent, detail domain.OrderDetail,
 	att *domain.EventAttestation, p domain.ApprovalPayload,
-) *eventReproductionResponseDTO {
+) (*eventReproductionResponseDTO, error) {
 	out := &eventReproductionResponseDTO{}
 	switch att.RequestType {
 	case domain.AttestationRequestSubmit:
@@ -385,12 +389,11 @@ func toEventReproductionResponseDTO(
 			Reviews:         httpx.ToReviewMarkDTOs(p.Reviews),
 		}
 	case domain.AttestationRequestExecutionReport:
-		reportID := ""
-		if event.Payload.ExecutionReport != nil {
-			reportID = event.Payload.ExecutionReport.ExternalID.String()
+		if event.Payload.ExecutionReport == nil {
+			return nil, fmt.Errorf("execution report attestation has no persisted execution report payload")
 		}
 		out.ExecutionReport = &httpx.ExecutionReportResponseDTO{
-			ID:                reportID,
+			ID:                event.Payload.ExecutionReport.ExternalID.String(),
 			Result:            executionResultFromPayload(p),
 			SignedAttestation: att.SignedEnvelope,
 			AttestationKeyID:  att.KeyID,
@@ -412,8 +415,10 @@ func toEventReproductionResponseDTO(
 		}
 	case domain.AttestationRequestReviewCancel:
 		out.ReviewCancel = orderMutationResponseFromPayload(detail, att, p)
+	default:
+		return nil, fmt.Errorf("unsupported attestation request type %q", att.RequestType)
 	}
-	return out
+	return out, nil
 }
 
 func submitPayloadRejectReasons(p domain.ApprovalPayload) []httpx.OrderRejectDTO {

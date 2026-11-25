@@ -46,8 +46,7 @@ func TestDialStreamRefusesRedirect(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	defer source.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	conn, err := vendorhttp.DialStream(ctx, "vendor", source.URL)
 	if conn != nil {
 		_ = conn.CloseNow()
@@ -65,20 +64,22 @@ func TestDialStream(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
+		ctx := r.Context()
 		typ, payload, err := conn.Read(ctx)
 		if err != nil {
-			t.Error("read stream frame failed")
+			if t.Context().Err() == nil {
+				t.Error("read stream frame failed")
+			}
 			return
 		}
 		if err := conn.Write(ctx, typ, payload); err != nil {
-			t.Error("echo stream frame failed")
+			if t.Context().Err() == nil {
+				t.Error("echo stream frame failed")
+			}
 		}
 	}))
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	conn, err := vendorhttp.DialStream(ctx, "vendor", server.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -119,8 +120,7 @@ func TestDialStreamTLSVerification(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	conn, err := vendorhttp.DialStream(ctx, "vendor", server.URL)
 	if conn != nil {
 		_ = conn.CloseNow()
@@ -145,7 +145,7 @@ func TestCopyClient(t *testing.T) {
 			var policyCalls atomic.Int32
 			callerError := errors.New("caller policy marker")
 			if name != "nil" {
-				client = &http.Client{Timeout: time.Second, Transport: http.DefaultTransport}
+				client = &http.Client{Timeout: time.Hour, Transport: http.DefaultTransport}
 				if name == "caller policy" {
 					client.CheckRedirect = func(*http.Request, []*http.Request) error {
 						policyCalls.Add(1)

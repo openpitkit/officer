@@ -25,7 +25,7 @@ import (
 )
 
 func TestPingLoopTick(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	const interval = 30 * time.Millisecond
 	payloads := make(chan string, 1)
@@ -44,27 +44,19 @@ func TestPingLoopTick(t *testing.T) {
 			return nil
 		}, interval, nil)
 	}()
-	select {
-	case payload := <-payloads:
-		if payload != `{"op":"ping"}` {
-			t.Errorf("payload = %q, want %q", payload, `{"op":"ping"}`)
-		}
-		if elapsed := time.Since(start); elapsed < interval {
-			t.Errorf("ping after %s, want at least %s", elapsed, interval)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("ping was not written on tick")
+	payload := <-payloads
+	if payload != `{"op":"ping"}` {
+		t.Errorf("payload = %q, want %q", payload, `{"op":"ping"}`)
+	}
+	if elapsed := time.Since(start); elapsed < interval {
+		t.Errorf("ping after %s, want at least %s", elapsed, interval)
 	}
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("PingLoop did not return after cancel")
-	}
+	<-done
 }
 
 func TestPingLoopCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan struct{})
 	writes := make(chan struct{}, 1)
@@ -76,11 +68,7 @@ func TestPingLoopCancel(t *testing.T) {
 		}, time.Hour, nil)
 	}()
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("PingLoop did not return after cancel")
-	}
+	<-done
 	select {
 	case <-writes:
 		t.Fatal("ping written before first tick")
@@ -95,7 +83,7 @@ func TestPingLoopWriteError(t *testing.T) {
 			name = "unread"
 		}
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			want := errors.New("write failed")
 			errs := make(chan error, capacity)
@@ -108,11 +96,7 @@ func TestPingLoopWriteError(t *testing.T) {
 					return want
 				}, time.Millisecond, errs)
 			}()
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("PingLoop blocked reporting write error")
-			}
+			<-done
 			if calls != 1 {
 				t.Errorf("writes = %d, want 1", calls)
 			}

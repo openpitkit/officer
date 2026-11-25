@@ -1319,9 +1319,17 @@ func httpTokenPayload(t *testing.T, signer *fakeSigner, mode string) domain.Appr
 }
 
 // mustWorkflow issues a workflow token and fails the test on error.
-func mustWorkflow(t *testing.T, svc *backend.Service) backend.SignedApproval {
+func mustWorkflow(t *testing.T, svc *backend.Service, quantity ...string) backend.SignedApproval {
 	t.Helper()
-	tok, err := svc.SubmitOrder(systemCtx(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
+	order := sampleOrder()
+	switch len(quantity) {
+	case 0:
+	case 1:
+		order.AmountValue = quantity[0]
+	default:
+		t.Fatalf("workflow setup: got %d quantity overrides, want at most one", len(quantity))
+	}
+	tok, err := svc.SubmitOrder(systemCtx(), order, backend.SubmitModeHold, domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("workflow setup: %v", err)
 	}
@@ -1718,6 +1726,31 @@ func TestService_ConfirmExecutionSigningFailureFailsClosed(t *testing.T) {
 	if !reflect.DeepEqual(fn.orderEvents[domain.ExternalID(tok.OrderExternalID)], beforeEvents) {
 		t.Fatalf("events after failed confirm = %+v, want %+v",
 			fn.orderEvents[domain.ExternalID(tok.OrderExternalID)], beforeEvents)
+	}
+}
+
+func TestService_CancelOrderRejectsMissingEventOrderStatus(t *testing.T) {
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(t, signer)
+	tok := mustWorkflow(t, svc)
+	orderID := domain.ExternalID(tok.OrderExternalID)
+	beforeOrder := fn.orders[orderID]
+	beforeEvents := slices.Clone(fn.orderEvents[orderID])
+	beforeSigned := len(signer.signed)
+	fn.omitCancelEventStatus = true
+
+	_, att, err := svc.CancelOrder(systemCtx(), tok.OrderExternalID, "10", "operator")
+	if err == nil || !strings.Contains(err.Error(), "cancel execution report event missing order status") {
+		t.Fatalf("CancelOrder error = %v, want missing cancel event order status", err)
+	}
+	if att.SignedAttestation != "" || len(signer.signed) != beforeSigned {
+		t.Fatal("cancel with missing event order status was signed")
+	}
+	if !reflect.DeepEqual(fn.orders[orderID], beforeOrder) {
+		t.Fatalf("order after failed cancel = %+v, want %+v", fn.orders[orderID], beforeOrder)
+	}
+	if !reflect.DeepEqual(fn.orderEvents[orderID], beforeEvents) {
+		t.Fatalf("history after failed cancel = %+v, want %+v", fn.orderEvents[orderID], beforeEvents)
 	}
 }
 

@@ -533,6 +533,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				"fractional equity requires day",
 				"IB requires day, gtc or ioc",
 				"Binance requires GTC, IOC or FOK for a limit order and {} for a market order",
+				"Coinbase requires GTC, IOC or FOK for a limit order and {} for a market order",
 				`eToro uses {} for market or {"timeInForce":"ioc"} for an IOC limit buy`,
 				"Bybit requires GTC, IOC or FOK for a limit order and {} for a market order",
 				"OKX requires GTC, IOC or FOK for a limit order and {} for a market order",
@@ -542,7 +543,7 @@ func TestServerToolSnapshot(t *testing.T) {
 				}
 			}
 			for field, guidance := range map[string]string{
-				"amountKind": "built-in Alpaca, Binance, IB, eToro, Bybit and OKX require quantity",
+				"amountKind": "built-in Alpaca, Binance, Bybit, Coinbase, IB, eToro and OKX require quantity",
 				"price":      "IB crypto buys require a limit price",
 			} {
 				property := input.Properties[field]
@@ -566,6 +567,23 @@ func TestServerToolSnapshot(t *testing.T) {
 		}
 		if schemas[0] != schemas[1] {
 			t.Fatalf("paper and live sends must take the same input:\n%s\n%s", schemas[0], schemas[1])
+		}
+	})
+	t.Run("trade-venue-trade-id-schema", func(t *testing.T) {
+		for _, name := range []string{"list_trades", "get_order"} {
+			trades := decodeSchema(t, gotByName[name].OutputSchema).Properties["trades"]
+			if trades == nil || trades.Items == nil {
+				t.Fatalf("%s has no trades array", name)
+			}
+			property := trades.Items.Properties["venueTradeId"]
+			if property == nil || property.Type != "string" ||
+				property.Description != "The venue's identifier of the fill, set when the connection's connector records it; absent otherwise." ||
+				slices.Contains(trades.Items.Required, "venueTradeId") {
+				t.Fatalf("%s venueTradeId schema = %+v, required = %v", name, property, trades.Items.Required)
+			}
+		}
+		if decodeSchema(t, gotByName["report_fill"].InputSchema).Properties["venueTradeId"] != nil {
+			t.Fatal("report_fill must not accept venueTradeId")
 		}
 	})
 	t.Run("venue-route-schema", func(t *testing.T) {
@@ -607,8 +625,8 @@ func TestServerToolSnapshot(t *testing.T) {
 				if property.Description == "" {
 					t.Errorf("%s.%s has no input description", name, field)
 				}
-				if field == "credentials" && (!strings.Contains(property.Description, "rite-only") || !strings.Contains(property.Description, "{apiKey, apiSecret}")) {
-					t.Errorf("%s credentials must describe write-only Alpaca credentials", name)
+				if field == "credentials" && (!strings.Contains(property.Description, "rite-only") || !strings.Contains(property.Description, "{apiKey, apiSecret}") || !strings.Contains(property.Description, "Coinbase uses {apiKeyId, apiKeySecret}")) {
+					t.Errorf("%s credentials must describe write-only Alpaca and Coinbase credentials", name)
 				}
 				if name == "update_trading_connection" && (field == "label" || field == "credentials") && !strings.Contains(property.Description, "omitted keeps the stored value") {
 					t.Errorf("%s.%s must describe omitted settings", name, field)

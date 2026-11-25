@@ -752,7 +752,7 @@ export interface SignedApproval {
   signedApproval: string;
   keyId: string;
   id: string;
-  verdict: "accept" | "reject" | "review" | "";
+  verdict: "accept" | "reject" | "review";
   reasons: CheckReject[];
   reviews: ReviewMark[];
 }
@@ -811,6 +811,8 @@ export interface TradingProvider {
   searchesSymbols: boolean;
   /** The venue charges fees not tied to orders, such as Alpaca FEE/CFEE. */
   unlinkedFees: boolean;
+  /** Whether the provider supports live mode only. */
+  liveOnly: boolean;
 }
 
 /** Mapping from a venue symbol to an Officer asset pair. */
@@ -1385,6 +1387,9 @@ export interface PublicKeyMaterial {
   key: string;
 }
 
+/** Mode selected when submitting an order. */
+export type SubmitMode = "immediate" | "hold";
+
 /** The persisted signed-attestation envelope metadata for one order event: the
  *  exact base64url envelope plus its own fields. Bound 1:1 to the event
  *  it attested. */
@@ -1396,8 +1401,12 @@ export interface EventAttestation {
   alg: ApprovalAlg;
   /** The trading request this attestation binds. */
   requestType: string;
-  /** Wire submit mode carried by the attestation ("hold" | "immediate"). */
-  mode: string;
+  /**
+   * The original submit mode of the order this attestation belongs to.
+   * Execution-report attestations signed by Officer 0.3.1 and earlier carry
+   * `immediate` whatever the order's mode.
+   */
+  mode: SubmitMode;
   /** RFC3339Nano timestamp at which the envelope was issued. May be empty. */
   issuedAt: string;
   /** Whether the envelope carries a real cryptographic signature. */
@@ -1414,7 +1423,7 @@ export interface SignedApprovalResponse {
   /** The order's opaque public handle. */
   id: string;
   /** Signed pre-trade verdict. */
-  verdict: "accept" | "reject" | "review" | "";
+  verdict: "accept" | "reject" | "review";
   /** Structured reject reasons; empty on accept. */
   reasons: CheckReject[];
   /** Ordered review marks; empty when no review is required. */

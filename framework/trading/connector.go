@@ -109,6 +109,9 @@ const (
 
 // Fill is one execution, preserving venue quantities and commission currency.
 type Fill struct {
+	// VenueTradeID is the venue's identifier of this execution, set by connectors
+	// that record it; empty otherwise.
+	VenueTradeID   string
 	Quantity       string // This execution's exact decimal quantity.
 	Price          string // This execution's exact decimal price.
 	CumQuantity    string // Cumulative filled quantity after this execution.

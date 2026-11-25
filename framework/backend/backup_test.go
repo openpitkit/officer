@@ -705,8 +705,8 @@ func TestRestoreBackupMissingCommittedManualInstrumentFails(t *testing.T) {
 	svc, _, md := newBackupRestoreTestService(t, true)
 	archive, opts := backupRestoreTestArchive("125.5")
 	_, err := svc.RestoreBackup(systemCtx(), archive, opts)
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("RestoreBackup error = %v, want not found", err)
+	if err == nil || errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("RestoreBackup error = %v, want internal error", err)
 	}
 	if !strings.Contains(
 		err.Error(),

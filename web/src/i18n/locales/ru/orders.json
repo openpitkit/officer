@@ -146,6 +146,7 @@
   },
 
   "addOrder": {
+    "preTradeRejected": "Предторговые проверки отклонили ордер.",
     "addedAwaitingReview": "Ордер добавлен и ждёт ревью оператора.",
     "addedAwaitingReviewWithWarning": "Ордер добавлен и ждёт ревью оператора. {{warning}}",
     "button": "Добавить ордер",

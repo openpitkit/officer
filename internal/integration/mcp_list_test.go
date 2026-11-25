@@ -73,6 +73,32 @@ func (s *listRowsSource) ListGroupRows(
 	return s.groups, nil
 }
 
+func TestTradeVenueTradeIDOverMCP(t *testing.T) {
+	t.Parallel()
+	for _, venueTradeID := range []string{"", "venue-trade-42"} {
+		src := listRowsFixture()
+		src.trades.Rows[0].Trade.VenueTradeID = venueTradeID
+		src.orderDetail = domain.OrderDetail{
+			Order:  domain.Order{ExternalID: "order-1"},
+			Trades: []domain.Trade{src.trades.Rows[0].Trade},
+		}
+		for _, tool := range []string{"list_trades", "get_order"} {
+			input := map[string]any{}
+			if tool == "get_order" {
+				input["id"] = "order-1"
+			}
+			result := callTool[map[string]any](t, src, tool, input)
+			requireNotToolError(t, result.IsError)
+			rows := result.StructuredContent["trades"].([]any)
+			row := rows[0].(map[string]any)
+			value, present := row["venueTradeId"]
+			if present != (venueTradeID != "") || (present && value != venueTradeID) {
+				t.Fatalf("%s venueTradeId=%v present=%v, want %q", tool, value, present, venueTradeID)
+			}
+		}
+	}
+}
+
 func listRowsFixture() *listRowsSource {
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	return &listRowsSource{

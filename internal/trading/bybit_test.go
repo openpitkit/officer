@@ -56,7 +56,7 @@ func newBybitTest(t *testing.T, handler http.HandlerFunc) *bybitConnector {
 
 func writeBybitResult(t *testing.T, w http.ResponseWriter, result any) {
 	t.Helper()
-	writeBinanceJSON(t, w, map[string]any{"retCode": 0, "retMsg": "OK", "result": result})
+	writeJSON(t, w, map[string]any{"retCode": 0, "retMsg": "OK", "result": result})
 }
 
 func TestBybitProvider(t *testing.T) {
@@ -208,7 +208,7 @@ func TestBybitSend(t *testing.T) {
 	}
 	for _, code := range []int{10005, 10000} {
 		c := newBybitTest(t, func(w http.ResponseWriter, r *http.Request) {
-			writeBinanceJSON(t, w, map[string]any{"retCode": code, "retMsg": "refused"})
+			writeJSON(t, w, map[string]any{"retCode": code, "retMsg": "refused"})
 		})
 		_, err := c.Send(context.Background(), bybitTestOrder())
 		if err == nil || errors.Is(err, fwtrading.ErrRejected) != (code == 10005) {

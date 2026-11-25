@@ -1341,6 +1341,9 @@ type OrderEvent struct {
 // originating order by the order's opaque handle. All monetary values are exact
 // decimal strings, never float.
 type Trade struct {
+	// VenueTradeID is the venue's identifier of the fill, set by connectors that
+	// record it; empty otherwise.
+	VenueTradeID string
 	// At is the wall-clock time the fill was recorded.
 	At time.Time
 	// ExternalID is the opaque public handle of this trade.
@@ -1479,6 +1482,9 @@ func ReviewMarksHeld(marks []ReviewMark) (bool, error) {
 // (BaseAsset, QuoteAsset), and LockPrice is the single reference price captured
 // at pre-trade time. All values are exact decimal strings; never float.
 type ExecutionReportInput struct {
+	// VenueTradeID is the venue's identifier of the fill, supplied only by the
+	// trading runtime for connectors that record it; empty otherwise.
+	VenueTradeID string
 	// ExternalID is the optional caller-controlled public handle of this report.
 	// The store generates one when it is absent.
 	ExternalID ExternalID
@@ -1597,13 +1603,11 @@ type BalanceSettlement struct {
 }
 
 // OrderSettlement is one atomic fill/settlement persisted in a single store
-// transaction: per-asset balances, the order status, fill event(s), the optional
-// trade, account blocks the engine already applied, and the optional lock-price
-// rewrite are all committed together or not at all. It moves the node's former
-// read-modify-write fill persistence (GetBalance + UpsertBalance + UpdateOrder
-// Status + AppendOrderEvent + CreateTrade + SetAccountBlocked) inside one tx so a
-// crash can never leave a half-settled order. It is a plain data carrier: no
-// methods, no engine/store imports.
+// transaction. Per-asset balances, the order status, fill events, the optional
+// trade, account blocks the engine already applied, and the optional lock
+// rewrite all commit together or not at all, so a crash can never leave a
+// half-settled order. It is a plain data carrier: no methods, no engine/store
+// imports.
 type OrderSettlement struct {
 	// Review inserts the order_review row in the same transaction as the status.
 	Review *OrderReview
@@ -1626,10 +1630,8 @@ type OrderSettlement struct {
 	// P&L for this settlement. An empty reason with a non-empty AccountPnl clears
 	// a prior halt.
 	AccountPnlHaltReason PnlHaltReason
-	// Lock is the opaque SDK-serialized reservation lock to write when SetLock is
-	// true; an empty (non-nil) slice clears it, nil leaves it. It replaces the
-	// former decimal-array lock: display prices are derived from the deserialized
-	// SDK lock, not stored as an array.
+	// Lock is the opaque SDK-serialized reservation lock. Display prices are
+	// derived from the deserialized SDK lock.
 	Lock []byte
 	// Leaves is the exact open base quantity supplied with this settlement.
 	// Empty leaves the stored value unchanged; terminal status does not alter it.
@@ -1652,8 +1654,8 @@ type OrderSettlement struct {
 	// Blocks are engine-already-applied account blocks to mirror in the same tx
 	// (the block UPDATE only; the observational audit row stays outside).
 	Blocks []AccountBlock
-	// SetLock distinguishes a nil Lock ("leave unchanged") from an empty slice
-	// ("clear"); only when true is the lock column rewritten.
+	// SetLock controls whether to replace the stored lock. When true, nil
+	// removes the lock and a non-nil slice is stored as supplied.
 	SetLock bool
 }
 

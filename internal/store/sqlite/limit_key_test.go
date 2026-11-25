@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,9 +30,11 @@ import (
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	fwstore "go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/framework/web/httpapi"
 )
 
 func TestCountingLimitModeStorage(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		policy string
 		scope  domain.LimitScope
@@ -50,6 +53,7 @@ func TestCountingLimitModeStorage(t *testing.T) {
 	} {
 		policy := tc.policy
 		t.Run(policy+"/"+string(tc.scope), func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedLimitFixtures(t)
 			if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
 				t.Fatal(err)
@@ -146,6 +150,7 @@ func TestCountingLimitModeStorage(t *testing.T) {
 }
 
 func TestScanPolicyRowUnknownKindIsInternalError(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedLimitFixtures(t)
 	db, err := rs.(*realmStore).db()
 	if err != nil {
@@ -170,6 +175,7 @@ func TestScanPolicyRowUnknownKindIsInternalError(t *testing.T) {
 }
 
 func TestSQLLimitTableRejectsInvalidKeyShape(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		shape limitKeyShape
@@ -178,8 +184,10 @@ func TestSQLLimitTableRejectsInvalidKeyShape(t *testing.T) {
 		{"unknown", limitKeyShape(255)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			table := limitTable{name: "limit_rate", noun: "rate limit", keyShape: tc.shape}
 			t.Run("where", func(t *testing.T) {
+				t.Parallel()
 				_, err := table.pnlAxisKeyed()
 				if err == nil || errors.Is(err, domain.ErrInvalid) {
 					t.Fatalf("pnlAxisKeyed error = %v, want internal error", err)
@@ -189,6 +197,7 @@ func TestSQLLimitTableRejectsInvalidKeyShape(t *testing.T) {
 				}
 			})
 			t.Run("prune", func(t *testing.T) {
+				t.Parallel()
 				query, err := table.pruneQuery()
 				if err == nil || errors.Is(err, domain.ErrInvalid) {
 					t.Fatalf("pruneQuery error = %v, want internal error", err)
@@ -205,6 +214,7 @@ func TestSQLLimitTableRejectsInvalidKeyShape(t *testing.T) {
 }
 
 func TestSQLLimitTableRejectsGenericPnlPrune(t *testing.T) {
+	t.Parallel()
 	table := limitTable{name: "limit_spot_funds_pnl_bound", keyShape: limitKeyShapePnlAxis}
 	query, err := table.pruneQuery()
 	if err == nil || errors.Is(err, domain.ErrInvalid) {
@@ -281,7 +291,9 @@ func sqlKeyRowIDs(t *testing.T, ctx context.Context, q sqlQueryer, table string)
 }
 
 func TestSQLLimitKeyArchiveValidationOrder(t *testing.T) {
+	t.Parallel()
 	t.Run("limit_context", func(t *testing.T) {
+		t.Parallel()
 		ctx, rs := seedLimitFixtures(t)
 		scope := backup.Scope{Sections: []backup.Section{backup.SectionRiskLimits}, Accounts: backup.EntitySelector{All: true}}
 		archive, err := rs.ExportBackup(ctx, scope)
@@ -305,6 +317,7 @@ func TestSQLLimitKeyArchiveValidationOrder(t *testing.T) {
 		}
 	})
 	t.Run("group_precedes_limit", func(t *testing.T) {
+		t.Parallel()
 		ctx, rs := seedLimitFixtures(t)
 		scope := backup.Scope{Sections: []backup.Section{backup.SectionAccountsGroups, backup.SectionRiskLimits}, Accounts: backup.EntitySelector{All: true}}
 		archive, err := rs.ExportBackup(ctx, scope)
@@ -321,8 +334,10 @@ func TestSQLLimitKeyArchiveValidationOrder(t *testing.T) {
 }
 
 func TestSQLLimitKeyPruneIgnoresCorruptionOutsideScope(t *testing.T) {
+	t.Parallel()
 	for _, subject := range []string{"rate_account", "pnl_account", "pnl_group"} {
 		t.Run(subject, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedLimitFixtures(t)
 			if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
 				t.Fatal(err)
@@ -364,6 +379,7 @@ func TestSQLLimitKeyPruneIgnoresCorruptionOutsideScope(t *testing.T) {
 }
 
 func TestSQLLimitKeyAxes(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		axis string
 		pair [2]domain.KeyedLimit
@@ -414,8 +430,10 @@ func TestSQLLimitKeyAxes(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.axis, func(t *testing.T) {
+			t.Parallel()
 			for _, operation := range []string{"write", "delete", "restore", "prune_one", "prune_both", "prune_one_direct", "prune_both_direct"} {
 				t.Run(operation, func(t *testing.T) {
+					t.Parallel()
 					ctx, rs := seedLimitFixtures(t)
 					if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
 						t.Fatal(err)
@@ -590,17 +608,21 @@ func mustSQLLimitKey(t *testing.T, policy string, mode domain.RuleMode, scope do
 }
 
 func TestSQLLimitKeyRejectsBeforeStorage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, rs := newTestStore(t)
 	limit := domain.LimitRate{Mode: domain.RuleModeReject, Scope: domain.ScopeBroker, MaxOrders: 10, Window: time.Second}
 	putSQLKeyLimit(t, ctx, rs, limit)
 	foreign := mustSQLLimitKey(t, domain.PolicySpotFundsLimitMode, "", domain.ScopeGlobal, "", "", "")
-	for _, key := range []domain.LimitKey{{}, foreign} {
+	for _, key := range []domain.LimitKey{foreign, {}} {
 		err := rs.DeleteLimit(ctx, key)
-		if !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("DeleteLimit(%+v) = %v, want ErrInvalid", key, err)
+		if err == nil || errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("DeleteLimit(%+v) = %v, want internal failure", key, err)
 		}
-		if err.Error() != fmt.Sprintf("store: policy %q has no limit barrier table: invalid", key.Policy()) {
+		if public := httpapi.DescribeErr(err); public.Status != http.StatusInternalServerError || public.Code != "internal" {
+			t.Fatalf("DeleteLimit(%+v) = %+v, want HTTP 500 internal", key, public)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("policy %q has no limit barrier table", key.Policy())) {
 			t.Fatalf("DeleteLimit(%+v) message = %v, want policy and missing barrier table", key, err)
 		}
 		requireSQLKeyLimits(t, ctx, rs, limit)
@@ -609,15 +631,18 @@ func TestSQLLimitKeyRejectsBeforeStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, key := range []domain.LimitKey{{}, foreign} {
-		if err := rs.DeleteLimit(ctx, key); !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("closed DeleteLimit(%+v) = %v, want ErrInvalid before database access", key, err)
+		if err := rs.DeleteLimit(ctx, key); err == nil ||
+			!strings.Contains(err.Error(), fmt.Sprintf("policy %q has no limit barrier table", key.Policy())) {
+			t.Fatalf("closed DeleteLimit(%+v) = %v, want lookup failure before database access", key, err)
 		}
 	}
 }
 
 func TestSQLLimitKeyPruneRejectsCorruptStoredRow(t *testing.T) {
+	t.Parallel()
 	for _, table := range []string{"limit_rate", "limit_spot_funds_pnl_bound"} {
 		t.Run(table, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedLimitFixtures(t)
 			scope := backup.Scope{Sections: []backup.Section{backup.SectionRiskLimits}, Accounts: backup.EntitySelector{All: true}}
 			archive, err := rs.ExportBackup(ctx, scope)

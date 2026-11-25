@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
@@ -51,6 +50,20 @@ func (r committedAccessRealm) AppendAudit(ctx context.Context, entry store.Audit
 	return r.RealmStore.AppendAudit(ctx, entry)
 }
 
+func TestTradingAccessObserverWiringFailuresAreInternal(t *testing.T) {
+	n := &localNode{}
+	if err := n.InstallTradingAccessObserver(nil); err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing observer = %v, want internal error", err)
+	}
+	observer := func(context.Context, domain.Account, domain.Caller) error { return nil }
+	if err := n.InstallTradingAccessObserver(observer); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.InstallTradingAccessObserver(observer); err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("duplicate observer = %v, want internal error", err)
+	}
+}
+
 func TestTradingAccessNotificationCompletesOutsideNodeLocks(t *testing.T) {
 	n, realm, paper := newTradingFeeAccountNode(t)
 	ctx := context.Background()
@@ -72,23 +85,14 @@ func TestTradingAccessNotificationCompletesOutsideNodeLocks(t *testing.T) {
 	done := make(chan error, 1)
 	defer func() {
 		close(release)
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Error(err)
-			}
-		case <-time.After(3 * time.Second):
-			t.Error("delivery did not finish")
+		if err := <-done; err != nil {
+			t.Error(err)
 		}
 	}()
 	go func() {
 		done <- n.PutTradingAccess(ctx, domain.TradingAccess{Account: "first", Connection: live.ExternalID}, false, testCaller)
 	}()
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("notification was not reached")
-	}
+	<-entered
 	if !n.mutate.TryLock() {
 		t.Fatal("delivery holds node mutation lock")
 	}
@@ -106,6 +110,7 @@ func TestTradingAccessNotificationCompletesOutsideNodeLocks(t *testing.T) {
 	}
 	select {
 	case err := <-done:
+		done <- err // The deferred check receives the result.
 		t.Fatalf("notification returned before delivery completed: %v", err)
 	default:
 	}

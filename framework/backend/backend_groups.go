@@ -79,6 +79,8 @@ func (s *Service) UpdateGroup(
 	if err := domain.ValidateTitle(group.Title); err != nil {
 		return domain.AccountGroup{}, err
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	return s.node.UpdateGroup(ctx, oldCode, group, caller)
 }
 
@@ -275,6 +277,8 @@ func (s *Service) DeleteGroup(ctx context.Context, code string, force bool) erro
 			return err
 		}
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	return s.node.DeleteGroup(ctx, code, force, caller)
 }
 

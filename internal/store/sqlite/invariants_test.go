@@ -73,6 +73,7 @@ import (
 // test spans ALL groups in one pass to catch any gap introduced by a future
 // group that skips the shape check.
 func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -364,6 +365,7 @@ func assertExternalID(t *testing.T, label string, id domain.ExternalID) {
 //   - instance→instruments→quotes: sqlite_marketdata_test.go (TestMDCascadeDeleteInstance)
 //   - account/principal→audit (SET NULL): sqlite_audit_test.go (TestAuditTrailPreservedOnAccountDelete)
 func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -475,6 +477,7 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 // this test exercises the counter path at a scale where the initial default
 // is long past.
 func TestEngineIDAssignment_ManyAccountsAndGroups(t *testing.T) {
+	t.Parallel()
 	const n = 20
 	ctx := context.Background()
 	_, rs := newTestStore(t)
@@ -552,6 +555,7 @@ func TestEngineIDAssignment_ManyAccountsAndGroups(t *testing.T) {
 // policy tables can both carry broker-scoped NULL-axis rows without colliding
 // with each other across tables.
 func TestLimitPolicyUnique_AllLimitTables(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	r := rs.(*realmStore)
@@ -721,6 +725,7 @@ VALUES ('realized', ?, NULL, NULL, (SELECT id FROM asset WHERE code = 'USD'), ?)
 }
 
 func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 

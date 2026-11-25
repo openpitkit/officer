@@ -1639,12 +1639,35 @@ func TestLocalNode_SetAccountCurrencyValidatesStoredAssetBeforeEngine(t *testing
 		asset:      "USD",
 	}
 	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SetAccountCurrency = %v, want ErrInvalid", err)
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetAccountCurrency = %v, want internal error", err)
 	}
 	account, ok, getErr := st.GetAccount(ctx, id)
 	if getErr != nil || !ok || account.Currency != "" {
 		t.Fatalf("stored account = %+v ok=%v err=%v, want unchanged", account, ok, getErr)
+	}
+}
+
+func TestLocalNode_SetAccountCurrencyRejectsMissingLiveAssetAlias(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatal(err)
+	}
+	eng.resolverMu.Lock()
+	delete(eng.assetResolverIDs, "USD")
+	eng.resolverMu.Unlock()
+	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
+	if err == nil || errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "live dictionary") {
+		t.Fatalf("missing live asset alias = %v, want internal error", err)
+	}
+	stored, ok, err := st.GetAccount(ctx, id)
+	if err != nil || !ok || stored.Currency != "" {
+		t.Fatalf("account = %+v, ok=%v err=%v, want unchanged", stored, ok, err)
 	}
 }
 
@@ -1664,8 +1687,8 @@ func TestLocalNode_SetAccountCurrencyRejectsStoredLiveAssetMismatch(t *testing.T
 		asset:      "USD",
 	}
 	err := n.SetAccountCurrency(ctx, id, "USD", testCaller)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SetAccountCurrency = %v, want ErrInvalid", err)
+	if err == nil || errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetAccountCurrency = %v, want internal error", err)
 	}
 	if strings.Contains(err.Error(), "424242") {
 		t.Fatalf("SetAccountCurrency error discloses stored engine handle: %v", err)

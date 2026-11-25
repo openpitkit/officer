@@ -1857,7 +1857,7 @@ func TestLimitSpotFundsPnlBounds_EitherOrValidationUsesRequestRoot(t *testing.T)
 // compared as written, "-1e-2000000000" and "0" build 10^2000000000 - as a
 // validation error on the field it came from, before the bounds are compared,
 // and within a second, so a comparison that builds the power fails the test
-// instead of hanging it.
+// after it returns; a call that never returns is left to go test's -timeout.
 func TestLimitSpotFundsPnlBounds_ValidateRefusesHugeExponent(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -2198,20 +2198,15 @@ func TestParseEngineDecimal(t *testing.T) {
 }
 
 // requireWithinASecond runs call and fails t unless it returns within a
-// second, so a call whose work grows with a value's exponent fails at once
-// instead of stalling the suite until its timeout. what names the call in that
-// failure.
+// second, so a call whose work grows with a value's exponent fails after it
+// returns. A call that never returns is left to go test's -timeout. what names
+// the call in that failure.
 func requireWithinASecond(t *testing.T, what string, call func()) {
 	t.Helper()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		call()
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("%s did not return within a second", what)
+	start := time.Now()
+	call()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("%s took %v, want under a second", what, elapsed)
 	}
 }
 

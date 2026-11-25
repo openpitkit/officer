@@ -499,7 +499,7 @@ func TestOKXLookupRejectsPartialHistory(t *testing.T) {
 				}
 				okxReply(w, page)
 			})
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			ref := fwtrading.OrderRef{
 				Symbol: "BTC-USDT", ClientOrderID: okxTestCOID, VenueOrderID: "123",

@@ -58,6 +58,88 @@ import (
 // behaviour is covered by TestRealmDataOpAfterCloseReturnsClosedError.
 func (r *realmStore) rawDB() *sql.DB { return r.store.currentDB() }
 
+func newSnapshotReader(
+	t *testing.T,
+	writer *realmStore,
+	matches func(string) bool,
+	write func(context.Context) error,
+) *realmStore {
+	t.Helper()
+	writerDB := writer.rawDB()
+	// WAL lets the writer commit while the reader holds its snapshot.
+	var journalMode string
+	if err := writerDB.QueryRowContext(t.Context(), `PRAGMA journal_mode = WAL`).Scan(&journalMode); err != nil {
+		t.Fatalf("enable WAL: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal mode = %q, want wal", journalMode)
+	}
+
+	var once sync.Once
+	var writeErr error
+	var matched bool
+	readerDB := sql.OpenDB(snapshotConnector{
+		driver: writerDB.Driver(),
+		dsn:    sqliteDSN(writer.store.path),
+		beforeQuery: func(ctx context.Context, query string) error {
+			if !matches(query) {
+				return nil
+			}
+			once.Do(func() {
+				matched = true
+				writeErr = write(ctx)
+			})
+			return writeErr
+		},
+	})
+	t.Cleanup(func() {
+		if err := readerDB.Close(); err != nil {
+			t.Errorf("close snapshot reader: %v", err)
+		}
+		if !matched {
+			t.Error("snapshot reader never issued the expected query")
+		}
+	})
+	readerStore := &sqliteStore{}
+	readerStore.db.Store(readerDB)
+	readerStore.enumCodes.Store(writer.store.enumCodes.Load())
+	return &realmStore{store: readerStore}
+}
+
+type snapshotConnector struct {
+	driver      driver.Driver
+	dsn         string
+	beforeQuery func(context.Context, string) error
+}
+
+func (c snapshotConnector) Driver() driver.Driver { return c.driver }
+
+func (c snapshotConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := c.driver.Open(c.dsn)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotConn{Conn: conn, beforeQuery: c.beforeQuery}, nil
+}
+
+type snapshotConn struct {
+	driver.Conn
+	beforeQuery func(context.Context, string) error
+}
+
+func (c snapshotConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+}
+
+func (c snapshotConn) QueryContext(
+	ctx context.Context, query string, args []driver.NamedValue,
+) (driver.Rows, error) {
+	if err := c.beforeQuery(ctx, query); err != nil {
+		return nil, fmt.Errorf("commit write before snapshot query: %w", err)
+	}
+	return c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
+}
+
 // migratedDatabase is a database file migrated once per test binary without
 // options. Migrating from scratch costs about half a second under -race, and
 // paid by each of the package's several hundred cases it put the package past
@@ -174,6 +256,7 @@ func (d *transactionBeginDriver) BeginTx(context.Context, driver.TxOptions) (dri
 }
 
 func TestBeginTxClassifiesCancellation(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		code     int
@@ -185,6 +268,7 @@ func TestBeginTxClassifiesCancellation(t *testing.T) {
 		{"canceled_busy", sqlite3.SQLITE_BUSY, true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			original := &transactionCodeError{code: test.code}
@@ -223,11 +307,13 @@ func TestBeginTxClassifiesCancellation(t *testing.T) {
 }
 
 func TestClassifyTxCancel(t *testing.T) {
+	t.Parallel()
 	interrupt := &transactionCodeError{code: sqlite3.SQLITE_INTERRUPT}
 	for _, canceled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("canceled=%t", canceled), func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			t.Cleanup(cancel)
 			if canceled {
 				cancel()
 			}
@@ -249,6 +335,7 @@ func TestClassifyTxCancel(t *testing.T) {
 				{"nil", nil, false},
 			} {
 				t.Run(test.name, func(t *testing.T) {
+					t.Parallel()
 					got := classifyTxCancel(ctx, test.err)
 					if !canceled || !test.classify {
 						if got != test.err {
@@ -274,6 +361,7 @@ func TestClassifyTxCancel(t *testing.T) {
 }
 
 func TestRollbackTransactionClassifiesCancellation(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		canceled bool
@@ -285,6 +373,7 @@ func TestRollbackTransactionClassifiesCancellation(t *testing.T) {
 		{"live_tx_done", false, sql.ErrTxDone, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			_, realm := newTestStore(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -313,6 +402,7 @@ func TestRollbackTransactionClassifiesCancellation(t *testing.T) {
 }
 
 func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := openSQLiteStoreForTest(t, filepath.Join(t.TempDir(), "mode-migration.db"))
 	source := schema.NewEmbeddedMigrationSource(store.dialect)
@@ -364,7 +454,40 @@ func TestMigrateOrderSizeModeFromVersion2(t *testing.T) {
 	}
 }
 
+func TestMigrateTradeVenueTradeID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, rs := newRealmStore(t, domain.DefaultRealm)
+	db := rs.(*realmStore).rawDB()
+	var columnType string
+	var notNull int
+	if err := db.QueryRowContext(ctx,
+		`SELECT type, "notnull" FROM pragma_table_info('trade') WHERE name = 'venue_trade_id'`,
+	).Scan(&columnType, &notNull); err != nil {
+		t.Fatal(err)
+	}
+	if columnType != "TEXT" || notNull != 0 {
+		t.Fatalf("venue_trade_id = %s, notnull=%d; want TEXT NULL", columnType, notNull)
+	}
+	var unique, partial int
+	if err := db.QueryRowContext(ctx,
+		`SELECT "unique", partial FROM pragma_index_list('trade') WHERE name = 'idx_trades_venue_trade_id'`,
+	).Scan(&unique, &partial); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := db.QueryRowContext(ctx,
+		`SELECT name FROM pragma_index_info('idx_trades_venue_trade_id')`,
+	).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if unique != 0 || partial != 0 || name != "venue_trade_id" {
+		t.Fatalf("venue index: unique=%d partial=%d column=%s", unique, partial, name)
+	}
+}
+
 func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, rs := newTestStore(t)
 
@@ -409,6 +532,7 @@ func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 }
 
 func TestEnumDictionariesCoverDomainCodes(t *testing.T) {
+	t.Parallel()
 	s, _ := newTestStore(t)
 	dictionaries, err := s.(*sqliteStore).enumDictionaries()
 	if err != nil {
@@ -532,6 +656,7 @@ func domainEnumCodes(t *testing.T, typeName string) []string {
 }
 
 func TestNewLoadsEnumDictionaries(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	s, err := New(path, domain.DefaultRealm)
@@ -560,6 +685,7 @@ func TestNewLoadsEnumDictionaries(t *testing.T) {
 }
 
 func TestNewOpensEnumDictionariesWithMissingCodes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 	sq := s.(*sqliteStore)
@@ -619,8 +745,10 @@ func TestNewOpensEnumDictionariesWithMissingCodes(t *testing.T) {
 }
 
 func TestNewRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
+	t.Parallel()
 	for _, missingCode := range []bool{false, true} {
 		t.Run(fmt.Sprintf("missing_code=%t", missingCode), func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			s, _ := newTestStore(t)
 			sq := s.(*sqliteStore)
@@ -655,6 +783,7 @@ func TestNewRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
 }
 
 func TestNewRejectsMissingEnumDictionaryCodeWithOccupiedStableID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 	sq := s.(*sqliteStore)
@@ -688,6 +817,7 @@ func TestNewRejectsMissingEnumDictionaryCodeWithOccupiedStableID(t *testing.T) {
 }
 
 func TestMigrateRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 	sq := s.(*sqliteStore)
@@ -713,9 +843,11 @@ func TestMigrateRejectsEnumDictionaryCodeWithWrongStableID(t *testing.T) {
 }
 
 func TestMigrateRefusesIncompleteBookkeeping(t *testing.T) {
+	t.Parallel()
 	for _, recorded := range []string{"shared", "app"} {
 		for _, emptyOther := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/empty_other=%t", recorded, emptyOther), func(t *testing.T) {
+				t.Parallel()
 				ctx := context.Background()
 				path := filepath.Join(t.TempDir(), "officer.db")
 				setup := openSQLiteStoreForTest(t, path)
@@ -749,8 +881,8 @@ func TestMigrateRefusesIncompleteBookkeeping(t *testing.T) {
 
 				reopened := openSQLiteStoreForTest(t, path)
 				err = reopened.Migrate(ctx)
-				if !errors.Is(err, domain.ErrInvalid) {
-					t.Errorf("Migrate with only %s recorded = %v, want ErrInvalid", recorded, err)
+				if !internalFailureAnswer(err) {
+					t.Errorf("Migrate with only %s recorded = %v, want internal error", recorded, err)
 				} else {
 					for _, want := range []string{strconv.Quote(path), "shared and application migration records that disagree", "created before the application tables existed", "first start interrupted", "must be recreated"} {
 						if !strings.Contains(err.Error(), want) {
@@ -789,9 +921,11 @@ func TestMigrateRefusesIncompleteBookkeeping(t *testing.T) {
 }
 
 func TestMigrateFreshBookkeeping(t *testing.T) {
+	t.Parallel()
 	for _, emptyShared := range []bool{false, true} {
 		for _, emptyApp := range []bool{false, true} {
 			t.Run(fmt.Sprintf("empty_shared=%t/empty_app=%t", emptyShared, emptyApp), func(t *testing.T) {
+				t.Parallel()
 				ctx := context.Background()
 				store := openSQLiteStoreForTest(t, filepath.Join(t.TempDir(), "officer.db"))
 				for _, cfg := range []struct {
@@ -826,6 +960,7 @@ func TestMigrateFreshBookkeeping(t *testing.T) {
 }
 
 func TestMigrateCurrentDatabaseRestarts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	store := openSQLiteStoreForTest(t, path)
@@ -873,6 +1008,7 @@ func assertMigrationBookkeeping(t *testing.T, store *sqliteStore) {
 // transaction-opening method are all exercised because they reach the pool
 // through different call shapes.
 func TestRealmDataOpAfterCloseReturnsClosedError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	s, err := New(path, domain.DefaultRealm)
@@ -917,22 +1053,24 @@ func TestRealmDataOpAfterCloseReturnsClosedError(t *testing.T) {
 }
 
 func TestForRealmSingleRealmEnforcement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 
 	// The empty realm id is not served; it is never replaced by the bound realm.
-	if _, err := s.ForRealm(ctx, ""); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ForRealm(empty) error = %v, want ErrInvalid", err)
+	if _, err := s.ForRealm(ctx, ""); !internalFailureAnswer(err) {
+		t.Fatalf("ForRealm(empty) error = %v, want internal error", err)
 	}
 
-	// A foreign realm id is rejected with ErrInvalid.
+	// A foreign realm id is an internal realm-binding failure.
 	_, err := s.ForRealm(ctx, domain.RealmID("other"))
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ForRealm(other) error = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("ForRealm(other) error = %v, want internal error", err)
 	}
 }
 
 func TestNewRejectsEmptyRealm(t *testing.T) {
+	t.Parallel()
 	s, err := New(filepath.Join(t.TempDir(), "officer.db"), "")
 	if s != nil {
 		_ = s.Close()
@@ -943,6 +1081,7 @@ func TestNewRejectsEmptyRealm(t *testing.T) {
 }
 
 func TestForRealmNonDefaultBoundRealm(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	s, err := New(path, domain.RealmID("desk-a"))
@@ -958,8 +1097,8 @@ func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 		t.Fatalf("ForRealm(desk-a) = %v, want nil", err)
 	}
 	// The default realm is now foreign to a connector bound to desk-a.
-	if _, err := s.ForRealm(ctx, domain.DefaultRealm); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ForRealm(default) error = %v, want ErrInvalid", err)
+	if _, err := s.ForRealm(ctx, domain.DefaultRealm); !internalFailureAnswer(err) {
+		t.Fatalf("ForRealm(default) error = %v, want internal error", err)
 	}
 }
 
@@ -968,6 +1107,7 @@ func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 // nothing: the target table's row count is unchanged after the call. The store
 // never attributes a record to the system on the caller's behalf.
 func TestWritesRejectEmptySource(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	realm := rs.(*realmStore)
 	order, err := rs.CreateOrder(ctx, sampleOrder())
@@ -1043,6 +1183,7 @@ func TestWritesRejectEmptySource(t *testing.T) {
 // format to strings of one length whose text order is their chronological
 // order, and the parse sites, which keep time.RFC3339Nano, recover the instant.
 func TestTimeStrTextOrderIsChronological(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, time.September, 15, 10, 0, 0, 0, time.UTC)
 	earlier := base.Add(123450 * time.Microsecond)
 	later := base.Add(123456 * time.Microsecond)
@@ -1074,6 +1215,7 @@ func TestTimeStrTextOrderIsChronological(t *testing.T) {
 // at Migrate and at ForRealm alike, while reopening it under the original realm
 // still works.
 func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	// open migrates and binds the database as realm; migrateErr reports what
@@ -1101,8 +1243,8 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 		t.Fatalf("open(a) on a fresh database = %v, %v, want nil", migrateErr, bindErr)
 	}
 	migrateErr, _ := open("b")
-	if !errors.Is(migrateErr, domain.ErrInvalid) {
-		t.Fatalf("Migrate(b) on a database bound to a = %v, want ErrInvalid", migrateErr)
+	if !internalFailureAnswer(migrateErr) {
+		t.Fatalf("Migrate(b) on a database bound to a = %v, want internal error", migrateErr)
 	}
 	if !strings.Contains(migrateErr.Error(), `"a"`) ||
 		!strings.Contains(migrateErr.Error(), `"b"`) {
@@ -1116,8 +1258,8 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 	if err := foreign.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(bindErr, domain.ErrInvalid) {
-		t.Fatalf("ForRealm(b) on a database bound to a = %v, want ErrInvalid", bindErr)
+	if !internalFailureAnswer(bindErr) {
+		t.Fatalf("ForRealm(b) on a database bound to a = %v, want internal error", bindErr)
 	}
 	if migrateErr, bindErr := open("a"); migrateErr != nil || bindErr != nil {
 		t.Fatalf("open(a) after the rejected open = %v, %v, want nil", migrateErr, bindErr)
@@ -1130,6 +1272,7 @@ func TestForRealmRejectsDatabaseBoundToAnotherRealm(t *testing.T) {
 // row is absent, and exactly one row remains. A direct second insert is refused
 // by the schema's single-row constraint itself.
 func TestForRealmConcurrentOpensLeaveOneRealmRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "officer.db")
 	s, err := New(path, domain.DefaultRealm)
@@ -1200,6 +1343,7 @@ func TestForRealmConcurrentOpensLeaveOneRealmRow(t *testing.T) {
 }
 
 func TestResetUpdatesOpenDatabaseAndPersistsNewContents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, rs := newTestStore(t)
 	if _, err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
@@ -1241,6 +1385,7 @@ func TestResetUpdatesOpenDatabaseAndPersistsNewContents(t *testing.T) {
 }
 
 func TestResetCanceledContextPreservesContents(t *testing.T) {
+	t.Parallel()
 	s, rs := newTestStore(t)
 	if _, err := rs.CreateAsset(context.Background(), domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
@@ -1263,9 +1408,11 @@ func TestResetCanceledContextPreservesContents(t *testing.T) {
 }
 
 func TestResetCleanupFailureReportsCommitState(t *testing.T) {
+	t.Parallel()
 	for _, committed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("committed=%t", committed), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			t.Parallel()
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			s, rs := newTestStore(t)
 			accessStore := s.(*sqliteStore)
@@ -1289,14 +1436,13 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 
 			// Reset waits for the live connection only after closing the migrated
 			// temporary database. Block its cleanup without changing that database.
-			ticker := time.NewTicker(time.Millisecond)
-			defer ticker.Stop()
-			for db.Stats().WaitCount == waitCount {
+			for db.Stats().WaitCount == waitCount { // Reset queued for a connection.
 				select {
-				case <-ctx.Done():
-					t.Fatalf("Reset did not reach connection acquisition: %v", ctx.Err())
-				case <-ticker.C:
+				case err := <-result:
+					t.Fatalf("Reset returned before queuing for a connection: %v", err)
+				default:
 				}
+				time.Sleep(time.Millisecond)
 			}
 			temporary, err := filepath.Glob(s.Path() + ".reset-*.db")
 			if err != nil || len(temporary) != 1 {
@@ -1316,12 +1462,7 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 			} else {
 				cancel()
 			}
-			var resetErr error
-			select {
-			case resetErr = <-result:
-			case <-time.After(10 * time.Second):
-				t.Fatal("Reset did not return")
-			}
+			resetErr := <-result // Reset returned.
 			if !committed {
 				if err := conn.Close(); err != nil {
 					t.Fatalf("close held SQLite connection: %v", err)
@@ -1358,6 +1499,7 @@ func TestResetCleanupFailureReportsCommitState(t *testing.T) {
 }
 
 func TestResetDoesNotExposeNilOrUnmigratedDBToReaders(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, rs := newTestStore(t)
 
@@ -1424,6 +1566,7 @@ func TestResetDoesNotExposeNilOrUnmigratedDBToReaders(t *testing.T) {
 }
 
 func TestExternalIDHelperRoundTrip(t *testing.T) {
+	t.Parallel()
 	id, err := newExternalID()
 	if err != nil {
 		t.Fatalf("newExternalID: %v", err)
@@ -1454,6 +1597,7 @@ func TestExternalIDHelperRoundTrip(t *testing.T) {
 }
 
 func TestAssetRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1558,6 +1702,7 @@ func TestAssetRoundTrip(t *testing.T) {
 }
 
 func TestUpdateAssetAllowsCurrencyRenameWithReferences(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, store := newTestStore(t)
 	if _, err := store.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
@@ -1593,6 +1738,7 @@ func TestUpdateAssetAllowsCurrencyRenameWithReferences(t *testing.T) {
 }
 
 func TestAssetClassRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1649,6 +1795,7 @@ func TestAssetClassRoundTrip(t *testing.T) {
 }
 
 func TestAssetClassLinkIsForeignKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1708,6 +1855,7 @@ func TestAssetClassLinkIsForeignKey(t *testing.T) {
 }
 
 func TestAssetClassListFiltersAndCounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1760,6 +1908,7 @@ func TestAssetClassListFiltersAndCounts(t *testing.T) {
 }
 
 func TestAssetListFilters(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1809,6 +1958,7 @@ func TestAssetListFilters(t *testing.T) {
 }
 
 func TestPrincipalRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1846,6 +1996,7 @@ func TestPrincipalRoundTrip(t *testing.T) {
 }
 
 func TestGroupRoundTripAndEngineID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1909,6 +2060,7 @@ func TestGroupRoundTripAndEngineID(t *testing.T) {
 }
 
 func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2043,6 +2195,7 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 }
 
 func TestDeleteGroupDetachesMemberAccount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2067,6 +2220,7 @@ func TestDeleteGroupDetachesMemberAccount(t *testing.T) {
 }
 
 func TestListAccountRowsFiltersAndCounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2176,6 +2330,7 @@ func TestListAccountRowsFiltersAndCounts(t *testing.T) {
 // account status axis must resolve the group tier too: a member of a blocked
 // group is blocked, not active.
 func TestListAccountRowsStatusFilterIsEffective(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2229,6 +2384,7 @@ func TestListAccountRowsStatusFilterIsEffective(t *testing.T) {
 // reason for a group-blocked member, so a filter on that exact text must return
 // the row that displays it.
 func TestListAccountRowsBlockReasonFilterIsEffective(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2274,6 +2430,7 @@ func TestListAccountRowsBlockReasonFilterIsEffective(t *testing.T) {
 }
 
 func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2354,6 +2511,7 @@ func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
 }
 
 func TestListGroupRowsFiltersAndCounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	zero := 0
@@ -2498,6 +2656,7 @@ func TestListGroupRowsFiltersAndCounts(t *testing.T) {
 }
 
 func TestListGroupRowsSortAndPage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -2588,6 +2747,7 @@ func TestListGroupRowsSortAndPage(t *testing.T) {
 // or its current group's, and a group's own grant. A grant on a disabled
 // connection still counts.
 func TestListRowsVenueAccess(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 

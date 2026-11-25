@@ -144,6 +144,7 @@ const provider: TradingProvider = {
   verifiesSymbols: true,
   searchesSymbols: true,
   unlinkedFees: true,
+  liveOnly: false,
 };
 const api = {
   fetchTrading: vi.fn(),
@@ -261,16 +262,19 @@ async function card(label = "Alpaca paper", expand = true) {
   return region;
 }
 
-async function openCreateConnection(user: ReturnType<typeof userEvent.setup>) {
+async function openCreateConnection(
+  user: ReturnType<typeof userEvent.setup>,
+  title = "Alpaca",
+) {
   await user.click(
     await screen.findByRole("button", { name: /^Add trading connection/ }),
   );
   const picker = within(
     screen.getByRole("dialog", { name: "Add trading connection" }),
   );
-  await user.click(picker.getByRole("button", { name: "Alpaca" }));
+  await user.click(picker.getByRole("button", { name: title }));
   return within(
-    await screen.findByRole("dialog", { name: "Add Alpaca connection" }),
+    await screen.findByRole("dialog", { name: `Add ${title} connection` }),
   );
 }
 
@@ -406,7 +410,11 @@ describe("Trading connections", () => {
   it("deletes a connection after confirmation and keeps a refusal in the dialog", async () => {
     const user = userEvent.setup();
     api.deleteTradingConnection.mockRejectedValueOnce(
-      new ApiError("Disable the connection first", "conflict", 409),
+      new ApiError(
+        "trading connection has order history and cannot be deleted",
+        "conflict",
+        409,
+      ),
     );
     api.deleteTradingConnection.mockImplementationOnce(async (id: string) => {
       snapshot = {
@@ -424,7 +432,7 @@ describe("Trading connections", () => {
     expect(api.deleteTradingConnection).not.toHaveBeenCalled();
     await user.click(dialog.getByRole("button", { name: "Delete" }));
     expect(await dialog.findByRole("alert")).toHaveTextContent(
-      "Disable the connection first",
+      "trading connection has order history and cannot be deleted",
     );
     await user.click(dialog.getByRole("button", { name: "Delete" }));
     await waitFor(() =>
@@ -5139,6 +5147,38 @@ describe("IB trading connections", () => {
 });
 
 describe("Add trading connection dialog", () => {
+  it("offers only live mode for a live-only provider", async () => {
+    const user = userEvent.setup();
+    snapshot.providers = [{ ...provider, liveOnly: true }];
+    renderTrading();
+    const dialog = await openCreateConnection(user);
+    const mode = within(dialog.getByRole("group", { name: "Mode" }));
+    expect(
+      mode.queryByRole("button", { name: "Paper" }),
+    ).not.toBeInTheDocument();
+    expect(mode.getByRole("button", { name: "Live" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("submits live mode for a live-only provider", async () => {
+    const user = userEvent.setup();
+    snapshot.providers = [{ ...provider, liveOnly: true }];
+    renderTrading();
+    const dialog = await openCreateConnection(user);
+    await user.type(dialog.getByLabelText("API key"), "key");
+    await user.type(dialog.getByLabelText("API secret"), "secret");
+    await user.click(dialog.getByRole("button", { name: "Create" }));
+    expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+      provider: "alpaca",
+      label: "Alpaca",
+      mode: "live",
+      credentials: { apiKey: "key", apiSecret: "secret" },
+      enabled: false,
+    });
+  });
+
   it("opens from the add button in page content", async () => {
     const user = userEvent.setup();
     renderTrading();
@@ -5827,6 +5867,196 @@ describe("Add trading connection dialog", () => {
   );
 });
 
+describe("Coinbase trading connections", () => {
+  const coinbase: TradingProvider = {
+    ...provider,
+    type: "coinbase",
+    title: "Coinbase",
+    liveOnly: true,
+    unlinkedFees: false,
+  };
+  const privateKey =
+    "-----BEGIN EC PRIVATE KEY-----\nfirst-line\nsecond-line\n-----END EC PRIVATE KEY-----";
+
+  it("links live documentation in the picker and shows only live setup steps", async () => {
+    const user = userEvent.setup();
+    snapshot = { providers: [coinbase], connections: [] };
+    renderTrading();
+    await user.click(
+      await screen.findByRole("button", { name: /^Add trading connection/ }),
+    );
+    const picker = within(screen.getByRole("dialog"));
+    expect(picker.getByRole("link", { name: "Site" })).toHaveAttribute(
+      "href",
+      "https://www.coinbase.com",
+    );
+    const docsUrl =
+      "https://docs.cdp.coinbase.com/coinbase-app/authentication-authorization/api-key-authentication";
+    expect(picker.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      docsUrl,
+    );
+    await user.click(picker.getByRole("button", { name: "Coinbase" }));
+    const dialog = within(screen.getByRole("dialog"));
+    const mode = within(dialog.getByRole("group", { name: "Mode" }));
+    expect(
+      mode.queryByRole("button", { name: "Paper" }),
+    ).not.toBeInTheDocument();
+    expect(mode.getByRole("button", { name: "Live" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const steps = dialog.getAllByRole("listitem");
+    expect(steps).toHaveLength(5);
+    expect(steps[0]).toHaveTextContent(
+      "Sign in to the Coinbase Developer Platform portal and check that Live is selected in the menu with your account name at the top of the portal: keys created in Sandbox do not work with the trading API.",
+    );
+    expect(steps[1]).toHaveTextContent(
+      "Under API Keys, select Secret API Keys and click Create API key. Fill in API key nickname.",
+    );
+    expect(steps[1]).toHaveTextContent(
+      "Optionally enter the public IP address of the machine running Officer under IP allowlist.",
+    );
+    expect(steps[2]).toHaveTextContent(
+      "Under Permissions, expand Coinbase App & Advanced Trade, select the portfolio and check Read and Trade, leaving Transfer unchecked.",
+    );
+    expect(steps[2]).toHaveTextContent(
+      "Under Signature algorithm, choose ECDSA: the Coinbase trading API does not accept Ed25519 keys. Click Create to generate the key.",
+    );
+    expect(steps[3]).toHaveTextContent(
+      "Copy the API key ID and the Secret from the Coinbase dialog exactly as shown, or click Download API key to save them to a file.",
+    );
+    expect(steps[4]).toHaveTextContent(/Keep this dialog open/);
+    expect(
+      dialog.getByRole("link", { name: "Open Coinbase developer portal" }),
+    ).toHaveAttribute("href", "https://portal.cdp.coinbase.com");
+    expect(
+      dialog.getByRole("link", { name: "API key authentication guide" }),
+    ).toHaveAttribute("href", docsUrl);
+    expect(
+      within(steps[2]).getByRole("link", {
+        name: "About supported key types",
+      }),
+    ).toHaveAttribute("href", `${docsUrl}#creating-api-keys`);
+    expect(
+      dialog.queryByText(/testnet|paper trading/i),
+    ).not.toBeInTheDocument();
+    // Sandbox is named only as the portal environment to avoid.
+    expect(dialog.getAllByText(/sandbox/i)).toEqual([
+      within(steps[0]).getByText(/sandbox/i),
+    ]);
+  });
+
+  it("requires both credentials and sends live mode with PEM line breaks intact", async () => {
+    const user = userEvent.setup();
+    snapshot = { providers: [coinbase], connections: [] };
+    renderTrading();
+    const dialog = await openCreateConnection(user, "Coinbase");
+    const keyId = dialog.getByLabelText("API key ID", { exact: true });
+    expect(keyId.tagName).toBe("INPUT");
+    expect(keyId).toHaveAttribute("type", "password");
+    expect(keyId).toHaveAttribute("autocomplete", "new-password");
+    const pem = dialog.getByLabelText("Secret", { exact: true });
+    expect(pem.tagName).toBe("TEXTAREA");
+    expect(pem).toHaveAttribute("autocomplete", "off");
+    expect(pem).toHaveAttribute("autocorrect", "off");
+    expect(pem).toHaveAttribute("spellcheck", "false");
+    expect(pem).toHaveAttribute("rows", "5");
+    expect(pem).toHaveClass("font-mono");
+    expect(pem).toBeRequired();
+    // Both secrets start masked; each Show reveals only its own field.
+    expect(pem).toHaveClass("[-webkit-text-security:disc]");
+    const [showKeyId, showSecret] = dialog.getAllByRole("button", {
+      name: "Show",
+    });
+    await user.click(showSecret);
+    expect(pem).not.toHaveClass("[-webkit-text-security:disc]");
+    expect(keyId).toHaveAttribute("type", "password");
+    await user.click(showKeyId);
+    expect(keyId).toHaveAttribute("type", "text");
+    expect(keyId).toHaveAttribute("spellcheck", "false");
+    for (const hide of dialog.getAllByRole("button", { name: "Hide" })) {
+      await user.click(hide);
+    }
+    expect(keyId).toHaveAttribute("type", "password");
+    expect(pem).toHaveClass("[-webkit-text-security:disc]");
+    const create = dialog.getByRole("button", { name: "Create" });
+    expect(create).toBeDisabled();
+    await user.type(keyId, "  organizations/org/apiKeys/key  ");
+    await user.type(pem, "   ");
+    expect(create).toBeDisabled();
+    await user.type(pem, `${privateKey}\n  `);
+    await user.clear(keyId);
+    await user.type(keyId, "   ");
+    expect(create).toBeDisabled();
+    await user.click(create);
+    expect(api.createTradingConnection).not.toHaveBeenCalled();
+    await user.clear(keyId);
+    await user.type(keyId, "  organizations/org/apiKeys/key  ");
+    expect(create).toBeEnabled();
+    await user.click(create);
+    expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+      provider: "coinbase",
+      label: "Coinbase",
+      mode: "live",
+      credentials: {
+        apiKeyId: "organizations/org/apiKeys/key",
+        apiKeySecret: privateKey,
+      },
+      enabled: false,
+    });
+  });
+
+  it("replaces only the secret through the settings textarea", async () => {
+    const user = userEvent.setup();
+    snapshot = {
+      providers: [coinbase],
+      connections: [
+        connection({
+          id: "coinbase-1",
+          provider: "coinbase",
+          label: "Coinbase live",
+          mode: "live",
+          secrets: { apiKeyId: true, apiKeySecret: true },
+        }),
+      ],
+    };
+    renderTrading();
+    const scope = await card("Coinbase live");
+    expect(scope.getByText("API key ID: stored")).toBeInTheDocument();
+    expect(scope.getByText("Secret: stored")).toBeInTheDocument();
+    await user.click(scope.getByRole("button", { name: "Edit settings" }));
+    const dialog = within(screen.getByRole("dialog"));
+    const keyId = dialog.getByLabelText("API key ID", { exact: true });
+    expect(keyId).toHaveValue("");
+    expect(keyId).toHaveAttribute("type", "password");
+    const pem = dialog.getByLabelText("Secret", { exact: true });
+    expect(pem.tagName).toBe("TEXTAREA");
+    expect(pem).toHaveAttribute("autocomplete", "off");
+    expect(pem).toHaveAttribute("autocorrect", "off");
+    expect(pem).toHaveAttribute("spellcheck", "false");
+    expect(pem).toHaveAttribute("rows", "5");
+    expect(pem).toHaveClass("font-mono");
+    expect(pem).toHaveAttribute("placeholder", "Keep stored secret");
+    expect(pem).toHaveValue("");
+    const save = dialog.getByRole("button", { name: "Save" });
+    await user.type(pem, "   ");
+    expect(save).toBeDisabled();
+    await user.type(pem, `${privateKey}\n  `);
+    await user.click(save);
+    expect(api.updateTradingConnectionSettings).toHaveBeenCalledExactlyOnceWith(
+      "coinbase-1",
+      { credentials: { apiKeySecret: privateKey } },
+    );
+    await user.click(scope.getByRole("button", { name: "Edit settings" }));
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Secret", {
+        exact: true,
+      }),
+    ).toHaveValue("");
+  });
+});
+
 describe("Trading provider credential fields", () => {
   const etoro: TradingProvider = { ...provider, type: "etoro", title: "eToro" };
   const okx: TradingProvider = { ...provider, type: "okx", title: "OKX" };
@@ -6311,6 +6541,11 @@ describe("Trading provider credential fields", () => {
     },
     {
       venue: provider,
+      labels: ["API key", "API secret"],
+      credentials: { apiKey: "public-key", apiSecret: "user-key" },
+    },
+    {
+      venue: { ...provider, type: "binance", title: "Binance" },
       labels: ["API key", "API secret"],
       credentials: { apiKey: "public-key", apiSecret: "user-key" },
     },

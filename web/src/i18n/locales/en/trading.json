@@ -75,6 +75,12 @@
       "passphraseStored": "Passphrase: stored",
       "passphraseNotSet": "Passphrase: not set"
     },
+    "coinbase": {
+      "apiKeyIdStored": "API key ID: stored",
+      "apiKeyIdNotSet": "API key ID: not set",
+      "apiKeySecretStored": "Secret: stored",
+      "apiKeySecretNotSet": "Secret: not set"
+    },
     "ibEndpoint": "{{host}}:{{port}}",
     "ibClientId": "Client ID: {{clientId}}",
     "enabled": "Enabled",
@@ -97,7 +103,7 @@
   },
   "deleteConnection": {
     "title": "Delete trading connection?",
-    "description": "{{label}} and its configuration will be permanently removed. Disable the connection first. Connections with order history cannot be deleted."
+    "description": "{{label}} and its configuration will be permanently removed. Connections with order history cannot be deleted."
   },
   "create": {
     "okx": {
@@ -109,6 +115,16 @@
         "createKey": "Create an API key in your OKX account with the {{tradePermission}} permission and no withdrawal permission, and set a passphrase. Copy the API key, the secret key and the passphrase - OKX cannot recover a lost passphrase.",
         "bindIp": "Bind the public IPv4 address of the machine running Officer to the key: OKX expires a key with the trading permission and no bound IP address after 14 days of inactivity."
       }
+    },
+    "keepDialogOpen": "Keep this dialog open - the fields below ask for both values.",
+    "coinbase": {
+      "logIn": "Sign in to the {{portal}} portal and check that {{live}} is selected in the menu with your account name at the top of the portal: keys created in {{sandbox}} do not work with the trading API.",
+      "openPortal": "Open Coinbase developer portal",
+      "authenticationGuide": "API key authentication guide",
+      "keyTypes": "About supported key types",
+      "createKey": "Under {{apiKeys}}, select {{secretApiKeys}} and click {{createApiKey}}. Fill in {{nickname}}. Optionally enter the public IP address of the machine running Officer under {{ipAllowlist}}.",
+      "restrictKey": "Under {{permissions}}, expand {{advancedTrade}}, select the portfolio and check {{read}} and {{trade}}, leaving {{transfer}} unchecked. Under {{signatureAlgorithm}}, choose {{ecdsa}}: the Coinbase trading API does not accept {{ed25519}} keys. Click {{create}} to generate the key.",
+      "copyKeys": "Copy the {{apiKeyId}} and the {{secret}} from the Coinbase dialog exactly as shown, or click {{downloadApiKey}} to save them to a file."
     },
     "test": {
       "prepare": "This connection executes test orders locally and needs no keys. After creating it, grant access to a test account, configure symbol masks and their execution rules, then enable the connection."
@@ -177,7 +193,6 @@
       "copyUserKey": "Copy the new key from the Generated Keys list into the User key field.",
       "publicApiKey": "The Public API key identifies the application. Enter it in the Public API key field.",
       "authenticationGuide": "eToro authentication guide",
-      "keepDialogOpen": "Keep this dialog open - the fields below ask for both values.",
       "live": {
         "createUserKey": "Create a user key: in eToro, open Settings, then Trading, scroll to API Key Management and click Create New Key. Choose the Real environment - each key works for one environment only, and Officer connects the real account in live mode. Choose Write permission - Read only shows portfolio data and cannot place orders. Click Generate Key and enter the verification code eToro sends to your phone. API Key Management appears only once your eToro account is verified."
       }
@@ -203,6 +218,10 @@
         "eea": "EEA account ({{site}})",
         "us": "US or Australian account ({{site}})"
       }
+    },
+    "coinbase": {
+      "apiKeyId": "API key ID",
+      "apiKeySecret": "Secret"
     },
     "description": "Leave fields blank to keep the stored values.",
     "unknownProviderCredentials": "This panel does not know the credential fields of this provider.",

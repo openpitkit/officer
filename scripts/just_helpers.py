@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import base64
+import errno
 import hashlib
 import http.client
 import io
@@ -38,7 +39,8 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
@@ -101,6 +103,7 @@ def run(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     capture: bool = False,
+    pass_fds: Sequence[int] = (),
 ) -> subprocess.CompletedProcess[str]:
     command = list(args)
     if not command:
@@ -114,6 +117,7 @@ def run(
             text=True,
             stdout=subprocess.PIPE if capture else None,
             stderr=subprocess.PIPE if capture else None,
+            pass_fds=pass_fds,
         )
     except FileNotFoundError as exc:
         executable = command[0] if command else str(exc.filename)
@@ -462,36 +466,100 @@ def command_install_python_tools(_: argparse.Namespace) -> None:
     )
 
 
-def command_frontend_ci_install(args: argparse.Namespace) -> None:
-    web_dir = ROOT / "web"
-    # The stamp lives inside node_modules, so removing node_modules removes it.
-    stamp = web_dir / "node_modules" / FRONTEND_INSTALL_STAMP
-    # Everything the installed tree depends on: a package.json edit without a
-    # lockfile update must reach `npm ci`, which rejects the mismatch, and a
-    # Node.js or platform change invalidates the native modules.
-    current = "\n".join(
-        [
-            *(
-                sha256_file(web_dir / name)
-                for name in ("package.json", "package-lock.json")
-            ),
-            ci_version("CI_NODE"),
-            f"{sys.platform} {platform.machine()}",
-        ]
-    )
-    if stamp.is_file() and stamp.read_text(encoding="utf-8") == current:
-        print("Frontend dependencies already installed from the committed lockfile.")
-        return
+@contextmanager
+def frontend_install_lock() -> Iterator[int]:
+    """Serialize stamp checks and npm ci across processes in this checkout.
 
-    # Only the project-local runtime's npm; `which` finds npm.cmd on Windows.
-    node_bin_dir = node_executable(Path(args.node_dir)).parent
-    npm = shutil.which("npm", path=str(node_bin_dir))
-    if npm is None:
-        raise SystemExit(
-            f"missing executable: npm in {node_bin_dir}; run just ensure-node"
+    On POSIX, closing this descriptor releases the lock only after the last
+    inheriting descendant closes it too; never explicitly unlock it.
+    On Windows, killing only the helper can leave npm running unlocked; end the
+    orphaned npm/node process before the next run, which reinstalls on its own.
+    """
+    lock_path = ROOT / ".tmp" / "frontend-install.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock:
+        if is_windows():
+            import msvcrt
+
+            # Windows locks a byte range starting at the current position.
+            if lock.tell() == 0:
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                if exc.errno != errno.EACCES:
+                    raise
+                print("Waiting for another frontend install to finish ...", flush=True)
+                while True:
+                    try:
+                        msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError as exc:
+                        if exc.errno != errno.EDEADLOCK:
+                            raise
+                        # LK_LOCK gives up after its own retries; keep waiting.
+                        continue
+            try:
+                yield lock.fileno()
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print("Waiting for another frontend install to finish ...", flush=True)
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            yield lock.fileno()
+
+
+def command_frontend_ci_install(args: argparse.Namespace) -> None:
+    with frontend_install_lock() as lock_fd:
+        web_dir = ROOT / "web"
+        # The stamp lives inside node_modules, so removing node_modules removes it.
+        stamp = web_dir / "node_modules" / FRONTEND_INSTALL_STAMP
+        hidden_lockfile = stamp.parent / ".package-lock.json"
+        # Everything the installed tree depends on: a package.json edit without a
+        # lockfile update must reach `npm ci`, which rejects the mismatch, and a
+        # Node.js or platform change invalidates the native modules.
+        current = "\n".join(
+            [
+                *(
+                    sha256_file(web_dir / name)
+                    for name in ("package.json", "package-lock.json")
+                ),
+                ci_version("CI_NODE"),
+                f"{sys.platform} {platform.machine()}",
+            ]
         )
-    run([npm, "ci"], cwd=web_dir)
-    stamp.write_text(current, encoding="utf-8")
+        if hidden_lockfile.is_file():
+            installed = f"{current}\n{sha256_file(hidden_lockfile)}"
+            if stamp.is_file() and stamp.read_text(encoding="utf-8") == installed:
+                print(
+                    "Frontend dependencies already installed "
+                    "from the committed lockfile."
+                )
+                return
+
+        # Only the project-local runtime's npm; `which` finds npm.cmd on Windows.
+        node_bin_dir = node_executable(Path(args.node_dir)).parent
+        npm = shutil.which("npm", path=str(node_bin_dir))
+        if npm is None:
+            raise SystemExit(
+                f"missing executable: npm in {node_bin_dir}; run just ensure-node"
+            )
+        stamp.unlink(missing_ok=True)
+        run([npm, "ci"], cwd=web_dir, pass_fds=() if is_windows() else (lock_fd,))
+        if not hidden_lockfile.is_file():
+            raise SystemExit(
+                f"npm ci did not write the installed tree: {hidden_lockfile}"
+            )
+        installed = f"{current}\n{sha256_file(hidden_lockfile)}"
+        stamp.write_text(installed, encoding="utf-8")
 
 
 def command_semgrep_scan(args: argparse.Namespace) -> None:
@@ -551,9 +619,6 @@ def command_check_public_packages(_: argparse.Namespace) -> None:
             f"could not read public package allowlist {allowlist}: {exc}"
         ) from None
 
-    # Every package of the module, commands included. web/node_modules is npm
-    # install output, never committed, and some npm packages ship Go sources.
-    node_modules = "go.openpit.dev/officer/web/node_modules/"
     result = run(
         ["go", "list", "-find", "-f", "{{.ImportPath}}", "./..."],
         capture=True,
@@ -561,8 +626,6 @@ def command_check_public_packages(_: argparse.Namespace) -> None:
     )
     public: set[str] = set()
     for import_path in result.stdout.splitlines():
-        if import_path.startswith(node_modules):
-            continue
         if "internal" not in import_path.split("/"):
             public.add(import_path)
 
@@ -706,8 +769,8 @@ def command_go_tool_dev(args: argparse.Namespace) -> None:
 def reset_serve_database(init_config: str, sqlite_path: str | None = None) -> None:
     """Move a stopped dev database aside before initialization.
 
-    With sqlite_path, the database is exactly that file, as the binary opens an
-    explicit path. Otherwise it is this checkout's per-commit file next to the
+    With sqlite_path, the database is the file before its query parameters.
+    Otherwise it is this checkout's per-commit file next to the
     path from PIT_OFFICER_SQLITE_PATH (default pit-officer.db). A relative path
     is relative to the checkout.
     """
@@ -717,7 +780,11 @@ def reset_serve_database(init_config: str, sqlite_path: str | None = None) -> No
         configured = os.environ.get("PIT_OFFICER_SQLITE_PATH", "")
         path = Path(configured if configured else "pit-officer.db")
     else:
-        path = Path(sqlite_path)
+        # Mirror sqlite.DatabaseFilePath, including its non-file refusals.
+        name = sqlite_path.partition("?")[0]
+        if name == "" or name == ":memory:" or name.startswith("file:"):
+            raise SystemExit(f"database path {sqlite_path!r} is not a file path")
+        path = Path(name)
     if not path.is_absolute():
         path = ROOT / path
     # The per-commit file is opened only by a non-release build; an explicit path

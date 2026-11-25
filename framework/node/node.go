@@ -520,8 +520,8 @@ type Node interface {
 	// ForceOrderReview commits a held waiting order without a pre-trade call
 	// or engine operation. It preserves the hold and clears the review row.
 	// A non-waiting or non-held review, a changed held flag, or a mode other
-	// than hold returns domain.ErrConflict. Changed chain input returns
-	// domain.ErrInvalid. A missing review row, empty lock or empty or zero
+	// than hold returns domain.ErrConflict. Changed chain input returns an
+	// internal error. A missing review row, empty lock or empty or zero
 	// reserved quantity is an explicit error.
 	// An account blocked by its own flag or its group returns domain.ErrConflict.
 	// A non-nil attestFor builds the attestor for the accepted event.
@@ -535,7 +535,7 @@ type Node interface {
 	// It clears the review row. A non-waiting or non-held review, a changed
 	// held flag, or a mode other than immediate returns domain.ErrConflict.
 	// An account blocked by its own flag or its group returns domain.ErrConflict.
-	// Changed chain input returns domain.ErrInvalid.
+	// Changed chain input returns an internal error.
 	// A missing review row, empty lock or empty or zero reserved quantity is
 	// an explicit error. Once the report reaches the engine, every failure
 	// is fatal and requires reconciliation.
@@ -815,7 +815,8 @@ type Node interface {
 		ctx context.Context, instrument domain.TradingInstrument, caller domain.Caller,
 	) error
 
-	// DeleteTradingConnection removes a disabled connection with no venue orders.
+	// DeleteTradingConnection removes a connection, enabled or not, with no venue
+	// orders and no order reviews.
 	DeleteTradingConnection(ctx context.Context, id domain.ExternalID, caller domain.Caller) error
 
 	// DeleteTradingInstrument removes one instrument mapping.

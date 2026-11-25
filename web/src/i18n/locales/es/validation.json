@@ -29,6 +29,7 @@
     "nonNegativeDecimal": "{{kind}} debe ser un decimal no negativo",
     "decimal": "{{kind}} debe ser un decimal",
     "mode": "modo de límite de fondos desconocido",
+    "notAllowed": "{{kind}} no se admite para {{policy}}",
     "unknown": "tipo desconocido {{kind}}"
   },
   "limit": {

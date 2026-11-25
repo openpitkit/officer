@@ -97,7 +97,7 @@ func appendAdjustment(
 	}
 	principalID, err := resolveOptionalPrincipalID(ctx, q, rec.Principal)
 	if err != nil {
-		return rec, err
+		return rec, domain.Internal(err)
 	}
 
 	reqJSON, err := json.Marshal(rec.Request)
@@ -112,13 +112,13 @@ func appendAdjustment(
 	status := adjustmentStatus(rec)
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(rec.Source))
 	if err != nil {
-		return rec, err
+		return rec, domain.Internal(err)
 	}
 	statusID, err := dictionaries.id(
 		adjustmentStatusTable, "adjustment status", string(status),
 	)
 	if err != nil {
-		return rec, err
+		return rec, domain.Internal(err)
 	}
 
 	xid, err := externalIDForInsert(rec.ExternalID)
@@ -213,13 +213,13 @@ func upsertBalancesTx(
 	for _, b := range balances {
 		accountID, err := resolveAccountID(ctx, tx, b.Account)
 		if err != nil {
-			return fmt.Errorf("store: balance account %q: %w", b.Account, err)
+			return fmt.Errorf("store: balance account %q: %w", b.Account, domain.Internal(err))
 		}
 		assetID, err := resolveAssetID(ctx, tx, b.Asset)
 		if err != nil {
 			return fmt.Errorf(
 				"store: balance asset %q for account %q: %w",
-				b.Asset, b.Account, err,
+				b.Asset, b.Account, domain.Internal(err),
 			)
 		}
 		available := settleOrZero(b.Available)
@@ -352,17 +352,18 @@ func (r *realmStore) ListAdjustmentRows(
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, err
 	}
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "adjustment")
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	countQuery := `SELECT COUNT(*)
 FROM adjustment adj
 JOIN account  a   ON a.id   = adj.account_id
 JOIN asset    ast ON ast.id = adj.asset_id
 LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: count adjustments: %w", err)
 	}
 
@@ -375,7 +376,7 @@ LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: list adjustment rows: %w", err)
 	}
@@ -393,6 +394,9 @@ LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 		return fwstore.AdjustmentListPage{}, fmt.Errorf(
 			"store: iterate adjustment rows: %w", err,
 		)
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: finish adjustment read: %w", err)
 	}
 	return fwstore.AdjustmentListPage{
 		Rows:  result,
@@ -523,7 +527,8 @@ func adjustmentTypeID(
 	if err := domain.ValidateAdjustmentType(t); err != nil {
 		return 0, err
 	}
-	return dictionaries.id(adjustmentTypeTable, "adjustment type", string(t))
+	id, err := dictionaries.id(adjustmentTypeTable, "adjustment type", string(t))
+	return id, domain.Internal(err)
 }
 
 // adjustmentOutcomeEnvelope is the JSON envelope written to the outcome column.

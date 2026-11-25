@@ -157,7 +157,7 @@ func TestAlertRoutesShareTrustedPersonalState(t *testing.T) {
 	}
 	missing := alertRouter(t, s, "", httpx.AllowAll{})
 	rec = alertRequest(missing, "GET", "/api/v1/alerts", "")
-	if rec.Code != 422 {
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), `"code":"internal"`) {
 		t.Fatalf("missing trusted principal = %d %s", rec.Code, rec.Body)
 	}
 	rec = alertRequest(alice, "POST", "/app/api/v1/alerts/event/actions/accept", `{"input":{}}`)

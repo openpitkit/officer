@@ -49,20 +49,26 @@ import (
 	"go.openpit.dev/officer/framework/store"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/signing"
 )
 
-func waitForTrading(t *testing.T, what string, check func() bool) {
+func submitHeldOrder(
+	t *testing.T, ctx context.Context, service *backend.Service, realm store.RealmStore,
+	caller domain.Caller, draft domain.Order,
+) domain.Order {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if check() {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	approval, err := service.SubmitOrder(auth.ContextWithCaller(ctx, caller), draft,
+		backend.SubmitModeHold, domain.MissingAccountReject)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
 	}
-	t.Fatalf("timed out waiting for %s", what)
+	detail, err := realm.GetOrder(ctx, domain.ExternalID(approval.OrderExternalID))
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	return detail.Order
 }
 
 func assertDecimal(t *testing.T, got, want string) {
@@ -81,8 +87,7 @@ func assertDecimal(t *testing.T, got, want string) {
 }
 
 func TestAlpacaRuntimeEndToEnd(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	caller := domain.Caller{Principal: domain.PrincipalOperator, Source: domain.SourceAPI}
 	must := func(err error) {
 		t.Helper()
@@ -237,22 +242,20 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		must(err)
 		t.Cleanup(runtime.Stop)
 		must(runtime.Start(auth.ContextWithCaller(ctx, caller)))
-		select {
-		case stream := <-streams:
-			return runtime, stream
-		case <-ctx.Done():
-			t.Fatal("venue stream did not connect")
-			return nil, nil
-		}
+		stream := <-streams // Venue stream connected.
+		return runtime, stream
 	}
 	draft := func(quantity string) domain.Order {
 		return domain.Order{Account: "desk", BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: quantity, Price: "2"}
 	}
+	submitOrder := func(quantity string) domain.Order {
+		t.Helper()
+		return submitHeldOrder(t, ctx, service, realm, caller, draft(quantity))
+	}
 	submit := func(quantity string) domain.Order {
 		t.Helper()
-		order, err := n.SubmitOrder(ctx, draft(quantity), domain.MissingAccountReject, caller)
-		must(err)
+		order := submitOrder(quantity)
 		if order.Status != domain.OrderStatusCommitted {
 			t.Fatalf("order was not held: %+v", order)
 		}
@@ -311,9 +314,13 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		}
 	}
 	push("partial_fill", "3", "3", "1.5")
-	waitForTrading(t, "partial fill", func() bool { return detail(first).Order.Status == domain.OrderStatusPartiallyFilled })
+	polltest.Until(func() bool {
+		return detail(first).Order.Status == domain.OrderStatusPartiallyFilled
+	}) // partial fill
 	push("fill", "7", "10", "2")
-	waitForTrading(t, "final fill", func() bool { return detail(first).Order.Status == domain.OrderStatusFilled })
+	polltest.Until(func() bool {
+		return detail(first).Order.Status == domain.OrderStatusFilled
+	}) // final fill
 	firstDetail := detail(first)
 	if len(firstDetail.Trades) != 2 {
 		t.Fatalf("trade count = %d, want 2", len(firstDetail.Trades))
@@ -329,8 +336,7 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	}
 	assertBalances("981.5", "10")
 
-	rejected, err := n.SubmitOrder(ctx, draft("10000"), domain.MissingAccountReject, caller)
-	must(err)
+	rejected := submitOrder("10000")
 	if rejected.Status != domain.OrderStatusRejected {
 		t.Fatalf("pre-trade did not reject: %+v", rejected)
 	}
@@ -396,15 +402,13 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 		t.Cleanup(func() { must(built.Close()) })
 		realm, err = st.ForRealm(ctx, domain.DefaultRealm)
 		must(err)
-		select {
-		case <-streams:
-		case <-ctx.Done():
-			t.Fatal("app venue stream did not connect")
-		}
+		<-streams // App venue stream connected.
 		return built
 	}
 	built := startApp()
-	waitForTrading(t, "reconciled fill", func() bool { return detail(second).Order.Status == domain.OrderStatusFilled })
+	polltest.Until(func() bool {
+		return detail(second).Order.Status == domain.OrderStatusFilled
+	}) // reconciled fill
 	secondDetail := detail(second)
 	if trades := secondDetail.Trades; len(trades) != 1 {
 		t.Fatalf("reconciled trades = %d, want 1", len(trades))
@@ -417,11 +421,11 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 			t.Fatalf("reconciled report caller was not system: %+v", event)
 		}
 	}
-	waitForTrading(t, "app fee adjustment", func() bool {
+	polltest.Until(func() bool {
 		records, err := realm.ListAdjustments(ctx, "desk", domain.SourceSystem, 10)
 		must(err)
 		return len(records) == 1
-	})
+	}) // app fee adjustment
 	assertBalances("977.25", "12")
 	must(built.Close())
 	venueMu.Lock()
@@ -433,16 +437,16 @@ func TestAlpacaRuntimeEndToEnd(t *testing.T) {
 	})
 	venueMu.Unlock()
 	built = startApp()
-	waitForTrading(t, "core-rejected app fee", func() bool {
+	polltest.Until(func() bool {
 		records, err := realm.ListAdjustments(ctx, "desk", domain.SourceSystem, 10)
 		must(err)
 		return len(records) == 2
-	})
-	waitForTrading(t, "app skipped-fee audit", func() bool {
+	}) // core-rejected app fee
+	polltest.Until(func() bool {
 		rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 		must(err)
 		return len(rows) == 1
-	})
+	}) // app skipped-fee audit
 	rows, err := realm.ListAuditFiltered(ctx, domain.AuditFilter{Actions: []domain.AuditAction{domain.AuditActionVenueFeeSkipped}}, 10)
 	must(err)
 	if len(rows) != 1 || rows[0].Source != domain.SourceSystem || rows[0].Actor != "" || rows[0].Account != "" ||

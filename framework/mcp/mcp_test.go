@@ -29,7 +29,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -322,8 +321,7 @@ func TestHandlerRejectsSessionReuseByDifferentCaller(t *testing.T) {
 	transport := &principalTransport{principal: "session-owner"}
 	session := connectHTTPClient(t, httpServer.URL, transport)
 	transport.setPrincipal("intruder")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	if _, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: "caller"}); err == nil {
 		t.Fatal("tool call under a different caller succeeded")
 	}
@@ -344,8 +342,7 @@ func TestHandlerEndsSessionOpenedUnderOtherAccountFeatures(t *testing.T) {
 	httpServer := httptest.NewServer(newCallerHTTPHandler(t, src))
 	defer httpServer.Close()
 	transport := &principalTransport{principal: "agent"}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 
 	stale := connectHTTPClient(t, httpServer.URL, transport)
 	src.set(backend.AccountFeatures{Account: "default"})
@@ -923,28 +920,28 @@ func (s *guardSource) ApplyAdjustment(ctx context.Context, account domain.Accoun
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
 
-func (s *guardSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *guardSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitRate, error) {
+	return domain.LimitRate{}, domain.ErrNotImplemented
 }
 
-func (s *guardSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *guardSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitOrderSize, error) {
+	return domain.LimitOrderSize{}, domain.ErrNotImplemented
 }
 
-func (s *guardSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *guardSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitPosition, error) {
+	return domain.LimitPosition{}, domain.ErrNotImplemented
 }
 
-func (s *guardSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *guardSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitSpotFundsPnlBounds, error) {
+	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotImplemented
 }
 
 func (s *guardSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
 	return domain.SpotFundsLimitModeState{}, domain.ErrNotImplemented
 }
 
-func (s *guardSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
-	return domain.ErrNotImplemented
+func (s *guardSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
+	return domain.LimitSpotFundsLimitMode{}, domain.ErrNotImplemented
 }
 
 func TestGuardPublicToolErrorAndLegacyTransport(t *testing.T) {

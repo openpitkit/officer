@@ -39,7 +39,7 @@ func resolveOrderReview(ctx context.Context, dictionaries *enumDictionaries, tx 
 ) (resolvedOrderReview, error) {
 	modeID, err := dictionaries.id(attestationModeTable, "review mode", review.Mode)
 	if err != nil {
-		return resolvedOrderReview{}, fmt.Errorf("store: order %q review: %w", order, err)
+		return resolvedOrderReview{}, fmt.Errorf("store: order %q review: %w", order, domain.Internal(err))
 	}
 	resolved := resolvedOrderReview{modeID: modeID, held: review.Held}
 	if review.Destination != nil {
@@ -92,7 +92,7 @@ func getOrderReview(ctx context.Context, q sqlQueryer, order domain.ExternalID) 
 	if connection != nil {
 		id, err := domain.ExternalIDFromBytes(connection)
 		if err != nil {
-			return nil, fmt.Errorf("store: decode review connection for order %q: %w", order, err)
+			return nil, fmt.Errorf("store: decode review connection for order %q: %w", order, domain.Internal(err))
 		}
 		review.Destination = &domain.TradingDestination{Connection: id, VenueAccount: account.String, Route: route.String}
 	}
@@ -105,7 +105,7 @@ func checkOrderReviewInvariant(ctx context.Context, dictionaries *enumDictionari
 ) error {
 	statusID, err := dictionaries.id(orderStatusTable, "order status", string(domain.OrderStatusAwaitingReview))
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	query := `SELECT o.external_id FROM order_record o
 	 LEFT JOIN order_review r ON r.order_id = o.id
@@ -126,7 +126,7 @@ func checkOrderReviewInvariant(ctx context.Context, dictionaries *enumDictionari
 	}
 	id, err := domain.ExternalIDFromBytes(raw)
 	if err != nil {
-		return fmt.Errorf("store: decode review invariant order: %w", err)
+		return fmt.Errorf("store: decode review invariant order: %w", domain.Internal(err))
 	}
 	return fmt.Errorf("store: order %q status and order_review row disagree: %w", id, domain.ErrInvalid)
 }
