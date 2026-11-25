@@ -37,7 +37,9 @@ import { formatDateTime, formatNumber } from "@/i18n/format";
 import { cn } from "@/lib/utils";
 
 import { listAlerts, resolveAlert, setAlertRead } from "./api";
-import { getAlertRenderer } from "./registry";
+import { useBrowserNotifications } from "./browserNotifications";
+import { NotificationPermissionNotice } from "./NotificationPermissionNotice";
+import { alertSummary, getAlertRenderer } from "./registry";
 
 export function AlertsLauncher() {
   const { t } = useTranslation();
@@ -49,6 +51,7 @@ export function AlertsLauncher() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const requestedAlert = useRef<string | null>(null);
   const unread = load.state === "ready" ? load.data.unread : null;
   const launcherCaption =
     load.state === "ready"
@@ -93,18 +96,46 @@ export function AlertsLauncher() {
     }
   }
 
+  function changeOpen(next: boolean) {
+    setOpen(next);
+    setError(null);
+    if (!next) requestedAlert.current = null;
+    if (next) {
+      close();
+      reload();
+    }
+  }
+
+  function openAlert(id: string) {
+    if (load.state !== "ready") {
+      requestedAlert.current = id;
+      return;
+    }
+    requestedAlert.current = null;
+    const alert = load.data.alerts.find((alert) => alert.id === id);
+    if (!alert) return;
+    setExpanded(id);
+    if (!alert.read) void mutate(() => setAlertRead(client, id, true));
+  }
+
+  useEffect(() => {
+    if (load.state !== "ready" || requestedAlert.current === null) return;
+    openAlert(requestedAlert.current);
+  });
+
+  const notificationPermission = useBrowserNotifications(
+    load,
+    t,
+    (id, notification) => {
+      window.focus();
+      changeOpen(true);
+      notification.close();
+      openAlert(id);
+    },
+  );
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        setError(null);
-        if (next) {
-          close();
-          reload();
-        }
-      }}
-    >
+    <Dialog open={open} onOpenChange={changeOpen}>
       <DialogTrigger asChild>
         <button
           type="button"
@@ -141,6 +172,7 @@ export function AlertsLauncher() {
       >
         <DialogTitle>{t("alerts:title")}</DialogTitle>
         <DialogDescription>{t("alerts:description")}</DialogDescription>
+        <NotificationPermissionNotice {...notificationPermission} />
         {load.state === "loading" && <LoadingStatus />}
         {load.state === "error" && (
           <ErrorState message={load.error} onRetry={reload} />
@@ -190,24 +222,15 @@ export function AlertsLauncher() {
                       aria-expanded={selected}
                       className="h-auto w-full justify-start whitespace-normal text-left"
                       onClick={() => {
-                        if (selected) {
-                          setExpanded(null);
-                          return;
-                        }
-                        setExpanded(alert.id);
-                        if (!alert.read)
-                          void mutate(() =>
-                            setAlertRead(client, alert.id, true),
-                          );
+                        if (selected) setExpanded(null);
+                        else openAlert(alert.id);
                       }}
                     >
                       <span className="min-w-0 flex-1">
                         <span
                           className={cn("block", !alert.read && "font-bold")}
                         >
-                          {renderer
-                            ? renderer.summary(alert)
-                            : t("alerts:unsupported", { type: alert.type })}
+                          {alertSummary(alert, t)}
                         </span>
                         <span className="block text-[10px] text-muted">
                           {formatDateTime(alert.at)}
@@ -255,7 +278,9 @@ export function AlertsLauncher() {
                                   resolveAlert(client, alert.id, action, input),
                                 )
                               )
-                                setExpanded(null);
+                                setExpanded((current) =>
+                                  current === alert.id ? null : current,
+                                );
                             }}
                           />
                         )}

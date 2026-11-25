@@ -1,4 +1,16 @@
 {
+  "browserNotifications": {
+    "unsupported": "Las notificaciones del navegador no están disponibles en este navegador",
+    "default": "Las notificaciones del navegador están desactivadas",
+    "defaultDetail": "El panel puede avisarle de nuevas alertas mientras esta pestaña esté abierta.",
+    "allow": "Permitir notificaciones",
+    "granted": "Las notificaciones del navegador están activadas",
+    "denied": "Las notificaciones del navegador están bloqueadas",
+    "deniedDetail": "El navegador no volverá a solicitar permiso. Permita las notificaciones para este sitio en la configuración del sitio del navegador y vuelva a cargar la página.",
+    "failed": "Error en las notificaciones del navegador",
+    "refused": "El navegador se negó a mostrar la notificación.",
+    "notificationTitle": "Pit Officer: nueva alerta"
+  },
   "orderAwaitingReview": {
     "title": "Orden pendiente de revisión: {{order}}",
     "detail": "Orden {{order}}, cuenta {{account}}, código de marca {{markCode}}.",

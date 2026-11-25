@@ -15,6 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
+import type { TFunction } from "i18next";
 import type { ComponentProps } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -47,12 +48,12 @@ function reviewPayload(alert: ActionableAlert) {
   };
 }
 
-export function Summary({ alert }: { alert: ActionableAlert }) {
-  const { t } = useTranslation("alerts");
+// eslint-disable-next-line react-refresh/only-export-components -- The summary shares payload validation with the detail.
+export function summary(alert: ActionableAlert, t: TFunction): string {
   const payload = reviewPayload(alert);
   return payload === null
-    ? t("orderAwaitingReview.invalid")
-    : t("orderAwaitingReview.title", payload);
+    ? t("alerts:orderAwaitingReview.invalid")
+    : t("alerts:orderAwaitingReview.title", payload);
 }
 
 export function Detail({

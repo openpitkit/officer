@@ -15,6 +15,7 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
+import type { TFunction } from "i18next";
 import type { ComponentProps } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -39,12 +40,12 @@ function accountName(alert: ActionableAlert): string | null {
     : payload.account;
 }
 
-export function Summary({ alert }: { alert: ActionableAlert }) {
-  const { t } = useTranslation("alerts");
+// eslint-disable-next-line react-refresh/only-export-components -- The summary shares payload validation with the detail.
+export function summary(alert: ActionableAlert, t: TFunction): string {
   const account = accountName(alert);
   return account === null
-    ? t("mixedTradingAccess.invalid")
-    : t("mixedTradingAccess.title", { account });
+    ? t("alerts:mixedTradingAccess.invalid")
+    : t("alerts:mixedTradingAccess.title", { account });
 }
 
 export function Detail({
