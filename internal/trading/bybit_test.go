@@ -95,13 +95,16 @@ func TestBybitProvider(t *testing.T) {
 func TestBybitConstruction(t *testing.T) {
 	for _, tc := range []struct {
 		mode         domain.TradingMode
+		credentials  string
 		rest, stream string
 	}{
-		{domain.TradingModePaper, bybit.TestnetRESTURL, bybit.TestnetPrivateStreamURL},
-		{domain.TradingModeLive, bybit.LiveRESTURL, bybit.LivePrivateStreamURL},
+		{domain.TradingModePaper, binanceTestCredentials, bybit.TestnetRESTURL, bybit.TestnetPrivateStreamURL},
+		{domain.TradingModePaper, `{"apiKey":"key","apiSecret":"secret","site":"global"}`, bybit.TestnetRESTURL, bybit.TestnetPrivateStreamURL},
+		{domain.TradingModePaper, `{"apiKey":"key","apiSecret":"secret","site":"eu"}`, bybit.EUTestnetRESTURL, bybit.EUTestnetPrivateStreamURL},
+		{domain.TradingModeLive, binanceTestCredentials, bybit.LiveRESTURL, bybit.LivePrivateStreamURL},
 	} {
 		connector, err := NewBybitConnector(domain.TradingConnection{
-			Mode: tc.mode, Credentials: binanceTestCredentials,
+			Mode: tc.mode, Credentials: tc.credentials,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -118,11 +121,19 @@ func TestBybitConstruction(t *testing.T) {
 	for _, tc := range []struct{ raw, pointer string }{
 		{`{`, "/credentials"}, {`{"apiSecret":"secret"}`, "/credentials/apiKey"},
 		{`{"apiKey":"key"}`, "/credentials/apiSecret"},
+		{`{"apiKey":"key","apiSecret":"secret","site":""}`, "/credentials/site"},
+		{`{"apiKey":"key","apiSecret":"secret","site":"typo"}`, "/credentials/site"},
 	} {
 		_, err := NewBybitConnector(domain.TradingConnection{Mode: domain.TradingModePaper, Credentials: tc.raw})
 		if err == nil || domain.ValidationPointer(err) != tc.pointer {
 			t.Fatalf("validation pointer = %q, want %q", domain.ValidationPointer(err), tc.pointer)
 		}
+	}
+	_, err := NewBybitConnector(domain.TradingConnection{
+		Mode: domain.TradingModeLive, Credentials: `{"apiKey":"key","apiSecret":"secret","site":"eu"}`,
+	})
+	if !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/credentials/site" {
+		t.Fatalf("EU live connection must fail validation, got %v", err)
 	}
 }
 

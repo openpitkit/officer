@@ -176,15 +176,18 @@
       }
     },
     "bybit": {
-      "openTestnet": "请打开 Bybit 测试网，并注册或登录账户。",
-      "openTestnetSite": "打开 Bybit 测试网",
-      "generateKeys": "请在 Bybit 测试网上打开 API 密钥管理页面，并创建系统生成的 API 密钥 - Officer 使用 HMAC-SHA256 签名请求。请授予密钥读写权限和现货交易权限，然后复制 API key 和 API secret。模拟交易连接使用测试网；测试网密钥仅适用于该测试网。",
-      "openApiManagement": "打开测试网 API 密钥管理页面",
-      "keepPageOpen": "请保持页面打开 - 下方字段需要填写这两个值。",
-      "live": {
-        "createKey": "请在 Bybit 实盘网站上打开 API 密钥管理页面，并创建系统生成的 API 密钥 - Officer 使用 HMAC-SHA256 签名请求。请授予密钥读写权限和现货交易权限，然后复制 API key 和 API secret。",
-        "openApiManagement": "打开实盘 API 密钥管理页面"
-      }
+      "openTestnet": "请打开 Bybit 对应地区的测试网，并注册或登录账户。测试网密钥仅适用于测试网。",
+      "openGlobalTestnet": "Bybit Global 测试网",
+      "openEuTestnet": "Bybit EU 测试网",
+      "generateKeys": "请打开 Bybit 对应地区的 API 密钥管理页面，点击 Create New Key。请选择系统生成的密钥。Officer 使用 HMAC-SHA256 签名请求。请启用读写和现货交易权限，然后复制 API key 和 API secret。",
+      "openGlobalApiManagement": "Bybit Global API 密钥管理",
+      "openEuApiManagement": "Bybit EU API 密钥管理",
+      "globalApiKeyGuide": "Bybit Global API 密钥创建指南",
+      "euApiKeyGuide": "Bybit EU API 密钥创建指南",
+      "keepPageOpen": "请保持页面打开，以便将这两个值复制到下方字段。请选择创建密钥的测试网。",
+      "liveKeepPageOpen": "实盘连接使用 Bybit Global 的密钥。请保持页面打开，以便将这两个值复制到下方字段。",
+      "site": "Bybit 测试网",
+      "sitePlaceholder": "请选择创建密钥的站点"
     },
     "etoro": {
       "logInAccount": "请登录您的 eToro 账户。",

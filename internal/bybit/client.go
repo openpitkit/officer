@@ -35,17 +35,20 @@ import (
 	"go.openpit.dev/officer/internal/vendorhttp"
 )
 
-// TestnetRESTURL is Bybit's testnet REST endpoint.
+// TestnetRESTURL is Bybit Global's testnet REST endpoint.
 const TestnetRESTURL = "https://api-testnet.bybit.com"
+
+// EUTestnetRESTURL is Bybit EU's testnet REST endpoint.
+const EUTestnetRESTURL = "https://api-testnet.bybit.eu"
 
 const recvWindow = "5000"
 
 // Credentials holds an API key and secret; neither value has a default.
 type Credentials = apikey.Credentials
 
-// ParseCredentials parses the stored Bybit credential object.
-func ParseCredentials(raw string) (Credentials, error) {
-	return apikey.Parse(raw, "bybit")
+// ParseCredentials parses the stored Bybit credential object and its site.
+func ParseCredentials(raw string) (Credentials, string, error) {
+	return apikey.ParseWithOptionalField(raw, "bybit", "site")
 }
 
 // APIError reports an HTTP or venue refusal without retaining its body.

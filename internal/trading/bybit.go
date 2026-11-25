@@ -44,12 +44,14 @@ const (
 	bybitLookupWindow      = 7 * 24 * time.Hour
 	bybitLookupOrderStatus = "An order lookup returned an order status Officer does not know."
 	bybitLookupExtraFees   = "An order lookup returned unsupported extra fees."
+	bybitEUSite            = "eu"
 )
 
 type bybitConnector struct {
 	client             *bybit.Client
 	httpClient         *http.Client
 	credentials        bybit.Credentials
+	site               string
 	restURL, streamURL string
 	redact             *strings.Replacer
 	lifecycle          streamLifecycle
@@ -60,7 +62,7 @@ type bybitConnector struct {
 }
 
 // NewBybitConnector connects spot trading to Bybit testnet in paper mode or
-// to the live venue in live mode. Credentials are an API key and secret.
+// to Bybit Global in live mode. Credentials can select the EU testnet.
 func NewBybitConnector(connection domain.TradingConnection) (fwtrading.Connector, error) {
 	switch connection.Mode {
 	case domain.TradingModePaper:
@@ -77,10 +79,22 @@ func NewBybitConnector(connection domain.TradingConnection) (fwtrading.Connector
 func newBybitConnector(connection domain.TradingConnection,
 	restURL, streamURL string,
 ) (*bybitConnector, error) {
-	credentials, err := bybit.ParseCredentials(connection.Credentials)
+	credentials, site, err := bybit.ParseCredentials(connection.Credentials)
 	if err != nil {
 		return nil, domain.WithValidationPointer(
 			"/credentials"+domain.ValidationPointer(err), err)
+	}
+	switch site {
+	case "", "global":
+	case bybitEUSite:
+		if connection.Mode != domain.TradingModePaper {
+			return nil, domain.NewValidationError("/credentials/site", "unsupported_value",
+				"bybit: the EU site is available in paper mode")
+		}
+		restURL, streamURL = bybit.EUTestnetRESTURL, bybit.EUTestnetPrivateStreamURL
+	default:
+		return nil, domain.NewValidationError("/credentials/site", "invalid",
+			"bybit: site must be global or eu")
 	}
 	_, redact, err := secret.CredentialRedactor(connection.Credentials)
 	if err != nil {
@@ -89,7 +103,7 @@ func newBybitConnector(connection domain.TradingConnection,
 	httpClient := &http.Client{Timeout: bybitHTTPTimeout}
 	return &bybitConnector{
 		client:     bybit.NewClient(restURL, credentials, redact, httpClient),
-		httpClient: httpClient, credentials: credentials,
+		httpClient: httpClient, credentials: credentials, site: site,
 		restURL: restURL, streamURL: streamURL, redact: redact,
 		symbols: make(map[string]bybit.Instrument),
 	}, nil
@@ -341,6 +355,9 @@ func (c *bybitConnector) CheckAccount(ctx context.Context) (fwtrading.AccountInf
 	}
 	if !slices.Contains(account.Permissions.Spot, "SpotTrade") {
 		status += ", spot trading not permitted"
+	}
+	if c.site == bybitEUSite {
+		id = "bybit.eu:" + id
 	}
 	return fwtrading.AccountInfo{Identity: id, Status: status}, nil
 }

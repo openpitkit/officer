@@ -408,11 +408,11 @@ func TestSignedRequiresDependencies(t *testing.T) {
 }
 
 func TestBybitCredentialsAndAPIError(t *testing.T) {
-	credentials, err := ParseCredentials(`{"apiKey":" key ","apiSecret":" secret "}`)
-	if err != nil || !reflect.DeepEqual(credentials, Credentials{APIKey: "key", APISecret: "secret"}) {
+	credentials, site, err := ParseCredentials(`{"apiKey":" key ","apiSecret":" secret "}`)
+	if err != nil || site != "" || !reflect.DeepEqual(credentials, Credentials{APIKey: "key", APISecret: "secret"}) {
 		t.Fatalf("parse: %+v %v", credentials, err)
 	}
-	if _, err := ParseCredentials(`{}`); err == nil || !strings.Contains(err.Error(), "bybit") {
+	if _, _, err := ParseCredentials(`{}`); err == nil || !strings.Contains(err.Error(), "bybit") {
 		t.Fatal("missing credentials accepted")
 	}
 	for _, tc := range []struct {

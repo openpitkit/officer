@@ -32,8 +32,10 @@ import (
 const (
 	// LivePrivateStreamURL is Bybit's live private WebSocket endpoint.
 	LivePrivateStreamURL = "wss://stream.bybit.com/v5/private"
-	// TestnetPrivateStreamURL is Bybit's testnet private WebSocket endpoint.
+	// TestnetPrivateStreamURL is Bybit Global's testnet private endpoint.
 	TestnetPrivateStreamURL = "wss://stream-testnet.bybit.com/v5/private"
+	// EUTestnetPrivateStreamURL is Bybit EU's testnet private endpoint.
+	EUTestnetPrivateStreamURL = "wss://stream-testnet.bybit.eu/v5/private"
 )
 
 // WriteAuth sends a text auth frame. The caller supplies a future expiry and

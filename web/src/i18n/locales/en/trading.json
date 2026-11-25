@@ -176,15 +176,18 @@
       }
     },
     "bybit": {
-      "openTestnet": "Open the Bybit testnet and sign up or log in.",
-      "openTestnetSite": "Open Bybit testnet",
-      "generateKeys": "Open API management on the Bybit testnet and create a system-generated API key - Officer signs requests with HMAC-SHA256. Give the key read-write access and permission to trade spot, then copy the API key and the API secret. Paper connections use the testnet; testnet keys work only there.",
-      "openApiManagement": "Open testnet API management",
-      "keepPageOpen": "Keep the page open - the fields below ask for both values.",
-      "live": {
-        "createKey": "Open API management on the Bybit live site and create a system-generated API key - Officer signs requests with HMAC-SHA256. Give the key read-write access and permission to trade spot, then copy the API key and the API secret.",
-        "openApiManagement": "Open live API management"
-      }
+      "openTestnet": "Open the testnet for your Bybit region and sign up or log in. Testnet keys work only on the testnet.",
+      "openGlobalTestnet": "Bybit Global testnet",
+      "openEuTestnet": "Bybit EU testnet",
+      "generateKeys": "Open API management for your Bybit region and select Create New Key. Choose a system-generated key. Officer signs requests with HMAC-SHA256. Enable read-write access and spot trading, then copy the API key and the API secret.",
+      "openGlobalApiManagement": "Bybit Global API management",
+      "openEuApiManagement": "Bybit EU API management",
+      "globalApiKeyGuide": "Bybit Global API key guide",
+      "euApiKeyGuide": "Bybit EU API key guide",
+      "keepPageOpen": "Keep the page open to copy both values into the fields below. Select the testnet where you created the key.",
+      "liveKeepPageOpen": "Live connections use API keys from Bybit Global. Keep the page open to copy both values into the fields below.",
+      "site": "Bybit testnet",
+      "sitePlaceholder": "Choose where you created the key"
     },
     "etoro": {
       "logInAccount": "Log in to your eToro account.",

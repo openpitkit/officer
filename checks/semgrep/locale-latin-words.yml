@@ -77,7 +77,8 @@ rules:
         | Pit\ Officer | OpenPit | Officer | The\ Pit\ Project\ Owners | Pit
         | Spot\ Funds | eSign | Tape | Ladder | BYO | Mock
         | Interactive\ Brokers | IB\ Gateway | IB | TWS | IEX
-        | Alpaca | Binance | Bybit | Coinbase\ Exchange | Coinbase | Kraken | eToro
+        | Alpaca | Binance | Bybit\ Global | Bybit\ EU | Bybit
+        | Coinbase\ Exchange | Coinbase | Kraken | eToro
         | OKX | OANDA | Finnhub
         | Claude\ Desktop | Claude\ Agent\ Skill | Claude\ Skill | Claude
         | Docker\ Desktop

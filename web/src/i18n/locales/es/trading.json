@@ -176,15 +176,18 @@
       }
     },
     "bybit": {
-      "openTestnet": "Abra la red de pruebas de Bybit y regístrese o inicie sesión.",
-      "openTestnetSite": "Abrir la red de pruebas de Bybit",
-      "generateKeys": "Abra la gestión de claves de API en la red de pruebas de Bybit y cree una clave de API generada por el sistema - Officer firma las solicitudes con HMAC-SHA256. Otorgue a la clave acceso de lectura y escritura y permiso para negociar al contado, y copie la API key y la clave secreta. Las conexiones simuladas utilizan la red de pruebas; las claves de prueba solo funcionan allí.",
-      "openApiManagement": "Abrir la gestión de claves de API de prueba",
-      "keepPageOpen": "Mantenga la página abierta - los campos de abajo piden ambos valores.",
-      "live": {
-        "createKey": "Abra la gestión de claves de API en el sitio de negociación real de Bybit y cree una clave de API generada por el sistema - Officer firma las solicitudes con HMAC-SHA256. Otorgue a la clave acceso de lectura y escritura y permiso para negociar al contado, y copie la API key y la clave secreta.",
-        "openApiManagement": "Abrir la gestión de claves de API reales"
-      }
+      "openTestnet": "Abra la red de pruebas de su región de Bybit y regístrese o inicie sesión. Las claves de prueba solo funcionan en la red de pruebas.",
+      "openGlobalTestnet": "Red de pruebas de Bybit Global",
+      "openEuTestnet": "Red de pruebas de Bybit EU",
+      "generateKeys": "Abra la gestión de claves de API para su región de Bybit y seleccione Create New Key. Elija una clave generada por el sistema. Officer firma las solicitudes con HMAC-SHA256. Habilite el acceso de lectura y escritura y la negociación al contado. Luego copie la API key y la clave secreta.",
+      "openGlobalApiManagement": "Gestión de claves de API de Bybit Global",
+      "openEuApiManagement": "Gestión de claves de API de Bybit EU",
+      "globalApiKeyGuide": "Cómo crear claves de API en Bybit Global",
+      "euApiKeyGuide": "Cómo crear claves de API en Bybit EU",
+      "keepPageOpen": "Mantenga la página abierta para copiar ambos valores en los campos de abajo. Seleccione la red de pruebas en la que creó la clave.",
+      "liveKeepPageOpen": "Las conexiones reales usan claves de Bybit Global. Mantenga la página abierta para copiar ambos valores en los campos de abajo.",
+      "site": "Red de pruebas de Bybit",
+      "sitePlaceholder": "Seleccione dónde creó la clave"
     },
     "etoro": {
       "logInAccount": "Inicie sesión en su cuenta de eToro.",

@@ -249,10 +249,11 @@ func EtoroProvider() fwtrading.Provider {
 
 // BybitProvider trades one account per HMAC key pair and verifies spot symbols.
 //
-// Credentials are {apiKey, apiSecret}; userID identifies the account and
-// VenueAccount is empty. Paper mode uses api-testnet.bybit.com and
-// stream-testnet.bybit.com/v5/private; live mode uses api.bybit.com and
-// stream.bybit.com/v5/private. Route JSON for a limit order is
+// Credentials are {apiKey, apiSecret, site} with site "global" or "eu".
+// Credentials without site use the original Global endpoints. Paper mode
+// uses the selected site's REST and private WebSocket endpoints. Live mode
+// uses Bybit Global. The EU site scopes userID with a "bybit.eu:" prefix.
+// VenueAccount is empty. Route JSON for a limit order is
 // {"timeInForce": "GTC"|"IOC"|"FOK"}; a market order requires {}. Only quantity
 // orders are supported. Symbol verification and search read GET
 // /v5/market/instruments-info?category=spot on the connection's host and take
