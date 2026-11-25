@@ -1315,6 +1315,9 @@ func (rt *restoreTx) validateTradingAccessFeeAccounts(ctx context.Context) (resu
 
 func (rt *restoreTx) restoreOrderReviews(ctx context.Context, reviews []backup.OrderReview) error {
 	for _, archived := range reviews {
+		if archived.Mode != domain.SubmitModeHold && archived.Mode != domain.SubmitModeImmediate {
+			return fmt.Errorf("store: restore %s order review %q: unknown review mode %q: %w", backup.SectionActivityHistory, archived.Order, archived.Mode, domain.ErrInvalid)
+		}
 		orderID, err := lookupOrderID(ctx, rt.tx, archived.Order)
 		if err != nil {
 			return fmt.Errorf("store: restore %s order review %q: %w", backup.SectionActivityHistory, archived.Order, err)
@@ -2223,11 +2226,11 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 		`INSERT OR REPLACE INTO trade
 		 (external_id, order_id, account_id, base_asset_id, quote_asset_id,
 		  principal_id, at, source_id, side_id, quantity, price, lock_price,
-		  commission_amount, commission_currency)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  commission_amount, commission_currency, venue_trade_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ExternalID.Bytes(), orderID, accountID, baseID, quoteID, principalID,
 		timeStr(t.At), sourceID, sideID, t.Quantity, t.Price, t.LockPrice,
-		commissionAmount(t.Commission), commissionCurrency(t.Commission),
+		commissionAmount(t.Commission), commissionCurrency(t.Commission), nullableString(t.VenueTradeID),
 	); err != nil {
 		return fmt.Errorf("store: restore trade %q: %w", t.ExternalID, err)
 	}

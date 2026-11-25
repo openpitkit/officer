@@ -88,6 +88,15 @@ type OrderRef struct {
 	Symbol string
 	// Side is the side of Officer's order on Lookup; empty in stream events.
 	Side domain.OrderSide
+	// CreatedAt is when Officer created the venue link, before sending the
+	// order, by Officer's own clock as stored by the runtime; zero in stream
+	// events. It is not a venue timestamp: a Lookup that bounds a venue-side
+	// search window with it must widen the window by its own clock-skew
+	// margin. If Lookup needs this time to prove absence, it must return an
+	// error for a zero CreatedAt, never found=false: reconciliation would
+	// mark the Officer order cancelled and release its reservation while the
+	// venue order may still be live.
+	CreatedAt time.Time
 }
 
 // CommissionLeg identifies the order's venue leg used to pay a commission.
@@ -100,6 +109,9 @@ const (
 
 // Fill is one execution, preserving venue quantities and commission currency.
 type Fill struct {
+	// VenueTradeID is the venue's identifier of this execution, set by connectors
+	// that record it; empty otherwise.
+	VenueTradeID   string
 	Quantity       string // This execution's exact decimal quantity.
 	Price          string // This execution's exact decimal price.
 	CumQuantity    string // Cumulative filled quantity after this execution.

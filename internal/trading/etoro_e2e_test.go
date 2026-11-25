@@ -41,6 +41,7 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	fwtrading "go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/officer/internal/store/sqlite"
 	"go.openpit.dev/officer/signing"
 )
@@ -53,6 +54,7 @@ type etoroRuntimeTest struct {
 	st       store.Store
 	realm    store.RealmStore
 	n        node.Node
+	service  *backend.Service
 	runtime  *fwtrading.Runtime
 	registry *fwtrading.Registry
 	server   *httptest.Server
@@ -84,7 +86,7 @@ func (h *etoroRuntimeTest) must(err error) {
 
 func newEtoroRuntimeTest(t *testing.T) *etoroRuntimeTest {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	h := &etoroRuntimeTest{
 		t: t, ctx: ctx, caller: domain.Caller{Principal: domain.PrincipalOperator, Source: domain.SourceAPI},
@@ -160,6 +162,7 @@ func (h *etoroRuntimeTest) start() {
 	h.must(err)
 	service, err := backend.New(h.n, nil, signer, engine.LockSettlementPrice)
 	h.must(err)
+	h.service = service
 	h.runtime, err = fwtrading.NewRuntime(h.registry, h.realm, nil,
 		func(ctx context.Context, in domain.ExecutionReportInput) error {
 			h.mu.Lock()
@@ -177,11 +180,7 @@ func (h *etoroRuntimeTest) start() {
 		}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	h.must(err)
 	h.must(h.runtime.Start(auth.ContextWithCaller(h.ctx, h.caller)))
-	select {
-	case h.stream = <-h.streams:
-	case <-h.ctx.Done():
-		h.t.Fatal("eToro runtime stream did not connect")
-	}
+	h.stream = <-h.streams // eToro runtime stream connected.
 	base, found, err := h.realm.GetAsset(h.ctx, "AAPL")
 	h.must(err)
 	if !found {
@@ -344,14 +343,17 @@ func (h *etoroRuntimeTest) draft(side domain.OrderSide, quantity, price string) 
 
 func (h *etoroRuntimeTest) submit(side domain.OrderSide, price string) domain.Order {
 	h.t.Helper()
-	draft := h.draft(side, "0.3", price)
-	h.must(h.runtime.PreCheck(h.ctx, draft, h.dest))
-	order, err := h.n.SubmitOrder(h.ctx, draft, domain.MissingAccountReject, h.caller)
-	h.must(err)
+	order := h.submitDraft(h.draft(side, "0.3", price))
 	if order.Status != domain.OrderStatusCommitted {
 		h.t.Fatalf("pre-trade did not commit order: %+v", order)
 	}
 	return order
+}
+
+func (h *etoroRuntimeTest) submitDraft(draft domain.Order) domain.Order {
+	h.t.Helper()
+	h.must(h.runtime.PreCheck(h.ctx, draft, h.dest))
+	return submitHeldOrder(h.t, h.ctx, h.service, h.realm, h.caller, draft)
 }
 
 func (h *etoroRuntimeTest) detail(order domain.Order) domain.OrderDetail {
@@ -368,22 +370,29 @@ func (h *etoroRuntimeTest) state(status, executions int) {
 }
 
 func (h *etoroRuntimeTest) push() {
-	etoroOrderPush(h.t, h.ctx, h.stream, "9007199254740993")
+	h.t.Helper()
+	if !etoroOrderPush(h.t, h.ctx, h.stream, "9007199254740993") {
+		h.t.Fatal("failed to push eToro order update")
+	}
 }
 
 func (h *etoroRuntimeTest) streamBarrier() {
 	h.t.Helper()
-	etoroOrderPush(h.t, h.ctx, h.stream, "42")
-	waitForTrading(h.t, "stream event delivery barrier", func() bool {
+	if !etoroOrderPush(h.t, h.ctx, h.stream, "42") {
+		h.t.Fatal("failed to push eToro stream barrier")
+	}
+	polltest.Until(func() bool {
 		h.c.ordersMu.Lock()
 		defer h.c.ordersMu.Unlock()
 		return slices.Equal(h.c.held, []string{"42"})
-	})
+	}) // stream event delivery barrier
 }
 
 func (h *etoroRuntimeTest) waitStatus(order domain.Order, status domain.OrderStatus) {
 	h.t.Helper()
-	waitForTrading(h.t, string(status), func() bool { return h.detail(order).Order.Status == status })
+	polltest.Until(func() bool {
+		return h.detail(order).Order.Status == status
+	}) // wait for the requested order status
 }
 
 func (h *etoroRuntimeTest) assertBooked(order domain.Order, count int, usd, base, eur string) {
@@ -538,23 +547,30 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 			result <- err
 		}()
 		select {
-		case <-accepted:
-		case <-h.ctx.Done():
-			t.Fatal("POST was not accepted")
+		case <-accepted: // Venue accepted the POST.
+		case err := <-result:
+			t.Fatalf("Send returned before venue accepted the POST: %v", err)
 		}
 		for range 3 {
 			h.push()
 		}
-		waitForTrading(t, "update held before POST response", func() bool {
+		polltest.Until(func() bool {
+			select {
+			case err := <-result:
+				t.Fatalf("Send returned before update was held: %v", err)
+			default:
+			}
 			h.c.ordersMu.Lock()
 			defer h.c.ordersMu.Unlock()
 			return len(h.c.held) == 1
-		})
+		}) // update held before POST response
 		close(release)
 		h.must(<-result)
 		h.waitStatus(order, domain.OrderStatusFilled)
 		for _, status := range []int{3, 5, 1, 3} {
-			etoroPush(t, h.ctx, h.stream, "Trading.OrderForOpen.Update", fmt.Sprintf(`{"OrderID":9007199254740993,"StatusID":%d,"ExecutedUnits":999}`, status))
+			if !etoroPush(t, h.ctx, h.stream, "Trading.OrderForOpen.Update", fmt.Sprintf(`{"OrderID":9007199254740993,"StatusID":%d,"ExecutedUnits":999}`, status)) {
+				t.Fatal("failed to replay eToro order update")
+			}
 		}
 		h.streamBarrier()
 		h.runtime.Stop()
@@ -580,11 +596,11 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		before := len(h.lookups)
 		h.mu.Unlock()
 		h.push()
-		waitForTrading(t, "partial replay lookup", func() bool {
+		polltest.Until(func() bool {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			return len(h.lookups) > before
-		})
+		}) // partial replay lookup
 		h.state(3, 2)
 		h.push()
 		h.waitStatus(order, domain.OrderStatusFilled)
@@ -618,7 +634,9 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 		_, err := h.runtime.Send(h.ctx, order.ExternalID, h.dest)
 		h.must(err)
 		h.state(3, 1)
-		etoroPush(t, h.ctx, h.stream, "Trading.OrderForCloseMultiple.Update", `{"OrderID":9007199254740993}`)
+		if !etoroPush(t, h.ctx, h.stream, "Trading.OrderForCloseMultiple.Update", `{"OrderID":9007199254740993}`) {
+			t.Fatal("failed to push eToro close order update")
+		}
 		h.waitStatus(order, domain.OrderStatusFilled)
 		h.assertBooked(order, 1, "1000.6", "9.7", "100")
 		h.mu.Lock()
@@ -631,10 +649,7 @@ func TestEtoroRuntimeEndToEnd(t *testing.T) {
 	t.Run("pre-trade-reject", func(t *testing.T) {
 		h := newEtoroRuntimeTest(t)
 		h.dest.Route = `{"timeInForce":"ioc"}`
-		draft := h.draft(domain.OrderSideBuy, "5", "201")
-		h.must(h.runtime.PreCheck(h.ctx, draft, h.dest))
-		order, err := h.n.SubmitOrder(h.ctx, draft, domain.MissingAccountReject, h.caller)
-		h.must(err)
+		order := h.submitDraft(h.draft(domain.OrderSideBuy, "5", "201"))
 		if order.Status != domain.OrderStatusRejected {
 			t.Fatalf("pre-trade did not reject: %+v", order)
 		}

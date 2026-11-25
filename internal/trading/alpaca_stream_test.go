@@ -57,7 +57,10 @@ func readAuth(t *testing.T, ctx context.Context, conn *websocket.Conn) bool {
 	t.Helper()
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
-		t.Error("auth frame missing")
+		// The test context is canceled before connector and server cleanup.
+		if t.Context().Err() == nil {
+			t.Error("auth frame missing")
+		}
 		return false
 	}
 	return checkAuthFrame(t, raw)
@@ -76,7 +79,9 @@ func checkAuthFrame(t *testing.T, raw []byte) bool {
 func sendFrame(t *testing.T, ctx context.Context, conn *websocket.Conn, kind websocket.MessageType, raw string) bool {
 	t.Helper()
 	if conn.Write(ctx, kind, []byte(raw)) != nil {
-		t.Error("server frame write failed")
+		if t.Context().Err() == nil {
+			t.Error("server frame write failed")
+		}
 		return false
 	}
 	return true
@@ -89,7 +94,9 @@ func completeHandshake(t *testing.T, ctx context.Context, conn *websocket.Conn) 
 	}
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
-		t.Error("listen frame missing")
+		if t.Context().Err() == nil {
+			t.Error("listen frame missing")
+		}
 		return false
 	}
 	var listen struct {
@@ -107,16 +114,11 @@ func completeHandshake(t *testing.T, ctx context.Context, conn *websocket.Conn) 
 
 func nextEvent(t *testing.T, events <-chan fwtrading.Event) fwtrading.Event {
 	t.Helper()
-	select {
-	case event, ok := <-events:
-		if !ok {
-			t.Fatal("stream channel closed early")
-		}
-		return event
-	case <-time.After(2 * time.Second):
-		t.Fatal("stream event timeout")
+	event, ok := <-events // Stream event arrives.
+	if !ok {
+		t.Fatal("stream channel closed early")
 	}
-	return fwtrading.Event{}
+	return event
 }
 
 func subscribeAlpaca(t *testing.T, c *alpacaConnector) <-chan fwtrading.Event {
@@ -132,13 +134,8 @@ func assertClosed(t *testing.T, c *alpacaConnector, events <-chan fwtrading.Even
 	t.Helper()
 	c.Close()
 	c.Close()
-	select {
-	case _, ok := <-events:
-		if ok {
-			t.Fatal("Close did not end channel")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Close did not close channel")
+	if _, ok := <-events; ok { // Stream channel closes.
+		t.Fatal("Close did not end channel")
 	}
 }
 
@@ -154,7 +151,7 @@ func TestStreamEvents(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
 			return
@@ -177,8 +174,8 @@ func TestStreamEvents(t *testing.T) {
 		}
 		<-release
 	}))
-	defer server.Close()
-	defer close(release)
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) })
 	c := testAlpacaConnector(t, server)
 	events := subscribeAlpaca(t, c)
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
@@ -204,7 +201,7 @@ func TestStreamEvents(t *testing.T) {
 			t.Fatal("terminal update did not request lookup")
 		}
 	}
-	assertClosed(t, c, events)
+	t.Cleanup(func() { assertClosed(t, c, events) })
 }
 
 func TestStreamReconnectBackoff(t *testing.T) {
@@ -216,13 +213,13 @@ func TestStreamReconnectBackoff(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if readAuth(t, ctx, conn) {
 			completeHandshake(t, ctx, conn)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	c := testAlpacaConnector(t, server)
 	events := subscribeAlpaca(t, c)
 	var previous time.Time
@@ -230,12 +227,7 @@ func TestStreamReconnectBackoff(t *testing.T) {
 		if nextEvent(t, events).Kind != fwtrading.EventConnected {
 			t.Fatal("listen acknowledgement did not connect")
 		}
-		var at time.Time
-		select {
-		case at = <-attempts:
-		case <-time.After(time.Second):
-			t.Fatal("dial timestamp missing")
-		}
+		at := <-attempts // Connection attempt starts.
 		if i > 0 {
 			minimum := alpacaReconnectMin * time.Duration(1<<(i-1))
 			if at.Sub(previous) < minimum-25*time.Millisecond {
@@ -244,7 +236,7 @@ func TestStreamReconnectBackoff(t *testing.T) {
 		}
 		previous = at
 	}
-	assertClosed(t, c, events)
+	t.Cleanup(func() { assertClosed(t, c, events) })
 }
 
 func TestStreamSlowConsumerReconnectBackoff(t *testing.T) {
@@ -256,7 +248,7 @@ func TestStreamSlowConsumerReconnectBackoff(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
 			return
@@ -264,37 +256,29 @@ func TestStreamSlowConsumerReconnectBackoff(t *testing.T) {
 		_ = conn.CloseNow()
 		attempts <- at
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	c := testAlpacaConnector(t, server)
 	events := subscribeAlpaca(t, c)
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("listen acknowledgement did not connect")
 	}
 	for range 2 {
-		select {
-		case <-attempts:
-		case <-time.After(2 * time.Second):
-			t.Fatal("server did not close after listen acknowledgement")
-		}
+		<-attempts // Connection attempt starts.
 	}
 	<-time.After(alpacaReconnectMax + 50*time.Millisecond)
 	releasedAt := time.Now()
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("blocked Connected missing")
 	}
-	select {
-	case at := <-attempts:
-		minimum := 2 * alpacaReconnectMin
-		if elapsed := at.Sub(releasedAt); elapsed < minimum-25*time.Millisecond {
-			t.Fatalf("slow consumer reset reconnect backoff: waited %v, want at least %v", elapsed, minimum)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("reconnect after releasing slow consumer missing")
+	at := <-attempts // Connection attempt starts.
+	minimum := 2 * alpacaReconnectMin
+	if elapsed := at.Sub(releasedAt); elapsed < minimum-25*time.Millisecond {
+		t.Fatalf("slow consumer reset reconnect backoff: waited %v, want at least %v", elapsed, minimum)
 	}
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("reconnect Connected missing")
 	}
-	assertClosed(t, c, events)
+	t.Cleanup(func() { assertClosed(t, c, events) })
 }
 
 func TestStreamRejectsRedirect(t *testing.T) {
@@ -306,7 +290,7 @@ func TestStreamRejectsRedirect(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		_, raw, err := conn.Read(ctx)
 		var frame struct {
@@ -322,7 +306,7 @@ func TestStreamRejectsRedirect(t *testing.T) {
 	}))
 	defer server.Close()
 	c := testAlpacaConnector(t, server)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	healthy, err := c.stream(ctx, make(chan fwtrading.Event, 1))
 	if targetDials.Load() != 0 || authFrames.Load() != 0 {
@@ -342,7 +326,7 @@ func TestStreamHealthyConnection(t *testing.T) {
 					return
 				}
 				defer func() { _ = conn.CloseNow() }()
-				ctx, cancel := context.WithTimeout(context.Background(), 2*alpacaReconnectMax)
+				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
 					return
@@ -357,7 +341,7 @@ func TestStreamHealthyConnection(t *testing.T) {
 			}))
 			defer server.Close()
 			c := testAlpacaConnector(t, server)
-			ctx, cancel := context.WithTimeout(context.Background(), 2*alpacaReconnectMax)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			events := make(chan fwtrading.Event, 2)
 			healthy, err := c.stream(ctx, events)
@@ -428,13 +412,8 @@ func streamStatuses(c *alpacaConnector) <-chan alpacaStatus {
 
 func nextStatus(t *testing.T, statuses <-chan alpacaStatus) alpacaStatus {
 	t.Helper()
-	select {
-	case status := <-statuses:
-		return status
-	case <-time.After(2 * time.Second):
-		t.Fatal("stream status timeout")
-	}
-	return alpacaStatus{}
+	status := <-statuses // Stream status is reported.
+	return status
 }
 
 func TestStreamRedactsOverlappingCredentials(t *testing.T) {
@@ -452,15 +431,17 @@ func TestStreamRedactsOverlappingCredentials(t *testing.T) {
 					return
 				}
 				defer func() { _ = conn.CloseNow() }()
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				if _, _, err := conn.Read(ctx); err != nil {
-					t.Error("auth frame missing")
+					if t.Context().Err() == nil {
+						t.Error("auth frame missing")
+					}
 					return
 				}
 				sendFrame(t, ctx, conn, websocket.MessageText, `{"action":"error","data":{"error_message":"`+tc.message+`"}}`)
 			}))
-			defer server.Close()
+			t.Cleanup(server.Close)
 			c := testAlpacaConnectorWith(t, server, `{"apiKey":"`+tc.key+`","apiSecret":"`+tc.secret+`"}`)
 			statuses := streamStatuses(c)
 			events := subscribeAlpaca(t, c)
@@ -468,7 +449,7 @@ func TestStreamRedactsOverlappingCredentials(t *testing.T) {
 			if status := nextStatus(t, statuses); status.ok || status.message != want {
 				t.Fatalf("status = %+v, want %q", status, want)
 			}
-			assertClosed(t, c, events)
+			t.Cleanup(func() { assertClosed(t, c, events) })
 		})
 	}
 }
@@ -483,7 +464,7 @@ func TestStreamReportsUnparsableOncePerConnectionAndEveryOverfill(t *testing.T) 
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
 			return
@@ -568,14 +549,16 @@ func TestStreamFailureReports(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) {
 			return
 		}
 		if attempt == 2 {
 			if err := conn.Close(websocket.StatusPolicyViolation, "refused test-key-marker test-secret-marker"); err != nil {
-				t.Error(err)
+				if t.Context().Err() == nil {
+					t.Error(err)
+				}
 			}
 			return
 		}
@@ -590,7 +573,9 @@ func TestStreamFailureReports(t *testing.T) {
 			return
 		}
 		if _, _, err := conn.Read(ctx); err != nil {
-			t.Error("listen frame missing")
+			if t.Context().Err() == nil {
+				t.Error("listen frame missing")
+			}
 			return
 		}
 		for _, raw := range []string{
@@ -754,7 +739,7 @@ func TestStreamTradeUpdateDiscriminatorAndReferences(t *testing.T) {
 					return
 				}
 				defer func() { _ = conn.CloseNow() }()
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
 					return
@@ -767,7 +752,7 @@ func TestStreamTradeUpdateDiscriminatorAndReferences(t *testing.T) {
 				}
 				_, _, _ = conn.Read(ctx)
 			}))
-			defer server.Close()
+			t.Cleanup(server.Close)
 			c := testAlpacaConnector(t, server)
 			events := subscribeAlpaca(t, c)
 			if nextEvent(t, events).Kind != fwtrading.EventConnected {
@@ -783,7 +768,7 @@ func TestStreamTradeUpdateDiscriminatorAndReferences(t *testing.T) {
 			if event.Kind != fwtrading.EventFill {
 				t.Fatal("ignored or dropped update was emitted before the valid fill")
 			}
-			assertClosed(t, c, events)
+			t.Cleanup(func() { assertClosed(t, c, events) })
 		})
 	}
 }
@@ -796,7 +781,7 @@ func assertStreamReconciles(t *testing.T, raw string) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
 			return
@@ -809,7 +794,7 @@ func assertStreamReconciles(t *testing.T, raw string) {
 		}
 		_, _, _ = conn.Read(ctx)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	c := testAlpacaConnector(t, server)
 	events := subscribeAlpaca(t, c)
 	if nextEvent(t, events).Kind != fwtrading.EventConnected {
@@ -822,7 +807,7 @@ func assertStreamReconciles(t *testing.T, raw string) {
 	if nextEvent(t, events).Kind != fwtrading.EventFill {
 		t.Fatal("valid update after invalid payload was lost")
 	}
-	assertClosed(t, c, events)
+	t.Cleanup(func() { assertClosed(t, c, events) })
 }
 
 func TestStreamReconnect(t *testing.T) {
@@ -836,7 +821,7 @@ func TestStreamReconnect(t *testing.T) {
 					return
 				}
 				defer func() { _ = conn.CloseNow() }()
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				if !readAuth(t, ctx, conn) {
 					return
@@ -856,7 +841,7 @@ func TestStreamReconnect(t *testing.T) {
 				}
 				_, _, _ = conn.Read(ctx)
 			}))
-			defer server.Close()
+			t.Cleanup(server.Close)
 			c := testAlpacaConnector(t, server)
 			events := subscribeAlpaca(t, c)
 			if nextEvent(t, events).Kind != fwtrading.EventConnected {
@@ -868,7 +853,7 @@ func TestStreamReconnect(t *testing.T) {
 			if attempts.Load() < 2 {
 				t.Fatal("stream failed to reconnect")
 			}
-			assertClosed(t, c, events)
+			t.Cleanup(func() { assertClosed(t, c, events) })
 		})
 	}
 }
@@ -897,7 +882,7 @@ func TestStreamUnauthorized(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) {
 			return
@@ -928,29 +913,20 @@ func TestStreamUnauthorized(t *testing.T) {
 	})
 	events := subscribeAlpaca(t, c)
 	var first, second time.Time
-	select {
-	case first = <-attempts:
-	case <-time.After(time.Second):
-		t.Fatal("initial connection missing")
-	}
+	first = <-attempts // Connection attempt starts.
 	select {
 	case <-events:
 		t.Fatal("unauthorized stream reported Connected")
 	case <-time.After(alpacaReconnectMax / 2):
 	}
-	select {
-	case second = <-attempts:
-	case <-time.After(alpacaReconnectMax):
-		t.Fatal("unauthorized stream not retried")
-	}
+	second = <-attempts // Connection attempt starts.
 	if second.Sub(first) < alpacaReconnectMax-50*time.Millisecond {
 		t.Fatal("unauthorized retry did not use max backoff")
 	}
-	select {
-	case <-reported:
-	case <-time.After(time.Second):
-		t.Fatal("authorized retry reported no ok status")
+	if gap := second.Sub(first); gap > alpacaReconnectMax+alpacaReconnectMax/2 {
+		t.Fatalf("unauthorized retry came after %v, want at most %v", gap, alpacaReconnectMax+alpacaReconnectMax/2)
 	}
+	<-reported // Authorized retry reports its status.
 	select {
 	case <-events:
 		t.Fatal("Connected delivered before the ok status report")
@@ -980,7 +956,7 @@ func TestStreamUnauthorizedHoldsMaxUntilHealthy(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) {
 			return
@@ -1000,18 +976,14 @@ func TestStreamUnauthorizedHoldsMaxUntilHealthy(t *testing.T) {
 		// connector after the last dial cannot cut the handler short.
 		attempts <- at
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	c := testAlpacaConnector(t, server)
 	events := subscribeAlpaca(t, c)
 	dials := make([]time.Time, 0, 4)
 	nextDial := func() {
 		t.Helper()
-		select {
-		case at := <-attempts:
-			dials = append(dials, at)
-		case <-time.After(alpacaReconnectMax + time.Second):
-			t.Fatalf("dial %d missing", len(dials)+1)
-		}
+		at := <-attempts // Connection attempt starts.
+		dials = append(dials, at)
 	}
 	for range 3 {
 		nextDial()
@@ -1030,7 +1002,7 @@ func TestStreamUnauthorizedHoldsMaxUntilHealthy(t *testing.T) {
 	if waited := dials[3].Sub(healthyAt); waited >= alpacaReconnectMax/2 {
 		t.Fatalf("failure after a healthy stream waited %v, want under %v", waited, alpacaReconnectMax/2)
 	}
-	assertClosed(t, c, events)
+	t.Cleanup(func() { assertClosed(t, c, events) })
 }
 
 func TestStreamRequiresReporters(t *testing.T) {
@@ -1147,7 +1119,7 @@ func TestStreamWaitsForListenAck(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) {
 			return
@@ -1156,7 +1128,9 @@ func TestStreamWaitsForListenAck(t *testing.T) {
 			return
 		}
 		if _, _, err := conn.Read(ctx); err != nil {
-			t.Error("listen missing")
+			if t.Context().Err() == nil {
+				t.Error("listen missing")
+			}
 			return
 		}
 		sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"listening","data":{"streams":[]}}`)
@@ -1165,15 +1139,11 @@ func TestStreamWaitsForListenAck(t *testing.T) {
 		sendFrame(t, ctx, conn, websocket.MessageText, `{"stream":"listening","data":{"streams":["trade_updates"]}}`)
 		_, _, _ = conn.Read(ctx)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	c := testAlpacaConnector(t, server)
 	reports := recordAlpacaReports(c)
 	events := subscribeAlpaca(t, c)
-	select {
-	case <-listening:
-	case <-time.After(time.Second):
-		t.Fatal("listen request missing")
-	}
+	<-listening // Listen request arrives.
 	select {
 	case <-events:
 		t.Fatal("Connected before trade_updates listen ack")
@@ -1189,7 +1159,7 @@ func TestStreamWaitsForListenAck(t *testing.T) {
 	if statuses, _ := reports.snapshot(); !reflect.DeepEqual(statuses, []alpacaStatus{{true, ""}}) {
 		t.Fatalf("statuses after Connected = %+v, want one ok", statuses)
 	}
-	assertClosed(t, c, events)
+	t.Cleanup(func() { assertClosed(t, c, events) })
 }
 
 func TestStreamSilenceAndCancellation(t *testing.T) {
@@ -1201,7 +1171,7 @@ func TestStreamSilenceAndCancellation(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(context.Background(), alpacaHandshakeTimeout+3*time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		if !readAuth(t, ctx, conn) || !completeHandshake(t, ctx, conn) {
 			return
@@ -1210,8 +1180,8 @@ func TestStreamSilenceAndCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 	c := testAlpacaConnector(t, server)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 	events, err := c.Subscribe(ctx)
 	if err != nil {
 		t.Fatal("Subscribe failed")
@@ -1228,13 +1198,8 @@ func TestStreamSilenceAndCancellation(t *testing.T) {
 		t.Fatal("silent stream redialed")
 	}
 	cancel()
-	select {
-	case _, ok := <-events:
-		if ok {
-			t.Fatal("cancellation produced an event")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("cancellation did not close stream")
+	if _, ok := <-events; ok { // Stream channel closes.
+		t.Fatal("cancellation produced an event")
 	}
 	c.Close()
 }

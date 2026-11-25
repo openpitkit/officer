@@ -30,6 +30,7 @@ import (
 )
 
 func TestMcpAccessRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -71,6 +72,7 @@ func TestMcpAccessRoundTrip(t *testing.T) {
 }
 
 func TestSettingRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -112,6 +114,7 @@ func TestSettingRoundTrip(t *testing.T) {
 // answers domain.ErrNotFound for a key that holds no value, so a removal of
 // nothing is told apart from a removal that happened.
 func TestDeleteSetting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	if err := rs.SetSetting(ctx, "unset_key", "x"); err != nil {

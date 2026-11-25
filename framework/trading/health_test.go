@@ -28,6 +28,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/health"
 	"go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func TestConnectionStreamFailureDegrades(t *testing.T) {
@@ -155,7 +156,7 @@ func TestConnectionUnavailableDiagnostics(t *testing.T) {
 	}{
 		{"build", health.CodeInvalidProviderConfig, health.DiagKindConfig, domain.ErrUpstream},
 		// Sends check the provider before the worker, as before.
-		{"unsupported", health.CodeUnsupportedProvider, health.DiagKindConfig, domain.ErrInvalid},
+		{"unsupported", health.CodeUnsupportedProvider, health.DiagKindConfig, nil},
 		{"subscribe", health.CodeConnectionError, health.DiagKindEnvironment, domain.ErrUpstream},
 		{"nil_channel", health.CodeInternalError, health.DiagKindProvider, domain.ErrUpstream},
 		{"closed", health.CodeConnectionError, health.DiagKindProvider, domain.ErrUpstream},
@@ -195,9 +196,9 @@ func TestConnectionUnavailableDiagnostics(t *testing.T) {
 				connector := f.venue.current
 				f.venue.mu.Unlock()
 				connector.closeEvents()
-				waitFor(t, func() bool {
+				polltest.Until(func() bool {
 					return f.runtime.ConnectionStatuses()[id].State == trading.ConnectionUnavailable
-				}, "closed event stream status")
+				}) // Connection status records the closed event stream.
 			}
 			status := f.runtime.ConnectionStatuses()[id]
 			if status.State != trading.ConnectionUnavailable || len(status.Diagnostics) != 1 {
@@ -210,11 +211,11 @@ func TestConnectionUnavailableDiagnostics(t *testing.T) {
 				t.Fatalf("%s failure diagnostic = %+v", tc.failure, diag)
 			}
 			dest := domain.TradingDestination{Connection: id, Route: "{}"}
-			if err := f.runtime.PreCheck(testCtx, f.draft("1"), dest); !errors.Is(err, tc.gate) {
+			if err := f.runtime.PreCheck(testCtx, f.draft("1"), dest); (tc.gate == nil && (!internalFailureAnswer(err))) || (tc.gate != nil && !errors.Is(err, tc.gate)) {
 				t.Fatalf("%s failure PreCheck = %v", tc.failure, err)
 			}
 			_, err := f.runtime.Send(testCtx, f.submit("1").ExternalID, dest)
-			if !errors.Is(err, tc.gate) || !errors.Is(err, trading.ErrNotSent) {
+			if (tc.gate == nil && (!internalFailureAnswer(err))) || (tc.gate != nil && !errors.Is(err, tc.gate)) || !errors.Is(err, trading.ErrNotSent) {
 				t.Fatalf("%s failure Send = %v", tc.failure, err)
 			}
 		})

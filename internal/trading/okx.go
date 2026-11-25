@@ -138,7 +138,7 @@ func okxOfficerID(clOrdID string) (string, bool) {
 }
 
 func parseOKXRoute(raw string, limit bool) (string, error) {
-	tif, err := parseVenueRoute(raw, limit, "OKX")
+	tif, err := parseSpotRoute(raw, "OKX", limit)
 	if err != nil {
 		return "", err
 	}
@@ -200,12 +200,12 @@ func (c *okxConnector) PreCheck(ctx context.Context, order fwtrading.Order) erro
 	if !found || instrument.State != "live" {
 		return fmt.Errorf("%w: symbol must allow spot trading", fwtrading.ErrRejected)
 	}
-	qty, err := parseVenueDecimal(order.Quantity, true)
+	qty, err := parsePlainDecimal(order.Quantity, true)
 	if err != nil {
 		return fmt.Errorf("%w: quantity must be a positive plain decimal", fwtrading.ErrRejected)
 	}
-	minimum, minErr := parseVenueDecimal(instrument.MinSz, true)
-	lot, lotErr := parseVenueDecimal(instrument.LotSz, true)
+	minimum, minErr := parsePlainDecimal(instrument.MinSz, true)
+	lot, lotErr := parsePlainDecimal(instrument.LotSz, true)
 	if minErr != nil || lotErr != nil {
 		return fmt.Errorf("okx: unreadable instrument quantity rules: %w", domain.ErrUpstream)
 	}
@@ -213,11 +213,11 @@ func (c *okxConnector) PreCheck(ctx context.Context, order fwtrading.Order) erro
 		return fmt.Errorf("%w: quantity must meet minSz and lotSz", fwtrading.ErrRejected)
 	}
 	if order.LimitPrice != "" {
-		price, priceErr := parseVenueDecimal(order.LimitPrice, true)
+		price, priceErr := parsePlainDecimal(order.LimitPrice, true)
 		if priceErr != nil {
 			return fmt.Errorf("%w: price must be a positive plain decimal", fwtrading.ErrRejected)
 		}
-		tick, tickErr := parseVenueDecimal(instrument.TickSz, true)
+		tick, tickErr := parsePlainDecimal(instrument.TickSz, true)
 		if tickErr != nil {
 			return fmt.Errorf("okx: unreadable instrument tickSz: %w", domain.ErrUpstream)
 		}
@@ -391,7 +391,7 @@ func (c *okxConnector) Lookup(
 		return fwtrading.Snapshot{}, false, fmt.Errorf(
 			"okx: unknown venue order status: %w", domain.ErrUpstream)
 	}
-	filled, err := parseVenueDecimal(order.Filled, false)
+	filled, err := parsePlainDecimal(order.Filled, false)
 	if err != nil {
 		return fwtrading.Snapshot{}, false, fmt.Errorf(
 			"okx: unreadable lookup quantities: %w", domain.ErrUpstream)
@@ -437,7 +437,7 @@ func (c *okxConnector) trades(
 						"okx: conflicting duplicate fill: %w", domain.ErrUpstream)
 				}
 				if _, exists := known[trade.TradeID]; !exists {
-					amount, err := parseVenueDecimal(trade.Quantity, true)
+					amount, err := parsePlainDecimal(trade.Quantity, true)
 					if err != nil {
 						return nil, fmt.Errorf("okx: unreadable fill: %w", domain.ErrUpstream)
 					}
@@ -496,8 +496,8 @@ func okxFillTime(raw string) (time.Time, error) {
 func (c *okxConnector) snapshot(
 	ctx context.Context, order okxOrder, status fwtrading.VenueStatus, trades []okxTrade,
 ) (fwtrading.Snapshot, error) {
-	qty, qtyErr := parseVenueDecimal(order.Quantity, true)
-	filled, filledErr := parseVenueDecimal(order.Filled, false)
+	qty, qtyErr := parsePlainDecimal(order.Quantity, true)
+	filled, filledErr := parsePlainDecimal(order.Filled, false)
 	if qtyErr != nil || filledErr != nil || filled.GreaterThan(qty) {
 		return fwtrading.Snapshot{}, fmt.Errorf(
 			"okx: unreadable lookup quantities: %w", domain.ErrUpstream)
@@ -507,8 +507,8 @@ func (c *okxConnector) snapshot(
 	}
 	cum := decimal.Zero
 	for i, trade := range trades {
-		amount, amountErr := parseVenueDecimal(trade.Quantity, true)
-		_, priceErr := parseVenueDecimal(trade.Price, true)
+		amount, amountErr := parsePlainDecimal(trade.Quantity, true)
+		_, priceErr := parsePlainDecimal(trade.Price, true)
 		at, timeErr := okxFillTime(trade.At)
 		if amountErr != nil || priceErr != nil || timeErr != nil {
 			return fwtrading.Snapshot{}, fmt.Errorf("okx: unreadable fill: %w", domain.ErrUpstream)
@@ -540,7 +540,7 @@ func (c *okxConnector) snapshot(
 func (c *okxConnector) commission(
 	ctx context.Context, symbol, fee, currency string, fetch bool,
 ) (*domain.Commission, fwtrading.CommissionLeg, error) {
-	value, err := parseVenueDecimal(strings.TrimPrefix(fee, "-"), false)
+	value, err := parsePlainDecimal(strings.TrimPrefix(fee, "-"), false)
 	if err != nil || (currency == "" && !value.IsZero()) {
 		return nil, "", fmt.Errorf("okx: unreadable commission: %w", domain.ErrUpstream)
 	}

@@ -53,7 +53,9 @@ func oaRead(t *testing.T, ctx context.Context, conn *websocket.Conn, into any) b
 	t.Helper()
 	typ, payload, err := conn.Read(ctx)
 	if err != nil || typ != websocket.MessageText || json.Unmarshal(payload, into) != nil {
-		t.Error("could not read OpenAlgo client request")
+		if t.Context().Err() == nil {
+			t.Error("could not read OpenAlgo client request")
+		}
 		return false
 	}
 	return true
@@ -63,7 +65,9 @@ func oaWrite(t *testing.T, ctx context.Context, conn *websocket.Conn, frame any)
 	t.Helper()
 	payload, err := json.Marshal(frame)
 	if err != nil || conn.Write(ctx, websocket.MessageText, payload) != nil {
-		t.Error("could not write OpenAlgo test frame")
+		if t.Context().Err() == nil {
+			t.Error("could not write OpenAlgo test frame")
+		}
 		return false
 	}
 	return true
@@ -134,9 +138,7 @@ func oaServer(t *testing.T, handler func(context.Context, *websocket.Conn)) stri
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		handler(ctx, conn)
+		handler(t.Context(), conn)
 	}))
 	t.Cleanup(server.Close)
 	return "ws" + strings.TrimPrefix(server.URL, "http")
@@ -155,16 +157,11 @@ func oaSubscribe(t *testing.T, connector fwmarketdata.Connector, subs []fwmarket
 
 func oaNextUpdate(t *testing.T, updates <-chan fwmarketdata.QuoteUpdate) fwmarketdata.QuoteUpdate {
 	t.Helper()
-	select {
-	case update, ok := <-updates:
-		if !ok {
-			t.Fatal("quote channel closed before expected update")
-		}
-		return update
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for quote")
-		return fwmarketdata.QuoteUpdate{}
+	update, ok := <-updates
+	if !ok {
+		t.Fatal("quote channel closed before expected update")
 	}
+	return update
 }
 
 func oaReporters(t *testing.T, connector fwmarketdata.Connector) (<-chan oaStatus, <-chan health.Diagnostic) {
@@ -188,28 +185,6 @@ func oaReporters(t *testing.T, connector fwmarketdata.Connector) (<-chan oaStatu
 	return statuses, diagnostics
 }
 
-func oaNextStatus(t *testing.T, statuses <-chan oaStatus) oaStatus {
-	t.Helper()
-	select {
-	case status := <-statuses:
-		return status
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for stream status")
-		return oaStatus{}
-	}
-}
-
-func oaNextDiagnostic(t *testing.T, diagnostics <-chan health.Diagnostic) health.Diagnostic {
-	t.Helper()
-	select {
-	case diag := <-diagnostics:
-		return diag
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for stream diagnostic")
-		return health.Diagnostic{}
-	}
-}
-
 func TestOpenAlgoQuotesAndDuplicateSubscriptions(t *testing.T) {
 	wsURL := oaServer(t, func(ctx context.Context, conn *websocket.Conn) {
 		request, ok := oaHandshake(t, ctx, conn)
@@ -226,7 +201,9 @@ func TestOpenAlgoQuotesAndDuplicateSubscriptions(t *testing.T) {
 		}
 		for _, exchange := range []string{"NSE", "BSE"} {
 			if conn.Write(ctx, websocket.MessageText, []byte(oaQuote("RELIANCE", exchange, "1187.750000000000000001"))) != nil {
-				t.Error("could not send exact-price quote")
+				if t.Context().Err() == nil {
+					t.Error("could not send exact-price quote")
+				}
 				return
 			}
 		}
@@ -240,7 +217,7 @@ func TestOpenAlgoQuotesAndDuplicateSubscriptions(t *testing.T) {
 		{External: "BSE:RELIANCE", Base: 1003, Quote: 2003},
 	}
 	updates := oaSubscribe(t, connector, subs)
-	if !oaNextStatus(t, statuses).ok {
+	if !(<-statuses).ok {
 		t.Fatal("authenticated and subscribed stream did not report connected")
 	}
 	for _, sub := range subs {
@@ -291,7 +268,9 @@ func TestOpenAlgoQuoteHandshakeFailures(t *testing.T) {
 					}
 					if name == "auth-binary" {
 						if conn.Write(ctx, websocket.MessageBinary, []byte(`{"type":"auth","status":"success"}`)) != nil {
-							t.Error("could not send binary auth")
+							if t.Context().Err() == nil {
+								t.Error("could not send binary auth")
+							}
 						}
 					} else {
 						oaWrite(t, ctx, conn, map[string]string{"status": "error", "code": "AUTHENTICATION_ERROR", "message": oaFakeKey})
@@ -311,7 +290,9 @@ func TestOpenAlgoQuoteHandshakeFailures(t *testing.T) {
 					oaAck(t, ctx, conn, request)
 				case "subscribe-binary":
 					if conn.Write(ctx, websocket.MessageBinary, []byte(`{}`)) != nil {
-						t.Error("could not send binary ack")
+						if t.Context().Err() == nil {
+							t.Error("could not send binary ack")
+						}
 					}
 				case "all-refused", "unrequested-refusal":
 					symbol := "RELIANCE"
@@ -327,7 +308,7 @@ func TestOpenAlgoQuoteHandshakeFailures(t *testing.T) {
 			connector := oaNewConnector(t, "http://localhost:5000", wsURL)
 			statuses, diagnostics := oaReporters(t, connector)
 			updates := oaSubscribe(t, connector, []fwmarketdata.Subscription{{External: "NSE:RELIANCE", Base: 1, Quote: 2}})
-			status := oaNextStatus(t, statuses)
+			status := <-statuses
 			if status.ok || status.message == "" {
 				t.Fatal("failed handshake reported connected or lost its error")
 			}
@@ -344,7 +325,7 @@ func TestOpenAlgoQuoteHandshakeFailures(t *testing.T) {
 				if !strings.Contains(status.message, "all quote subscriptions were refused") {
 					t.Fatal("all-refused session did not fail explicitly")
 				}
-				diag := oaNextDiagnostic(t, diagnostics)
+				diag := <-diagnostics
 				if diag.Level != health.DiagError || diag.Code != health.CodeNoData ||
 					diag.Kind != health.DiagKindProvider || diag.Instrument != "NSE:RELIANCE" ||
 					diag.Title != "OpenAlgo refused quotes for this instrument" ||
@@ -378,7 +359,9 @@ func TestOpenAlgoQuotePartialAcknowledgement(t *testing.T) {
 		}
 		for _, frame := range []string{oaQuote("BAD1", "BSE", "999"), oaQuote("RELIANCE", "NSE", "1187.75")} {
 			if conn.Write(ctx, websocket.MessageText, []byte(frame)) != nil {
-				t.Error("could not send partial-session frame")
+				if t.Context().Err() == nil {
+					t.Error("could not send partial-session frame")
+				}
 				return
 			}
 		}
@@ -392,7 +375,7 @@ func TestOpenAlgoQuotePartialAcknowledgement(t *testing.T) {
 		{External: "NSE:BAD2", Base: 4, Quote: 2},
 		{External: "NSE:BAD3", Base: 5, Quote: 2},
 	})
-	if !oaNextStatus(t, statuses).ok {
+	if !(<-statuses).ok {
 		t.Fatal("partial acknowledgement stopped accepted instruments")
 	}
 	update := oaNextUpdate(t, updates)
@@ -407,7 +390,7 @@ func TestOpenAlgoQuotePartialAcknowledgement(t *testing.T) {
 		{"NSE:BAD2", detail + " OpenAlgo: not found"},
 		{"NSE:BAD3", detail},
 	} {
-		diag := oaNextDiagnostic(t, diagnostics)
+		diag := <-diagnostics
 		if diag.Level != health.DiagError || diag.Code != health.CodeNoData ||
 			diag.Kind != health.DiagKindProvider || diag.Instrument != tc.instrument ||
 			diag.Title != "OpenAlgo refused quotes for this instrument" || diag.Detail != tc.detail {
@@ -418,7 +401,7 @@ func TestOpenAlgoQuotePartialAcknowledgement(t *testing.T) {
 			t.Errorf("partial refusal for %s lost its remediation or actions: %+v", tc.instrument, diag)
 		}
 	}
-	if diag := oaNextDiagnostic(t, diagnostics); diag.Level != health.DiagWarn ||
+	if diag := <-diagnostics; diag.Level != health.DiagWarn ||
 		diag.Code != health.CodeInconsistentData || diag.Kind != health.DiagKindProvider || diag.Instrument != "BSE:BAD1" {
 		t.Fatal("refused instrument push was not skipped with a warning")
 	}
@@ -455,12 +438,16 @@ func TestOpenAlgoQuoteSkippedFrames(t *testing.T) {
 				}
 				for range count {
 					if conn.Write(ctx, tc.typ, []byte(tc.payload)) != nil {
-						t.Error("could not send skipped frame")
+						if t.Context().Err() == nil {
+							t.Error("could not send skipped frame")
+						}
 						return
 					}
 				}
 				if conn.Write(ctx, websocket.MessageText, []byte(oaQuote("RELIANCE", "NSE", "1187.75"))) != nil {
-					t.Error("could not send skipped-frame sequence")
+					if t.Context().Err() == nil {
+						t.Error("could not send skipped-frame sequence")
+					}
 					return
 				}
 				_, _, _ = conn.Read(ctx)
@@ -471,7 +458,7 @@ func TestOpenAlgoQuoteSkippedFrames(t *testing.T) {
 			if oaNextUpdate(t, updates).Mark != "1187.75" {
 				t.Fatal("invalid frame emitted an update before the barrier quote")
 			}
-			diag := oaNextDiagnostic(t, diagnostics)
+			diag := <-diagnostics
 			level := health.DiagError
 			if tc.code == health.CodeInconsistentData {
 				level = health.DiagWarn
@@ -501,10 +488,10 @@ func TestOpenAlgoQuoteStreamError(t *testing.T) {
 	connector := oaNewConnector(t, "http://localhost:5000", wsURL)
 	statuses, _ := oaReporters(t, connector)
 	updates := oaSubscribe(t, connector, []fwmarketdata.Subscription{{External: "NSE:RELIANCE"}})
-	if !oaNextStatus(t, statuses).ok {
+	if !(<-statuses).ok {
 		t.Fatal("stream did not connect before error")
 	}
-	status := oaNextStatus(t, statuses)
+	status := <-statuses
 	if status.ok || !strings.Contains(status.message, "BROKER_ERROR") || !strings.Contains(status.message, "[redacted]") {
 		t.Fatal("stream error did not terminate session with a redacted status")
 	}
@@ -525,7 +512,9 @@ func TestOpenAlgoQuoteReconnectResubscribes(t *testing.T) {
 		}
 		requests <- request
 		if conn.Write(ctx, websocket.MessageText, []byte(oaQuote("RELIANCE", "NSE", fmt.Sprint(attempt)))) != nil {
-			t.Error("could not send reconnect quote")
+			if t.Context().Err() == nil {
+				t.Error("could not send reconnect quote")
+			}
 			return
 		}
 		if attempt > 1 {
@@ -545,7 +534,7 @@ func TestOpenAlgoQuoteReconnectResubscribes(t *testing.T) {
 	if first.RequestID == second.RequestID || len(second.Symbols) != 1 || second.Symbols[0] != first.Symbols[0] {
 		t.Fatal("reconnect did not resubscribe with a fresh request id")
 	}
-	if !oaNextStatus(t, statuses).ok || oaNextStatus(t, statuses).ok || !oaNextStatus(t, statuses).ok {
+	if !(<-statuses).ok || (<-statuses).ok || !(<-statuses).ok {
 		t.Fatal("reconnect status sequence changed")
 	}
 }
@@ -678,7 +667,7 @@ func TestOpenAlgoQuoteIncompleteAcknowledgement(t *testing.T) {
 			}
 			statuses, _ := oaReporters(t, connector)
 			updates := oaSubscribe(t, connector, []fwmarketdata.Subscription{{External: "NSE:RELIANCE"}, {External: "BSE:OTHER"}})
-			status := oaNextStatus(t, statuses)
+			status := <-statuses
 			if status.ok || !strings.Contains(status.message, "unexpected quote subscription reply") {
 				t.Fatal("incomplete subscription acknowledgement was accepted")
 			}
@@ -731,7 +720,7 @@ func TestOpenAlgoQuoteLiveness(t *testing.T) {
 			connector.sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 			statuses, diagnostics := oaReporters(t, connector)
 			updates := oaSubscribe(t, connector, []fwmarketdata.Subscription{{External: "NSE:RELIANCE"}})
-			if !oaNextStatus(t, statuses).ok {
+			if !(<-statuses).ok {
 				t.Fatal("session did not connect")
 			}
 			if answer {
@@ -750,11 +739,11 @@ func TestOpenAlgoQuoteLiveness(t *testing.T) {
 					t.Fatal("silent session reconnected or stopped sending pings")
 				}
 			} else {
-				status := oaNextStatus(t, statuses)
+				status := <-statuses
 				if status.ok || !strings.Contains(status.message, "websocket read timeout after") {
 					t.Fatal("stopped pongs did not end the session with an idle timeout")
 				}
-				if !oaNextStatus(t, statuses).ok || connections.Load() < 2 {
+				if !(<-statuses).ok || connections.Load() < 2 {
 					t.Fatal("session did not reconnect after stopped pongs")
 				}
 			}
@@ -812,7 +801,7 @@ func TestOpenAlgoDiagnose(t *testing.T) {
 			statuses, _ := oaReporters(t, connector)
 			external := "NSE:" + tc.symbol
 			oaSubscribe(t, connector, []fwmarketdata.Subscription{{External: external}})
-			if !oaNextStatus(t, statuses).ok {
+			if !(<-statuses).ok {
 				t.Fatal("diagnostic session did not connect")
 			}
 			findings, err := connector.(fwmarketdata.Diagnosable).Diagnose(context.Background())
@@ -836,7 +825,9 @@ func TestOpenAlgoCloseWithUnreadUpdate(t *testing.T) {
 			return
 		}
 		if conn.Write(ctx, websocket.MessageText, []byte(oaQuote("RELIANCE", "NSE", "1187.75"))) != nil {
-			t.Error("could not send unread update")
+			if t.Context().Err() == nil {
+				t.Error("could not send unread update")
+			}
 			return
 		}
 		_, _, _ = conn.Read(ctx)
@@ -847,16 +838,7 @@ func TestOpenAlgoCloseWithUnreadUpdate(t *testing.T) {
 		{External: "NSE:RELIANCE", Base: 3, Quote: 4},
 	})
 	oaNextUpdate(t, updates)
-	closed := make(chan struct{})
-	go func() {
-		connector.Close()
-		close(closed)
-	}()
-	select {
-	case <-closed:
-	case <-time.After(time.Second):
-		t.Fatal("Close blocked on an unread update")
-	}
+	connector.Close()
 	if _, ok := <-updates; ok {
 		t.Fatal("Close left an update or an open channel")
 	}
@@ -871,7 +853,9 @@ func TestOpenAlgoReconnectBackoffResetsAfterDelivery(t *testing.T) {
 			return
 		}
 		if n == 3 && conn.Write(ctx, websocket.MessageText, []byte(oaQuote("RELIANCE", "NSE", "1187.75"))) != nil {
-			t.Error("could not send delivering-session quote")
+			if t.Context().Err() == nil {
+				t.Error("could not send delivering-session quote")
+			}
 		}
 	})
 	connector := oaNewConnector(t, "http://localhost:5000", wsURL).(*openAlgoConnector)
@@ -895,13 +879,8 @@ func TestOpenAlgoReconnectBackoffResetsAfterDelivery(t *testing.T) {
 		if i == 2 && oaNextUpdate(t, updates).Mark != "1187.75" {
 			t.Fatal("delivering session did not publish the quote")
 		}
-		select {
-		case got := <-delays:
-			if got != expected {
-				t.Fatalf("retry %d delay = %s, want %s", i+1, got, expected)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("session did not schedule a reconnect")
+		if got := <-delays; got != expected {
+			t.Fatalf("retry %d delay = %s, want %s", i+1, got, expected)
 		}
 		if i < 2 {
 			resume <- struct{}{}

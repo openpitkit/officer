@@ -30,6 +30,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/trading"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func TestRuntimeStartAfterStop(t *testing.T) {
@@ -341,24 +342,16 @@ func TestRuntimeSendStoppedDuringDestinationRead(t *testing.T) {
 		must(t, r.Start(testCtx))
 		sent := make(chan error, 1)
 		go func() { _, err := r.Send(caller, order.ExternalID, f.dest); sent <- err }()
-		select {
-		case <-st.entered:
-		case <-time.After(3 * time.Second):
-			t.Fatal("Send did not reach the worker's destination read")
-		}
+		<-st.entered
 		r.Stop()
 		// Both select arms are ready, so exercise result delivery as well as Stop.
 		releaseCaller()
-		select {
-		case err := <-sent:
-			if !errors.Is(err, domain.ErrConflict) {
-				t.Fatalf("accepted Send stopped before any write (attempt %d)=%v", i, err)
-			}
-			if errors.Is(err, trading.ErrNotSent) {
-				workerResults++
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("accepted Send hung after Stop")
+		err = <-sent
+		if !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("accepted Send stopped before any write (attempt %d)=%v", i, err)
+		}
+		if errors.Is(err, trading.ErrNotSent) {
+			workerResults++
 		}
 		_, found, err := f.st.GetVenueOrder(testCtx, order.ExternalID)
 		must(t, err)
@@ -418,10 +411,10 @@ func TestRuntimeConnectionStatuses(t *testing.T) {
 			connector := f.venue.current
 			f.venue.mu.Unlock()
 			connector.closeEvents()
-			waitFor(t, func() bool {
+			polltest.Until(func() bool {
 				status := f.runtime.ConnectionStatuses()[f.connection.ExternalID]
 				return status.State == trading.ConnectionUnavailable && strings.Contains(status.Error, "venue event stream closed")
-			}, "closed event stream status")
+			}) // Connection status records the closed event stream.
 			f.runtime.Stop()
 			if len(f.runtime.ConnectionStatuses()) != 0 {
 				t.Fatal("stopped runtime still exposes connection statuses")
@@ -461,11 +454,7 @@ func TestRuntimeCallsDuringStart(t *testing.T) {
 	f.addConnection("slow", "slow construction", false)
 	started := make(chan error, 1)
 	go func() { started <- f.runtime.Start(testCtx) }()
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Start did not reach connector construction")
-	}
+	<-entered
 	orderID := f.submit("1").ExternalID
 	calls := make(chan error, 1)
 	go func() {
@@ -488,20 +477,9 @@ func TestRuntimeCallsDuringStart(t *testing.T) {
 		}
 		calls <- nil
 	}()
-	blocked := false
-	select {
-	case err := <-calls:
-		must(t, err)
-	case <-time.After(500 * time.Millisecond):
-		blocked = true
-	}
+	must(t, <-calls)
 	releaseBuild()
 	must(t, <-started)
-	if blocked {
-		//nolint:staticcheck // S1005: drain before reporting the blocked call.
-		_ = <-calls
-		t.Fatal("calls blocked on connector construction")
-	}
 	must(t, f.runtime.PreCheck(testCtx, f.draft("1"), f.dest))
 }
 
@@ -522,11 +500,7 @@ func TestRuntimeConcurrentLifecycleAndSend(t *testing.T) {
 	}
 	sent := make(chan error, 1)
 	go func() { _, err := f.runtime.Send(testCtx, order.ExternalID, f.dest); sent <- err }()
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Send was not accepted")
-	}
+	<-entered
 	queued := make(chan error, 16)
 	for i := 0; i < cap(queued); i++ {
 		id := f.submit("1").ExternalID
@@ -534,29 +508,18 @@ func TestRuntimeConcurrentLifecycleAndSend(t *testing.T) {
 	}
 	stopped := make(chan struct{})
 	go func() { f.runtime.Stop(); close(stopped) }()
-	select {
-	case <-cancelled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Stop did not cancel the accepted venue call")
-	}
+	<-cancelled
 	for i := 0; i < cap(queued); i++ {
-		select {
-		case err := <-queued:
-			if !errors.Is(err, domain.ErrConflict) {
-				t.Fatalf("queued Send during Stop=%v", err)
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("queued Send hung during Stop")
+		if err := <-queued; !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("queued Send during Stop=%v", err)
 		}
 	}
 	select {
 	case <-stopped:
 		releaseSend()
-		waitFor(t, func() bool {
-			link, found, err := f.st.GetVenueOrder(testCtx, order.ExternalID)
-			return err == nil && found && link.VenueOrderID != ""
-		}, "accepted Send acknowledgement after early Stop")
-		t.Fatal("Stop returned before the accepted Send completed")
+		// Stop already cancelled the runtime context, so Send can return
+		// without waiting for the connector's release.
+		t.Fatalf("Stop returned before the accepted Send completed (Send: %v)", <-sent)
 	default:
 	}
 	restarted := make(chan error, 1)
@@ -580,18 +543,9 @@ func TestRuntimeConcurrentLifecycleAndSend(t *testing.T) {
 	}
 	releaseSend()
 	for _, done := range []<-chan struct{}{stopped, secondStop} {
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			t.Fatal("concurrent Stop hung")
-		}
+		<-done
 	}
-	select {
-	case err := <-restarted:
-		must(t, err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("concurrent Restart hung")
-	}
+	must(t, <-restarted)
 	if err := <-sent; err != nil && !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("accepted Send during Stop=%v", err)
 	}
@@ -625,13 +579,8 @@ func TestRuntimeConcurrentLifecycleAndSend(t *testing.T) {
 	}
 	close(wave)
 	for i := 0; i < cap(results); i++ {
-		select {
-		case err := <-results:
-			if err != nil && !errors.Is(err, domain.ErrConflict) {
-				t.Fatalf("concurrent lifecycle/Send=%v", err)
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("concurrent lifecycle/Send hung")
+		if err := <-results; err != nil && !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("concurrent lifecycle/Send=%v", err)
 		}
 	}
 	must(t, f.runtime.Restart())

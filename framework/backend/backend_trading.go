@@ -42,6 +42,7 @@ type TradingProvider struct {
 	Type, Title                                     string
 	VenueAccounts, VerifiesSymbols, SearchesSymbols bool
 	UnlinkedFees                                    bool
+	LiveOnly                                        bool
 }
 
 // TradingConnectionStatus contains configuration without credential values.
@@ -234,7 +235,7 @@ func (s *Service) GetTrading(ctx context.Context) (TradingStatus, error) {
 			ExecutionPolicy: p.ExecutionPolicy,
 			Type:            p.Type, Title: p.Title, VenueAccounts: p.VenueAccounts,
 			VerifiesSymbols: p.VerifiesSymbols, SearchesSymbols: p.SearchesSymbols,
-			UnlinkedFees: p.UnlinkedFees,
+			UnlinkedFees: p.UnlinkedFees, LiveOnly: p.LiveOnly,
 		})
 	}
 	states := s.trading.ConnectionStatuses()
@@ -293,13 +294,15 @@ func (s *Service) requireNonReleaseTradingConfirmation(caller domain.Caller, con
 	return nil
 }
 
-// CreateTradingConnection identifies the venue account before storing a paper
-// connection. The returned value omits credentials. A tighten-only caller is
+// CreateTradingConnection checks the connection with its provider in paper or
+// live mode before storing it with the venue identity returned by CheckAccount.
+// The returned value omits credentials. A tighten-only caller is
 // refused with domain.ErrLoosening before anything is checked or the venue is
 // called: a new connection widens what can be sent. In single-account mode the
 // create also writes the scope account's grant (see grantScopeAccountLocked).
 // In a non-release build, enabling requires the operator's confirmation through
 // the panel.
+// A live-only provider refuses paper mode before any venue call or storage write.
 func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingConnection, nonReleaseConfirmed bool) (result domain.TradingConnection, resultErr error) {
 	ctx, finish := node.PostCommitNotifications(ctx)
 	defer func() {
@@ -336,8 +339,13 @@ func (s *Service) CreateTradingConnection(ctx context.Context, c domain.TradingC
 	if !domain.TradingModeSupported(c.Mode) {
 		return domain.TradingConnection{}, domain.ErrInvalid
 	}
-	if _, err := s.tradingProvider(c.Provider); err != nil {
+	provider, err := s.tradingProvider(c.Provider)
+	if err != nil {
 		return domain.TradingConnection{}, err
+	}
+	if c.Mode == domain.TradingModePaper && provider.LiveOnly {
+		return domain.TradingConnection{}, domain.NewValidationError(
+			"/mode", "unsupported_value", "trading provider supports live mode only")
 	}
 	if err := domain.ValidateTradingConnectionSettings(c.Label, c.Credentials); err != nil {
 		return domain.TradingConnection{}, err
@@ -406,7 +414,7 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 	}
 	var storedValues, mergedValues map[string]any
 	if err := json.Unmarshal([]byte(c.Credentials), &storedValues); err != nil {
-		return fmt.Errorf("stored trading credentials are not a JSON object: %w", domain.ErrInvalid)
+		return fmt.Errorf("stored trading credentials are not a JSON object")
 	}
 	// The market-data merger emits an empty string for two empty objects;
 	// trading must retain its stored JSON object when no fields change.
@@ -424,7 +432,7 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 		return err
 	}
 	if err := json.Unmarshal([]byte(merged), &mergedValues); err != nil {
-		return fmt.Errorf("merged trading credentials are not a JSON object: %w", domain.ErrInvalid)
+		return fmt.Errorf("merged trading credentials are not a JSON object")
 	}
 	changed := !reflect.DeepEqual(storedValues, mergedValues)
 	if caller.TightenOnly() {
@@ -433,10 +441,10 @@ func (s *Service) UpdateTradingConnectionSettings(ctx context.Context, id, label
 		// while the merged text stores them apart.
 		var storedExact, mergedExact map[string]any
 		if err := decodeCredentialsJSON(c.Credentials, &storedExact); err != nil {
-			return fmt.Errorf("stored trading credentials are not a JSON object: %w", domain.ErrInvalid)
+			return fmt.Errorf("stored trading credentials are not a JSON object")
 		}
 		if err := decodeCredentialsJSON(merged, &mergedExact); err != nil {
-			return fmt.Errorf("merged trading credentials are not a JSON object: %w", domain.ErrInvalid)
+			return fmt.Errorf("merged trading credentials are not a JSON object")
 		}
 		if !reflect.DeepEqual(storedExact, mergedExact) {
 			return fmt.Errorf(
@@ -540,7 +548,7 @@ func (s *Service) grantScopeAccountLocked(ctx context.Context, id string) error 
 	}
 	p, err := s.tradingProvider(c.Provider)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if p.VenueAccounts {
 		return nil
@@ -621,7 +629,9 @@ func (s *Service) DeleteTradingInstrument(ctx context.Context, connection, exter
 	return s.node.DeleteTradingInstrument(ctx, id, externalSymbol, caller)
 }
 
-// DeleteTradingConnection removes an unused, disabled connection.
+// DeleteTradingConnection removes a connection with no venue orders and no
+// order reviews, enabled or not. When the running runtime holds a worker for
+// it, the runtime restarts so that worker and its venue session stop.
 func (s *Service) DeleteTradingConnection(ctx context.Context, connection string) error {
 	s.tradingMu.Lock()
 	defer s.tradingMu.Unlock()
@@ -636,7 +646,14 @@ func (s *Service) DeleteTradingConnection(ctx context.Context, connection string
 	if err != nil {
 		return err
 	}
-	return s.node.DeleteTradingConnection(ctx, id, caller)
+	_, running := s.trading.ConnectionStatuses()[id]
+	if err := s.node.DeleteTradingConnection(ctx, id, caller); err != nil {
+		return err
+	}
+	if !running {
+		return nil
+	}
+	return s.restartTradingLocked()
 }
 
 // VerifyTradingSymbol asks the venue whether a symbol exists and is tradable.
@@ -722,7 +739,7 @@ func (s *Service) PutTradingAccess(ctx context.Context, access domain.TradingAcc
 	}
 	p, err := s.tradingProvider(c.Provider)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	return s.node.PutTradingAccess(ctx, access, p.UnlinkedFees, caller)
 }
@@ -767,7 +784,7 @@ func (s *Service) RemoveTradingAccess(ctx context.Context, connection domain.Ext
 		}
 		p, err := s.tradingProvider(c.Provider)
 		if err != nil {
-			return err
+			return domain.Internal(err)
 		}
 		requireFeeAccount = p.UnlinkedFees
 	}
@@ -814,7 +831,7 @@ func (s *Service) SetTradingFeeAccount(ctx context.Context, connection domain.Ex
 	}
 	p, err := s.tradingProvider(c.Provider)
 	if err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if !p.UnlinkedFees {
 		return fmt.Errorf("trading provider has no unlinked fees: %w", domain.ErrInvalid)
@@ -1010,7 +1027,7 @@ func (s *Service) preCheckTradingOrder(ctx context.Context, o domain.Order, dest
 		if tradingHasDomainSentinel(err) {
 			return err
 		}
-		return fmt.Errorf("trading pre-check: %w: %w", err, domain.ErrUpstream)
+		return fmt.Errorf("trading pre-check: %w", err)
 	}
 	return nil
 }

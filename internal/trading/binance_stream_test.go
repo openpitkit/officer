@@ -48,10 +48,11 @@ func binanceWriteFrame(t *testing.T, conn *websocket.Conn, value any) {
 		t.Error(err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
-		t.Error(err)
+		if t.Context().Err() == nil {
+			t.Error(err)
+		}
 	}
 }
 
@@ -64,11 +65,12 @@ func binanceAccept(t *testing.T, w http.ResponseWriter,
 		t.Error(err)
 		return nil, ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	ctx := r.Context()
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
-		t.Error(err)
+		if t.Context().Err() == nil {
+			t.Error(err)
+		}
 		_ = conn.CloseNow()
 		return nil, ""
 	}
@@ -98,9 +100,7 @@ func binanceConfirm(t *testing.T, conn *websocket.Conn, id string) {
 	})
 }
 
-func binanceWaitForClose(conn *websocket.Conn) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+func binanceWaitForClose(ctx context.Context, conn *websocket.Conn) {
 	_, _, _ = conn.Read(ctx)
 }
 
@@ -127,22 +127,6 @@ func binanceExecution(trade binanceTrade,
 	}
 }
 
-func binanceNextEvent(t *testing.T,
-	events <-chan fwtrading.Event,
-) fwtrading.Event {
-	t.Helper()
-	select {
-	case event, ok := <-events:
-		if !ok {
-			t.Fatal("stream closed before event")
-		}
-		return event
-	case <-time.After(4 * time.Second):
-		t.Fatal("timed out waiting for stream event")
-		return fwtrading.Event{}
-	}
-}
-
 func binanceSubscribe(t *testing.T,
 	c *binanceConnector,
 ) <-chan fwtrading.Event {
@@ -151,7 +135,7 @@ func binanceSubscribe(t *testing.T,
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := binanceNextEvent(t, events)
+	event := nextEvent(t, events)
 	if event.Kind != fwtrading.EventConnected {
 		t.Fatal("first event must confirm connection")
 	}
@@ -255,11 +239,11 @@ func TestBinanceStreamExecutions(t *testing.T) {
 				binanceWriteEvent(t, conn, map[string]any{
 					"e": "executionReport", "x": "EXPIRED", "c": "sentinel", "i": 9,
 				})
-				binanceWaitForClose(conn)
+				binanceWaitForClose(t.Context(), conn)
 			})
 			reports := binanceRecordReports(c)
 			events := binanceSubscribe(t, c)
-			event := binanceNextEvent(t, events)
+			event := nextEvent(t, events)
 			if tc.kind == "" {
 				if event.Ref.ClientOrderID != "sentinel" {
 					t.Fatalf("ignored update emitted %+v", event)
@@ -285,7 +269,7 @@ func TestBinanceStreamExecutions(t *testing.T) {
 						t.Fatalf("incorrect fill: %+v", event.Fill)
 					}
 				}
-				_ = binanceNextEvent(t, events)
+				_ = nextEvent(t, events)
 			}
 			reports.mu.Lock()
 			defer reports.mu.Unlock()
@@ -332,9 +316,9 @@ func TestBinanceStreamCommissionRecovery(t *testing.T) {
 					}
 				}
 				binanceWriteEvent(t, conn, raw)
-				binanceWaitForClose(conn)
+				binanceWaitForClose(t.Context(), conn)
 			})
-			event := binanceNextEvent(t, binanceSubscribe(t, c))
+			event := nextEvent(t, binanceSubscribe(t, c))
 			if name == "fetch fails" {
 				if event.Kind != fwtrading.EventOrder || fetches.Load() != 1 {
 					t.Fatalf("failed asset lookup must reconcile: %+v", event)
@@ -373,11 +357,11 @@ func TestBinanceStreamHandshakeAndReconnect(t *testing.T) {
 			})
 			return
 		}
-		binanceWaitForClose(conn)
+		binanceWaitForClose(t.Context(), conn)
 	})
 	reports := binanceRecordReports(c)
 	events := binanceSubscribe(t, c)
-	event := binanceNextEvent(t, events)
+	event := nextEvent(t, events)
 	if event.Kind != fwtrading.EventConnected {
 		t.Fatalf("reconnect did not emit connected: %+v", event)
 	}
@@ -414,7 +398,9 @@ func TestBinanceStreamVenueReconnect(t *testing.T) {
 					if attempt == 1 {
 						if reason == "close frame" {
 							if err := conn.Close(websocket.StatusGoingAway, "restart"); err != nil {
-								t.Error(err)
+								if t.Context().Err() == nil {
+									t.Error(err)
+								}
 							}
 							return
 						}
@@ -424,11 +410,11 @@ func TestBinanceStreamVenueReconnect(t *testing.T) {
 							},
 						})
 					}
-					binanceWaitForClose(conn)
+					binanceWaitForClose(t.Context(), conn)
 				})
 			reports := binanceRecordReports(c)
 			events := binanceSubscribe(t, c)
-			event := binanceNextEvent(t, events)
+			event := nextEvent(t, events)
 			if event.Kind != fwtrading.EventConnected {
 				t.Fatalf("venue reconnect did not emit connected: %+v", event)
 			}
@@ -471,12 +457,12 @@ func TestBinanceStreamReferenceDiagnostics(t *testing.T) {
 		binanceWriteEvent(t, conn, raw)
 		raw["x"], raw["c"] = "EXPIRED", "sentinel"
 		binanceWriteEvent(t, conn, raw)
-		binanceWaitForClose(conn)
+		binanceWaitForClose(t.Context(), conn)
 	})
 	reports := binanceRecordReports(c)
 	events := binanceSubscribe(t, c)
-	first := binanceNextEvent(t, events)
-	last := binanceNextEvent(t, events)
+	first := nextEvent(t, events)
+	last := nextEvent(t, events)
 	if first.Kind != fwtrading.EventOrder ||
 		last.Ref.ClientOrderID != "sentinel" {
 		t.Fatalf("unexpected reference events: %+v %+v", first, last)
@@ -512,12 +498,12 @@ func TestBinanceStreamDiagnosticsOnce(t *testing.T) {
 			bad["l"], bad["z"] = "test-secret", "1"
 			binanceWriteEvent(t, conn, bad)
 		}
-		binanceWaitForClose(conn)
+		binanceWaitForClose(t.Context(), conn)
 	})
 	reports := binanceRecordReports(c)
 	events := binanceSubscribe(t, c)
 	for range 4 {
-		if event := binanceNextEvent(t, events); event.Kind != fwtrading.EventOrder {
+		if event := nextEvent(t, events); event.Kind != fwtrading.EventOrder {
 			t.Fatalf("bad data must reconcile: %+v", event)
 		}
 	}
@@ -557,7 +543,7 @@ func TestBinanceStreamUnauthorizedHoldsMax(t *testing.T) {
 			return
 		}
 		binanceConfirm(t, conn, id)
-		binanceWaitForClose(conn)
+		binanceWaitForClose(t.Context(), conn)
 	})
 	events, err := c.Subscribe(context.Background())
 	if err != nil {
@@ -565,12 +551,8 @@ func TestBinanceStreamUnauthorizedHoldsMax(t *testing.T) {
 	}
 	var times []time.Time
 	for range 3 {
-		select {
-		case at := <-attempts:
-			times = append(times, at)
-		case <-time.After(7 * time.Second):
-			t.Fatal("reconnect did not resume")
-		}
+		at := <-attempts // Connection attempt starts.
+		times = append(times, at)
 	}
 	for i := 1; i < len(times); i++ {
 		if times[i].Sub(times[i-1]) < binanceReconnectMax-100*time.Millisecond {
@@ -578,7 +560,7 @@ func TestBinanceStreamUnauthorizedHoldsMax(t *testing.T) {
 				times[i].Sub(times[i-1]))
 		}
 	}
-	event := binanceNextEvent(t, events)
+	event := nextEvent(t, events)
 	if event.Kind != fwtrading.EventConnected {
 		t.Fatal("stream did not recover after refusal")
 	}
@@ -597,7 +579,7 @@ func TestBinanceStreamLifecycle(t *testing.T) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err == nil {
 			defer func() { _ = conn.CloseNow() }()
-			binanceWaitForClose(conn)
+			binanceWaitForClose(t.Context(), conn)
 		}
 	})
 	c.SetDiagnosticReporter(nil)
@@ -687,14 +669,14 @@ func TestBinanceFillParityRandomized(t *testing.T) {
 						case binance.ExchangeInfoPath:
 							writeBinanceSymbol(t, w, binanceTestSymbol())
 						case "/api/v3/order":
-							writeBinanceJSON(t, w, binanceLookupOrder(
+							writeJSON(t, w, binanceLookupOrder(
 								"FILLED", total.String(), total.String()))
 						case "/api/v3/myTrades":
 							reversed := append([]binanceTrade(nil), trades...)
 							for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
 								reversed[i], reversed[j] = reversed[j], reversed[i]
 							}
-							writeBinanceJSON(t, w, reversed)
+							writeJSON(t, w, reversed)
 						case "/stream":
 							conn, id := binanceAccept(t, w, r)
 							if conn == nil {
@@ -708,13 +690,13 @@ func TestBinanceFillParityRandomized(t *testing.T) {
 								raw["N"] = streamAssets[i]
 								binanceWriteEvent(t, conn, raw)
 							}
-							binanceWaitForClose(conn)
+							binanceWaitForClose(t.Context(), conn)
 						}
 					})
 				events := binanceSubscribe(t, c)
 				fills := make([]fwtrading.Fill, 0, count)
 				for range count {
-					event := binanceNextEvent(t, events)
+					event := nextEvent(t, events)
 					if event.Kind != fwtrading.EventFill {
 						t.Fatalf("expected fill: %+v", event)
 					}
@@ -762,7 +744,7 @@ func TestBinanceRedaction(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/stream" {
 				w.WriteHeader(400)
-				writeBinanceJSON(t, w, map[string]any{
+				writeJSON(t, w, map[string]any{
 					"code": -1013, "msg": message,
 				})
 				return
@@ -784,7 +766,7 @@ func TestBinanceRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	t.Cleanup(c.Close)
 	reports := binanceRecordReports(c)
 	_, sendErr := c.Send(context.Background(), binanceTestOrder())
 	if !errors.Is(sendErr, fwtrading.ErrRejected) {
@@ -794,18 +776,16 @@ func TestBinanceRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-reports.statuses:
-	case <-time.After(3 * time.Second):
-		t.Fatal("missing refused subscription status")
-	}
-	c.Close()
-	reports.mu.Lock()
-	defer reports.mu.Unlock()
-	text := sendErr.Error() + fmt.Sprint(reports.messages, reports.diagnostics)
-	for _, variant := range variants {
-		if strings.Contains(text, variant) {
-			t.Fatal("credentials appeared in error, status or diagnostic")
+	<-reports.statuses // Refused subscription status arrives.
+	t.Cleanup(func() {
+		c.Close()
+		reports.mu.Lock()
+		defer reports.mu.Unlock()
+		text := sendErr.Error() + fmt.Sprint(reports.messages, reports.diagnostics)
+		for _, variant := range variants {
+			if strings.Contains(text, variant) {
+				t.Fatal("credentials appeared in error, status or diagnostic")
+			}
 		}
-	}
+	})
 }

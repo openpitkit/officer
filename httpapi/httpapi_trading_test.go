@@ -407,8 +407,13 @@ func TestTradingOptionalFieldsAndEmptyCollections(t *testing.T) {
 		`{"account":"","accountGroup":"desk","venueAccount":"sub-g","group":""},`+
 		`{"account":"acc-1","accountGroup":"","venueAccount":"sub-1","group":"desk"},`+
 		`{"account":"acc-2","accountGroup":"","venueAccount":"","group":""}]`, 1)
-	providers := `{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true}`
+	providers := `{"type":"alpaca","title":"Alpaca","executionPolicy":false,"venueAccounts":true,"verifiesSymbols":true,"searchesSymbols":true,"unlinkedFees":true,"liveOnly":false}`
 	assertTradingJSON(t, rec, 200, `{"trading":{"providers":[`+providers+`],"connections":[`+expected+`]}}`)
+	svc.tradingStatus.Providers[0].LiveOnly = true
+	liveOnlyProviders := strings.Replace(providers, `"liveOnly":false`, `"liveOnly":true`, 1)
+	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/trading", ""), 200,
+		`{"trading":{"providers":[`+liveOnlyProviders+`],"connections":[`+expected+`]}}`)
+	svc.tradingStatus.Providers[0].LiveOnly = false
 	svc.tradingDestinations[0].State = "unavailable"
 	svc.tradingDestinations[0].Error = "keys unavailable"
 	assertTradingJSON(t, callTrading(t, svc, "/api/v1", "GET", "/accounts/acc-1/trading-destinations?mode=live", ""), 200, `{"destinations":[{"connection":"connection-1","label":"Paper","provider":"alpaca","mode":"paper","enabled":false,"venueAccount":"","state":"unavailable","error":"keys unavailable"}]}`)
@@ -820,25 +825,17 @@ func jsonMembers(typ reflect.Type) (required, properties []string) {
 // property names from the spec text, sorted.
 func openAPISchemaMembers(t *testing.T, spec, name string) (required, properties []string) {
 	t.Helper()
-	_, schema, found := strings.Cut(spec, "\n    "+name+":\n")
-	if !found {
+	schemas, found := openAPIComponents(strings.Split(spec, "\n"), "schemas")
+	if !found || schemas[name] == "" {
 		t.Fatalf("OpenAPI schema %s is missing", name)
 	}
-	inProperties := false
-	for _, line := range strings.Split(schema, "\n") {
-		indent := len(line) - len(strings.TrimLeft(line, " "))
-		if strings.TrimSpace(line) != "" && indent < 6 {
-			break
-		}
-		switch {
-		case indent == 6:
-			inProperties = line == "      properties:"
-			if list, ok := strings.CutPrefix(line, "      required: ["); ok {
-				required = strings.Split(strings.TrimSuffix(list, "]"), ", ")
-			}
-		case indent == 8 && inProperties:
-			properties = append(properties, strings.TrimSuffix(strings.TrimSpace(line), ":"))
-		}
+	schema := openAPIFields(t, name, schemas[name])
+	// Schemas whose fields are all optional have no required member.
+	if block, exists := schema["required"]; exists {
+		required = openAPIList(t, name+".required", block)
+	}
+	for property := range openAPIFields(t, name+".properties", schema["properties"]) {
+		properties = append(properties, property)
 	}
 	slices.Sort(required)
 	slices.Sort(properties)

@@ -52,7 +52,7 @@ func Next(
 		return Occurrence{}, false, err
 	}
 	if completed < 0 {
-		return Occurrence{}, false, fmt.Errorf("negative completed count: %w", ErrInvalid)
+		return Occurrence{}, false, fmt.Errorf("negative completed count")
 	}
 	if spec.Schedule.Kind == Once ||
 		(spec.Termination.Mode == Count && completed >= spec.Termination.MaxRuns) {

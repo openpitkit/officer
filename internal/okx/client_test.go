@@ -471,7 +471,7 @@ func TestSignedRedirectRefused(t *testing.T) {
 			}))
 			defer source.Close()
 			var originalRedirects atomic.Int32
-			original := &http.Client{Timeout: time.Second, CheckRedirect: func(
+			original := &http.Client{Timeout: time.Hour, CheckRedirect: func(
 				*http.Request, []*http.Request,
 			) error {
 				originalRedirects.Add(1)

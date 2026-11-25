@@ -798,6 +798,7 @@ const accessSnapshot: TradingSnapshot = {
       verifiesSymbols: true,
       searchesSymbols: true,
       unlinkedFees: true,
+      liveOnly: false,
     },
     {
       executionPolicy: false,
@@ -807,6 +808,7 @@ const accessSnapshot: TradingSnapshot = {
       verifiesSymbols: false,
       searchesSymbols: false,
       unlinkedFees: false,
+      liveOnly: false,
     },
   ],
   connections: [

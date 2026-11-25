@@ -1,0 +1,90 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# SQLite tests ran serially under -race and hit go test's 10-minute timeout.
+# Process-global changes require serial execution so other tests cannot observe
+# a temporary environment, working directory, file mode mask, or logger.
+
+rules:
+  - id: sqlite-test-parallel
+    message: Start SQLite tests with t.Parallel() unless they change process-global state.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern: |
+          func $TEST($T *testing.T) {
+            ...
+          }
+      - pattern-not: |
+          func $TEST($T *testing.T) {
+            $T.Parallel()
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $TEST
+          regex: ^Test(?:[^a-z]|$)
+      # A global call may live inside a subtest. Skip comments and literals
+      # before looking for those calls anywhere in the test body.
+      - pattern-not-regex: |-
+          (?x)
+          (?: //[^\r\n]* | /\*[\s\S]*?\*/ | `[^`]*`
+            | "(?:\\.|[^"\\])*" | '(?:\\.|[^'\\])*'
+          ) (*SKIP)(*F)
+          |
+          (?<![\w.]) (?:
+              \w+\s*\.\s*(?:Setenv|Chdir)
+            | os\s*\.\s*(?:Unsetenv|Clearenv)
+            | syscall\s*\.\s*Umask
+            | (?:slog|logtest)\s*\.\s*SetDefault
+            | captureSlogForTest
+          ) \s* \(
+      - focus-metavariable: $TEST
+    paths:
+      include:
+        - "/internal/store/sqlite/*_test.go"
+
+  - id: sqlite-test-parallel-global-state
+    message: Run SQLite tests that change process-global state serially.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-inside: |
+          func $TEST($T *testing.T) {
+            ...
+            $T.Parallel()
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $TEST
+          regex: ^Test(?:[^a-z]|$)
+      # Both lists must match. The fixture covers each call in both rules.
+      - pattern-regex: |-
+          (?x)
+          (?: //[^\r\n]* | /\*[\s\S]*?\*/ | `[^`]*`
+            | "(?:\\.|[^"\\])*" | '(?:\\.|[^'\\])*'
+          ) (*SKIP)(*F)
+          |
+          (?<![\w.]) (?:
+              \w+\s*\.\s*(?:Setenv|Chdir)
+            | os\s*\.\s*(?:Unsetenv|Clearenv)
+            | syscall\s*\.\s*Umask
+            | (?:slog|logtest)\s*\.\s*SetDefault
+            | captureSlogForTest
+          ) \s* \(
+    paths:
+      include:
+        - "/internal/store/sqlite/*_test.go"

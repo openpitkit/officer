@@ -19,17 +19,17 @@ package auth_test
 
 import (
 	"context"
-	"errors"
+	"net/http"
 	"testing"
 
 	"go.openpit.dev/officer/framework/auth"
-	"go.openpit.dev/officer/framework/domain"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 func TestCallerFromContextRejectsUnstampedContext(t *testing.T) {
 	caller, err := auth.CallerFromContext(context.Background())
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("CallerFromContext on a bare context = (%+v, %v), want ErrInvalid", caller, err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("CallerFromContext on a bare context = (%+v, %v), want internal error", caller, err)
 	}
 }
 
@@ -42,4 +42,12 @@ func TestCallerFromContextReturnsStampedSystemCaller(t *testing.T) {
 		t.Fatalf("CallerFromContext on a system-stamped context = (%+v, %v), want (%+v, nil)",
 			caller, err, system)
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

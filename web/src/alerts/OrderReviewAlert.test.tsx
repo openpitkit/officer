@@ -22,7 +22,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import type { ActionableAlert } from "./registry";
-import { Summary, Detail } from "./OrderReviewAlert";
+import { summary, Detail } from "./OrderReviewAlert";
 
 const alert: ActionableAlert = {
   id: "order/1",
@@ -53,7 +53,7 @@ it("shows identifiers safely, opens the order and closes with empty input", asyn
   const { container } = render(
     <I18nextProvider i18n={i18n}>
       <MemoryRouter initialEntries={["/orders"]}>
-        <Summary alert={alert} />
+        <span>{summary(alert, i18n.t)}</span>
         <Detail alert={alert} pending={false} resolve={resolve} />
         <Location />
       </MemoryRouter>

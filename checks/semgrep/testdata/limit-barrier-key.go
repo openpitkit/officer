@@ -2843,9 +2843,9 @@ func limitKeyWhere(key domain.LimitKey, ids limitKeyIDs) (limitKeyPredicate, err
 	return predicate, nil
 }
 
-// Negative source: framework/web/httpapi/limit_dto.go:356.
+// Negative source: framework/backend/backend_limits.go:383.
 func persistedLimit[Limit domain.KeyedLimit](
-	ctx context.Context, svc LimitReader,
+	ctx context.Context, n node.Node,
 	target Limit,
 	slice func(node.AccountLimits) []Limit,
 ) (Limit, error) {
@@ -2855,22 +2855,19 @@ func persistedLimit[Limit domain.KeyedLimit](
 	if err != nil {
 		return zero, err
 	}
-	limits, err := svc.ListLimits(ctx, key.Account())
+	limits, err := n.ListLimits(ctx, key.Account())
 	if err != nil {
 		return zero, err
 	}
-	for _, limit := range slice(limits) {
-		// ok: limit-key-literal, limit-target-literal, limit-key-string-join, limit-key-axis-compare, limit-key-sql
-		limitKey, err := domain.StoredLimitKey(limit)
-		if err != nil {
-			return zero, err
-		}
-		// ok: limit-key-literal, limit-target-literal, limit-key-string-join, limit-key-axis-compare, limit-key-sql
-		if limitKey == key {
-			return limit, nil
-		}
+	limit, found, err := domain.FindLimit(slice(limits), key)
+	if err != nil {
+		return zero, err
 	}
-	return zero, domain.ErrNotFound
+	if !found {
+		return zero, domain.Internal(
+			errors.New("limit write was stored but its read-back did not find it"))
+	}
+	return limit, nil
 }
 
 // Negative source: framework/node/local_restore_online.go:343.

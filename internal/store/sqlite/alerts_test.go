@@ -36,8 +36,8 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-func alertCaller(name string) context.Context {
-	return auth.ContextWithCaller(context.Background(), domain.Caller{Source: domain.SourcePanel, Principal: name})
+func alertCaller(t *testing.T, name string) context.Context {
+	return auth.ContextWithCaller(t.Context(), domain.Caller{Source: domain.SourcePanel, Principal: name})
 }
 func alertTestType(calls *atomic.Int32) alerts.Type {
 	validate := func(raw json.RawMessage) error {
@@ -69,6 +69,7 @@ func alertTestService(t *testing.T, r *realmStore, calls *atomic.Int32, channels
 }
 
 func TestAlertsPersonalStateFanoutAndResolution(t *testing.T) {
+	t.Parallel()
 	_, rs := newTestStore(t)
 	r := rs.(*realmStore)
 	var calls atomic.Int32
@@ -83,7 +84,7 @@ func TestAlertsPersonalStateFanoutAndResolution(t *testing.T) {
 		}},
 		alerts.Channel{Name: "other", Deliver: func(context.Context, alerts.Event) error { attempted = append(attempted, "other"); return nil }},
 	)
-	ctx := alertCaller("alice")
+	ctx := alertCaller(t, "alice")
 	if err := s.Publish(ctx, alertEvent("event-1")); err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("safe delivery error = %v", err)
 	}
@@ -109,12 +110,12 @@ func TestAlertsPersonalStateFanoutAndResolution(t *testing.T) {
 	}
 	// A second Service is another HTTP/MCP session over the same durable store.
 	session := alertTestService(t, r, &calls)
-	alice, _ := session.List(alertCaller("alice"))
-	bob, _ := session.List(alertCaller("bob"))
+	alice, _ := session.List(alertCaller(t, "alice"))
+	bob, _ := session.List(alertCaller(t, "bob"))
 	if alice.Unread != 0 || bob.Unread != 1 || alice.Total != 1 {
 		t.Fatalf("personal marks leaked: alice=%+v bob=%+v", alice, bob)
 	}
-	if err := session.SetRead(alertCaller("bob"), "event-1", false); err != nil {
+	if err := session.SetRead(alertCaller(t, "bob"), "event-1", false); err != nil {
 		t.Fatal(err)
 	}
 	alice, _ = s.List(ctx)
@@ -187,11 +188,12 @@ func TestAlertsPersonalStateFanoutAndResolution(t *testing.T) {
 }
 
 func TestAlertsIdentityValidationAndTransactionFailures(t *testing.T) {
+	t.Parallel()
 	_, rs := newTestStore(t)
 	r := rs.(*realmStore)
 	var calls atomic.Int32
 	s := alertTestService(t, r, &calls)
-	ctx := alertCaller("alice")
+	ctx := alertCaller(t, "alice")
 	if err := s.Publish(ctx, alertEvent("kept")); err != nil {
 		t.Fatal(err)
 	}
@@ -253,11 +255,12 @@ func TestAlertsIdentityValidationAndTransactionFailures(t *testing.T) {
 // A generated operation sequence checks isolation through repeated mark/read
 // transitions, including independent sessions and the terminal resolved state.
 func TestAlertsReadStateSequences(t *testing.T) {
+	t.Parallel()
 	_, rs := newTestStore(t)
 	r := rs.(*realmStore)
 	var calls atomic.Int32
 	s := alertTestService(t, r, &calls)
-	if err := s.Publish(alertCaller("alice"), alertEvent("sequence")); err != nil {
+	if err := s.Publish(alertCaller(t, "alice"), alertEvent("sequence")); err != nil {
 		t.Fatal(err)
 	}
 	expected := map[string]bool{"alice": false, "bob": false}
@@ -266,17 +269,17 @@ func TestAlertsReadStateSequences(t *testing.T) {
 	for step := range 80 {
 		name := names[random.IntN(len(names))]
 		read := random.IntN(2) == 1
-		if err := s.SetRead(alertCaller(name), "sequence", read); err != nil {
+		if err := s.SetRead(alertCaller(t, name), "sequence", read); err != nil {
 			t.Fatal(err)
 		}
 		expected[name] = read
 		session := alertTestService(t, r, &calls)
 		for _, principal := range names {
-			a, err := session.Detail(alertCaller(principal), "sequence")
+			a, err := session.Detail(alertCaller(t, principal), "sequence")
 			if err != nil {
 				t.Fatal(err)
 			}
-			list, err := session.List(alertCaller(principal))
+			list, err := session.List(alertCaller(t, principal))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -289,14 +292,14 @@ func TestAlertsReadStateSequences(t *testing.T) {
 			}
 		}
 	}
-	if _, err := s.Resolve(alertCaller("bob"), "sequence", "accept", json.RawMessage(`{}`)); err != nil {
+	if _, err := s.Resolve(alertCaller(t, "bob"), "sequence", "accept", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	for _, principal := range names {
-		if err := s.SetRead(alertCaller(principal), "sequence", false); !errors.Is(err, domain.ErrNotFound) {
+		if err := s.SetRead(alertCaller(t, principal), "sequence", false); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("terminal mark recreated event: %v", err)
 		}
-		list, err := s.List(alertCaller(principal))
+		list, err := s.List(alertCaller(t, principal))
 		if err != nil || list.Total != 0 || list.Unread != 0 {
 			t.Fatalf("terminal state = %+v %v", list, err)
 		}
@@ -304,12 +307,13 @@ func TestAlertsReadStateSequences(t *testing.T) {
 }
 
 func TestAlertsSurviveDatabaseReopen(t *testing.T) {
+	t.Parallel()
 	st, rs := newTestStore(t)
 	r := rs.(*realmStore)
 	path := r.store.path
 	var calls atomic.Int32
 	s := alertTestService(t, r, &calls)
-	ctx := alertCaller("alice")
+	ctx := alertCaller(t, "alice")
 	if err := s.Publish(ctx, alertEvent("restart")); err != nil {
 		t.Fatal(err)
 	}
@@ -343,6 +347,7 @@ func TestAlertsSurviveDatabaseReopen(t *testing.T) {
 }
 
 func TestAlertsHandlerCanUseDomainStore(t *testing.T) {
+	t.Parallel()
 	_, rs := newTestStore(t)
 	r := rs.(*realmStore)
 	var calls atomic.Int32
@@ -361,8 +366,7 @@ func TestAlertsHandlerCanUseDomainStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(alertCaller("alice"), 2*time.Second)
-	defer cancel()
+	ctx := alertCaller(t, "alice")
 	if err := s.Publish(ctx, alertEvent("reentrant")); err != nil {
 		t.Fatal(err)
 	}
@@ -372,18 +376,19 @@ func TestAlertsHandlerCanUseDomainStore(t *testing.T) {
 }
 
 func TestAlertsPortableBackupModesAndRollback(t *testing.T) {
+	t.Parallel()
 	_, sourceRealm := newTestStore(t)
 	source := sourceRealm.(*realmStore)
 	var calls atomic.Int32
 	s := alertTestService(t, source, &calls, alerts.Channel{Name: "failed", Deliver: func(context.Context, alerts.Event) error { return errors.New("transport failure") }})
-	ctx := alertCaller("alice")
+	ctx := alertCaller(t, "alice")
 	if err := s.Publish(ctx, alertEvent("portable")); err == nil {
 		t.Fatal("delivery failure missing")
 	}
 	if err := s.SetRead(ctx, "portable", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRead(alertCaller("bob"), "portable", false); err != nil {
+	if err := s.SetRead(alertCaller(t, "bob"), "portable", false); err != nil {
 		t.Fatal(err)
 	}
 	archive, err := source.ExportBackup(ctx, backup.Scope{All: true})
@@ -402,8 +407,10 @@ func TestAlertsPortableBackupModesAndRollback(t *testing.T) {
 	}
 	for _, mode := range []backup.RestoreMode{backup.RestoreModeReplaceAll, backup.RestoreModeOverwrite, backup.RestoreModeInsertMissing} {
 		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
 			_, targetRealm := newTestStore(t)
 			target := targetRealm.(*realmStore)
+			var calls atomic.Int32
 			session := alertTestService(t, target, &calls)
 			for _, id := range []string{"portable", "target-only"} {
 				if err := session.Publish(ctx, alertEvent(id)); err != nil {
@@ -447,6 +454,7 @@ func TestAlertsPortableBackupModesAndRollback(t *testing.T) {
 }
 
 func TestAlertsLateDeliveryAfterResolution(t *testing.T) {
+	t.Parallel()
 	_, rs := newTestStore(t)
 	r := rs.(*realmStore)
 	var calls atomic.Int32
@@ -461,14 +469,14 @@ func TestAlertsLateDeliveryAfterResolution(t *testing.T) {
 			return ctx.Err()
 		}
 	}})
-	ctx, cancel := context.WithTimeout(alertCaller("alice"), 2*time.Second)
+	ctx, cancel := context.WithCancel(alertCaller(t, "alice"))
 	defer cancel()
 	published := make(chan error, 1)
 	go func() { published <- s.Publish(ctx, alertEvent("late")) }()
 	select {
-	case <-started:
-	case <-ctx.Done():
-		t.Fatal("slow channel did not start")
+	case <-started: // Slow channel started.
+	case err := <-published:
+		t.Fatalf("Publish returned before delivery started: %v", err)
 	}
 	if _, err := s.Resolve(ctx, "late", "accept", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)

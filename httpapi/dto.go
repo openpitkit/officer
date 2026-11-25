@@ -37,33 +37,10 @@ import (
 // for the DTOs shared with the MCP tools - the account, group, order and trade
 // row DTOs (list_dto.go), the asset DTO (asset_dto.go), the adjustment DTOs
 // (adjustment_dto.go), the execution-report DTOs (execution_report_dto.go),
-// the reject DTO (order_reject_dto.go), the review DTOs (order_review_dto.go)
-// and the limit DTOs (limit_dto.go), shared there so a second surface can take
-// and answer the same body.
+// the reject DTO (order_reject_dto.go), the review DTOs (order_review_dto.go),
+// the venue-order DTO (venue_order_dto.go), and the limit DTOs (limit_dto.go),
+// shared there so a second surface can take and answer the same body.
 // framework/web/httpapi owns their encoding and mapping.
-
-type venueOrderDTO struct {
-	Connection    string          `json:"connection"`
-	VenueAccount  string          `json:"venueAccount"`
-	Route         json.RawMessage `json:"route"`
-	ClientOrderID string          `json:"clientOrderId"`
-	VenueOrderID  string          `json:"venueOrderId,omitempty"`
-	SendAttempted bool            `json:"sendAttempted"`
-	CreatedAt     string          `json:"createdAt"`
-}
-
-func toVenueOrderDTO(v domain.VenueOrder) (venueOrderDTO, error) {
-	route, err := storedTradingRouteDTO(v.Route)
-	if err != nil {
-		return venueOrderDTO{}, err
-	}
-	return venueOrderDTO{
-		Connection: v.Connection.String(), VenueAccount: v.VenueAccount,
-		Route: route, ClientOrderID: v.ClientOrderID,
-		VenueOrderID: v.VenueOrderID, SendAttempted: v.SendAttempted,
-		CreatedAt: v.CreatedAt.Format(time.RFC3339Nano),
-	}, nil
-}
 
 func storedTradingRouteDTO(route string) (json.RawMessage, error) {
 	if err := domain.ValidateTradingRoute(route); err != nil {
@@ -1239,10 +1216,10 @@ type sendVenueOrderResponseDTO struct {
 }
 
 type venueSendDTO struct {
-	Status     string                        `json:"status"`
-	Error      string                        `json:"error,omitempty"`
-	VenueOrder *venueOrderDTO                `json:"venueOrder,omitempty"`
-	Refusal    *trading.TestExecutionRefusal `json:"refusal,omitempty"`
+	Status     string                                `json:"status"`
+	Error      string                                `json:"error,omitempty"`
+	VenueOrder *httpx.VenueOrderDTO[json.RawMessage] `json:"venueOrder,omitempty"`
+	Refusal    *trading.TestExecutionRefusal         `json:"refusal,omitempty"`
 }
 
 func toVenueSendDTO(send *backend.VenueSend) (*venueSendDTO, error) {
@@ -1251,7 +1228,7 @@ func toVenueSendDTO(send *backend.VenueSend) (*venueSendDTO, error) {
 	}
 	out := &venueSendDTO{Status: send.Status, Error: send.Error, Refusal: send.Refusal}
 	if send.Order != nil {
-		link, err := toVenueOrderDTO(*send.Order)
+		link, err := httpx.ToVenueOrderDTO(*send.Order, storedTradingRouteDTO)
 		if err != nil {
 			return nil, err
 		}

@@ -36,6 +36,7 @@ import (
 	"go.openpit.dev/officer/framework/health"
 	fwtrading "go.openpit.dev/officer/framework/trading"
 	"go.openpit.dev/officer/internal/okx"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func okxWSWrite(t *testing.T, ctx context.Context, conn *websocket.Conn, frame any) bool {
@@ -58,11 +59,18 @@ func okxWSHandshake(
 		return nil
 	}
 	_, raw, err := conn.Read(ctx)
+	if err != nil {
+		if t.Context().Err() == nil {
+			t.Error("OKX login request")
+		}
+		_ = conn.CloseNow()
+		return nil
+	}
 	var login struct {
 		Op   string
 		Args []map[string]string
 	}
-	if err != nil || json.Unmarshal(raw, &login) != nil || login.Op != "login" ||
+	if json.Unmarshal(raw, &login) != nil || login.Op != "login" ||
 		len(login.Args) != 1 || login.Args[0]["apiKey"] == "" ||
 		login.Args[0]["passphrase"] == "" || login.Args[0]["sign"] == "" {
 		t.Error("OKX login request")
@@ -74,8 +82,14 @@ func okxWSHandshake(
 		return nil
 	}
 	_, raw, err = conn.Read(ctx)
-	if err != nil ||
-		string(raw) != `{"op":"subscribe","args":[{"channel":"orders","instType":"SPOT"}]}` {
+	if err != nil {
+		if t.Context().Err() == nil {
+			t.Error("OKX orders subscription")
+		}
+		_ = conn.CloseNow()
+		return nil
+	}
+	if string(raw) != `{"op":"subscribe","args":[{"channel":"orders","instType":"SPOT"}]}` {
 		t.Error("OKX orders subscription")
 		_ = conn.CloseNow()
 		return nil
@@ -102,23 +116,9 @@ func okxWSData(rows ...map[string]string) map[string]any {
 	}
 }
 
-func okxNextEvent(t *testing.T, events <-chan fwtrading.Event) fwtrading.Event {
-	t.Helper()
-	select {
-	case event, open := <-events:
-		if !open {
-			t.Fatal("OKX event channel closed")
-		}
-		return event
-	case <-time.After(4 * time.Second):
-		t.Fatal("OKX event timeout")
-	}
-	return fwtrading.Event{}
-}
-
 func TestOKXStreamEvents(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 	c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v5/public/instruments" {
 			okxReply(w, []okx.Instrument{okxTestInstrument()})
@@ -144,11 +144,11 @@ func TestOKXStreamEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal("subscribe")
 	}
-	if okxNextEvent(t, events).Kind != fwtrading.EventConnected {
+	if nextEvent(t, events).Kind != fwtrading.EventConnected {
 		t.Fatal("handshake must precede connected")
 	}
 	for i := 0; i < 2; i++ {
-		event := okxNextEvent(t, events)
+		event := nextEvent(t, events)
 		if event.Kind != fwtrading.EventFill || event.Ref.ClientOrderID != okxTestCOID ||
 			event.Ref.VenueOrderID != "123" || event.Ref.Symbol != "BTC-USDT" ||
 			event.Fill.Final != (i == 1) || event.Fill.At.UnixMilli() != 1700000000000 ||
@@ -163,7 +163,7 @@ func TestOKXStreamEvents(t *testing.T) {
 			t.Fatal("stream fill quantities")
 		}
 	}
-	if e := okxNextEvent(t, events); e.Kind != fwtrading.EventOrder ||
+	if e := nextEvent(t, events); e.Kind != fwtrading.EventOrder ||
 		e.Ref.ClientOrderID != okxTestCOID {
 		t.Fatal("venue cancel must reconcile")
 	}
@@ -174,7 +174,7 @@ func TestOKXStreamAuthorizationAndRedaction(t *testing.T) {
 		"60004", "60005", "60006", "60007", "60009", "60024", "60032", "63999",
 	} {
 		t.Run(code, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			signatures := make(chan string, 1)
 			c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
@@ -229,8 +229,8 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 	} {
 		for _, lifecycle := range []bool{false, true} {
 			t.Run(tc.stage+"/"+tc.code+"/"+strconv.FormatBool(lifecycle), func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
 				signatures := make(chan string, 1)
 				c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/api/v5/public/instruments" {
@@ -243,8 +243,14 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 					}
 					defer func() { _ = conn.CloseNow() }()
 					_, login, err := conn.Read(ctx)
+					if err != nil {
+						if t.Context().Err() == nil {
+							t.Error("missing captured login")
+						}
+						return
+					}
 					var frame struct{ Args []struct{ Sign string } }
-					if err != nil || json.Unmarshal(login, &frame) != nil ||
+					if json.Unmarshal(login, &frame) != nil ||
 						len(frame.Args) != 1 || frame.Args[0].Sign == "" {
 						t.Error("missing captured login")
 						return
@@ -293,11 +299,7 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 						for range events {
 						}
 					}()
-					select {
-					case message = <-statuses:
-					case <-ctx.Done():
-						t.Fatal("missing published failure status")
-					}
+					message = <-statuses // Stream publishes the failure status.
 				} else {
 					_, err := c.stream(ctx, make(chan fwtrading.Event, 1))
 					if err == nil || errors.Is(err, errOKXUnauthorized) != okxAuthCode(tc.code) {
@@ -305,8 +307,6 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 					}
 					message = err.Error()
 				}
-				cancel()
-				c.Close()
 				var signature string
 				select {
 				case signature = <-signatures:
@@ -346,8 +346,8 @@ func TestOKXStreamEchoedRequestsStayPrivate(t *testing.T) {
 func TestOKXStreamCloseReasonStaysPrivate(t *testing.T) {
 	for _, lifecycle := range []bool{false, true} {
 		t.Run(strconv.FormatBool(lifecycle), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
 			c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v5/public/instruments" {
 					okxReply(w, []okx.Instrument{okxTestInstrument()})
@@ -376,11 +376,7 @@ func TestOKXStreamCloseReasonStaysPrivate(t *testing.T) {
 					for range events {
 					}
 				}()
-				select {
-				case message = <-statuses:
-				case <-ctx.Done():
-					t.Fatal("missing published close status")
-				}
+				message = <-statuses // Stream publishes the close status.
 			} else {
 				_, err := c.stream(ctx, make(chan fwtrading.Event, 1))
 				if err == nil {
@@ -388,8 +384,6 @@ func TestOKXStreamCloseReasonStaysPrivate(t *testing.T) {
 				}
 				message = err.Error()
 			}
-			cancel()
-			c.Close()
 			if !strings.Contains(message, "okx: stream closed by venue: status 4004") ||
 				strings.Contains(message, "venue-close-reason-marker") {
 				t.Fatal("close status missing or venue reason escaped into error or status")
@@ -401,8 +395,8 @@ func TestOKXStreamCloseReasonStaysPrivate(t *testing.T) {
 func TestOKXStreamReconnect(t *testing.T) {
 	for _, reason := range []string{"notice", "close", "error"} {
 		t.Run(reason, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
 			var sessions atomic.Int32
 			c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v5/public/instruments" {
@@ -437,7 +431,7 @@ func TestOKXStreamReconnect(t *testing.T) {
 				t.Fatal("subscribe")
 			}
 			for i := 0; i < 2; i++ {
-				if okxNextEvent(t, events).Kind != fwtrading.EventConnected {
+				if nextEvent(t, events).Kind != fwtrading.EventConnected {
 					t.Fatal("reconnect must announce reconciliation")
 				}
 			}
@@ -491,8 +485,8 @@ func TestOKXStreamRowDiagnostics(t *testing.T) {
 }
 
 func TestOKXStreamPongTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 	pingSeen := make(chan struct{}, 1)
 	c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v5/public/instruments" {
@@ -533,8 +527,8 @@ func TestOKXStreamPongTimeout(t *testing.T) {
 }
 
 func TestOKXStreamBlockedDeliveryPongTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 	c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v5/public/instruments" {
 			okxReply(w, []okx.Instrument{okxTestInstrument()})
@@ -565,8 +559,8 @@ func TestOKXStreamCancelWithFill(t *testing.T) {
 	for _, state := range []string{"canceled", "mmp_canceled"} {
 		for _, withFill := range []bool{false, true} {
 			t.Run(state+"/"+strconv.FormatBool(withFill), func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
 				c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/api/v5/public/instruments" {
 						okxReply(w, []okx.Instrument{okxTestInstrument()})
@@ -589,18 +583,18 @@ func TestOKXStreamCancelWithFill(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "reconnect notice") {
 					t.Fatal("cancel stream did not reach its end")
 				}
-				if okxNextEvent(t, out).Kind != fwtrading.EventConnected {
+				if nextEvent(t, out).Kind != fwtrading.EventConnected {
 					t.Fatal("missing connected event")
 				}
 				var ref fwtrading.OrderRef
 				if withFill {
-					event := okxNextEvent(t, out)
+					event := nextEvent(t, out)
 					if event.Kind != fwtrading.EventFill || event.Fill.Final {
 						t.Fatal("cancel fill must precede reconciliation and stay non-final")
 					}
 					ref = event.Ref
 				}
-				event := okxNextEvent(t, out)
+				event := nextEvent(t, out)
 				if event.Kind != fwtrading.EventOrder || event.Ref.ClientOrderID != okxTestCOID ||
 					(withFill && event.Ref != ref) || len(out) != 0 {
 					t.Fatal("cancel must emit exactly one reconciliation with the same ref")
@@ -613,8 +607,8 @@ func TestOKXStreamCancelWithFill(t *testing.T) {
 func TestOKXStreamCatalogue(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(strconv.FormatBool(fail), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
 			var requests atomic.Int32
 			c := newOKXTest(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v5/public/instruments" {
@@ -659,9 +653,9 @@ func TestOKXStreamCatalogue(t *testing.T) {
 			if !strings.Contains(err.Error(), "reconnect notice") {
 				t.Fatal("order reader did not reach the notice")
 			}
-			okxNextEvent(t, out)
-			if okxNextEvent(t, out).Kind != fwtrading.EventFill ||
-				okxNextEvent(t, out).Kind != fwtrading.EventOrder ||
+			nextEvent(t, out)
+			if nextEvent(t, out).Kind != fwtrading.EventFill ||
+				nextEvent(t, out).Kind != fwtrading.EventOrder ||
 				len(diagnostics) != 1 || diagnostics[0].Detail != okxFillAssets ||
 				diagnostics[0].Level != health.DiagWarn ||
 				diagnostics[0].Remediation != venueStreamReconciled {
@@ -791,11 +785,7 @@ func TestOKXStreamMissedFillsReconciledOnce(t *testing.T) {
 		"type": "deposit", "asset": "USD", "averageEntryPrice": "1", "realizedPnl": "0",
 		"balance": map[string]any{"mode": "absolute", "value": "1000"},
 	}, http.StatusCreated)
-	select {
-	case <-connected:
-	case <-f.ctx.Done():
-		t.Fatal("first connection")
-	}
+	<-connected // First connection.
 	input := tradingE2ESendInput(id)
 	input["destination"] = map[string]any{
 		"connection": id, "route": map[string]any{"timeInForce": "GTC"},
@@ -813,32 +803,24 @@ func TestOKXStreamMissedFillsReconciledOnce(t *testing.T) {
 	if !okxWSWrite(t, f.ctx, conn, okxWSData(row)) {
 		t.Fatal("first fill write")
 	}
-	f.wait("first OKX fill", func() bool {
+	polltest.Until(func() bool {
 		d, e := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 		tradingE2EMust(t, e)
 		return len(d.Trades) == 1
-	})
+	}) // first OKX fill
 	mu.Lock()
 	broken = true
 	mu.Unlock()
 	if !okxWSWrite(t, f.ctx, conn, map[string]string{"event": "notice", "code": "64008"}) {
 		t.Fatal("break notice")
 	}
-	select {
-	case <-connected:
-	case <-f.ctx.Done():
-		t.Fatal("reconnect")
-	}
-	select {
-	case <-replayed:
-	case <-f.ctx.Done():
-		t.Fatal("replay")
-	}
-	f.wait("OKX recovered fills and cancellation", func() bool {
+	<-connected // Reconnect.
+	<-replayed  // Replay.
+	polltest.Until(func() bool {
 		d, e := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 		tradingE2EMust(t, e)
 		return len(d.Trades) == 3 && d.Order.Status == domain.OrderStatusCancelled
-	})
+	}) // OKX recovered fills and cancellation
 	f.close()
 	mu.Lock()
 	gotPosts, gotLookups := posts, lookups
@@ -848,11 +830,7 @@ func TestOKXStreamMissedFillsReconciledOnce(t *testing.T) {
 	}
 	// After restart, duplicates must not change the three booked trades.
 	f.start()
-	select {
-	case <-connected:
-	case <-f.ctx.Done():
-		t.Fatal("connection after restart")
-	}
+	<-connected // Connection after restart.
 	detail, err := f.realm.GetOrder(f.ctx, domain.ExternalID(sent.ID))
 	tradingE2EMust(t, err)
 	if len(detail.Trades) != 3 {

@@ -39,6 +39,38 @@ import (
 	"go.openpit.dev/officer/internal/accountmode"
 )
 
+type followingLimitWriteSource struct {
+	frameworkmcp.Source
+}
+
+func (s followingLimitWriteSource) PutOrderSizeLimit(
+	ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite,
+	missing domain.MissingAccountPolicy,
+) (domain.LimitOrderSize, error) {
+	stored, err := s.Source.PutOrderSizeLimit(ctx, limit, write, missing)
+	if err != nil {
+		return domain.LimitOrderSize{}, err
+	}
+	limit.MaxQuantity = "5"
+	_, err = s.Source.PutOrderSizeLimit(ctx, limit, domain.LimitWriteChange, missing)
+	return stored, err
+}
+
+func TestLimitMCPWriteAnswersBeforeFollowingWriter(t *testing.T) {
+	_, src := controlPlaneTools(t)
+	res := callTool[httpx.PutLimitResultDTO](t,
+		followingLimitWriteSource{Source: src}, "add_limit", map[string]any{
+			"policy": "order_size_limit", "scope": "broker", "maxQuantity": "10",
+		})
+	if res.IsError {
+		t.Fatal(textContent(res.Content))
+	}
+	barrier := res.StructuredContent.OrderSizeLimit
+	if barrier == nil || barrier.MaxQuantity != "10" || barrier.Mode != "reject" {
+		t.Fatalf("write answered %+v, want its own reject cap 10", barrier)
+	}
+}
+
 // limitWriteDriver calls add_limit or update_limit and checks the barriers of
 // one kind that the service stores against what each call sends.
 type limitWriteDriver[Limit comparable] struct {
@@ -185,7 +217,7 @@ func TestMCPOrderSizeLimitModes(t *testing.T) {
 	review := domain.LimitOrderSize{
 		Mode: domain.RuleModeReviewWithoutHold, Scope: domain.ScopeBroker, MaxQuantity: "20",
 	}
-	if err := service.PutOrderSizeLimit(systemCtx(), review, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
+	if _, err := service.PutOrderSizeLimit(systemCtx(), review, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
 		t.Fatal(err)
 	}
 	driver := orderSizeLimitDriver(t, service, src)
@@ -299,17 +331,17 @@ func TestMCPGetLimitsCountingRuleModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mode := range []domain.RuleMode{domain.RuleModeReject, domain.RuleModeReviewWithHold} {
-		if err := service.PutRateLimit(ctx, domain.LimitRate{
+		if _, err := service.PutRateLimit(ctx, domain.LimitRate{
 			Mode: mode, Scope: domain.ScopeBroker, Window: time.Minute, MaxOrders: 10,
 		}, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
 			t.Fatal(err)
 		}
-		if err := service.PutPositionLimit(ctx, domain.LimitPosition{
+		if _, err := service.PutPositionLimit(ctx, domain.LimitPosition{
 			Mode: mode, Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "USD", MaxPosition: "10",
 		}, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
 			t.Fatal(err)
 		}
-		if err := service.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		if _, err := service.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 			Mode: mode, Axis: domain.SpotFundsPnlAxisRealized, Scope: domain.ScopeGlobal, Currency: "USD", LowerBound: "-10",
 		}, domain.LimitWriteAdd, domain.MissingAccountReject); err != nil {
 			t.Fatal(err)
@@ -500,7 +532,7 @@ func TestPositionLimitReadSummaries(t *testing.T) {
 	if _, err := service.CreateAsset(systemCtx(), domain.Asset{Code: "ETH"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PutPositionLimit(systemCtx(), domain.LimitPosition{Mode: domain.RuleModeReject,
+	if _, err := service.PutPositionLimit(systemCtx(), domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: "desk", Asset: "ETH", MaxPosition: "1",
 	}, domain.LimitWriteReplace, domain.MissingAccountReject); err != nil {
 		t.Fatal(err)
@@ -833,7 +865,7 @@ func requireSpotFundsLimitMode(t *testing.T, service *backend.Service, want doma
 // operator.
 func putSpotFundsLimitMode(t *testing.T, service *backend.Service, mode domain.SpotFundsLimitMode) {
 	t.Helper()
-	if err := service.PutSpotFundsLimitMode(systemCtx(), domain.LimitSpotFundsLimitMode{
+	if _, err := service.PutSpotFundsLimitMode(systemCtx(), domain.LimitSpotFundsLimitMode{
 		Scope: domain.ScopeGlobal, Mode: mode,
 	}); err != nil {
 		t.Fatalf("put Spot Funds limit mode %s: %v", mode, err)
@@ -1115,10 +1147,11 @@ func TestAddLimitWithOneAccount(t *testing.T) {
 	}, "position_limit account_asset added", domain.LimitPosition{Mode: domain.RuleModeReject,
 		Scope: domain.ScopeAccountAsset, Account: oneAccountFeatures.Account, Asset: "USD", MaxPosition: "0",
 	})
-	rest := httpx.DescribeErr(service.PutSpotFundsPnlBoundsLimit(restCtx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
+	_, restErr := service.PutSpotFundsPnlBoundsLimit(restCtx, domain.LimitSpotFundsPnlBounds{Mode: domain.RuleModeReject,
 		Axis:  domain.SpotFundsPnlAxisRealized,
 		Scope: domain.ScopeAccountGroup, Currency: "USD", LowerBound: "-1",
-	}, domain.LimitWriteReplace, ""))
+	}, domain.LimitWriteReplace, "")
+	rest := httpx.DescribeErr(restErr)
 	if rest.Code != "validation" {
 		t.Fatalf("service account_group bound = %+v, want a validation refusal", rest)
 	}

@@ -1,4 +1,16 @@
 {
+  "browserNotifications": {
+    "unsupported": "Browser notifications are not available in this browser",
+    "default": "Browser notifications are off",
+    "defaultDetail": "The panel can notify you about new alerts while this tab is open.",
+    "allow": "Allow notifications",
+    "granted": "Browser notifications are on",
+    "denied": "Browser notifications are blocked",
+    "deniedDetail": "The browser will not ask again. Allow notifications for this site in the browser's site settings, then reload the page.",
+    "failed": "Browser notifications failed",
+    "refused": "The browser refused to show the notification.",
+    "notificationTitle": "Pit Officer: new alert"
+  },
   "orderAwaitingReview": {
     "title": "Order awaiting review: {{order}}",
     "detail": "Order {{order}}, account {{account}}, mark {{markCode}}.",

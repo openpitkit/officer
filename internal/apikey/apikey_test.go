@@ -73,8 +73,8 @@ func TestCredentialShapeValidation(t *testing.T) {
 		{"key_with_settings", "openalgo", []string{"apiKey", "url", "wsUrl"},
 			[]string{"test-key-marker", "http://localhost:5000", "ws://localhost:8765"},
 			func(raw, vendor string) error { _, _, err := apikey.ParseKey(raw, vendor, "url", "wsUrl"); return err }},
-		{"cdp", "coinbase", []string{"keyName", "privateKey"},
-			[]string{"test-key-name-marker", encodeECKey(t, key)},
+		{"cdp", "coinbase", []string{"apiKeyId", "apiKeySecret"},
+			[]string{"test-key-id-marker", encodeECKey(t, key)},
 			func(raw, vendor string) error { _, err := apikey.ParseCDP(raw, vendor); return err }},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
@@ -150,6 +150,9 @@ func TestParseCDPPrivateKey(t *testing.T) {
 		{"LF", validPEM, true},
 		{"CRLF", strings.ReplaceAll(validPEM, "\n", "\r\n"), true},
 		{"surrounding_whitespace", " \t\n" + validPEM + " \r\n\t", true},
+		{"escaped_LF", strings.ReplaceAll(validPEM, "\n", `\n`), true},
+		{"escaped_P384", strings.ReplaceAll(p384PEM, "\n", `\n`), false},
+		{"escaped_trailing_text", strings.ReplaceAll(validPEM, "\n", `\n`) + "test-trailing-marker", false},
 		{"P384", p384PEM, false},
 		{"P256_PKCS8", string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})), false},
 		{"Ed25519_PKCS8", string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: edPKCS8})), false},
@@ -167,15 +170,15 @@ func TestParseCDPPrivateKey(t *testing.T) {
 		{"invalid_SEC1", string(pem.EncodeToMemory(&pem.Block{Type: block.Type, Bytes: []byte("test-DER-marker")})), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw := credentialsJSON(t, map[string]string{"keyName": " \t test-key-name-marker \n ", "privateKey": tc.privateKey})
+			raw := credentialsJSON(t, map[string]string{"apiKeyId": " \t test-key-id-marker \n ", "apiKeySecret": tc.privateKey})
 			got, err := apikey.ParseCDP(raw, "coinbase")
 			if tc.valid {
-				if err != nil || got.KeyName != "test-key-name-marker" || got.PrivateKey == nil || !got.PrivateKey.Equal(key) {
+				if err != nil || got.APIKeyID != "test-key-id-marker" || got.PrivateKey == nil || !got.PrivateKey.Equal(key) {
 					t.Fatal("valid CDP credentials were refused, changed or not trimmed")
 				}
 				return
 			}
-			assertValidationError(t, err, "/privateKey", "format", "coinbase: privateKey must be a PEM EC P-256 private key")
+			assertValidationError(t, err, "/apiKeySecret", "format", "coinbase: apiKeySecret must be one unencrypted SEC1 PEM block (BEGIN EC PRIVATE KEY) with no headers, holding a P-256 private key")
 			if got != (apikey.CDPCredentials{}) {
 				t.Fatal("invalid private key returned credentials")
 			}

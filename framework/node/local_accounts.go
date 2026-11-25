@@ -188,8 +188,7 @@ func (n *localNode) administrativeChainTerminalError(
 		return state.err
 	}
 	switch state.err.(type) {
-	case internalPostCommitNodeMutationFailure,
-		*internalPostCommitNodeMutationFailure:
+	case internalPostCommitNodeMutationFailure:
 		return state.err
 	}
 	failureOperation := state.failureOperation
@@ -209,11 +208,7 @@ func (n *localNode) administrativeChainTerminalError(
 
 func isInternalPostCommitNodeMutation(err error) bool {
 	var value internalPostCommitNodeMutationFailure
-	if errors.As(err, &value) {
-		return true
-	}
-	var pointer *internalPostCommitNodeMutationFailure
-	return errors.As(err, &pointer)
+	return errors.As(err, &value)
 }
 
 func (n *localNode) reconcileAdministrativeChainFailure(
@@ -244,13 +239,12 @@ func validateAccountAdministrativeSource(
 	source param.AccountID,
 ) error {
 	if err := domain.ValidateEngineAccountID(account.EngineAccountID); err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if account.EngineAccountID.Uint64() != uint64(source.Handle()) {
 		return fmt.Errorf(
-			"account %q engine identity does not match the live resolver: %w",
+			"account %q engine identity does not match the live resolver",
 			account.Code,
-			domain.ErrInvalid,
 		)
 	}
 	return nil
@@ -265,18 +259,16 @@ func validateGroupAdministrativeSource(
 			return nil
 		}
 		return fmt.Errorf(
-			"default group does not match the live resolver: %w",
-			domain.ErrInvalid,
+			"default group does not match the live resolver",
 		)
 	}
 	if err := domain.ValidateEngineGroupID(group.EngineGroupID); err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	if uint32(group.EngineGroupID) != uint32(source.Handle()) {
 		return fmt.Errorf(
-			"group %q engine identity does not match the live resolver: %w",
+			"group %q engine identity does not match the live resolver",
 			group.Code,
-			domain.ErrInvalid,
 		)
 	}
 	return nil
@@ -289,15 +281,14 @@ func administrativeGroupSource(
 	if group.Code == "" {
 		if group.EngineGroupID != 0 {
 			return param.AccountGroupID{}, fmt.Errorf(
-				"default group has an invalid engine identity: %w",
-				domain.ErrInvalid,
+				"default group has an invalid engine identity",
 			)
 		}
 		return param.DefaultAccountGroup, nil
 	}
 	if err := domain.ValidateEngineGroupID(group.EngineGroupID); err != nil {
 		return param.AccountGroupID{}, fmt.Errorf(
-			"group %q engine id: %w", group.Code, err,
+			"group %q engine id: %w", group.Code, domain.Internal(err),
 		)
 	}
 	source, err := resolver.ResolveGroup(group.Code)
@@ -305,7 +296,7 @@ func administrativeGroupSource(
 		return param.AccountGroupID{}, fmt.Errorf(
 			"resolve group %q from the live dictionary: %w",
 			group.Code,
-			err,
+			domain.Internal(err),
 		)
 	}
 	if err := validateGroupAdministrativeSource(group, source); err != nil {
@@ -644,7 +635,7 @@ func (n *localNode) audit(ctx context.Context, caller domain.Caller, entry store
 	if err := domain.ValidateAuditDecision(
 		entry.Action, entry.OrderID, entry.Verdict, entry.RejectCode,
 	); err != nil {
-		return err
+		return domain.Internal(err)
 	}
 	return n.realm.AppendAudit(ctx, entry)
 }
@@ -661,7 +652,7 @@ func (n *localNode) auditBatch(
 			entries[i].Verdict,
 			entries[i].RejectCode,
 		); err != nil {
-			return err
+			return domain.Internal(err)
 		}
 	}
 	return n.realm.AppendAuditBatch(ctx, entries)
@@ -903,8 +894,8 @@ func (n *localNode) validateAccountGroupMove(
 	}
 	if current.GroupCode != previousGroup {
 		return domain.Account{}, fmt.Errorf(
-			"account %q group changed from %q to %q: %w",
-			account, previousGroup, current.GroupCode, domain.ErrInvalid,
+			"account %q group changed from %q to %q",
+			account, previousGroup, current.GroupCode,
 		)
 	}
 	if err := validateAccountAdministrativeSource(

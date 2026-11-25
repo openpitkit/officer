@@ -54,7 +54,7 @@ func TestIBStreamReconnectHealthAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event := nextIBEvent(t, events); event.Kind != fwtrading.EventConnected {
+	if event := nextEvent(t, events); event.Kind != fwtrading.EventConnected {
 		t.Fatalf("event=%+v", event)
 	}
 	failed, connected := <-statuses, <-statuses
@@ -65,17 +65,12 @@ func TestIBStreamReconnectHealthAndCancellation(t *testing.T) {
 	live := v.clients[len(v.clients)-1]
 	v.mu.Unlock()
 	live.w.ConnectionClosed()
-	if event := nextIBEvent(t, events); event.Kind != fwtrading.EventConnected {
+	if event := nextEvent(t, events); event.Kind != fwtrading.EventConnected {
 		t.Fatalf("reconnect=%+v", event)
 	}
 	cancel()
-	select {
-	case _, ok := <-events:
-		if ok {
-			t.Fatal("cancellation left the stream open")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("cancellation did not close stream")
+	if _, ok := <-events; ok { // Stream channel closes.
+		t.Fatal("cancellation left the stream open")
 	}
 	c.Close()
 	if v.connects != 3 || v.disconnects != 3 {
@@ -97,6 +92,8 @@ func TestIBBlockedRequestsCancelSession(t *testing.T) {
 				return true
 			}
 			c := testIBConnector(t, v)
+			// The caller's deadline is the only one that can end the request.
+			c.timeout = time.Hour
 			subscribeIB(t, c)
 			s, err := c.liveSession()
 			if err != nil {
@@ -104,32 +101,25 @@ func TestIBBlockedRequestsCancelSession(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
-			result := make(chan error, 1)
-			go func() {
-				var err error
-				switch name {
-				case "accounts":
-					_, err = s.accounts(ctx)
-				case "details", "place":
-					_, err = c.Send(ctx, ibTestOrder())
-				default:
-					_, _, err = c.Lookup(ctx, fwtrading.OrderRef{ClientOrderID: "officer-order"})
-				}
-				result <- err
-			}()
-			select {
-			case err := <-result:
-				if err == nil {
-					t.Fatal("blocked request succeeded")
-				}
-				if name == "place" && (errors.Is(err, fwtrading.ErrNotSent) || !strings.Contains(err.Error(), "unknown")) {
-					t.Fatalf("PlaceOrder outcome=%v", err)
-				}
-				if name == "details" && !errors.Is(err, fwtrading.ErrNotSent) {
-					t.Fatalf("pre-send outcome=%v", err)
-				}
-			case <-time.After(500 * time.Millisecond):
-				t.Fatal("request ignored context deadline")
+			switch name {
+			case "accounts":
+				_, err = s.accounts(ctx)
+			case "details", "place":
+				_, err = c.Send(ctx, ibTestOrder())
+			default:
+				_, _, err = c.Lookup(ctx, fwtrading.OrderRef{ClientOrderID: "officer-order"})
+			}
+			if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.Fatal("blocked request returned before its deadline")
+			}
+			if err == nil {
+				t.Fatal("blocked request succeeded")
+			}
+			if name == "place" && (errors.Is(err, fwtrading.ErrNotSent) || !strings.Contains(err.Error(), "unknown")) {
+				t.Fatalf("PlaceOrder outcome=%v", err)
+			}
+			if name == "details" && !errors.Is(err, fwtrading.ErrNotSent) {
+				t.Fatalf("pre-send outcome=%v", err)
 			}
 			if s.ctx.Err() == nil {
 				t.Fatal("stalled request left session usable")
@@ -220,10 +210,15 @@ func TestIBSendContractTimeoutNotSent(t *testing.T) {
 	v := newFakeIBVenue()
 	v.request = func(_ *fakeIBTradingClient, name string, _ int64) bool { return name == "details" }
 	c := testIBConnector(t, v)
+	// The caller's deadline is the only one that can end the request.
+	c.timeout = time.Hour
 	subscribeIB(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, err := c.Send(ctx, ibTestOrder())
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatal("Send returned before its deadline")
+	}
 	if !errors.Is(err, fwtrading.ErrNotSent) || !strings.Contains(err.Error(), "deadline") || v.places != 0 {
 		t.Fatalf("contract timeout=%v places=%d", err, v.places)
 	}
@@ -249,7 +244,7 @@ func TestIBRecoverableNotices(t *testing.T) {
 		}
 	}
 	s.Error(-1, 0, 1101, "connectivity restored", "")
-	if event := nextIBEvent(t, events); event.Kind != fwtrading.EventConnected {
+	if event := nextEvent(t, events); event.Kind != fwtrading.EventConnected {
 		t.Fatalf("restored=%+v", event)
 	}
 	select {
@@ -291,7 +286,7 @@ func TestIBImmediateDeathsGrowBackoff(t *testing.T) {
 		v.mu.Unlock()
 		start := time.Now()
 		client.w.ConnectionClosed()
-		if event := nextIBEvent(t, events); event.Kind != fwtrading.EventConnected {
+		if event := nextEvent(t, events); event.Kind != fwtrading.EventConnected {
 			t.Fatalf("reconnect=%+v", event)
 		}
 		delays = append(delays, time.Since(start))
@@ -483,7 +478,7 @@ func TestIBReconnectStatusText(t *testing.T) {
 	client := v.clients[len(v.clients)-1]
 	v.mu.Unlock()
 	client.w.ConnectionClosed()
-	if event := nextIBEvent(t, events); event.Kind != fwtrading.EventConnected {
+	if event := nextEvent(t, events); event.Kind != fwtrading.EventConnected {
 		t.Fatalf("reconnect = %+v", event)
 	}
 	for i := 0; i < 4; i++ {
@@ -491,14 +486,9 @@ func TestIBReconnectStatusText(t *testing.T) {
 		if i%2 == 1 {
 			wantOK, wantMessage = true, ""
 		}
-		select {
-		case got := <-statuses:
-			if got.ok != wantOK || got.message != wantMessage {
-				t.Fatalf("status %d = (%v, %q), want (%v, %q)",
-					i, got.ok, got.message, wantOK, wantMessage)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("status %d was not reported", i)
+		if got := <-statuses; got.ok != wantOK || got.message != wantMessage { // Stream status is reported.
+			t.Fatalf("status %d = (%v, %q), want (%v, %q)",
+				i, got.ok, got.message, wantOK, wantMessage)
 		}
 	}
 }
@@ -524,21 +514,13 @@ func TestIBCloseRefusesProbesDuringStreamTeardown(t *testing.T) {
 	closed := make(chan struct{})
 	defer func() {
 		v.mu.Unlock()
-		select {
-		case <-closed:
-		case <-time.After(time.Second):
-			t.Error("Close did not finish after stream teardown was released")
-		}
+		<-closed // Close completes after stream teardown.
 	}()
 	go func() {
 		c.Close()
 		close(closed)
 	}()
-	select {
-	case <-s.ctx.Done():
-	case <-time.After(time.Second):
-		t.Fatal("Close did not cancel the stream")
-	}
+	<-s.ctx.Done() // Stream context is canceled.
 	select {
 	case <-closed:
 		t.Fatal("Close returned before stream teardown finished")

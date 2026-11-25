@@ -23,6 +23,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 // fakeFetch is a deterministic FetchFunc whose responses are queued per call.
@@ -59,7 +61,7 @@ func TestPoller_EmitsImmediatelyAndCoalesces(t *testing.T) {
 	q := QuoteUpdate{Base: testMarketDataAssetID("AAPL"), Quote: testMarketDataAssetID("USD"), Mark: "100"}
 	f := &fakeFetch{batches: [][]QuoteUpdate{{q}, {q}}}
 
-	// A short interval drives at least a second tick within the deadline.
+	// A short interval drives subsequent ticks for the absence window.
 	p := NewPoller(f.fetch, time.Millisecond, nil)
 	out := make(chan QuoteUpdate, 4)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -68,13 +70,8 @@ func TestPoller_EmitsImmediatelyAndCoalesces(t *testing.T) {
 	done := make(chan struct{})
 	go func() { p.Run(ctx, pollSubs, out); close(done) }()
 
-	select {
-	case got := <-out:
-		if got.Mark != "100" {
-			t.Fatalf("first emit mark = %q, want 100", got.Mark)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for the immediate emit")
+	if got := <-out; got.Mark != "100" {
+		t.Fatalf("first emit mark = %q, want 100", got.Mark)
 	}
 
 	// The unchanged quote must not be re-emitted across subsequent ticks.
@@ -104,14 +101,10 @@ func TestPoller_EmitsChangedQuote(t *testing.T) {
 	go func() { p.Run(ctx, pollSubs, out); close(done) }()
 
 	marks := map[string]bool{}
-	deadline := time.After(time.Second)
+
 	for len(marks) < 2 {
-		select {
-		case got := <-out:
-			marks[got.Mark] = true
-		case <-deadline:
-			t.Fatalf("timed out; saw marks %v", marks)
-		}
+		got := <-out
+		marks[got.Mark] = true
 	}
 	if !marks["100"] || !marks["101"] {
 		t.Fatalf("want marks 100 and 101, got %v", marks)
@@ -141,16 +134,14 @@ func TestPoller_FetchErrorReportedAndSkipped(t *testing.T) {
 	done := make(chan struct{})
 	go func() { p.Run(ctx, pollSubs, out); close(done) }()
 
-	time.Sleep(30 * time.Millisecond)
+	polltest.Until(func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen != 0
+	})
 	cancel()
 	<-done
 
-	mu.Lock()
-	gotErrs := seen
-	mu.Unlock()
-	if gotErrs == 0 {
-		t.Fatal("want at least one reported fetch error")
-	}
 	select {
 	case got := <-out:
 		t.Fatalf("want no emit on fetch error, got %+v", got)

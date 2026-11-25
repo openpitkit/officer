@@ -62,10 +62,27 @@ func testOrder() fwtrading.Order {
 
 func TestProvidersAndEndpoints(t *testing.T) {
 	providers := FirstPartyProviders()
-	if len(providers) != 7 || providers[3].Type != domain.TradingProviderEtoro || providers[4].Type != domain.TradingProviderOKX || providers[5].Type != domain.TradingProviderOpenAlgo || providers[6].Type != "test" {
-		t.Fatal("expected Alpaca, Binance, IB, eToro, OKX, OpenAlgo and Test providers")
+	want := []string{
+		domain.TradingProviderAlpaca, domain.TradingProviderBinance, domain.TradingProviderCoinbase,
+		domain.TradingProviderIB, domain.TradingProviderEtoro, domain.TradingProviderBybit,
+		domain.TradingProviderOKX, domain.TradingProviderOpenAlgo, "test",
 	}
-	ib := providers[2]
+	if len(providers) != len(want) {
+		t.Fatalf("got %d providers, want %d", len(providers), len(want))
+	}
+	for i, provider := range providers {
+		if provider.Type != want[i] || provider.LiveOnly != (provider.Type == domain.TradingProviderCoinbase) {
+			t.Fatalf("provider %d: type = %q, liveOnly = %t", i, provider.Type, provider.LiveOnly)
+		}
+	}
+	coinbase := providers[2]
+	if coinbase.Title != "Coinbase" || coinbase.VenueAccounts || !coinbase.VerifiesSymbols || !coinbase.SearchesSymbols || coinbase.UnlinkedFees || coinbase.Build == nil {
+		t.Fatal("Coinbase provider contract differs")
+	}
+	if _, err := coinbase.Build(fwtrading.BuildContext{Connection: domain.TradingConnection{Mode: domain.TradingModePaper, Credentials: "{}"}}); !errors.Is(err, domain.ErrInvalid) || domain.ValidationPointer(err) != "/mode" {
+		t.Fatalf("Coinbase paper error = %v, want /mode validation error", err)
+	}
+	ib := providers[3]
 	if ib.Type != domain.TradingProviderIB || ib.Title != "Interactive Brokers" || !ib.VenueAccounts || !ib.VerifiesSymbols || !ib.SearchesSymbols || ib.UnlinkedFees || ib.Build == nil {
 		t.Fatal("IB provider contract differs")
 	}
@@ -419,11 +436,23 @@ func TestInvariantUnknownOutcomeIsNotRejected(t *testing.T) {
 			w.WriteHeader(tc.status)
 			_, _ = w.Write([]byte(tc.body))
 		}))
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		_, err := testAlpacaConnector(t, server).Send(ctx, testOrder())
-		cancel()
+		ctx := t.Context()
+		if tc.slow {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, 20*time.Millisecond)
+			defer cancel()
+		}
+		c := testAlpacaConnector(t, server)
+		if tc.slow {
+			// The caller's deadline is the only one that can end the request.
+			c.client = alpaca.NewClient(server.URL, c.credentials, &http.Client{Timeout: time.Hour}, c.redact)
+		}
+		_, err := c.Send(ctx, testOrder())
 		close(late)
 		server.Close()
+		if tc.slow && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			t.Fatal("Send returned before its deadline")
+		}
 		if err == nil || errors.Is(err, fwtrading.ErrRejected) {
 			t.Fatal("uncertain outcome marked rejected")
 		}

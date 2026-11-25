@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/store"
+	"go.openpit.dev/officer/internal/polltest"
 )
 
 func newAssetDeleteTestNode(t *testing.T, eng *fakeEngine) *localNode {
@@ -1625,18 +1626,10 @@ func TestLocalNode_RefusedAssetDeleteDoesNotTouchLiveResolver(t *testing.T) {
 		if !released {
 			close(release)
 		}
-		select {
-		case <-deleteDone:
-		case <-time.After(5 * time.Second):
-			t.Errorf("DeleteAsset goroutine did not stop")
-		}
+		<-deleteDone
 	}()
 
-	select {
-	case <-blocking.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("DeleteAsset did not enter the store")
-	}
+	<-blocking.entered
 	eng.resolverMu.RLock()
 	gotID, resolverExists := eng.assetResolverIDs[asset]
 	eng.resolverMu.RUnlock()
@@ -1651,12 +1644,7 @@ func TestLocalNode_RefusedAssetDeleteDoesNotTouchLiveResolver(t *testing.T) {
 
 	close(release)
 	released = true
-	var err error
-	select {
-	case err = <-deleteResult:
-	case <-time.After(5 * time.Second):
-		t.Fatal("DeleteAsset did not return after store release")
-	}
+	err := <-deleteResult
 	if !errors.Is(err, domain.ErrHasDependents) ||
 		!strings.Contains(err.Error(), "delete asset:") {
 		t.Fatalf("DeleteAsset = %v, want wrapped ErrHasDependents", err)
@@ -1764,18 +1752,10 @@ func TestLocalNode_RefusedAssetDeleteKeepsConcurrentQuoteConsistent(t *testing.T
 		if !released {
 			close(release)
 		}
-		select {
-		case <-deleteDone:
-		case <-time.After(5 * time.Second):
-			t.Errorf("DeleteAsset goroutine did not stop")
-		}
+		<-deleteDone
 	}()
 
-	select {
-	case <-blocking.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("DeleteAsset did not enter the store")
-	}
+	<-blocking.entered
 	update := marketdata.QuoteUpdate{
 		AsOf: time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC),
 		Base: instrument.BaseAssetID, Quote: instrument.QuoteAssetID,
@@ -1786,18 +1766,9 @@ func TestLocalNode_RefusedAssetDeleteKeepsConcurrentQuoteConsistent(t *testing.T
 		connector.updates <- update
 		close(quoteQueued)
 	}()
-	select {
-	case <-quoteQueued:
-	case <-time.After(5 * time.Second):
-		t.Fatal("quote publisher did not enqueue the update")
-	}
+	<-quoteQueued
 
-	var sinkResult assetDeleteSinkResult
-	select {
-	case sinkResult = <-sink.results:
-	case <-time.After(5 * time.Second):
-		t.Fatal("live sink did not receive the quote")
-	}
+	sinkResult := <-sink.results
 	if sinkResult.err != nil {
 		t.Fatalf("live sink push failed: %v", sinkResult.err)
 	}
@@ -1806,15 +1777,11 @@ func TestLocalNode_RefusedAssetDeleteKeepsConcurrentQuoteConsistent(t *testing.T
 	}
 	// The manager records the accepted snapshot only after the sink push
 	// returns, so the sink result can be observed before the snapshot is.
-	deadline := time.Now().Add(5 * time.Second)
 	quotes := manager.QuoteSnapshots()
-	for len(quotes) != 1 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	polltest.Until(func() bool {
 		quotes = manager.QuoteSnapshots()
-	}
-	if len(quotes) != 1 {
-		t.Fatalf("manager quote snapshots = %+v, want one quote", quotes)
-	}
+		return len(quotes) == 1
+	})
 	accepted := quotes[0]
 	if !accepted.AsOf.Equal(update.AsOf) ||
 		accepted.ExternalSymbol != instrument.ExternalSymbol ||
@@ -1828,11 +1795,7 @@ func TestLocalNode_RefusedAssetDeleteKeepsConcurrentQuoteConsistent(t *testing.T
 
 	close(release)
 	released = true
-	select {
-	case err = <-deleteResult:
-	case <-time.After(5 * time.Second):
-		t.Fatal("DeleteAsset did not return after store release")
-	}
+	err = <-deleteResult
 	if !errors.Is(err, domain.ErrHasDependents) ||
 		!strings.Contains(err.Error(), "delete asset:") {
 		t.Fatalf("DeleteAsset = %v, want wrapped ErrHasDependents", err)

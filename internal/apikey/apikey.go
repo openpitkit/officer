@@ -52,6 +52,16 @@ func ParseWithSecretField(raw, vendor, secretField string) (Credentials, error) 
 	return Credentials{APIKey: values[0], APISecret: values[1]}, nil
 }
 
+// ParseWithOptionalField accepts apiKey, apiSecret and one optional non-secret
+// field. An explicitly supplied field must be non-blank after trimming.
+func ParseWithOptionalField(raw, vendor, field string) (Credentials, string, error) {
+	values, err := parseFieldsWithOptional(raw, vendor, field, "apiKey", "apiSecret", field)
+	if err != nil {
+		return Credentials{}, "", err
+	}
+	return Credentials{APIKey: values[0], APISecret: values[1]}, values[2], nil
+}
+
 // PassphraseCredentials identifies an account by its API key, secret and
 // passphrase.
 type PassphraseCredentials struct{ APIKey, APISecret, Passphrase string }
@@ -83,23 +93,27 @@ func ParseKey(raw, vendor string, settings ...string) (string, []string, error) 
 	return values[0], values[1:], nil
 }
 
-// CDPCredentials identifies a Coinbase CDP key by its name and P-256 private
-// key.
+// CDPCredentials identifies a Coinbase CDP key by its API key ID and P-256
+// private key.
 type CDPCredentials struct {
-	KeyName    string
+	APIKeyID   string
 	PrivateKey *ecdsa.PrivateKey
 }
 
-// ParseCDP accepts only keyName and privateKey, each non-blank after trimming.
-// The private key must be one unencrypted SEC1 PEM block on P-256. Validation
-// errors never include key material or decoder messages.
+// ParseCDP accepts only apiKeyId and apiKeySecret, each non-blank after
+// trimming. The secret must be one unencrypted SEC1 PEM block on P-256, with
+// line breaks or with the two-character \n escapes the Coinbase key dialog
+// shows in their place; a backslash never occurs in PEM, so each escape is
+// read as a line break. Validation errors never include key material or
+// decoder messages.
 func ParseCDP(raw, vendor string) (CDPCredentials, error) {
-	values, err := parseFields(raw, vendor, "keyName", "privateKey")
+	values, err := parseFields(raw, vendor, "apiKeyId", "apiKeySecret")
 	if err != nil {
 		return CDPCredentials{}, err
 	}
-	invalidKey := domain.NewValidationError("/privateKey", "format", vendor+": privateKey must be a PEM EC P-256 private key")
-	privateKey := values[1]
+	invalidKey := domain.NewValidationError("/apiKeySecret", "format",
+		vendor+": apiKeySecret must be one unencrypted SEC1 PEM block (BEGIN EC PRIVATE KEY) with no headers, holding a P-256 private key")
+	privateKey := strings.ReplaceAll(values[1], `\n`, "\n")
 	block, rest := pem.Decode([]byte(privateKey))
 	// Decode skips leading text and malformed blocks before a valid block.
 	if block == nil || !strings.HasPrefix(privateKey, "-----BEGIN ") ||
@@ -114,10 +128,14 @@ func ParseCDP(raw, vendor string) (CDPCredentials, error) {
 	if key.Curve != elliptic.P256() {
 		return CDPCredentials{}, invalidKey
 	}
-	return CDPCredentials{KeyName: values[0], PrivateKey: key}, nil
+	return CDPCredentials{APIKeyID: values[0], PrivateKey: key}, nil
 }
 
 func parseFields(raw, vendor string, names ...string) ([]string, error) {
+	return parseFieldsWithOptional(raw, vendor, "", names...)
+}
+
+func parseFieldsWithOptional(raw, vendor, optional string, names ...string) ([]string, error) {
 	var fields map[string]string
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
 		return nil, domain.NewValidationError("", "type", vendor+": invalid credentials JSON")
@@ -129,8 +147,9 @@ func parseFields(raw, vendor string, names ...string) ([]string, error) {
 	}
 	values := make([]string, len(names))
 	for i, name := range names {
-		values[i] = strings.TrimSpace(fields[name])
-		if values[i] == "" {
+		value, present := fields[name]
+		values[i] = strings.TrimSpace(value)
+		if values[i] == "" && (name != optional || present) {
 			return nil, domain.NewValidationError("/"+name, "required", vendor+": "+name+" is required")
 		}
 	}

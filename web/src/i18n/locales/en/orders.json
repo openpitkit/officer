@@ -146,6 +146,7 @@
   },
 
   "addOrder": {
+    "preTradeRejected": "Pre-trade checks rejected the order.",
     "addedAwaitingReview": "Order added and awaiting operator review.",
     "addedAwaitingReviewWithWarning": "Order added and awaiting operator review. {{warning}}",
     "button": "Add Order",

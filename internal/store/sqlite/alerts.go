@@ -217,7 +217,7 @@ func scanAlert(row interface{ Scan(...any) error }) (alerts.Alert, error) {
 		return a, err
 	}
 	if !json.Valid([]byte(payload)) {
-		return a, fmt.Errorf("store: malformed alert payload: %w", domain.ErrInvalid)
+		return a, fmt.Errorf("store: malformed alert payload")
 	}
 	a.Payload = json.RawMessage(payload)
 	a.Deliveries = []alerts.Delivery{}
@@ -226,11 +226,7 @@ func scanAlert(row interface{ Scan(...any) error }) (alerts.Alert, error) {
 
 // ListAlerts reads rows and delivery status in one snapshot.
 func (r *realmStore) ListAlerts(ctx context.Context, principal string) (_ []alerts.Alert, err error) {
-	db, err := r.db()
-	if err != nil {
-		return nil, err
-	}
-	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
+	tx, err := r.beginReadTx(ctx, "alert")
 	if err != nil {
 		return nil, err
 	}
@@ -282,11 +278,7 @@ func readAlertDeliveries(ctx context.Context, q sqlReadWriter, a *alerts.Alert) 
 
 // GetAlert reads only the supplied trusted principal's personal mark.
 func (r *realmStore) GetAlert(ctx context.Context, id, principal string) (_ alerts.Alert, err error) {
-	db, err := r.db()
-	if err != nil {
-		return alerts.Alert{}, err
-	}
-	tx, err := beginTx(ctx, db, &sql.TxOptions{ReadOnly: true})
+	tx, err := r.beginReadTx(ctx, "alert")
 	if err != nil {
 		return alerts.Alert{}, err
 	}

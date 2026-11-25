@@ -34,14 +34,14 @@ type TradingAccessObserverHost interface {
 
 func (n *localNode) InstallTradingAccessObserver(observer func(context.Context, domain.Account, domain.Caller) error) error {
 	if observer == nil {
-		return fmt.Errorf("missing trading access observer: %w", domain.ErrInvalid)
+		return fmt.Errorf("missing trading access observer")
 	}
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
 	if n.tradingAccessObserver != nil {
-		return fmt.Errorf("trading access observer already installed: %w", domain.ErrInvalid)
+		return fmt.Errorf("trading access observer already installed")
 	}
 	n.tradingAccessObserver = observer
 	return nil
@@ -91,7 +91,7 @@ func (n *localNode) captureTradingAccessState(ctx context.Context, account domai
 			case domain.TradingModeLive:
 				live = true
 			default:
-				return nil, fmt.Errorf("trading connection mode %q for account %s: %w", mode, row.Code, domain.ErrInvalid)
+				return nil, fmt.Errorf("trading connection mode %q for account %s", mode, row.Code)
 			}
 		}
 		states[row.Code] = tradingAccessState{account: row, mixed: paper && live}

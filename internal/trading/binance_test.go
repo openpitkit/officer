@@ -76,18 +76,11 @@ func newBinanceTest(t *testing.T,
 	return c
 }
 
-func writeBinanceJSON(t *testing.T, w http.ResponseWriter, value any) {
-	t.Helper()
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		t.Error(err)
-	}
-}
-
 func writeBinanceSymbol(t *testing.T, w http.ResponseWriter,
 	symbol binance.Symbol,
 ) {
 	t.Helper()
-	writeBinanceJSON(t, w, binance.ExchangeInfo{
+	writeJSON(t, w, binance.ExchangeInfo{
 		Symbols: []binance.Symbol{symbol},
 	})
 }
@@ -221,7 +214,7 @@ func TestBinanceRouteAndOrderValidation(t *testing.T) {
 	for _, field := range []string{"quantity", "price"} {
 		for _, value := range []string{
 			"0", "-1", "1e3", "NaN", " 1", "+1", "1e-2147483647",
-			strings.Repeat("1", venueDecimalMaxLength+1),
+			strings.Repeat("1", plainDecimalMaxLength+1),
 		} {
 			order := binanceTestOrder()
 			if field == "quantity" {
@@ -527,11 +520,11 @@ func TestBinanceLookupStatusesAndReferences(t *testing.T) {
 								"officer-client" || q.Has("orderId") {
 								t.Error("lookup missing original client id")
 							}
-							writeBinanceJSON(t, w,
+							writeJSON(t, w,
 								binanceLookupOrder(tc.status, "2", "0"))
 							return
 						}
-						writeBinanceJSON(t, w, []binanceTrade{})
+						writeJSON(t, w, []binanceTrade{})
 					})
 				var diagnostics []health.Diagnostic
 				c.SetDiagnosticReporter(func(d health.Diagnostic) {
@@ -638,7 +631,7 @@ func TestBinanceLookupTrades(t *testing.T) {
 								symbolCalls.Add(1)
 								writeBinanceSymbol(t, w, binanceTestSymbol())
 							case "/api/v3/order":
-								writeBinanceJSON(t, w, binanceLookupOrder(
+								writeJSON(t, w, binanceLookupOrder(
 									"FILLED", strconv.Itoa(count), strconv.Itoa(count)))
 							case "/api/v3/myTrades":
 								pages.Add(1)
@@ -667,7 +660,7 @@ func TestBinanceLookupTrades(t *testing.T) {
 									trades = append(trades,
 										binanceTestTrade(id, "1", asset))
 								}
-								writeBinanceJSON(t, w, trades)
+								writeJSON(t, w, trades)
 							default:
 								t.Error("unexpected endpoint")
 							}
@@ -738,9 +731,9 @@ func TestBinanceLookupUnusableTrades(t *testing.T) {
 			c := newBinanceTest(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/v3/order":
-					writeBinanceJSON(t, w, binanceLookupOrder("FILLED", "2", "2"))
+					writeJSON(t, w, binanceLookupOrder("FILLED", "2", "2"))
 				case "/api/v3/myTrades":
-					writeBinanceJSON(t, w, []binanceTrade{trade})
+					writeJSON(t, w, []binanceTrade{trade})
 				case binance.ExchangeInfoPath:
 					symbol := binanceTestSymbol()
 					if field == "symbol assets" {
@@ -778,10 +771,10 @@ func TestBinanceSymbolCacheRecovery(t *testing.T) {
 							}
 							writeBinanceSymbol(t, w, symbol)
 						case "/api/v3/order":
-							writeBinanceJSON(t, w,
+							writeJSON(t, w,
 								binanceLookupOrder("FILLED", "1", "1"))
 						case "/api/v3/myTrades":
-							writeBinanceJSON(t, w, []binanceTrade{
+							writeJSON(t, w, []binanceTrade{
 								binanceTestTrade(1, "1", "ETH"),
 							})
 						default:
@@ -837,7 +830,7 @@ func TestBinanceLookupTradeIDs(t *testing.T) {
 				func(w http.ResponseWriter, r *http.Request) {
 					switch r.URL.Path {
 					case "/api/v3/order":
-						writeBinanceJSON(t, w,
+						writeJSON(t, w,
 							binanceLookupOrder("FILLED", "1", "1"))
 					case "/api/v3/myTrades":
 						trade := map[string]any{
@@ -852,7 +845,7 @@ func TestBinanceLookupTradeIDs(t *testing.T) {
 						case "null":
 							trade["id"] = nil
 						}
-						writeBinanceJSON(t, w, []map[string]any{trade})
+						writeJSON(t, w, []map[string]any{trade})
 					default:
 						t.Error("unexpected endpoint")
 					}
@@ -881,7 +874,7 @@ func TestBinanceTradeCursorLimit(t *testing.T) {
 				func(w http.ResponseWriter, r *http.Request) {
 					switch r.URL.Path {
 					case "/api/v3/order":
-						writeBinanceJSON(t, w,
+						writeJSON(t, w,
 							binanceLookupOrder("FILLED", "1001", "1001"))
 					case "/api/v3/myTrades":
 						page := pages.Add(1)
@@ -915,7 +908,7 @@ func TestBinanceTradeCursorLimit(t *testing.T) {
 								"commissionAsset": "", "time": 1700000001000,
 							}}
 						}
-						writeBinanceJSON(t, w, trades)
+						writeJSON(t, w, trades)
 					default:
 						t.Error("unexpected endpoint")
 					}
@@ -950,7 +943,7 @@ func TestBinanceAccountAndSymbols(t *testing.T) {
 		c := newBinanceTest(t, func(w http.ResponseWriter, r *http.Request) {
 			requests.Add(1)
 			if r.URL.Path == "/api/v3/account" {
-				writeBinanceJSON(t, w, binance.Account{
+				writeJSON(t, w, binance.Account{
 					UID: "9007199254740993", AccountType: "SPOT", CanTrade: canTrade,
 				})
 				return
@@ -970,7 +963,7 @@ func TestBinanceAccountAndSymbols(t *testing.T) {
 			other.QuoteAsset, other.Status = "USDC", "BREAK"
 			noSpot := symbol
 			noSpot.Symbol, noSpot.IsSpotTradingAllowed = "ETHBTC", false
-			writeBinanceJSON(t, w, binance.ExchangeInfo{
+			writeJSON(t, w, binance.ExchangeInfo{
 				Symbols: []binance.Symbol{other, noSpot, symbol},
 			})
 		})

@@ -31,6 +31,7 @@ import (
 )
 
 func TestSnapshotSourceURI(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name string
 		path string
@@ -41,6 +42,7 @@ func TestSnapshotSourceURI(t *testing.T) {
 		{"escaped Unix path", "/data/release ?#%.db", "file:///data/release%20%3F%23%25.db?mode=ro"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := snapshotSourceURI(tt.path); got != tt.want {
 				t.Errorf("snapshot source URI = %q, want %q", got, tt.want)
 			}
@@ -49,6 +51,7 @@ func TestSnapshotSourceURI(t *testing.T) {
 }
 
 func TestSnapshotCopiesWithoutChangingSource(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "release #%.db")
 	seedPath := filepath.Join(filepath.Dir(source), "seed.db")
@@ -121,6 +124,7 @@ func TestSnapshotCopiesWithoutChangingSource(t *testing.T) {
 }
 
 func TestSnapshotMissingSourceCreatesNothing(t *testing.T) {
+	t.Parallel()
 	source := filepath.Join(t.TempDir(), "missing.db")
 	err := Snapshot(context.Background(), source, filepath.Join(t.TempDir(), "copy.db"))
 	if err == nil {
@@ -134,6 +138,7 @@ func TestSnapshotMissingSourceCreatesNothing(t *testing.T) {
 }
 
 func TestSnapshotRejectsNonSQLiteSource(t *testing.T) {
+	t.Parallel()
 	source := filepath.Join(t.TempDir(), "invalid.db")
 	if err := os.WriteFile(source, []byte("not an SQLite database"), 0600); err != nil {
 		t.Fatal(err)

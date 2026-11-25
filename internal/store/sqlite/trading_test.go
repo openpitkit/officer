@@ -35,8 +35,10 @@ import (
 )
 
 func TestCredentialsSealed(t *testing.T) {
+	t.Parallel()
 	for _, sealed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("sealed=%v", sealed), func(t *testing.T) {
+			t.Parallel()
 			var opts []Option
 			if sealed {
 				opts = append(opts, WithMasterKey(mustStoreMasterKey(t, 0x71)))
@@ -50,6 +52,7 @@ func TestCredentialsSealed(t *testing.T) {
 }
 
 func TestTradingVenueIdentityStorage(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	got, found, err := rs.GetTradingConnection(ctx, connection.ExternalID)
 	if err != nil || !found || got.VenueIdentity != connection.VenueIdentity {
@@ -97,10 +100,11 @@ func TestTradingVenueIdentityStorage(t *testing.T) {
 }
 
 func TestDeleteTradingConnection(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	id := connection.ExternalID
-	if err := rs.DeleteTradingConnection(ctx, id); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("enabled connection: %v", err)
+	if !connection.Enabled {
+		t.Fatal("fixture connection must be enabled: an enabled connection deletes like a disabled one")
 	}
 	if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
 		Connection: id, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
@@ -108,9 +112,6 @@ func TestDeleteTradingConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := rs.PutTradingAccess(ctx, domain.TradingAccess{Connection: id, Account: "acc-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := rs.SetTradingConnectionEnabled(ctx, id, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := rs.DeleteTradingConnection(ctx, id); err != nil {
@@ -137,13 +138,11 @@ func TestDeleteTradingConnection(t *testing.T) {
 }
 
 func TestDeleteTradingConnectionPreservesOrderHistory(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	order := createTradingOrder(t, ctx, rs)
 	link := domain.VenueOrder{Order: order.ExternalID, Connection: connection.ExternalID, Route: "{}", ClientOrderID: "delete-guard"}
 	if _, err := rs.CreateVenueOrder(ctx, link); err != nil {
-		t.Fatal(err)
-	}
-	if err := rs.SetTradingConnectionEnabled(ctx, connection.ExternalID, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := rs.DeleteTradingConnection(ctx, connection.ExternalID); !errors.Is(err, domain.ErrConflict) {
@@ -158,6 +157,7 @@ func TestDeleteTradingConnectionPreservesOrderHistory(t *testing.T) {
 }
 
 func TestUpdateTradingConnectionSettings(t *testing.T) {
+	t.Parallel()
 	ctx, rs, original := seedTradingFixtures(t)
 	const credentials = `{"key":"replacement-secret"}`
 	if err := rs.UpdateTradingConnectionSettings(ctx, original.ExternalID, "new label", credentials); err != nil {
@@ -194,8 +194,10 @@ func TestUpdateTradingConnectionSettings(t *testing.T) {
 }
 
 func TestUpdateTradingConnectionSettingsRejectsInvalid(t *testing.T) {
+	t.Parallel()
 	for _, sealed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("sealed=%v", sealed), func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			var rs store.RealmStore
 			if sealed {
@@ -258,6 +260,7 @@ func TestUpdateTradingConnectionSettingsRejectsInvalid(t *testing.T) {
 }
 
 func TestUpdateTradingConnectionSettingsSealed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x72)))
 	connection, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
@@ -302,6 +305,7 @@ func TestUpdateTradingConnectionSettingsSealed(t *testing.T) {
 }
 
 func TestDeleteTradingInstrument(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	for _, symbol := range []string{"AAPL", "MSFT"} {
 		if err := rs.UpsertTradingInstrument(ctx, domain.TradingInstrument{
@@ -325,6 +329,7 @@ func TestDeleteTradingInstrument(t *testing.T) {
 }
 
 func TestRemoveTradingAccess(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	access := domain.TradingAccess{Account: "acc-1", Connection: connection.ExternalID, VenueAccount: "venue-account"}
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
@@ -360,6 +365,7 @@ func TestRemoveTradingAccess(t *testing.T) {
 }
 
 func TestTradingSchemaModeVocabulary(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	db := rs.(*realmStore).rawDB()
 	for _, mode := range []string{"live", "paper"} {
@@ -422,6 +428,7 @@ func createTradingOrder(
 }
 
 func TestEarliestVenueOrderTime(t *testing.T) {
+	t.Parallel()
 	ctx, rs, first := seedTradingFixtures(t)
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
 		Provider: domain.TradingProviderAlpaca, Label: "Other", Mode: domain.TradingModePaper, VenueIdentity: "other-account",
@@ -463,6 +470,7 @@ func TestEarliestVenueOrderTime(t *testing.T) {
 }
 
 func TestListTradingAccessForConnection(t *testing.T) {
+	t.Parallel()
 	ctx, rs, first := seedTradingFixtures(t)
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
 		Provider: domain.TradingProviderAlpaca, Label: "Other", Mode: domain.TradingModePaper, VenueIdentity: "other-account",
@@ -515,6 +523,7 @@ func TestListTradingAccessForConnection(t *testing.T) {
 }
 
 func TestTradingConnectionFeeAccount(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "fees"}); err != nil {
 		t.Fatal(err)
@@ -557,8 +566,10 @@ func TestTradingConnectionFeeAccount(t *testing.T) {
 }
 
 func TestCreateTradingConnectionRefusesFeeAccount(t *testing.T) {
+	t.Parallel()
 	for _, account := range []domain.AccountID{"acc-1", "missing"} {
 		t.Run(account.String(), func(t *testing.T) {
+			t.Parallel()
 			ctx, rs, connection := seedTradingFixtures(t)
 			connection.ExternalID = "refused"
 			connection.Label, connection.VenueIdentity = "refused", "refused"
@@ -574,6 +585,7 @@ func TestCreateTradingConnectionRefusesFeeAccount(t *testing.T) {
 }
 
 func TestGetTradingFeeAccounts(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	if _, _, err := rs.GetTradingFeeAccounts(ctx, "missing"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("unknown connection error = %v", err)
@@ -640,8 +652,10 @@ func TestGetTradingFeeAccounts(t *testing.T) {
 }
 
 func TestDeleteTradingFeeAccountRefused(t *testing.T) {
+	t.Parallel()
 	for _, force := range []bool{false, true} {
 		t.Run(fmt.Sprintf("force=%v", force), func(t *testing.T) {
+			t.Parallel()
 			ctx, rs, connection := seedTradingFixtures(t)
 			if err := rs.SetTradingConnectionFeeAccount(ctx, connection.ExternalID, "acc-1"); err != nil {
 				t.Fatal(err)
@@ -678,6 +692,7 @@ func TestDeleteTradingFeeAccountRefused(t *testing.T) {
 }
 
 func TestTradingConnectionCreateGetListEnable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	first, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
@@ -746,6 +761,7 @@ func TestTradingConnectionCreateGetListEnable(t *testing.T) {
 }
 
 func TestTradingConnectionValidationAndUniqueness(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	connection := domain.TradingConnection{
@@ -787,6 +803,7 @@ func TestTradingConnectionValidationAndUniqueness(t *testing.T) {
 }
 
 func TestTradingInstrumentUpsertFindListAndUniqueness(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	instrument := domain.TradingInstrument{
 		Connection:     connection.ExternalID,
@@ -856,6 +873,7 @@ func TestTradingInstrumentUpsertFindListAndUniqueness(t *testing.T) {
 }
 
 func TestTradingInstrumentUnknownReferences(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	base := domain.TradingInstrument{
 		Connection:     connection.ExternalID,
@@ -901,6 +919,7 @@ func assertTradingAssetMissing(t *testing.T, err error, asset string) {
 }
 
 func TestTradingAccessPutListReplaceAndUnknown(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
 		ExternalID: "connection-a", Provider: domain.TradingProviderAlpaca,
@@ -956,6 +975,7 @@ func TestTradingAccessPutListReplaceAndUnknown(t *testing.T) {
 }
 
 func TestTradingGroupAccessPutReplaceRemove(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	for _, group := range []string{"desk", "other"} {
 		if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: group}); err != nil {
@@ -1029,6 +1049,7 @@ func TestTradingGroupAccessPutReplaceRemove(t *testing.T) {
 }
 
 func TestListTradingAccessEffectiveGrants(t *testing.T) {
+	t.Parallel()
 	ctx, rs, first := seedTradingFixtures(t)
 	second, err := rs.CreateTradingConnection(ctx, domain.TradingConnection{
 		Provider: domain.TradingProviderAlpaca, Label: "Other", Mode: domain.TradingModePaper, VenueIdentity: "other-account",
@@ -1092,6 +1113,7 @@ func TestListTradingAccessEffectiveGrants(t *testing.T) {
 }
 
 func TestTradingAccessSchemaConstraints(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
 		t.Fatal(err)
@@ -1145,6 +1167,7 @@ func TestTradingAccessSchemaConstraints(t *testing.T) {
 }
 
 func TestVenueOrderCreateGetFindAndUniqueness(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	firstOrder := createTradingOrder(t, ctx, rs)
 	secondOrder := createTradingOrder(t, ctx, rs)
@@ -1200,7 +1223,7 @@ func TestVenueOrderCreateGetFindAndUniqueness(t *testing.T) {
 	acknowledgedAtCreate.VenueOrderID = "venue-2"
 	if _, err := rs.CreateVenueOrder(
 		ctx, acknowledgedAtCreate,
-	); !errors.Is(err, domain.ErrInvalid) {
+	); !internalFailureAnswer(err) {
 		t.Fatalf("pre-acknowledged create error = %v", err)
 	}
 	sendAttemptedAtCreate := link
@@ -1209,7 +1232,7 @@ func TestVenueOrderCreateGetFindAndUniqueness(t *testing.T) {
 	sendAttemptedAtCreate.SendAttempted = true
 	if _, err := rs.CreateVenueOrder(
 		ctx, sendAttemptedAtCreate,
-	); !errors.Is(err, domain.ErrInvalid) {
+	); !internalFailureAnswer(err) {
 		t.Fatalf("send-attempted create error = %v", err)
 	}
 	unknownOrder := link
@@ -1228,6 +1251,7 @@ func TestVenueOrderCreateGetFindAndUniqueness(t *testing.T) {
 }
 
 func TestVenueOrderAcknowledgementAndDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	firstOrder := createTradingOrder(t, ctx, rs)
 	secondOrder := createTradingOrder(t, ctx, rs)
@@ -1242,7 +1266,7 @@ func TestVenueOrderAcknowledgementAndDelete(t *testing.T) {
 			t.Fatalf("CreateVenueOrder(%d): %v", i, err)
 		}
 	}
-	if err := rs.SetVenueOrderID(ctx, firstOrder.ExternalID, ""); !errors.Is(err, domain.ErrInvalid) {
+	if err := rs.SetVenueOrderID(ctx, firstOrder.ExternalID, ""); !internalFailureAnswer(err) {
 		t.Fatalf("empty venue order id error = %v", err)
 	}
 	if err := rs.SetVenueOrderID(ctx, "missing", "venue-missing"); !errors.Is(err, domain.ErrNotFound) {
@@ -1300,6 +1324,7 @@ func TestVenueOrderAcknowledgementAndDelete(t *testing.T) {
 }
 
 func TestListOpenVenueOrdersUsesDomainTerminalStatuses(t *testing.T) {
+	t.Parallel()
 	ctx, rs, connection := seedTradingFixtures(t)
 	tests := []struct {
 		status domain.OrderStatus

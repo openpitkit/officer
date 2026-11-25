@@ -603,7 +603,7 @@ func (s *sqliteStore) putAccessCredential(
 ) error {
 	if len(value) == 0 {
 		return fmt.Errorf(
-			"store: access credential %s is empty: %w", kind, domain.ErrInvalid,
+			"store: access credential %s is empty", kind,
 		)
 	}
 	stored, err := s.sealValue(

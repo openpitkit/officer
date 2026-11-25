@@ -26,8 +26,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"go.openpit.dev/officer/framework/domain"
 )
 
 // CredentialFreeURL reports an absolute address that carries no credential
@@ -61,7 +59,7 @@ func CredentialFreeURL(value string) (*url.URL, bool) {
 func CredentialRedactor(credentials string, settings ...string) (map[string]bool, *strings.Replacer, error) {
 	var values map[string]any
 	if err := json.Unmarshal([]byte(credentials), &values); err != nil || values == nil {
-		return nil, nil, fmt.Errorf("secret: stored credentials are not a JSON object: %w", domain.ErrInvalid)
+		return nil, nil, fmt.Errorf("secret: stored credentials are not a JSON object")
 	}
 	secrets := make(map[string]bool)
 	var credentialStrings []string

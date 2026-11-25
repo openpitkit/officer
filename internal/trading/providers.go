@@ -25,7 +25,10 @@ import (
 
 // FirstPartyProviders returns the built-in trading factories.
 func FirstPartyProviders() []fwtrading.Provider {
-	return []fwtrading.Provider{AlpacaProvider(), BinanceProvider(), IBProvider(), EtoroProvider(), OKXProvider(), OpenAlgoProvider(), TestProvider()}
+	return []fwtrading.Provider{
+		AlpacaProvider(), BinanceProvider(), CoinbaseProvider(), IBProvider(),
+		EtoroProvider(), BybitProvider(), OKXProvider(), OpenAlgoProvider(), TestProvider(),
+	}
 }
 
 // IBProvider trades stocks, spot FX and crypto through TWS/IB Gateway.
@@ -118,6 +121,50 @@ func BinanceProvider() fwtrading.Provider {
 		UnlinkedFees: false,
 		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
 			return NewBinanceConnector(ctx.Connection)
+		},
+	}
+}
+
+// CoinbaseProvider trades one portfolio per CDP key and verifies spot symbols.
+//
+// Advanced Trade's sandbox serves only static, pre-defined responses and cannot
+// trade, so only live mode is supported. REST uses api.coinbase.com; the user
+// WebSocket host is advanced-trade-ws-user.coinbase.com. Credentials are
+// apiKeyId (organizations/{org}/apiKeys/{id}) and apiKeySecret (one unencrypted
+// SEC1 EC PRIVATE KEY PEM block on P-256, with line breaks or with the \n
+// escapes the Coinbase key dialog shows);
+// requests use ES256 JWT authentication, the only key type Advanced Trade
+// accepts, so Ed25519 keys are refused. VenueAccount is
+// empty. Route JSON for a limit order is {"timeInForce":"GTC"|"IOC"|"FOK"}; a
+// market order requires {}. Only quantity orders are supported. Symbol
+// verification reads GET /api/v3/brokerage/products/{symbol}; search reads the
+// SPOT catalogue from GET /api/v3/brokerage/products, including base and quote
+// assets. Both request get_tradability_status=true. Account check reads
+// portfolio_uuid, portfolio_type and can_trade from GET
+// /api/v3/brokerage/key_permissions.
+//
+// Pre-check requires an online SPOT product without is_disabled,
+// trading_disabled, cancel_only or view_only flags. It refuses post_only
+// products and market orders on limit_only products. Quantity must be positive,
+// within base size bounds and aligned to base_increment. Limit price must be
+// positive and aligned to price_increment, and quantity times price must meet
+// quote_min_size.
+//
+// The user and heartbeats WebSocket channels track connection health and
+// trigger REST reconciliation on order updates, reconnects and sequence gaps.
+// Reconciliation reads GET /api/v3/brokerage/orders/historical/{order_id}, or
+// searches /api/v3/brokerage/orders/historical/batch by product and side for
+// the client order id, then reads /api/v3/brokerage/orders/historical/fills.
+// History requiring an SCA proof token is refused with a diagnostic; the order
+// stays pending. Fills carry commission in the product's quote currency and are
+// identified by cumulative filled quantity. There are no unlinked fees.
+func CoinbaseProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderCoinbase, Title: "Coinbase", LiveOnly: true,
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewCoinbaseConnector(ctx.Connection)
 		},
 	}
 }
@@ -226,6 +273,47 @@ func OpenAlgoProvider() fwtrading.Provider {
 		UnlinkedFees: false,
 		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
 			return NewOpenAlgoConnector(ctx.Connection)
+		},
+	}
+}
+
+// BybitProvider trades one account per HMAC key pair and verifies spot symbols.
+//
+// Credentials are {apiKey, apiSecret, site} with site "global" or "eu".
+// Credentials without site use the original Global endpoints. Paper mode
+// uses the selected site's REST and private WebSocket endpoints. Live mode
+// uses Bybit Global. The EU site scopes userID with a "bybit.eu:" prefix.
+// VenueAccount is empty. Route JSON for a limit order is
+// {"timeInForce": "GTC"|"IOC"|"FOK"}; a market order requires {}. Only quantity
+// orders are supported. Symbol verification and search read GET
+// /v5/market/instruments-info?category=spot on the connection's host and take
+// each symbol's base and quote assets and status from it; a symbol whose
+// status is not Trading exists but is not tradable. Account check reads GET
+// /v5/user/query-api for userID, uta, readOnly and Spot permissions. It
+// refuses an unusable userID or unreadable status; it reports classic/unified,
+// read-only and missing SpotTrade permission.
+//
+// Pre-check requires a Trading symbol, positive quantity and, for a limit
+// order, a positive price. Quantity must respect basePrecision and the order
+// type's maximum quantity; limit orders also apply tickSize and minOrderAmt.
+// The venue's own refusal is definitive for all other restrictions. Fills are
+// identified by cumulative filled quantity. Commission is retained in the
+// reported asset and booked in the order's base or quote when it is one of
+// them; nonempty extraFees are refused. There are no unlinked fees.
+//
+// The private stream subscribes to order.spot and execution.spot.
+// Reconciliation reads GET /v5/order/realtime, GET /v5/order/history and GET
+// /v5/execution/list, using the order's symbol and creation time for history.
+// Bybit retains cancelled or rejected orders without fills for only 24 hours;
+// when neither order lookup finds one, Lookup returns an empty snapshot,
+// found=false and no error.
+func BybitProvider() fwtrading.Provider {
+	return fwtrading.Provider{
+		Type: domain.TradingProviderBybit, Title: "Bybit",
+		VenueAccounts: false, VerifiesSymbols: true, SearchesSymbols: true,
+		UnlinkedFees: false,
+		Build: func(ctx fwtrading.BuildContext) (fwtrading.Connector, error) {
+			return NewBybitConnector(ctx.Connection)
 		},
 	}
 }

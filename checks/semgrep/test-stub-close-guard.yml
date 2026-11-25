@@ -1,0 +1,202 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# Flags every call named Error, Errorf, Fatal, or Fatalf, on any receiver, in
+# the failure branch of a Read(ctx), Write(ctx, kind, data), or
+# Close(status, reason) check. The operation is matched by method name and
+# arity on any receiver, in Go HTTP test handlers and helpers that take a
+# *websocket.Conn.
+#
+# Inside the failure branch, wrap the report in a nested if whose entire
+# condition is t.Context().Err() == nil on the reporting test or
+# !harness.isClosing().
+#   if err := conn.Close(status, reason); err != nil {
+#       if t.Context().Err() == nil { t.Error(err) } }
+#
+# Known misses: checks without a direct != nil comparison, reports routed
+# through another helper, and connection helpers whose signatures carry
+# neither a *websocket.Conn nor the HTTP handler parameters.
+#
+# False positives: an overwritten error can tie the check to an earlier call,
+# and fmt.Errorf, log.Fatal or err.Error() in the failure branch counts as a
+# report, also inside an accepted guard. Pass err with %v, not err.Error().
+#
+# This rule has no approval marker or baseline.
+
+rules:
+  - id: test-stub-close-guard
+    message: >-
+      Wrap the venue stub's websocket error report in a nested teardown
+      guard inside the failure branch.
+    severity: ERROR
+    languages: [go]
+    paths:
+      include:
+        - "**/*_test.go"
+      exclude:
+        - "/checks/semgrep/testdata/**"
+    patterns:
+      - pattern: $T.$REPORT(...)
+      # Go signature patterns here also match receivers and result clauses.
+      - pattern-either:
+          - pattern-inside: |
+              func($W http.ResponseWriter, $R *http.Request) {
+                ...
+              }
+          - pattern-inside: |
+              func $FUNC(..., $W http.ResponseWriter, ..., $R *http.Request, ...) {
+                ...
+              }
+          - pattern-inside: |
+              func $FUNC(..., $R *http.Request, ..., $W http.ResponseWriter, ...) {
+                ...
+              }
+          - pattern-inside: |
+              func $FUNC(..., $CONN *websocket.Conn, ...) {
+                ...
+              }
+          - pattern-inside: |
+              func(..., $CONN *websocket.Conn, ...) {
+                ...
+              }
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      if $ERR := $CALL; $CONDITION {
+                        $...THEN
+                      }
+                  - pattern: |
+                      if $ERR = $CALL; $CONDITION {
+                        $...THEN
+                      }
+                  - pattern: |
+                      if ..., $ERR := $CALL; $CONDITION {
+                        $...THEN
+                      }
+                  - pattern: |
+                      if ..., $ERR = $CALL; $CONDITION {
+                        $...THEN
+                      }
+              - metavariable-pattern:
+                  metavariable: $CONDITION
+                  pattern: <... $ERR != nil ...>
+              - focus-metavariable: $...THEN
+          - patterns:
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          $ERR := $CALL
+                          ...
+                          if $CONDITION {
+                            $...THEN
+                          }
+                      - pattern: |
+                          $ERR = $CALL
+                          ...
+                          if $CONDITION {
+                            $...THEN
+                          }
+                      - pattern: |
+                          ..., $ERR := $CALL
+                          ...
+                          if $CONDITION {
+                            $...THEN
+                          }
+                      - pattern: |
+                          ..., $ERR = $CALL
+                          ...
+                          if $CONDITION {
+                            $...THEN
+                          }
+                  # Keep reports between the call and the check out of scope.
+                  - focus-metavariable: $...THEN
+              - metavariable-pattern:
+                  metavariable: $CONDITION
+                  pattern: <... $ERR != nil ...>
+              # An initializer can shadow the previously assigned error.
+              - pattern-not-inside:
+                  pattern-either:
+                    - pattern: |
+                        if $ERR := $X; $CONDITION { ... }
+                    - pattern: |
+                        if ..., $ERR := $X; $CONDITION { ... }
+                    - pattern: |
+                        if $ERR = $X; $CONDITION { ... }
+                    - pattern: |
+                        if ..., $ERR = $X; $CONDITION { ... }
+          - patterns:
+              - pattern: |
+                  if $CONDITION {
+                    $...THEN
+                  }
+              - metavariable-pattern:
+                  metavariable: $CONDITION
+                  pattern: <... $CALL != nil ...>
+              - focus-metavariable: $...THEN
+      - metavariable-pattern:
+          metavariable: $CALL
+          pattern-either:
+            - pattern: $SOCKET.Read($CTX)
+            - pattern: $SOCKET.Write($CTX, $KIND, $DATA)
+            - pattern: $SOCKET.Close($STATUS, $REASON)
+      # A nested guard must run after the operation that led to the report.
+      - pattern-not-inside:
+          patterns:
+            - pattern-either:
+                - patterns:
+                    - pattern: |
+                        if $CONDITION {
+                          ...
+                          if $T.Context().Err() == nil {
+                            $...GUARDED
+                          }
+                          ...
+                        }
+                    - pattern-not: |
+                        if $CONDITION {
+                          ...
+                          if $T.Context().Err() == nil {
+                            ...
+                            if $CONDITION { ... }
+                            ...
+                          }
+                          ...
+                        }
+                - patterns:
+                    - pattern: |
+                        if $CONDITION {
+                          ...
+                          if !$HARNESS.isClosing() {
+                            $...GUARDED
+                          }
+                          ...
+                        }
+                    - pattern-not: |
+                        if $CONDITION {
+                          ...
+                          if !$HARNESS.isClosing() {
+                            ...
+                            if $CONDITION { ... }
+                            ...
+                          }
+                          ...
+                        }
+            - focus-metavariable: $...GUARDED
+      - metavariable-regex:
+          metavariable: $REPORT
+          regex: '^(Error|Errorf|Fatal|Fatalf)$'

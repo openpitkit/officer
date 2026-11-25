@@ -162,6 +162,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { ClearableInput } from "@/components/ClearableInput";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   Dialog,
   DialogContent,
@@ -260,6 +261,23 @@ const VENUE_ORDER_OPTIONS: Record<
       market: [],
     },
     docsUrl: "https://developers.binance.com/docs/binance-spot-api-docs/enums",
+  },
+  bybit: {
+    routeKey: "timeInForce",
+    options: {
+      limit: ["GTC", "IOC", "FOK"],
+      market: [],
+    },
+    docsUrl: "https://bybit-exchange.github.io/docs/v5/enum#timeinforce",
+  },
+  coinbase: {
+    routeKey: "timeInForce",
+    options: {
+      limit: ["GTC", "IOC", "FOK"],
+      market: [],
+    },
+    docsUrl:
+      "https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/guides/orders",
   },
   etoro: {
     routeKey: "timeInForce",
@@ -639,6 +657,22 @@ interface OrderInitialValues {
   price: string;
   venueConnection?: string;
   venueMode?: TradingMode;
+}
+
+function orderInitialValues(
+  order: Order,
+  venueConnection: string | undefined,
+): OrderInitialValues {
+  return {
+    account: order.account,
+    baseAsset: order.baseAsset,
+    quoteAsset: order.quoteAsset,
+    side: order.side,
+    amountKind: order.amountKind,
+    amountValue: order.amountValue,
+    price: order.price === "0" ? "" : order.price,
+    venueConnection,
+  };
 }
 
 interface SubmitOrderDialogProps {
@@ -1040,6 +1074,18 @@ function SubmitOrderDialog({
     }
   }
 
+  function refreshAfterSubmitDecodeFailure(err: unknown, signal: AbortSignal) {
+    if (
+      !signal.aborted &&
+      err instanceof ApiError &&
+      err.code === "internal" &&
+      err.status === undefined
+    ) {
+      // The API may have recorded the order before response decoding failed.
+      onCreated();
+    }
+  }
+
   async function sendToSelectedVenue() {
     if (
       !account.trim() ||
@@ -1113,7 +1159,6 @@ function SubmitOrderDialog({
           );
           break;
         default:
-          onCreated();
           throw new ApiError("Missing trading decision verdict", "internal");
       }
       if (result.alertFailure) {
@@ -1127,6 +1172,7 @@ function SubmitOrderDialog({
       onClose();
       onOpenDetail(result.id, banner);
     } catch (err) {
+      refreshAfterSubmitDecodeFailure(err, controller.signal);
       setError(
         mutationErrorMessage(
           err,
@@ -1222,24 +1268,41 @@ function SubmitOrderDialog({
       ]
         .filter(Boolean)
         .join(" ");
+      const verdict = result.approval?.verdict;
+      let banner: DetailBanner | undefined;
+      switch (verdict) {
+        case "reject":
+          banner = {
+            tone: "danger",
+            text: [t("addOrder.preTradeRejected"), warning]
+              .filter(Boolean)
+              .join(" "),
+          };
+          break;
+        case "review":
+          banner = {
+            text: warning
+              ? t("addOrder.addedAwaitingReviewWithWarning", { warning })
+              : t("addOrder.addedAwaitingReview"),
+            tone: "warn",
+          };
+          break;
+        case "accept":
+        case undefined:
+          if (warning) {
+            banner = { text: warning, tone: alertFailure ? "warn" : "ok" };
+          }
+          break;
+        default:
+          throw new ApiError(
+            `Unexpected submit verdict ${JSON.stringify(verdict)}`,
+            "internal",
+          );
+      }
       onCreated();
       reset();
       onClose();
-      onOpenDetail(
-        result.order.id,
-        result.approval?.verdict === "review"
-          ? {
-              text: warning
-                ? t("addOrder.addedAwaitingReviewWithWarning", {
-                    warning,
-                  })
-                : t("addOrder.addedAwaitingReview"),
-              tone: "warn",
-            }
-          : warning
-            ? { text: warning, tone: alertFailure ? "warn" : "ok" }
-            : undefined,
-      );
+      onOpenDetail(result.order.id, banner);
     } catch (err) {
       if (controller.signal.aborted) {
         return;
@@ -1253,6 +1316,7 @@ function SubmitOrderDialog({
         setMissingAccountConfirmOpen(true);
         return;
       }
+      refreshAfterSubmitDecodeFailure(err, controller.signal);
       setError(errMessage(err));
     } finally {
       if (submitAbortRef.current === controller) {
@@ -1765,36 +1829,18 @@ function SubmitOrderDialog({
           </DialogFooter>
         </div>
       </DialogContent>
-      <AlertDialog
+      <ConfirmDialog
         open={dropCopyConfirmOpen}
         onOpenChange={setDropCopyConfirmOpen}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-[var(--danger)]">
-              {t("addOrder.dialog.dropCopyConfirmTitle")}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("addOrder.dialog.dropCopyConfirmDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>
-              {tc("actions.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="danger"
-              disabled={busy}
-              onClick={() => {
-                setDropCopyConfirmOpen(false);
-                void submit();
-              }}
-            >
-              {t("addOrder.dialog.submitDropCopy")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title={t("addOrder.dialog.dropCopyConfirmTitle")}
+        description={t("addOrder.dialog.dropCopyConfirmDescription")}
+        confirmLabel={t("addOrder.dialog.submitDropCopy")}
+        busy={busy}
+        onConfirm={() => {
+          setDropCopyConfirmOpen(false);
+          void submit();
+        }}
+      />
       <AlertDialog
         open={missingAccountConfirmOpen}
         onOpenChange={setMissingAccountConfirmOpen}
@@ -2640,50 +2686,6 @@ function ReviewMarkList({ marks }: { marks: ReviewMark[] }) {
 
 type ReviewAction = "confirm" | "cancel" | "force";
 
-function ReviewDecisionAlert({
-  open,
-  onOpenChange,
-  title,
-  description,
-  confirmLabel,
-  busy,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  description: string;
-  confirmLabel: string;
-  busy: boolean;
-  onConfirm: () => void;
-}) {
-  const { t: tc } = useTranslation();
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle className="text-[var(--danger)]">
-            {title}
-          </AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
-            {tc("actions.cancel")}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            variant="danger"
-            disabled={busy}
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
 function OrderReviewSection({
   review,
   connectionLabel,
@@ -2801,24 +2803,30 @@ function OrderReviewSection({
         )}
       </div>
       {review.held && (
-        <ReviewDecisionAlert
+        <ConfirmDialog
           open={forceOpen}
           onOpenChange={setForceOpen}
           title={t("detail.dialog.review.forceTitle")}
           description={t("detail.dialog.review.forceDescription")}
           confirmLabel={t("detail.dialog.review.force")}
           busy={action !== null}
-          onConfirm={() => onDecision("force")}
+          onConfirm={() => {
+            setForceOpen(false);
+            onDecision("force");
+          }}
         />
       )}
-      <ReviewDecisionAlert
+      <ConfirmDialog
         open={cancelOpen}
         onOpenChange={setCancelOpen}
         title={t("detail.dialog.review.cancelTitle")}
         description={t("detail.dialog.review.cancelDescription")}
         confirmLabel={t("detail.dialog.workflow.cancel")}
         busy={action !== null}
-        onConfirm={() => onDecision("cancel")}
+        onConfirm={() => {
+          setCancelOpen(false);
+          onDecision("cancel");
+        }}
       />
     </section>
   );
@@ -3187,7 +3195,7 @@ function OrderDetailDialog({
       >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className="truncate pr-8">
               {t("detail.dialog.title", { orderExternalId })}
             </DialogTitle>
             <DialogDescription>
@@ -3606,19 +3614,12 @@ function OrderDetailDialog({
                                 orderExternalId,
                               })}
                               onClick={() => {
-                                onCloneOrder({
-                                  account: state.order.account,
-                                  baseAsset: state.order.baseAsset,
-                                  quoteAsset: state.order.quoteAsset,
-                                  side: state.order.side,
-                                  amountKind: state.order.amountKind,
-                                  amountValue: state.order.amountValue,
-                                  price:
-                                    state.order.price === "0"
-                                      ? ""
-                                      : state.order.price,
-                                  venueConnection: state.venueOrder?.connection,
-                                });
+                                onCloneOrder(
+                                  orderInitialValues(
+                                    state.order,
+                                    state.venueOrder?.connection,
+                                  ),
+                                );
                                 onClose();
                               }}
                             >
@@ -3741,7 +3742,7 @@ function OrderDetailDialog({
                           key={trade.id}
                           className="hover:bg-transparent"
                         >
-                          <TableCell className="nums text-xs text-muted-lt">
+                          <TableCell className="nums max-w-64 text-xs text-muted-lt">
                             <IdCell
                               value={trade.id}
                               copyTitle={t("common:rowActions.copyId")}
@@ -3903,17 +3904,12 @@ function OrderDetailDialog({
                     size="sm"
                     aria-label={t("clone.orderAriaLabel", { orderExternalId })}
                     onClick={() => {
-                      onCloneOrder({
-                        account: state.order.account,
-                        baseAsset: state.order.baseAsset,
-                        quoteAsset: state.order.quoteAsset,
-                        side: state.order.side,
-                        amountKind: state.order.amountKind,
-                        amountValue: state.order.amountValue,
-                        price:
-                          state.order.price === "0" ? "" : state.order.price,
-                        venueConnection: state.venueOrder?.connection,
-                      });
+                      onCloneOrder(
+                        orderInitialValues(
+                          state.order,
+                          state.venueOrder?.connection,
+                        ),
+                      );
                       onClose();
                     }}
                   >
@@ -4150,7 +4146,7 @@ function OrdersTable({
             onFocus={() => setSelectedIndex(index)}
             onKeyDown={(event) => onRowKeyDown(event, index, order)}
           >
-            <TableCell className="text-muted-lt">
+            <TableCell className="max-w-64 text-muted-lt">
               <div className="flex min-w-0 items-center gap-1">
                 <IdCell
                   value={order.id}
@@ -4273,16 +4269,7 @@ function OrdersTable({
                     orderExternalId: order.id,
                   })}
                   onClick={() =>
-                    onClone({
-                      account: order.account,
-                      baseAsset: order.baseAsset,
-                      quoteAsset: order.quoteAsset,
-                      side: order.side,
-                      amountKind: order.amountKind,
-                      amountValue: order.amountValue,
-                      price: order.price === "0" ? "" : order.price,
-                      venueConnection: order.venueConnection,
-                    })
+                    onClone(orderInitialValues(order, order.venueConnection))
                   }
                 />
               </RowActions>
@@ -4493,14 +4480,14 @@ function TradesTable({
             onFocus={() => setSelectedIndex(index)}
             onKeyDown={(event) => onRowKeyDown(event, index, trade)}
           >
-            <TableCell className="text-muted-lt">
+            <TableCell className="max-w-64 text-muted-lt">
               <IdCell
                 value={trade.id}
                 copyTitle={t("common:rowActions.copyId")}
                 copiedTitle={t("common:rowActions.copiedId")}
               />
             </TableCell>
-            <TableCell>
+            <TableCell className="max-w-64">
               <IdCell
                 value={trade.order}
                 copyTitle={t("common:rowActions.copyId")}

@@ -258,13 +258,8 @@ func TestWebsocketReadLoopStopsOnError(t *testing.T) {
 	if !errors.Is(result.err, wantErr) {
 		t.Fatalf("second read err = %v, want %v", result.err, wantErr)
 	}
-	select {
-	case _, ok := <-reads:
-		if ok {
-			t.Fatal("read loop kept running after error")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("read loop did not close after error")
+	if _, ok := <-reads; ok { // Read loop closes.
+		t.Fatal("read loop kept running after error")
 	}
 	if calls != 2 {
 		t.Fatalf("calls = %d, want 2", calls)
@@ -285,23 +280,13 @@ func TestWebsocketReadLoopStopsOnContextCancel(t *testing.T) {
 
 	<-started
 	cancel()
-	select {
-	case result, ok := <-reads:
-		if ok {
-			if !errors.Is(result.err, context.Canceled) {
-				t.Fatalf("cancel result err = %v, want context.Canceled", result.err)
-			}
-			select {
-			case _, ok := <-reads:
-				if ok {
-					t.Fatal("read loop kept running after cancel")
-				}
-			case <-time.After(time.Second):
-				t.Fatal("read loop did not close after cancel result")
-			}
+	if result, ok := <-reads; ok { // Read loop closes.
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("cancel result err = %v, want context.Canceled", result.err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("read loop did not stop after cancel")
+		if _, ok := <-reads; ok { // Read loop closes.
+			t.Fatal("read loop kept running after cancel")
+		}
 	}
 }
 

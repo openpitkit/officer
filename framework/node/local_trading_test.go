@@ -911,9 +911,6 @@ func TestLocalNodeDeleteTradingConnection(t *testing.T) {
 	if after := readTradingAgentState(t, n, connection); !reflect.DeepEqual(after, before) {
 		t.Fatalf("agent deletion changed state: before=%+v after=%+v", before, after)
 	}
-	if err := n.SetTradingConnectionEnabled(ctx, connection, false, testCaller); err != nil {
-		t.Fatal(err)
-	}
 	if err := n.DeleteTradingConnection(ctx, connection, testCaller); err != nil {
 		t.Fatal(err)
 	}

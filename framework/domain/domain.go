@@ -249,6 +249,40 @@ func IsSentinel(err error) bool {
 	return false
 }
 
+// internalError is terminal so its domain causes cannot be reclassified as
+// caller errors. A custom Is cannot stop errors.Is from unwrapping after it
+// returns false, so this type deliberately has no Unwrap or As method.
+type internalError struct {
+	err error
+}
+
+func (e internalError) Error() string {
+	return e.err.Error()
+}
+
+func (e internalError) Is(target error) bool {
+	if IsSentinel(target) {
+		return false
+	}
+	return errors.Is(e.err, target)
+}
+
+// Internal returns nil for nil and returns an error it previously returned
+// unchanged. Otherwise it wraps err so errors.Is returns false for domain
+// sentinels and delegates other matches to errors.Is on err. errors.As and
+// errors.Unwrap cannot see through the wrapper.
+func Internal(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch err.(type) {
+	case internalError:
+		return err
+	default:
+		return internalError{err: err}
+	}
+}
+
 // DependentCount names one dependent row kind that blocks a destructive delete.
 type DependentCount struct {
 	Kind  string

@@ -37,6 +37,7 @@ import (
 )
 
 func TestSigningKeyUpsertGetList(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x81)))
 
@@ -103,6 +104,7 @@ func TestSigningKeyUpsertGetList(t *testing.T) {
 }
 
 func TestSigningKeyActiveSwitchingAndDeactivateAll(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x82)))
 
@@ -173,12 +175,14 @@ func TestSigningKeyActiveSwitchingAndDeactivateAll(t *testing.T) {
 }
 
 func TestSigningKeyRotationErasesRetiredPrivateMaterial(t *testing.T) {
+	t.Parallel()
 	for _, sealed := range []bool{false, true} {
 		name := "plaintext"
 		if sealed {
 			name = "sealed"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			var opts []Option
 			if sealed {
@@ -290,12 +294,14 @@ func TestSigningKeyRotationErasesRetiredPrivateMaterial(t *testing.T) {
 }
 
 func TestDeactivateAllSigningKeysRollsBack(t *testing.T) {
+	t.Parallel()
 	for _, sealed := range []bool{false, true} {
 		name := "plaintext"
 		if sealed {
 			name = "sealed"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			var opts []Option
 			if sealed {
@@ -356,6 +362,7 @@ func TestDeactivateAllSigningKeysRollsBack(t *testing.T) {
 }
 
 func TestUpsertSigningKeyRejectsZeroCreatedAt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t, WithMasterKey(mustStoreMasterKey(t, 0x83)))
 	err := rs.UpsertSigningKey(ctx, domain.SigningKey{

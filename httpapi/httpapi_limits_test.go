@@ -29,12 +29,48 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
+
+type followingLimitWriteService struct {
+	backend.ControlPlane
+}
+
+func (s followingLimitWriteService) PutOrderSizeLimit(
+	ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite,
+	missing domain.MissingAccountPolicy,
+) (domain.LimitOrderSize, error) {
+	stored, err := s.ControlPlane.PutOrderSizeLimit(ctx, limit, write, missing)
+	if err != nil {
+		return domain.LimitOrderSize{}, err
+	}
+	limit.MaxQuantity = "5"
+	_, err = s.ControlPlane.PutOrderSizeLimit(ctx, limit, domain.LimitWriteChange, missing)
+	return stored, err
+}
+
+func TestLimitRESTWriteAnswersBeforeFollowingWriter(t *testing.T) {
+	svc := newTestPolicyService(t)
+	router, err := newRouter(followingLimitWriteService{ControlPlane: svc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := callTestPolicy(t, router, "/api/v1", http.MethodPost,
+		"/limits/order-size?missingAccount=reject",
+		`{"scope":"broker","maxQuantity":"10","mode":"review_without_hold"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST = %d: %s", rec.Code, rec.Body)
+	}
+	barrier, _ := bodyMap(t, rec.Result())["orderSizeLimit"].(map[string]any)
+	if barrier["maxQuantity"] != "10" || barrier["mode"] != "review_without_hold" {
+		t.Fatalf("write answered %+v, want its own review_without_hold cap 10", barrier)
+	}
+}
 
 type orderSizeDeleteService struct {
 	*fakeService
@@ -366,7 +402,7 @@ func TestGetSpotFundsLimitMode(t *testing.T) {
 }
 
 // TestPutSpotFundsLimitMode proves the put takes the meta-policy body,
-// forwards it verbatim, and answers the value read back under its own key,
+// forwards it verbatim, and answers the value returned by the source,
 // while a field the body does not carry, an axis among them, is refused before
 // the service.
 func TestPutSpotFundsLimitMode(t *testing.T) {
@@ -382,7 +418,9 @@ func TestPutSpotFundsLimitMode(t *testing.T) {
 		{"account axis", `{"scope":"global","mode":"track_only","account":"acc-1"}`, http.StatusUnprocessableEntity, 0, "/account"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{}
+			svc := &fakeService{limitModeResult: domain.LimitSpotFundsLimitMode{
+				Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce,
+			}}
 			r, err := newRouter(svc)
 			if err != nil {
 				t.Fatal(err)
@@ -420,11 +458,11 @@ func TestPutSpotFundsLimitMode(t *testing.T) {
 			if svc.spotFundsLimitModePut != want {
 				t.Fatalf("put = %+v, want %+v", svc.spotFundsLimitModePut, want)
 			}
-			if svc.listLimitsCalls != 1 || svc.spotFundsLimitModeGetCalls != 0 {
-				t.Fatalf("read-back = (list %d, effective %d), want the stored row read once",
+			if svc.listLimitsCalls != 0 || svc.spotFundsLimitModeGetCalls != 0 {
+				t.Fatalf("extra reads = (list %d, effective %d), want none",
 					svc.listLimitsCalls, svc.spotFundsLimitModeGetCalls)
 			}
-			const wantBody = `{"spotFundsLimitMode":{"scope":"global","mode":"track_only"}}`
+			const wantBody = `{"spotFundsLimitMode":{"scope":"global","mode":"enforce"}}`
 			if got := strings.TrimSpace(rec.Body.String()); got != wantBody {
 				t.Fatalf("body = %s, want %s", got, wantBody)
 			}
@@ -456,49 +494,6 @@ func TestSpotFundsLimitModeRESTReviewRoundTrip(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestPutSpotFundsLimitModeAnswersReadBack proves the put answers the stored
-// row it reads back, not the body it was sent, and answers the absent-barrier
-// status when no row is stored after the put.
-func TestPutSpotFundsLimitModeAnswersReadBack(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		stored     []domain.LimitSpotFundsLimitMode
-		wantStatus int
-		wantBody   string
-	}{
-		{
-			"stored row", []domain.LimitSpotFundsLimitMode{{Scope: domain.ScopeGlobal, Mode: domain.SpotFundsLimitModeEnforce}},
-			http.StatusOK, `{"spotFundsLimitMode":{"scope":"global","mode":"enforce"}}`,
-		},
-		{"no row", nil, http.StatusNotFound, `{"error":{"code":"not_found","message":"not found"}}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := &readBackModeService{fakeService: &fakeService{}, stored: tc.stored}
-			r, err := newRouter(svc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/spot-funds-limit-mode",
-				strings.NewReader(`{"scope":"global","mode":"track_only"}`)))
-			if rec.Code != tc.wantStatus || strings.TrimSpace(rec.Body.String()) != tc.wantBody {
-				t.Fatalf("status = %d, body = %s; want %d %s", rec.Code, rec.Body.String(), tc.wantStatus, tc.wantBody)
-			}
-		})
-	}
-}
-
-// readBackModeService stores a put but reads back its own fixed rows, so an
-// answer that echoes the body instead of the stored row is caught.
-type readBackModeService struct {
-	*fakeService
-	stored []domain.LimitSpotFundsLimitMode
-}
-
-func (s *readBackModeService) ListLimits(context.Context, domain.AccountID) (node.AccountLimits, error) {
-	return node.AccountLimits{SpotFundsLimitModes: s.stored}, nil
 }
 
 func TestSpotFundsLimitModeErrors(t *testing.T) {
@@ -566,19 +561,33 @@ func TestSpotFundsLimitModeErrors(t *testing.T) {
 	}
 }
 
-// TestPutSpotFundsLimitModeReadBackError proves a failed read-back after a
-// stored put answers the read's error, not a stale body.
+// TestPutSpotFundsLimitModeReadBackError checks that a read-back failure after
+// the write was stored answers an internal error.
 func TestPutSpotFundsLimitModeReadBackError(t *testing.T) {
-	svc := &fakeService{listLimErr: fmt.Errorf("limits read: %w", domain.ErrEngineRestarting)}
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/spot-funds-limit-mode",
-		strings.NewReader(`{"scope":"global","mode":"enforce"}`)))
-	if rec.Code != http.StatusServiceUnavailable || svc.spotFundsLimitModePutCalls != 1 {
-		t.Fatalf("status = %d, put calls = %d; want 503 after one put", rec.Code, svc.spotFundsLimitModePutCalls)
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"internal", domain.Internal(fmt.Errorf("limit mode write was stored but its read-back did not find it")), http.StatusInternalServerError, "internal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{putSpotFundsLimitModeErr: tc.err}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/spot-funds-limit-mode",
+				strings.NewReader(`{"scope":"global","mode":"enforce"}`)))
+			problem, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+			if rec.Code != tc.status || problem["code"] != tc.code ||
+				svc.spotFundsLimitModePutCalls != 1 || svc.listLimitsCalls != 0 {
+				t.Fatalf("status = %d, error = %v, put calls = %d, list calls = %d",
+					rec.Code, problem, svc.spotFundsLimitModePutCalls, svc.listLimitsCalls)
+			}
+		})
 	}
 }
 
@@ -1000,19 +1009,10 @@ func TestKeyedLimitRESTWrites(t *testing.T) {
 }
 
 func TestPutRateLimit(t *testing.T) {
-	svc := &fakeService{
-		limits: node.AccountLimits{
-			RateLimits: []domain.LimitRate{
-				{Mode: domain.RuleModeReject,
-					Scope:     domain.ScopeAccountAsset,
-					Account:   "acc-1",
-					Asset:     "AAPL",
-					Window:    2 * time.Second,
-					MaxOrders: 101,
-				},
-			},
-		},
-	}
+	svc := &fakeService{rateLimitResult: domain.LimitRate{Mode: domain.RuleModeReject,
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		Window: 2 * time.Second, MaxOrders: 101,
+	}}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -1026,7 +1026,7 @@ func TestPutRateLimit(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	// The handler captures the typed barrier and responds from persisted state.
+	// The handler forwards the typed barrier and answers the source result.
 	if svc.rateLimitPut.Scope != domain.ScopeAccountAsset ||
 		svc.rateLimitPut.Account != "acc-1" ||
 		svc.rateLimitPut.Asset != "AAPL" ||
@@ -1045,23 +1045,10 @@ func TestPutRateLimit(t *testing.T) {
 }
 
 func TestPutOrderSizeLimit(t *testing.T) {
-	svc := &fakeService{
-		limits: node.AccountLimits{
-			OrderSizeLimits: []domain.LimitOrderSize{
-				{
-					Mode: domain.RuleModeReviewWithoutHold, Scope: domain.ScopeAccountSettlementAsset,
-					Account: "acc-1", Asset: "USD", MaxNotional: "99999",
-				},
-				{
-					Mode:        domain.RuleModeReject,
-					Scope:       domain.ScopeAccountSettlementAsset,
-					Account:     "acc-1",
-					Asset:       "USD",
-					MaxNotional: "50001",
-				},
-			},
-		},
-	}
+	svc := &fakeService{orderSizeLimitResult: domain.LimitOrderSize{
+		Mode: domain.RuleModeReject, Scope: domain.ScopeAccountSettlementAsset,
+		Account: "acc-1", Asset: "USD", MaxNotional: "50001",
+	}}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -1250,11 +1237,7 @@ func TestPutPositionLimit(t *testing.T) {
 			limit := domain.LimitPosition{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "BTC", MaxPosition: value}
 			stored := limit
 			stored.MaxPosition = "321.000000000000000002"
-			svc := &fakeService{limits: node.AccountLimits{PositionLimits: []domain.LimitPosition{
-				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "BTC", MaxPosition: "1"},
-				{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "ETH", MaxPosition: "2"},
-				stored,
-			}}}
+			svc := &fakeService{positionLimitResult: stored}
 			r, err := newRouter(svc)
 			if err != nil {
 				t.Fatal(err)
@@ -1313,11 +1296,12 @@ func TestPutPositionLimitReadBackError(t *testing.T) {
 		err    error
 		status int
 	}{
-		{"missing", nil, http.StatusNotFound},
+		{"missing stored barrier", domain.Internal(fmt.Errorf("limit write was stored but its read-back did not find it")), http.StatusInternalServerError},
+		{"write target missing", domain.ErrNotFound, http.StatusNotFound},
 		{"read failed", fmt.Errorf("read failed"), http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{listLimErr: tc.err}
+			svc := &fakeService{putLimErr: tc.err}
 			r, err := newRouter(svc)
 			if err != nil {
 				t.Fatal(err)
@@ -1369,20 +1353,11 @@ func TestListLimitsPositionValues(t *testing.T) {
 }
 
 func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
-	svc := &fakeService{
-		limits: node.AccountLimits{
-			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-				{Mode: domain.RuleModeReject,
-					Axis:         domain.SpotFundsPnlAxisRealized,
-					Scope:        domain.ScopeAccountGroup,
-					AccountGroup: "desk-a",
-					Currency:     "USD",
-					LowerBound:   "-999",
-					UpperBound:   "5001",
-				},
-			},
-		},
-	}
+	svc := &fakeService{pnlBoundsLimitResult: domain.LimitSpotFundsPnlBounds{
+		Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized,
+		Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a",
+		Currency: "USD", LowerBound: "-999", UpperBound: "5001",
+	}}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -1428,20 +1403,11 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 }
 
 func TestPutSpotFundsPnlBoundsLimit_Account(t *testing.T) {
-	svc := &fakeService{
-		limits: node.AccountLimits{
-			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-				{Mode: domain.RuleModeReject,
-					Axis:       domain.SpotFundsPnlAxisRealized,
-					Scope:      domain.ScopeAccount,
-					Account:    "acc-1",
-					Currency:   "EUR",
-					LowerBound: "-999",
-					UpperBound: "5001",
-				},
-			},
-		},
-	}
+	svc := &fakeService{pnlBoundsLimitResult: domain.LimitSpotFundsPnlBounds{
+		Mode: domain.RuleModeReject, Axis: domain.SpotFundsPnlAxisRealized,
+		Scope: domain.ScopeAccount, Account: "acc-1",
+		Currency: "EUR", LowerBound: "-999", UpperBound: "5001",
+	}}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -1548,7 +1514,8 @@ func TestPutSpotFundsPnlBoundsLimit_ExponentNotationValidationError(t *testing.T
 // P&L-bounds barrier with lowerBound under an upper bound of 0, and fails t
 // unless the answer comes within a second as a single decimal validation
 // error at /lowerBound with nothing stored, so a bound whose check grows with
-// its exponent fails the test instead of stalling the suite.
+// its exponent fails the test. A call that never returns is left to go test's
+// -timeout.
 func requireLowerBoundRefused(t *testing.T, lowerBound string) {
 	t.Helper()
 	r, realm := newRealServiceRouter(t)

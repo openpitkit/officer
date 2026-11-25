@@ -46,21 +46,12 @@ func TestPingLoopTicksAndCancellation(t *testing.T) {
 		}), time.Millisecond, make(chan error, 1))
 	}()
 	for range 2 {
-		select {
-		case got := <-writes:
-			if got != "ping" {
-				t.Fatalf("payload = %q; want ping", got)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("no ping on tick")
+		if got := <-writes; got != "ping" {
+			t.Fatalf("payload = %q; want ping", got)
 		}
 	}
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("loop did not stop after cancellation")
-	}
+	<-done
 }
 
 func TestPingLoopDisabled(t *testing.T) {
@@ -74,11 +65,7 @@ func TestPingLoopDisabled(t *testing.T) {
 				defer close(done)
 				okx.PingLoop(ctx, writerFunc(func(context.Context, []byte) error { calls++; return nil }), interval, nil)
 			}()
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("disabled loop did not return")
-			}
+			<-done
 			if calls != 0 {
 				t.Fatalf("writes = %d; want 0", calls)
 			}
@@ -105,11 +92,7 @@ func TestPingLoopWriteError(t *testing.T) {
 				defer close(done)
 				okx.PingLoop(ctx, writerFunc(func(context.Context, []byte) error { calls++; return want }), time.Millisecond, test.errs)
 			}()
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("loop did not stop on write error")
-			}
+			<-done
 			if calls != 1 {
 				t.Fatalf("writes = %d; want 1", calls)
 			}

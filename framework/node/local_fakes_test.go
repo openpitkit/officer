@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
@@ -38,7 +39,43 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+type orderQueueObserver struct {
+	asyncengine.NoopObserver
+	mu          sync.Mutex
+	nextEnqueue chan struct{}
+	cancelled   error
+}
+
+func (o *orderQueueObserver) observeNextEnqueue() <-chan struct{} {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.nextEnqueue = make(chan struct{})
+	return o.nextEnqueue
+}
+
+func (o *orderQueueObserver) OnEnqueue(param.AccountID, int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.nextEnqueue != nil {
+		close(o.nextEnqueue)
+		o.nextEnqueue = nil
+	}
+}
+
+func (o *orderQueueObserver) OnSubmitCancelled(_ param.AccountID, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.cancelled = err
+}
+
+func (o *orderQueueObserver) submitCancellation() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.cancelled
+}
+
 type fakeEngine struct {
+	queueObserver               orderQueueObserver
 	running                     bool
 	sink                        marketdata.Sink
 	marketDataServiceCloseCalls int
@@ -88,6 +125,9 @@ type fakeEngine struct {
 	submitAccountPnlHaltReason domain.PnlHaltReason
 	submitReject               *domain.OrderReject
 	emptyImmediatePersistence  bool
+	afterSubmitDecision        func()
+	afterOrderModel            func()
+	settleImmediateErr         error
 	execReportBlocks           []domain.AccountBlock
 	execReportOutcomes         []engine.BalanceOutcome
 	emptyExecReportPersistence bool
@@ -1370,6 +1410,48 @@ func (s *laneProbeRealm) SetGroupBlocked(
 		return s.failErr
 	}
 	return s.RealmStore.SetGroupBlocked(ctx, code, blocked, reason)
+}
+
+// The memory store ignores cancellation; this models cancellable database
+// transactions and audit writes for the order lifecycle tests.
+type cancellationAwareOrderRealm struct {
+	store.RealmStore
+}
+
+func (r *cancellationAwareOrderRealm) RecordOrderSubmission(
+	ctx context.Context, order domain.Order, submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+) (domain.Order, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Order{}, err
+	}
+	return r.RealmStore.RecordOrderSubmission(ctx, order, submitted,
+		func(persisted domain.Order) (domain.OrderSettlement, error) {
+			settlement, err := apply(persisted)
+			if err != nil {
+				return domain.OrderSettlement{}, err
+			}
+			if err := ctx.Err(); err != nil {
+				return domain.OrderSettlement{}, err
+			}
+			return settlement, nil
+		})
+}
+
+func (r *cancellationAwareOrderRealm) RecordOrderSettlement(
+	ctx context.Context, settlement domain.OrderSettlement,
+) (domain.ExternalID, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return r.RealmStore.RecordOrderSettlement(ctx, settlement)
+}
+
+func (r *cancellationAwareOrderRealm) AppendAudit(ctx context.Context, entry store.AuditEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.RealmStore.AppendAudit(ctx, entry)
 }
 
 // newTestNode builds a localNode over a real temp SQLite store and the fake

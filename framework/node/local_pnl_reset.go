@@ -59,7 +59,7 @@ func (n *localNode) PnlResetSchedulerFailure(err error) error {
 // InstallPnlResetScheduler attaches one worker before the node starts serving.
 func (n *localNode) InstallPnlResetScheduler(owner PnlResetSchedulerOwner) error {
 	if owner == nil {
-		return domain.ErrInvalid
+		return fmt.Errorf("missing P&L reset scheduler owner")
 	}
 	if n.pnlResetOwner != nil {
 		return domain.ErrAlreadyExists
@@ -99,7 +99,7 @@ func (n *localNode) ResetAccountPnl(ctx context.Context, code domain.AccountID, 
 		return domain.Account{}, fmt.Errorf("reset account P&L: %w", domain.ErrLoosening)
 	}
 	if err := domain.ValidateSource(caller.Source); err != nil {
-		return domain.Account{}, err
+		return domain.Account{}, domain.Internal(err)
 	}
 	if runID != "" && caller.Source != domain.SourceSystem {
 		return domain.Account{}, domain.ErrForbidden

@@ -855,7 +855,7 @@ func mergeMarketDataCredentials(existing, update string) (string, error) {
 	merged := make(map[string]any)
 	if existing != "" {
 		if err := decodeCredentialsJSON(existing, &merged); err != nil {
-			return "", fmt.Errorf("market-data stored credentials: %w", domain.ErrInvalid)
+			return "", fmt.Errorf("market-data stored credentials are not a JSON object")
 		}
 	}
 	var incoming map[string]any
@@ -1014,7 +1014,7 @@ func MarketDataSecrets(instance domain.MarketDataInstance) (map[string]bool, err
 	// The decode error stays unwrapped: it can quote part of a
 	// credential value.
 	if err := decodeCredentialsJSON(raw, &credentials); err != nil || credentials == nil {
-		return nil, fmt.Errorf("stored market-data credentials are not a JSON object: %w", domain.ErrInvalid)
+		return nil, fmt.Errorf("stored market-data credentials are not a JSON object")
 	}
 	secrets := make(map[string]bool)
 	switch instance.Provider {

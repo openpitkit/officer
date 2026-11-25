@@ -122,12 +122,13 @@ LEFT JOIN asset_class c ON c.id = a.class_id`
 	if len(clauses) > 0 {
 		countQuery += "\nWHERE " + strings.Join(clauses, " AND ")
 	}
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "asset")
 	if err != nil {
 		return fwstore.AssetListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AssetListPage{}, fmt.Errorf("store: count assets: %w", err)
 	}
 
@@ -137,7 +138,7 @@ LEFT JOIN asset_class c ON c.id = a.class_id`
 		query += "\nLIMIT ? OFFSET ?"
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AssetListPage{}, fmt.Errorf("store: list assets: %w", err)
 	}
@@ -153,6 +154,9 @@ LEFT JOIN asset_class c ON c.id = a.class_id`
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.AssetListPage{}, fmt.Errorf("store: iterate assets: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.AssetListPage{}, fmt.Errorf("store: finish asset read: %w", err)
 	}
 	return fwstore.AssetListPage{Rows: assets, Total: total}, nil
 }
@@ -386,12 +390,13 @@ LEFT JOIN asset a ON a.class_id = c.id` +
 GROUP BY c.id`
 
 	countQuery := `SELECT COUNT(*) FROM (SELECT c.id` + from + `) AS filtered`
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "asset class")
 	if err != nil {
 		return fwstore.AssetClassListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AssetClassListPage{}, fmt.Errorf("store: count asset class rows: %w", err)
 	}
 
@@ -404,7 +409,7 @@ SELECT c.code, c.title, c.notes, COUNT(a.id) AS asset_count` +
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
 
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AssetClassListPage{}, fmt.Errorf("store: list asset class rows: %w", err)
 	}
@@ -419,6 +424,9 @@ SELECT c.code, c.title, c.notes, COUNT(a.id) AS asset_count` +
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.AssetClassListPage{}, fmt.Errorf("store: iterate asset class rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.AssetClassListPage{}, fmt.Errorf("store: finish asset class read: %w", err)
 	}
 	return fwstore.AssetClassListPage{Rows: classes, Total: total}, nil
 }
@@ -789,21 +797,19 @@ GROUP BY g.id` + having
 
 	countArgs := append(append([]any{}, args...), havingArgs...)
 	countQuery := `SELECT COUNT(*) FROM (SELECT g.id` + from + `) AS filtered`
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "group")
 	if err != nil {
 		return fwstore.GroupListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return fwstore.GroupListPage{}, fmt.Errorf("store: count group rows: %w", err)
 	}
 
-	// The default group is read first, before the real-group cursor is opened:
-	// the SQLite connector serializes on a single connection, so a second query
-	// issued while a result set is still open would deadlock on the pool.
 	groups := make([]fwstore.GroupListRow, 0)
 	if filter.Page.Offset <= 0 && !filter.Restriction.Restricted() {
-		defaultRow, ok, err := r.defaultGroupRow(ctx, filter)
+		defaultRow, ok, err := defaultGroupRow(ctx, tx, filter)
 		if err != nil {
 			return fwstore.GroupListPage{}, err
 		}
@@ -824,7 +830,7 @@ SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked, g.block_reason,
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
 
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.GroupListPage{}, fmt.Errorf("store: list group rows: %w", err)
 	}
@@ -839,14 +845,17 @@ SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked, g.block_reason,
 	if err := rows.Err(); err != nil {
 		return fwstore.GroupListPage{}, fmt.Errorf("store: iterate group rows: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.GroupListPage{}, fmt.Errorf("store: finish group read: %w", err)
+	}
 	return fwstore.GroupListPage{Rows: groups, Total: total}, nil
 }
 
 // defaultGroupRow reads the synthetic default group (code empty) holding the
 // accounts with no group, applying the same filter visibility rules as the real
 // groups. The bool is false when the filter excludes it.
-func (r *realmStore) defaultGroupRow(
-	ctx context.Context, filter fwstore.GroupListFilter,
+func defaultGroupRow(
+	ctx context.Context, q sqlQueryer, filter fwstore.GroupListFilter,
 ) (result fwstore.GroupListRow, found bool, resultErr error) {
 	where, args, err := groupListWhere(filter, "dg")
 	if err != nil {
@@ -873,11 +882,7 @@ LEFT JOIN balance b ON b.account_id = a.id` +
 		where + `
 GROUP BY dg.code` + having
 
-	db, err := r.db()
-	if err != nil {
-		return fwstore.GroupListRow{}, false, err
-	}
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fwstore.GroupListRow{}, false, fmt.Errorf("store: default group row: %w", err)
 	}
@@ -1283,12 +1288,13 @@ LEFT JOIN balance b ON b.account_id = a.id` +
 		where + `
 GROUP BY a.id` + having
 	countQuery := `SELECT COUNT(*) FROM (SELECT a.id` + from + `) AS filtered`
-	db, err := r.db()
+	tx, err := r.beginReadTx(ctx, "account")
 	if err != nil {
 		return fwstore.AccountListPage{}, err
 	}
+	defer rollbackTransaction(ctx, &resultErr, tx)
 	var total int
-	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AccountListPage{}, fmt.Errorf("store: count account rows: %w", err)
 	}
 	queryArgs := append([]any{}, args...)
@@ -1303,7 +1309,7 @@ SELECT a.id, a.code, a.title, a.pnl, a.pnl_halt_reason, ac.code, g.code, gc.code
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
 
-	rows, err := db.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AccountListPage{}, fmt.Errorf("store: list account rows: %w", err)
 	}
@@ -1311,6 +1317,9 @@ SELECT a.id, a.code, a.title, a.pnl, a.pnl_halt_reason, ac.code, g.code, gc.code
 	result, err := scanAccountListRows(rows)
 	if err != nil {
 		return fwstore.AccountListPage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return fwstore.AccountListPage{}, fmt.Errorf("store: finish account read: %w", err)
 	}
 	return fwstore.AccountListPage{Rows: result, Total: total}, nil
 }
@@ -1506,11 +1515,11 @@ func (r *realmStore) SetAccountPnl(
 func setAccountPnl(ctx context.Context, q sqlExecer, code domain.AccountID, pnl string, haltReason domain.PnlHaltReason) error {
 	if pnl != "" {
 		if _, err := domain.AddDecimals("", pnl); err != nil {
-			return fmt.Errorf("store: account pnl %q: %w", code, err)
+			return fmt.Errorf("store: account pnl %q: %w", code, domain.Internal(err))
 		}
 	}
 	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
-		return fmt.Errorf("store: account pnl halt %q: %w", code, err)
+		return fmt.Errorf("store: account pnl halt %q: %w", code, domain.Internal(err))
 	}
 	// NULL is the absence of a P&L value: a halted accumulator, or no value
 	// reported at all. Never substitute a number.

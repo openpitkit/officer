@@ -32,6 +32,7 @@ import (
 )
 
 func TestSQLiteDialectBindVar(t *testing.T) {
+	t.Parallel()
 	for _, position := range []int{1, 2, 99} {
 		if got := (sqliteDialect{}).BindVar(position); got != "?" {
 			t.Errorf(
@@ -43,7 +44,9 @@ func TestSQLiteDialectBindVar(t *testing.T) {
 }
 
 func TestMigrationRunner(t *testing.T) {
+	t.Parallel()
 	t.Run("applies and records once", func(t *testing.T) {
+		t.Parallel()
 		db := openMigrationTestDB(t)
 		ctx := context.Background()
 		source := migrationList{{
@@ -64,6 +67,7 @@ func TestMigrationRunner(t *testing.T) {
 	})
 
 	t.Run("rolls back failed SQL", func(t *testing.T) {
+		t.Parallel()
 		db := openMigrationTestDB(t)
 		ctx := context.Background()
 		err := migration.Apply(
@@ -87,6 +91,7 @@ func TestMigrationRunner(t *testing.T) {
 	})
 
 	t.Run("executes quoted bookkeeping identifiers", func(t *testing.T) {
+		t.Parallel()
 		tests := []struct {
 			name           string
 			table          string
@@ -106,6 +111,7 @@ func TestMigrationRunner(t *testing.T) {
 
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
 				db := openMigrationTestDB(t)
 				ctx := context.Background()
 				cfg := migration.Config{Table: test.table}
@@ -161,6 +167,7 @@ func TestMigrationRunner(t *testing.T) {
 	})
 
 	t.Run("uses attached schema", func(t *testing.T) {
+		t.Parallel()
 		db := openMigrationTestDB(t)
 		// ATTACH is connection-local, so pin the pool to the attached connection.
 		db.SetMaxOpenConns(1)
@@ -213,6 +220,7 @@ func TestMigrationRunner(t *testing.T) {
 }
 
 func TestPending(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	source := migrationList{
 		{Version: 1, Name: "one.sql", SQL: "SELECT 1"},
@@ -221,11 +229,13 @@ func TestPending(t *testing.T) {
 	}
 
 	t.Run("filters applied versions", func(t *testing.T) {
+		t.Parallel()
 		for _, cfg := range []migration.Config{
 			{},
 			{Schema: "main", Table: "migration \"history"},
 		} {
 			t.Run(cfg.Schema+"/"+cfg.Table, func(t *testing.T) {
+				t.Parallel()
 				db := openMigrationTestDB(t)
 				if err := migration.Apply(
 					ctx, db, source[:2], cfg, sqliteDialect{},
@@ -251,6 +261,7 @@ func TestPending(t *testing.T) {
 	})
 
 	t.Run("sorts pending versions", func(t *testing.T) {
+		t.Parallel()
 		db := openMigrationTestDB(t)
 		cfg := migration.Config{}
 		if err := migration.Apply(
@@ -269,6 +280,7 @@ func TestPending(t *testing.T) {
 	})
 
 	t.Run("missing bookkeeping table", func(t *testing.T) {
+		t.Parallel()
 		db := openMigrationTestDB(t)
 		_, err := migration.Pending(ctx, db, source, migration.Config{})
 		var sqliteErr *sqlitedriver.Error
@@ -281,6 +293,7 @@ func TestPending(t *testing.T) {
 	})
 
 	t.Run("read only connection", func(t *testing.T) {
+		t.Parallel()
 		path := filepath.Join(t.TempDir(), "migration.db")
 		db, err := openSQLiteDB(path)
 		if err != nil {

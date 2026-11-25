@@ -73,6 +73,7 @@ func assertListPage(t *testing.T, total int, got []string, wantTotal int, want [
 }
 
 func TestListAccountRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "c"}); err != nil {
 		t.Fatalf("CreateAccount(c): %v", err)
@@ -120,6 +121,7 @@ func TestListAccountRowsAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			page, err := rs.ListAccountRows(ctx, tc.filter)
 			if err != nil {
 				t.Fatalf("ListAccountRows: %v", err)
@@ -134,6 +136,7 @@ func TestListAccountRowsAccountRestriction(t *testing.T) {
 }
 
 func TestListOrderRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	// Interleaved, so the restricted rows are not one contiguous id range.
 	for _, seed := range []struct {
@@ -191,6 +194,7 @@ func TestListOrderRowsAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			page, err := rs.ListOrderRows(ctx, tc.filter)
 			if err != nil {
 				t.Fatalf("ListOrderRows: %v", err)
@@ -205,6 +209,7 @@ func TestListOrderRowsAccountRestriction(t *testing.T) {
 }
 
 func TestListTradeRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	orders := make(map[domain.AccountID]domain.ExternalID)
 	for _, account := range []domain.AccountID{"a", "b"} {
@@ -274,6 +279,7 @@ func TestListTradeRowsAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			page, err := rs.ListTradeRows(ctx, tc.filter)
 			if err != nil {
 				t.Fatalf("ListTradeRows: %v", err)
@@ -288,6 +294,7 @@ func TestListTradeRowsAccountRestriction(t *testing.T) {
 }
 
 func TestListBalanceRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	for _, code := range []string{"X1", "X2", "X3"} {
 		if _, err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
@@ -345,6 +352,7 @@ func TestListBalanceRowsAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			page, err := rs.ListBalanceRows(ctx, tc.filter)
 			if err != nil {
 				t.Fatalf("ListBalanceRows: %v", err)
@@ -359,6 +367,7 @@ func TestListBalanceRowsAccountRestriction(t *testing.T) {
 }
 
 func TestListAdjustmentRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	for _, seed := range []struct {
 		account domain.AccountID
@@ -419,6 +428,7 @@ func TestListAdjustmentRowsAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			page, err := rs.ListAdjustmentRows(ctx, tc.filter)
 			if err != nil {
 				t.Fatalf("ListAdjustmentRows: %v", err)
@@ -433,6 +443,7 @@ func TestListAdjustmentRowsAccountRestriction(t *testing.T) {
 }
 
 func TestListPolicyRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	// Account a is a member of desk; ops is b's group, which a is not in.
 	for code, member := range map[string]domain.AccountID{"desk": "a", "ops": "b"} {
@@ -549,6 +560,7 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			page, err := rs.ListPolicyRows(ctx, tc.filter)
 			if err != nil {
 				t.Fatalf("ListPolicyRows: %v", err)
@@ -564,6 +576,7 @@ func TestListPolicyRowsAccountRestriction(t *testing.T) {
 }
 
 func TestListPolicyRowsPosition(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	for _, limit := range []domain.LimitPosition{
 		{Mode: domain.RuleModeReject, Scope: domain.ScopeAccountAsset, Account: "a", Asset: "AAPL", MaxPosition: "10"},
@@ -689,6 +702,7 @@ func auditDetails(rows []domain.AuditRow) []string {
 }
 
 func TestListAuditRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	seedRestrictionAudit(t, ctx, rs)
 	for _, tc := range []struct {
@@ -747,6 +761,7 @@ func TestListAuditRowsAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			page, err := rs.ListAuditRows(ctx, tc.filter)
 			if err != nil {
 				t.Fatalf("ListAuditRows: %v", err)
@@ -759,6 +774,7 @@ func TestListAuditRowsAccountRestriction(t *testing.T) {
 // TestListAuditFilteredAccountRestriction covers the count-bounded audit
 // listing: n bounds the restricted set, not a window taken before it.
 func TestListAuditFilteredAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	seedRestrictionAudit(t, ctx, rs)
 	for _, tc := range []struct {
@@ -811,6 +827,7 @@ func TestListAuditFilteredAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			rows, err := rs.ListAuditFiltered(ctx, tc.filter, tc.n)
 			if err != nil {
 				t.Fatalf("ListAuditFiltered: %v", err)
@@ -828,6 +845,7 @@ func TestListAuditFilteredAccountRestriction(t *testing.T) {
 // count filters read them, and the synthetic default group is omitted, so a
 // member of no group lists nothing.
 func TestListGroupRowsAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	for _, code := range []string{"desk", "empty", "ops"} {
 		if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: code}); err != nil {
@@ -914,6 +932,7 @@ func TestListGroupRowsAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			page, err := rs.ListGroupRows(ctx, tc.filter)
 			if err != nil {
 				t.Fatalf("ListGroupRows: %v", err)
@@ -934,6 +953,7 @@ func TestListGroupRowsAccountRestriction(t *testing.T) {
 // a restriction counts only the restricted account's orders, in the total, the
 // working set and the orders since a boundary alike.
 func TestCountOrdersAccountRestriction(t *testing.T) {
+	t.Parallel()
 	ctx, rs := newRestrictionStore(t)
 	boundary := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	before, after := boundary.Add(-time.Hour), boundary.Add(time.Hour)
@@ -980,6 +1000,7 @@ func TestCountOrdersAccountRestriction(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			total, err := rs.CountOrders(ctx, tc.restriction)
 			if err != nil || total != tc.total {
 				t.Fatalf("CountOrders = %d, %v; want %d", total, err, tc.total)

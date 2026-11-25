@@ -446,14 +446,12 @@ func TestDecimalRangeFilterValidateIsBoundedByLength(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			done := make(chan error, 1)
-			go func() { done <- tc.filter.Validate("amount") }()
-			select {
-			case err := <-done:
-				requireValidation(t, err, tc.want)
-			case <-time.After(time.Second):
-				t.Fatal("Validate() did not return within a second")
+			start := time.Now()
+			err := tc.filter.Validate("amount")
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("Validate() took %v, want under a second", elapsed)
 			}
+			requireValidation(t, err, tc.want)
 		})
 	}
 }

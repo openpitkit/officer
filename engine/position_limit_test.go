@@ -19,16 +19,14 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"math/rand"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	fwengine "go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/internal/polltest"
 	"go.openpit.dev/openpit/reject"
 )
 
@@ -528,8 +526,8 @@ func TestPositionLimit_BuildRejectsInvalidStoredSet(t *testing.T) {
 			if eng != nil {
 				defer eng.Stop()
 			}
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Errorf("build invalid stored position limits = %v, want ErrInvalid", err)
+			if !internalFailureAnswer(err) {
+				t.Errorf("build invalid stored position limits = %v, want internal error", err)
 			}
 			if eng != nil {
 				t.Error("build invalid stored position limits returned a non-nil engine")
@@ -563,8 +561,8 @@ func TestPositionLimit_AtomicValidation(t *testing.T) {
 					positionLimit("acc-1", "AAPL", "110"), bad,
 				}},
 			)
-			if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), domain.PolicyPositionLimit) {
-				t.Fatalf("invalid complete set = %v, want position_limit ErrInvalid", err)
+			if !internalFailureAnswer(err) || !strings.Contains(err.Error(), domain.PolicyPositionLimit) {
+				t.Fatalf("invalid complete set = %v, want position_limit 500 internal", err)
 			}
 			assertPositionLimitCheck(t, eng, checkProbe("acc-1", domain.OrderSideBuy, "11", "1"), false)
 			probe := checkProbe("acc-2", domain.OrderSideBuy, "11", "1")
@@ -641,14 +639,13 @@ func TestPositionLimit_RetuneWaitsForLaneAndFinishesAfterCancellation(t *testing
 		retuned <- err
 	}()
 	adapter := eng.(*openPitEngine)
-	deadline := time.Now().Add(5 * time.Second)
-	for adapter.mu.TryLock() {
-		adapter.mu.Unlock()
-		if time.Now().After(deadline) {
-			t.Fatal("position retune did not acquire the adapter mutex")
+	polltest.Until(func() bool {
+		if !adapter.mu.TryLock() {
+			return true
 		}
-		runtime.Gosched()
-	}
+		adapter.mu.Unlock()
+		return false
+	}) // Position retune acquired the adapter mutex.
 	select {
 	case err := <-retuned:
 		t.Fatalf("position retune finished while a lane was busy: %v", err)
@@ -656,16 +653,10 @@ func TestPositionLimit_RetuneWaitsForLaneAndFinishesAfterCancellation(t *testing
 	}
 	cancel()
 	freeLane()
-	select {
-	case err := <-retuned:
-		if err != nil {
-			t.Fatalf("position retune after cancellation = %v, want completed update", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("position retune did not finish after the lane was freed")
+	if err := <-retuned; err != nil {
+		t.Fatalf("position retune after cancellation = %v, want completed update", err)
 	}
-	waitCtx, stopWait := context.WithTimeout(context.Background(), time.Second)
-	defer stopWait()
+	waitCtx := t.Context()
 	if _, err := held.Await(waitCtx); err != nil {
 		t.Fatal(err)
 	}

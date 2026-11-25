@@ -38,18 +38,14 @@ func TestMockConnector_EmitsDeterministicQuotes(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	select {
-	case got := <-ch:
-		if got.Base != testMarketDataAssetID("AAPL") || got.Quote != testMarketDataAssetID("USD") {
-			t.Fatalf("instrument tag = %d/%d, want AAPL/USD", got.Base, got.Quote)
-		}
-		// First tick: mark 101, bid 100, ask 102.
-		if got.Mark != "101" || got.Bid != "100" || got.Ask != "102" {
-			t.Fatalf("first tick = mark %q bid %q ask %q, want 101/100/102",
-				got.Mark, got.Bid, got.Ask)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for the first mock quote")
+	got := <-ch // Quote or channel closure arrives.
+	if got.Base != testMarketDataAssetID("AAPL") || got.Quote != testMarketDataAssetID("USD") {
+		t.Fatalf("instrument tag = %d/%d, want AAPL/USD", got.Base, got.Quote)
+	}
+	// First tick: mark 101, bid 100, ask 102.
+	if got.Mark != "101" || got.Bid != "100" || got.Ask != "102" {
+		t.Fatalf("first tick = mark %q bid %q ask %q, want 101/100/102",
+			got.Mark, got.Bid, got.Ask)
 	}
 }
 

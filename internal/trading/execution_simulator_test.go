@@ -114,27 +114,8 @@ func (c *testRestClock) schedule(ctx context.Context, at time.Time, run func(tim
 
 func (c *testRestClock) next(t *testing.T) *testRestTimer {
 	t.Helper()
-	select {
-	case timer := <-c.armed:
-		return timer
-	case <-time.After(3 * time.Second):
-		t.Fatal("rest timer was not armed")
-		return nil
-	}
-}
-
-func testRestEvent(t *testing.T, events <-chan fwtrading.Event) fwtrading.Event {
-	t.Helper()
-	select {
-	case event, ok := <-events:
-		if !ok {
-			t.Fatal("rest events closed unexpectedly")
-		}
-		return event
-	case <-time.After(3 * time.Second):
-		t.Fatal("rest event was not delivered")
-		return fwtrading.Event{}
-	}
+	timer := <-c.armed // Rest timer is armed.
+	return timer
 }
 
 func restPolicy(t *testing.T, infinite bool) domain.TestExecutionPolicyState {
@@ -161,7 +142,7 @@ func buildRestConnector(t *testing.T, build fwtrading.BuildContext, clock *testR
 	events, err := c.Subscribe(ctx)
 	tradingE2EMust(t, err)
 	t.Cleanup(func() { cancel(); c.Close() })
-	if event := testRestEvent(t, events); event.Kind != fwtrading.EventConnected {
+	if event := nextEvent(t, events); event.Kind != fwtrading.EventConnected {
 		t.Fatalf("first event = %+v", event)
 	}
 	return c, events, cancel
@@ -209,7 +190,7 @@ func TestTestConnectorRestNoEarlyFill(t *testing.T) {
 	assertOpen()
 	clock.set(testNow.Add(10 * time.Second))
 	second.ticks <- clock.now()
-	if event := testRestEvent(t, events); event.Kind != fwtrading.EventOrder {
+	if event := nextEvent(t, events); event.Kind != fwtrading.EventOrder {
 		t.Fatalf("terminal event = %+v", event)
 	}
 	c.handlers.Wait()
@@ -255,7 +236,7 @@ func TestTestConnectorRestSnapshot(t *testing.T) {
 	}
 	clock.set(testNow.Add(10 * time.Second))
 	timer.ticks <- clock.now()
-	testRestEvent(t, events)
+	nextEvent(t, events)
 	c.handlers.Wait()
 	old := restSnapshot(t, c, order.ClientOrderID)
 	if len(old.Fills) != 1 || old.Fills[0].Price != "101" {
@@ -288,11 +269,7 @@ func TestTestConnectorRestLifecycle(t *testing.T) {
 			c.mu.Unlock()
 			clock.set(testNow.Add(10 * time.Second))
 			timer.ticks <- clock.now()
-			select {
-			case <-entered:
-			case <-time.After(3 * time.Second):
-				t.Fatal("quote read not reached")
-			}
+			<-entered // Quote read starts.
 			closed := make(chan struct{})
 			switch action {
 			case "stop":
@@ -423,7 +400,7 @@ func TestTestConnectorRestMissingAsk(t *testing.T) {
 	// The injected clock reports a local offset; the diagnostic must still be UTC.
 	clock.set(deadline.In(time.FixedZone("EET", 2*60*60)))
 	timer.ticks <- clock.now()
-	testRestEvent(t, events)
+	nextEvent(t, events)
 	c.handlers.Wait()
 	s := restSnapshot(t, c, "client")
 	if s.Status != fwtrading.VenueStatusCancelled || len(s.Fills) != 0 || !strings.Contains(s.Reason, "has no ask") {
@@ -566,7 +543,7 @@ func FuzzTestSequence(f *testing.F) {
 					want.deadline = x.clock.now().Add(10 * time.Second)
 					x.timers[id] = x.clock.next(t)
 				} else if want.terminal {
-					testRestEvent(t, x.events)
+					nextEvent(t, x.events)
 				}
 				x.orders[id] = want
 			case 2:
@@ -619,7 +596,7 @@ func FuzzTestSequence(f *testing.F) {
 					if x.clock.now().Before(want.deadline) {
 						x.timers[id] = x.clock.next(t)
 					} else {
-						testRestEvent(t, x.events)
+						nextEvent(t, x.events)
 						want.terminal = true
 						x.orders[id] = want
 					}
@@ -711,6 +688,16 @@ func buildTestConnector(t *testing.T, build fwtrading.BuildContext) fwtrading.Co
 	tradingE2EMust(t, err)
 	t.Cleanup(c.Close)
 	return c
+}
+
+func TestTestConnectorMissingClientOrderIDIsInternal(t *testing.T) {
+	connector := buildTestConnector(t, testBuildContext(t))
+	order := testExecutionOrder()
+	order.ClientOrderID = ""
+	_, err := connector.Send(context.Background(), order)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("missing runtime-generated client order id = %v, want internal error", err)
+	}
 }
 
 func testExecutionOrder() fwtrading.Order {
@@ -1065,17 +1052,13 @@ func TestTestProviderValidationAndDisabledSubscribe(t *testing.T) {
 	if build.Store.(*testPolicyStore).reads != 0 {
 		t.Fatal("Build/CheckAccount/PreCheck read the policy")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	events, err := c.Subscribe(ctx)
 	tradingE2EMust(t, err)
-	select {
-	case event := <-events:
-		if event.Kind != fwtrading.EventConnected {
-			t.Fatalf("first event = %+v", event)
-		}
-	case <-ctx.Done():
-		t.Fatal("disabled connection did not connect for reconcile")
+	event := <-events // Stream connects for reconciliation.
+	if event.Kind != fwtrading.EventConnected {
+		t.Fatalf("first event = %+v", event)
 	}
 }
 

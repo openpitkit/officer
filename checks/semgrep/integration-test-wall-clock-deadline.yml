@@ -15,43 +15,261 @@
 #
 # Please see https://officer.openpit.dev and the OWNERS file for details.
 
-# No wall-clock deadline on a wait in the integration tests (Go).
+# No wall-clock deadline on a liveness wait in any Go test in the module.
 #
 # A deadline armed in a test runs while the machine runs everything else: under
-# `-race` and several parallel gates the process can be descheduled for longer
-# than the deadline, which then expires before the awaited call even runs, and
-# the test fails without a defect ("context deadline exceeded").
+# -race a loaded machine can spend the budget before the awaited code runs.
+# Requests use testCtx(t) in internal/integration to carry the system caller,
+# and t.Context() elsewhere. Await a channel directly, or poll a condition with
+# polltest.Until. go test's -timeout catches a hang and prints every goroutine's
+# stack.
 #
-# The test waits for the state instead. A request runs under testCtx(t), which
-# ends with the test; an awaited goroutine is received from without a budget.
-# A wait that really hangs is caught by go test's -timeout, which also prints
-# every goroutine's stack. A short window that proves something does NOT
-# happen is not this rule's business: load cannot turn it red.
+# Short windows proving an event does NOT happen, fake or injected clocks, and
+# timestamps used as data are outside this rule. A deadline that is the input
+# under test stays: context.WithTimeout/WithDeadline inside a function referencing
+# context.DeadlineExceeded is exempt. Success paths in such a test still use
+# t.Context(); only a path asserting expiry uses the short deadline.
+# Production timeouts and backoffs remain business behaviour.
 
 rules:
   - id: integration-test-wall-clock-deadline
     message: >-
-      An integration test bounds a wait by wall-clock time, which a loaded
-      machine can spend before the awaited call runs. Use testCtx(t) for a
-      request and a plain receive for an awaited goroutine; go test's -timeout
-      catches a real hang.
+      A Go test bounds a liveness wait by wall-clock time, which a loaded machine
+      can spend before the awaited code runs. Use testCtx(t) for requests in
+      internal/integration, and t.Context() elsewhere. Receive the awaited event
+      or use polltest.Until for state. go test's -timeout catches a hang.
+      Functions referencing context.DeadlineExceeded may keep deadline inputs;
+      their success paths still use t.Context(). Absence windows are exempt.
     severity: ERROR
     languages: [go]
-    pattern-either:
-      - pattern: context.WithTimeout(...)
-      - pattern: context.WithDeadline(...)
-      - pattern: |
-          select {
-          case <-$CH:
-          case <-time.After($D):
-            $T.Fatal(...)
-          }
-      - pattern: |
-          select {
-          case <-$CH:
-          case <-time.After($D):
-            $T.Fatalf(...)
-          }
+    patterns:
+      - pattern-not-inside: |
+          synctest.Test($BUBBLE_T, func($TT *testing.T) {
+            ...
+          })
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: context.WithTimeout(...)
+                  - pattern: context.WithDeadline(...)
+              - pattern-not-inside: |
+                  func $F(...) {
+                    ...
+                    <... context.DeadlineExceeded ...>;
+                    ...
+                  }
+              - pattern-not-inside: |
+                  func(...) {
+                    ...
+                    <... context.DeadlineExceeded ...>;
+                    ...
+                  }
+              - pattern-not-inside: |
+                  func $F(...) $RET {
+                    ...
+                    <... context.DeadlineExceeded ...>;
+                    ...
+                  }
+              - pattern-not-inside: |
+                  func(...) $RET {
+                    ...
+                    <... context.DeadlineExceeded ...>;
+                    ...
+                  }
+          - patterns:
+              - pattern-either: &clock-failure-select
+                  - patterns:
+                      - pattern-either:
+                          - pattern: |
+                              select {
+                              case <-$CLOCK:
+                                $T.$FAIL(...)
+                              }
+                          - pattern: |
+                              select {
+                              case <-$CLOCK:
+                                ...
+                                $T.$FAIL(...)
+                                ...
+                              }
+                      - metavariable-regex:
+                          metavariable: $FAIL
+                          regex: ^(Fatalf?|Errorf?)$
+                  - pattern: |
+                      select {
+                      case <-$CLOCK:
+                        <... errors.New(...) ...>;
+                      }
+                  - pattern: |
+                      select {
+                      case <-$CLOCK:
+                        ...
+                        <... errors.New(...) ...>;
+                        ...
+                      }
+                  - pattern: |
+                      select {
+                      case <-$CLOCK:
+                        <... fmt.Errorf(...) ...>;
+                      }
+                  - pattern: |
+                      select {
+                      case <-$CLOCK:
+                        ...
+                        <... fmt.Errorf(...) ...>;
+                        ...
+                      }
+              - metavariable-pattern:
+                  metavariable: $CLOCK
+                  pattern: time.After(...)
+          - patterns:
+              - pattern-either: *clock-failure-select
+              - pattern-inside: |
+                  $TIMER := time.NewTimer(...)
+                  ...
+              - metavariable-pattern:
+                  metavariable: $CLOCK
+                  pattern: $TIMER.C
+          - patterns:
+              - pattern-either: *clock-failure-select
+              - pattern-inside: |
+                  $DEADLINE := time.After(...)
+                  ...
+              - metavariable-pattern:
+                  metavariable: $CLOCK
+                  pattern: $DEADLINE
+          - patterns:
+              - pattern-inside: |
+                  $DEADLINE := time.Now().Add(...)
+                  ...
+              - pattern-either:
+                  - pattern: |
+                      for <... time.Now().Before($DEADLINE) ...> {
+                        ...
+                      }
+                  - patterns:
+                      - pattern-either:
+                          - pattern: |
+                              if <... time.Now().After($DEADLINE) ...> {
+                                $T.$FAIL(...)
+                              }
+                          - pattern: |
+                              if <... time.Now().After($DEADLINE) ...> {
+                                $T.$FAIL(...)
+                                ...
+                              }
+                      - metavariable-regex:
+                          metavariable: $FAIL
+                          regex: ^(Fatalf?|Errorf?)$
     paths:
       include:
-        - "/internal/integration/**/*_test.go"
+        - "*_test.go"
+
+  - id: test-deferred-receive-after-consumed
+    message: >-
+      This select consumes a channel value needed by a deferred receive, so a
+      detected failure hangs until go test's -timeout instead of failing.
+      Send the consumed value back to the channel before failing.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              select {
+              case $V := <-$CH:
+                $T.$FAIL(...)
+              }
+          - pattern: |
+              select {
+              case $V := <-$CH:
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+          - pattern: |
+              select {
+              case <-$CH:
+                $T.$FAIL(...)
+              }
+          - pattern: |
+              select {
+              case <-$CH:
+                ...
+                $T.$FAIL(...)
+                ...
+              }
+      - pattern-not-inside: |
+          func $F(...) {
+            ...
+            <... close($CH) ...>;
+            ...
+          }
+      - pattern-not-inside: |
+          func $F(...) $RET {
+            ...
+            <... close($CH) ...>;
+            ...
+          }
+      - pattern-not-inside: |
+          func(...) {
+            ...
+            <... close($CH) ...>;
+            ...
+          }
+      - pattern-not-inside: |
+          func(...) $RET {
+            ...
+            <... close($CH) ...>;
+            ...
+          }
+      - pattern-either:
+          - pattern-inside: |
+              defer func(...) {
+                ...
+                <... <-$CH ...>;
+                ...
+              }(...)
+              ...
+          - pattern-inside: |
+              $T.Cleanup(func(...) {
+                ...
+                <... <-$CH ...>;
+                ...
+              })
+              ...
+      - pattern-not: |
+          select {
+          case $V := <-$CH:
+            $CH <- $V
+            $T.$FAIL(...)
+          }
+      - pattern-not: |
+          select {
+          case $V := <-$CH:
+            ...
+            $CH <- $V
+            ...
+            $T.$FAIL(...)
+            ...
+          }
+      - pattern-not: |
+          select {
+          case <-$CH:
+            $CH <- $VALUE
+            $T.$FAIL(...)
+          }
+      - pattern-not: |
+          select {
+          case <-$CH:
+            ...
+            $CH <- $VALUE
+            ...
+            $T.$FAIL(...)
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $FAIL
+          regex: ^(Fatalf?|Errorf?)$
+    paths:
+      include:
+        - "*_test.go"

@@ -22,10 +22,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/scheduler"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 type blockingClaimStore struct {
@@ -40,6 +42,33 @@ func (s *blockingClaimStore) Claim(ctx context.Context, _ time.Time) (scheduler.
 	close(s.entered)
 	<-ctx.Done()
 	return scheduler.Job{}, false, s.claimErr(ctx)
+}
+
+func TestSchedulerInternalFailures(t *testing.T) {
+	for _, defect := range []string{"store", "factory", "implementation", "progress"} {
+		t.Run(defect, func(t *testing.T) {
+			var st scheduler.Store = &blockingClaimStore{}
+			var factory scheduler.Factory = func(string, json.RawMessage) (scheduler.Task, error) { return nil, nil }
+			if defect == "store" {
+				st = nil
+			}
+			if defect == "factory" {
+				factory = nil
+			}
+			worker, err := scheduler.New(st, factory)
+			if err == nil {
+				spec := scheduler.JobSpec{Kind: "task", Config: json.RawMessage(`{}`), Schedule: scheduler.Schedule{Kind: scheduler.Interval, StartAt: time.Now().UTC(), Every: time.Hour}, Termination: scheduler.Termination{Mode: scheduler.Forever}}
+				if defect == "implementation" {
+					_, err = worker.Add(context.Background(), spec, scheduler.Ready)
+				} else {
+					_, _, err = scheduler.Next(spec, scheduler.Occurrence{}, time.Now().UTC(), -1)
+				}
+			}
+			if !internalFailureAnswer(err) || errors.Is(err, scheduler.ErrInvalid) {
+				t.Fatalf("internal scheduler failure = %v", err)
+			}
+		})
+	}
 }
 
 func TestStopDuringClaim(t *testing.T) {
@@ -81,16 +110,18 @@ func TestStopDuringClaim(t *testing.T) {
 					t.Errorf("cleanup Stop: %v", err)
 				}
 			})
-			timer := time.NewTimer(5 * time.Second)
-			defer timer.Stop()
-			select {
-			case <-store.entered:
-			case <-timer.C:
-				t.Fatal("scheduler did not enter Claim")
-			}
+			<-store.entered // Worker enters the store claim.
 			if err := worker.Stop(); !errors.Is(err, test.want) {
 				t.Fatalf("Stop: got %v, want %v", err, test.want)
 			}
 		})
 	}
+}
+
+func internalFailureAnswer(err error) bool {
+	if err == nil {
+		return false
+	}
+	public := httpx.DescribeErr(err)
+	return public.Status == http.StatusInternalServerError && public.Code == "internal"
 }

@@ -573,16 +573,12 @@ func TestFinnhubSubscribeEmitsInitialQuoteSnapshot(t *testing.T) {
 	}
 	defer connector.Close()
 
-	select {
-	case got, ok := <-ch:
-		if !ok {
-			t.Fatal("updates closed before initial snapshot")
-		}
-		if got.Mark != "191.23" || got.Base != testMarketDataAssetID("AAPL") || got.Quote != testMarketDataAssetID("USD") {
-			t.Fatalf("snapshot = %+v", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for initial snapshot")
+	got, ok := <-ch // Quote or channel closure arrives.
+	if !ok {
+		t.Fatal("updates closed before initial snapshot")
+	}
+	if got.Mark != "191.23" || got.Base != testMarketDataAssetID("AAPL") || got.Quote != testMarketDataAssetID("USD") {
+		t.Fatalf("snapshot = %+v", got)
 	}
 }
 

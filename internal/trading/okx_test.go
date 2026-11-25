@@ -100,7 +100,7 @@ func TestOKXProviderConstruction(t *testing.T) {
 		t.Fatal("OKX provider is not registered")
 	}
 	p := providers[i]
-	if p.Type != "okx" || p.Title != "OKX" || p.VenueAccounts || p.UnlinkedFees ||
+	if p.Type != domain.TradingProviderOKX || p.Title != "OKX" || p.VenueAccounts || p.UnlinkedFees ||
 		!p.VerifiesSymbols || !p.SearchesSymbols || p.Build == nil {
 		t.Fatal("OKX provider inventory contract")
 	}
@@ -438,9 +438,9 @@ func TestOKXLookupFillPages(t *testing.T) {
 	}
 	for i, fill := range s.Fills {
 		want := fmt.Sprintf("%d.%02d", (i+1)/100, (i+1)%100)
-		cum, _ := parseVenueDecimal(fill.CumQuantity, false)
-		expected, _ := parseVenueDecimal(want, false)
-		leaves, _ := parseVenueDecimal(fill.LeavesQuantity, false)
+		cum, _ := parsePlainDecimal(fill.CumQuantity, false)
+		expected, _ := parsePlainDecimal(want, false)
+		leaves, _ := parsePlainDecimal(fill.LeavesQuantity, false)
 		if !cum.Equal(expected) || !leaves.Add(cum).Equal(decimal.NewFromInt(2)) ||
 			fill.Price != strconv.Itoa(i+1) || fill.Final != (i == 199) {
 			t.Fatal("ordered cumulative fill chain")
@@ -499,7 +499,7 @@ func TestOKXLookupRejectsPartialHistory(t *testing.T) {
 				}
 				okxReply(w, page)
 			})
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			ref := fwtrading.OrderRef{
 				Symbol: "BTC-USDT", ClientOrderID: okxTestCOID, VenueOrderID: "123",

@@ -169,7 +169,7 @@ type taskResult struct {
 // rejects nil when its Build is called.
 func NewRuntime(registry *Registry, st Store, quotes QuoteSource, sink ReportSink, adjust AdjustmentSink, feeSkip FeeSkipSink, logger *slog.Logger) (*Runtime, error) {
 	if registry == nil || st == nil || sink == nil || adjust == nil || feeSkip == nil || logger == nil {
-		return nil, fmt.Errorf("trading: registry, store, report sink, adjustment sink, fee skip sink and logger required: %w", domain.ErrInvalid)
+		return nil, fmt.Errorf("trading: registry, store, report sink, adjustment sink, fee skip sink and logger required")
 	}
 	return &Runtime{
 		registry: registry, store: st, quotes: quotes, sink: sink, adjust: adjust, feeSkip: feeSkip, logger: logger,
@@ -243,7 +243,7 @@ func (r *Runtime) start(ctx context.Context) error {
 			// makes, fails for an unregistered provider, so its
 			// remediation promises no retry.
 			if _, registered := r.registry.Lookup(c.Provider); !registered {
-				w.setUnavailable(err, health.Diagnostic{
+				w.setUnavailable(domain.Internal(err), health.Diagnostic{
 					Code:  health.CodeUnsupportedProvider,
 					Kind:  health.DiagKindConfig,
 					Title: "Unsupported trading provider",
@@ -440,7 +440,7 @@ func (r *Runtime) submit(ctx context.Context, t task) (link domain.VenueOrder, e
 	}
 	if _, registered := r.registry.Lookup(connection.Provider); !registered {
 		r.mu.Unlock()
-		return domain.VenueOrder{}, fmt.Errorf("trading: unknown provider %q: %w", connection.Provider, domain.ErrInvalid)
+		return domain.VenueOrder{}, fmt.Errorf("trading: unknown provider %q", connection.Provider)
 	}
 	if !ok || w.unavailable != nil {
 		cause := "worker is not running"
@@ -590,7 +590,7 @@ func (w *worker) checkDestination(ctx context.Context, order domain.Order, dest 
 	}
 	p, registered := w.r.registry.Lookup(c.Provider)
 	if !registered {
-		return Order{}, fmt.Errorf("trading: unknown provider %q: %w", c.Provider, domain.ErrInvalid)
+		return Order{}, fmt.Errorf("trading: unknown provider %q", c.Provider)
 	}
 	w.r.mu.Lock()
 	unavailable := w.unavailable
@@ -637,7 +637,10 @@ func (w *worker) checkDestination(ctx context.Context, order domain.Order, dest 
 		checkCtx, cancel := context.WithTimeout(ctx, connectorTimeout)
 		defer cancel()
 		if err := checker.PreCheck(checkCtx, mapped); err != nil {
-			return Order{}, fmt.Errorf("trading: venue pre-check: %w", err)
+			if errors.Is(err, ErrRejected) || errors.Is(err, ErrUnsupported) {
+				return Order{}, fmt.Errorf("trading: venue pre-check: %w", err)
+			}
+			return Order{}, fmt.Errorf("trading: venue pre-check: %w: %w", err, domain.ErrUpstream)
 		}
 	}
 	return mapped, nil

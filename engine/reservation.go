@@ -177,13 +177,13 @@ func (e *openPitEngine) prepareImmediateReport(
 	}
 	accountID, err := e.res.account(o.Account)
 	if err != nil {
-		return fwengine.ImmediatePreparation{}, err
+		return fwengine.ImmediatePreparation{}, domain.Internal(err)
 	}
 	report, err := executionReportFromAccount(
 		reportInput, accountID, "0", e.res,
 	)
 	if err != nil {
-		return fwengine.ImmediatePreparation{}, err
+		return fwengine.ImmediatePreparation{}, domain.Internal(err)
 	}
 	return fwengine.ImmediatePreparation{
 		Verdict:             domain.VerdictAccept,
@@ -278,7 +278,7 @@ func (e *openPitEngine) SettleImmediate(
 
 // immediateReconciliationError reports state the engine already applied and the
 // caller must reconcile by hand. The cause is rendered, not wrapped: causes
-// carrying domain.ErrInvalid would answer 400 "fix your input and retry", which
+// carrying domain.ErrInvalid would answer 422 "fix your input and retry", which
 // contradicts the message and hides an internal failure.
 func immediateReconciliationError(
 	o domain.Order, state string, action string, err error,
@@ -293,8 +293,7 @@ func immediateReconciliationError(
 func immediateTradePrice(o domain.Order) (string, error) {
 	if o.Price == "" {
 		return "", fmt.Errorf(
-			"engine: immediate order has no price to settle at: %w",
-			domain.ErrInvalid,
+			"engine: immediate order has no price to settle at",
 		)
 	}
 	return o.Price, nil

@@ -72,6 +72,7 @@ func TestAccountBlockLifecycleShortSequences(t *testing.T) {
 	for i, sequence := range sequences {
 		sequence := sequence
 		t.Run(sequenceName(i, sequence), func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			state := newBlockLifecycleStore(t, ctx)
 			if _, err := state.realm.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {

@@ -136,6 +136,10 @@ func (s *Service) ApplyExecutionReport(
 		result, err := n.ApplyExecutionReport(ctx, in, caller)
 		return result, Attestation{}, err
 	}
+	mode, err := recordedSubmitMode(stored)
+	if err != nil {
+		return engine.ExecutionReportResult{}, Attestation{}, err
+	}
 	signer, err := s.signerOrErr()
 	if err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
@@ -172,7 +176,8 @@ func (s *Service) ApplyExecutionReport(
 				Leaves:      event.Payload.LeavesQuantity,
 			}
 			if persistence.OrderStatus == "" {
-				persistence.OrderStatus = targetStatus
+				return domain.ApprovalPayload{}, false,
+					fmt.Errorf("backend: execution report event missing order status")
 			}
 			if event.Payload.FillQuantity != "" || event.Payload.FillPrice != "" {
 				persistence.Trade = &domain.Trade{
@@ -203,7 +208,7 @@ func (s *Service) ApplyExecutionReport(
 			order.Source = caller.Source
 			order.Principal = caller.Principal
 			p, err := s.buildExecutionReportEventPayload(
-				order, event, persistence,
+				order, mode, event, persistence,
 			)
 			return p, err == nil, err
 		},
@@ -232,6 +237,7 @@ func (s *Service) ApplyExecutionReport(
 
 func (s *Service) buildExecutionReportEventPayload(
 	order domain.Order,
+	mode string,
 	event domain.OrderEvent,
 	persistence engine.ExecutionReportPersistence,
 ) (domain.ApprovalPayload, error) {
@@ -240,7 +246,7 @@ func (s *Service) buildExecutionReportEventPayload(
 			"backend: execution-report event has no request snapshot",
 		)
 	}
-	payload, err := s.buildExecutionReportPayload(order, persistence)
+	payload, err := s.buildExecutionReportPayload(order, mode, persistence)
 	if err != nil {
 		return domain.ApprovalPayload{}, err
 	}

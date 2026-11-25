@@ -180,7 +180,101 @@ func sampleOrder() domain.Order {
 	}
 }
 
+func TestGetOrderReadsOneSnapshotDuringFill(t *testing.T) {
+	t.Parallel()
+	_, rs := seedOrderFixtures(t)
+	ctx := t.Context()
+	writer := rs.(*realmStore)
+
+	created, settlement := seedSubmittedOrderWithFill(t, writer)
+	id := created.ExternalID
+	commission := *settlement.Trade.Commission
+	isFilled := func(detail domain.OrderDetail) bool {
+		return detail.Order.Status == domain.OrderStatusFilled &&
+			len(detail.Events) == 2 && detail.Events[0].Type == domain.OrderEventSubmitted &&
+			detail.Events[1].Type == domain.OrderEventFill && len(detail.Trades) == 1 &&
+			commissionsEqual(detail.Order.CommissionSubtotals, []domain.Commission{commission})
+	}
+	reader := newSnapshotReader(t, writer, func(query string) bool {
+		return strings.Contains(query, "FROM order_event ")
+	}, func(ctx context.Context) error {
+		_, err := writer.RecordOrderSettlement(ctx, settlement)
+		return err
+	})
+
+	snapshot, err := reader.GetOrder(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOrder during fill: %v", err)
+	}
+	submitted := snapshot.Order.Status == domain.OrderStatusSubmitted &&
+		len(snapshot.Events) == 1 && snapshot.Events[0].Type == domain.OrderEventSubmitted &&
+		len(snapshot.Trades) == 0 && len(snapshot.Order.CommissionSubtotals) == 0
+	if !submitted && !isFilled(snapshot) {
+		t.Fatalf("order snapshot has status %q, %d events, %d trades, commissions %v "+
+			"(want a complete submitted or filled snapshot)",
+			snapshot.Order.Status, len(snapshot.Events), len(snapshot.Trades),
+			snapshot.Order.CommissionSubtotals)
+	}
+
+	latest, err := writer.GetOrder(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOrder after fill: %v", err)
+	}
+	if !isFilled(latest) {
+		t.Fatalf("filled order has status %q, %d events, %d trades, commissions %v",
+			latest.Order.Status, len(latest.Events), len(latest.Trades),
+			latest.Order.CommissionSubtotals)
+	}
+}
+
+func seedSubmittedOrderWithFill(t *testing.T, writer fwstore.RealmStore) (domain.Order, domain.OrderSettlement) {
+	t.Helper()
+	ctx := t.Context()
+	order := sampleOrder()
+	order.Lock = nil
+	order.Leaves = order.AmountValue
+	created, err := writer.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	id := created.ExternalID
+	if _, err := writer.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: id, At: created.At, Type: domain.OrderEventSubmitted, Source: created.Source,
+	}); err != nil {
+		t.Fatalf("AppendOrderEvent: %v", err)
+	}
+
+	fillAt := created.At.Add(time.Second)
+	commission := domain.Commission{Amount: "-1", Currency: created.QuoteAsset}
+	report := domain.ExecutionReportRequest{
+		Order: id, Account: created.Account, Side: created.Side,
+		BaseAsset: created.BaseAsset, QuoteAsset: created.QuoteAsset,
+		FillQuantity: created.AmountValue, FillPrice: created.Price,
+		LeavesQuantity: "0", OrderStatus: domain.OrderStatusFilled, Commission: &commission,
+	}
+	settlement := domain.OrderSettlement{
+		Order: id, Account: report.Account, OrderStatus: report.OrderStatus,
+		Leaves: report.LeavesQuantity, AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		ReportID: &report.ExternalID,
+		Trade: &domain.Trade{
+			Order: id, Account: report.Account, At: fillAt, Source: domain.SourceAPI,
+			BaseAsset: report.BaseAsset, QuoteAsset: report.QuoteAsset, Side: report.Side,
+			Quantity: report.FillQuantity, Price: report.FillPrice, Commission: &commission,
+		},
+		Events: []domain.OrderEvent{{
+			Order: id, At: fillAt, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+			Payload: domain.OrderEventPayload{
+				FillQuantity: report.FillQuantity, FillPrice: report.FillPrice,
+				LeavesQuantity: report.LeavesQuantity, OrderStatus: string(report.OrderStatus),
+				Commission: &commission, ExecutionReport: &report,
+			},
+		}},
+	}
+	return created, settlement
+}
+
 func TestCreateOrderGetListRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	want := sampleOrder()
@@ -258,6 +352,7 @@ func TestCreateOrderGetListRoundTrip(t *testing.T) {
 }
 
 func TestCreateOrderDropCopyDefaultsFalse(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	order := sampleOrder()
 	order.DropCopy = false
@@ -282,17 +377,19 @@ func TestCreateOrderDropCopyDefaultsFalse(t *testing.T) {
 }
 
 func TestCreateOrderRejectsUnknownDictionaryCode(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	order := sampleOrder()
 	order.Source = domain.Source("unknown")
 
 	_, err := rs.CreateOrder(ctx, order)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("CreateOrder unknown source = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("CreateOrder unknown source = %v, want internal error", err)
 	}
 }
 
 func TestOrderListRowsSortFilterPageOrdersDecimalsNumerically(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	// A negative amount and an arbitrary-precision amount (beyond any fixed
 	// sort-key window) prove the column's DECIMAL collation orders numerically.
@@ -346,6 +443,7 @@ func TestOrderListRowsSortFilterPageOrdersDecimalsNumerically(t *testing.T) {
 }
 
 func TestOrderListRowsExclusiveMinBoundExcludesEqual(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	for _, value := range []string{"2.5", "3"} {
 		order := sampleOrder()
@@ -391,6 +489,7 @@ func TestOrderListRowsExclusiveMinBoundExcludesEqual(t *testing.T) {
 }
 
 func TestOrderLockBlobRoundTripsByteIdentical(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	// A lock with the full byte range, including an embedded NUL.
@@ -437,6 +536,7 @@ func TestOrderLockBlobRoundTripsByteIdentical(t *testing.T) {
 }
 
 func TestCreateOrderWithNilLock(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	o := sampleOrder()
@@ -455,6 +555,7 @@ func TestCreateOrderWithNilLock(t *testing.T) {
 }
 
 func TestUpdateOrderStatus(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	created, err := rs.CreateOrder(ctx, sampleOrder())
@@ -493,6 +594,7 @@ func eventAttestation(
 }
 
 func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	// A signing key the attestation references (ON DELETE RESTRICT FK).
@@ -605,8 +707,8 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 	}
 	badAlg := unsigned
 	badAlg.Alg = "bogus"
-	if err := rs.PutEventAttestation(ctx, badAlgEvent.ExternalID, badAlg); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("got %v, want domain.ErrInvalid for the unknown algorithm", err)
+	if err := rs.PutEventAttestation(ctx, badAlgEvent.ExternalID, badAlg); !internalFailureAnswer(err) {
+		t.Fatalf("got %v, want internal error for the unknown algorithm", err)
 	}
 
 	badKeyEvent, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
@@ -627,6 +729,7 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 }
 
 func TestOrderEventsRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	created, err := rs.CreateOrder(ctx, sampleOrder())
@@ -688,7 +791,64 @@ func TestOrderEventsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTradeVenueTradeIDRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, venueTradeID := range []string{"", "venue-trade-42"} {
+		t.Run("venue_trade_id="+venueTradeID, func(t *testing.T) {
+			t.Parallel()
+			ctx, rs := seedOrderFixtures(t)
+			order, err := rs.CreateOrder(ctx, sampleOrder())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 { // Venue identifiers deliberately are not unique.
+				trade, err := rs.CreateTrade(ctx, domain.Trade{
+					Order: order.ExternalID, Account: order.Account,
+					BaseAsset: order.BaseAsset, QuoteAsset: order.QuoteAsset,
+					Side: order.Side, Source: order.Source,
+					Quantity: "1", Price: "150", VenueTradeID: venueTradeID,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var stored sql.NullString
+				if err := rs.(*realmStore).rawDB().QueryRowContext(ctx,
+					`SELECT venue_trade_id FROM trade WHERE external_id = ?`,
+					trade.ExternalID.Bytes(),
+				).Scan(&stored); err != nil {
+					t.Fatal(err)
+				}
+				if stored.Valid != (venueTradeID != "") || stored.String != venueTradeID {
+					t.Fatalf("stored venue_trade_id = %+v, want %q or NULL", stored, venueTradeID)
+				}
+			}
+			check := func(trades []domain.Trade, err error) {
+				t.Helper()
+				if err != nil || len(trades) != 2 {
+					t.Fatalf("trades = %+v, err = %v", trades, err)
+				}
+				for _, trade := range trades {
+					if trade.VenueTradeID != venueTradeID {
+						t.Fatalf("VenueTradeID = %q, want %q", trade.VenueTradeID, venueTradeID)
+					}
+				}
+			}
+			check(rs.ListTrades(ctx, order.Account, "", 10))
+			check(rs.ListAllTrades(ctx, order.Account, ""))
+			detail, err := rs.GetOrder(ctx, order.ExternalID)
+			check(detail.Trades, err)
+			page, err := rs.ListTradeRows(ctx, fwstore.TradeListFilter{})
+			var trades []domain.Trade
+			for _, row := range page.Rows {
+				trades = append(trades, row.Trade)
+			}
+			check(trades, err)
+		})
+	}
+}
+
 func TestTradesRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	created, err := rs.CreateOrder(ctx, sampleOrder())
@@ -766,6 +926,7 @@ func TestTradesRoundTrip(t *testing.T) {
 }
 
 func TestCreateTradeRejectsInvalidCommissionAmount(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	created, err := rs.CreateOrder(ctx, sampleOrder())
@@ -797,6 +958,7 @@ func TestCreateTradeRejectsInvalidCommissionAmount(t *testing.T) {
 // one-sided commission would otherwise be dropped from the subtotals rollup and
 // understate the order commission.
 func TestCreateTradeRejectsOneSidedCommission(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	created, err := rs.CreateOrder(ctx, sampleOrder())
@@ -838,6 +1000,7 @@ func TestCreateTradeRejectsOneSidedCommission(t *testing.T) {
 // empty is a valid no-commission trade: it persists and reads back with a nil
 // Commission, matching the both-absent branch of the write invariant.
 func TestCreateTradeAbsentCommissionRoundTrips(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	created, err := rs.CreateOrder(ctx, sampleOrder())
@@ -873,6 +1036,7 @@ func TestCreateTradeAbsentCommissionRoundTrips(t *testing.T) {
 }
 
 func TestOrderCommissionSubtotals(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	created, err := rs.CreateOrder(ctx, sampleOrder())
@@ -980,6 +1144,7 @@ func TestOrderCommissionSubtotals(t *testing.T) {
 }
 
 func TestOrderCommissionSubtotalsChunksOrderIDs(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	orders := make([]domain.ExternalID, 0, commissionSubtotalOrderBatchSize+1)
@@ -1053,6 +1218,7 @@ func TestOrderCommissionSubtotalsChunksOrderIDs(t *testing.T) {
 // read and the list read to the shared rollup implementation across trade-row,
 // fee-only, mixed-currency, and canonical-event cases.
 func TestOrderCommissionSubtotalsFeeOnlyReportAgreesAcrossReads(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	mixed, err := rs.CreateOrder(ctx, sampleOrder())
@@ -1198,6 +1364,7 @@ func commissionsEqual(got, want []domain.Commission) bool {
 }
 
 func TestTradeListRowsDBCountPageFilterSortDecimalsNumerically(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
 		t.Fatalf("CreateAccount(acc-2): %v", err)
@@ -1320,6 +1487,7 @@ func TestTradeListRowsDBCountPageFilterSortDecimalsNumerically(t *testing.T) {
 }
 
 func TestListRowsVenueFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	connections := make([]domain.ExternalID, 0, 3)
 	for _, label := range []string{"linked", "other linked", "unlinked"} {
@@ -1477,6 +1645,7 @@ func TestListRowsVenueFilter(t *testing.T) {
 }
 
 func TestListRowsInvalidVenueFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	for _, tc := range []struct {
 		name   string
@@ -1506,6 +1675,7 @@ func TestListRowsInvalidVenueFilter(t *testing.T) {
 }
 
 func TestCountOrders(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	if n, err := rs.CountOrders(ctx, domain.AccountRestriction{}); err != nil || n != 0 {
@@ -1537,6 +1707,7 @@ func TestCountOrders(t *testing.T) {
 }
 
 func TestCountActiveOrders(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	activeStatuses := domain.OrderStatusesEligibleForFill()
@@ -1566,6 +1737,7 @@ func TestCountActiveOrders(t *testing.T) {
 }
 
 func TestRecordOrderSettlement(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	// Seed an opening balance so the carry-forward path is exercised.
@@ -1682,6 +1854,7 @@ func TestRecordOrderSettlement(t *testing.T) {
 }
 
 func TestRecordOrderSettlementPersistsExecutionReportIdentityAndEventLinks(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	created, err := rs.CreateOrder(ctx, sampleOrder())
 	if err != nil {
@@ -1758,6 +1931,7 @@ func TestRecordOrderSettlementPersistsExecutionReportIdentityAndEventLinks(t *te
 func TestRecordOrderSubmissionPersistsExecutionReportIdentityAndEventLink(
 	t *testing.T,
 ) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	reportID := domain.ExternalID("")
 	request := &domain.ExecutionReportRequest{
@@ -1821,6 +1995,7 @@ func TestRecordOrderSubmissionPersistsExecutionReportIdentityAndEventLink(
 }
 
 func TestRecordOrderSettlementGeneratesExecutionReportIDAtStoreBoundary(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	created, err := rs.CreateOrder(ctx, sampleOrder())
 	if err != nil {
@@ -1850,6 +2025,7 @@ func TestRecordOrderSettlementGeneratesExecutionReportIDAtStoreBoundary(t *testi
 }
 
 func TestRecordOrderSettlementRejectsReportWithoutEventsAndRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	created, err := rs.CreateOrder(ctx, sampleOrder())
 	if err != nil {
@@ -1882,8 +2058,8 @@ func TestRecordOrderSettlementRejectsReportWithoutEventsAndRollsBack(t *testing.
 			Source: domain.SourceAPI, Side: created.Side, Quantity: "1", Price: "1",
 		},
 	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("RecordOrderSettlement = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("RecordOrderSettlement = %v, want internal error", err)
 	}
 	if got := countRows(t, ctx, r, "execution_report"); got != wantReports {
 		t.Fatalf("execution reports = %d, want unchanged %d", got, wantReports)
@@ -1911,6 +2087,7 @@ func TestRecordOrderSettlementRejectsReportWithoutEventsAndRollsBack(t *testing.
 }
 
 func TestRecordOrderSettlementDuplicateReportRollsBackEverything(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	created, err := rs.CreateOrder(ctx, sampleOrder())
 	if err != nil {
@@ -2000,6 +2177,7 @@ func TestRecordOrderSettlementDuplicateReportRollsBackEverything(t *testing.T) {
 }
 
 func TestRecordOrderSettlementSpotFillPersistsEngineRealizedPnlAsset(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	seedBalance(t, ctx, rs, "acc-1", "AAPL", "2", "0", "0", "0")
@@ -2070,6 +2248,7 @@ func TestRecordOrderSettlementSpotFillPersistsEngineRealizedPnlAsset(t *testing.
 }
 
 func TestRecordOrderSettlementRealizedPnlZeroAndAbsent(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	seedBalance(t, ctx, rs, "acc-1", "AAPL", "1", "0", "0", "0")
 
@@ -2115,6 +2294,7 @@ func TestRecordOrderSettlementRealizedPnlZeroAndAbsent(t *testing.T) {
 }
 
 func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	seedBalance(t, ctx, rs, "acc-1", "USD", "800", "0", "0", "1")
@@ -2190,13 +2370,9 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 	close(start)
 
 	for i := 0; i < 2; i++ {
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatalf("concurrent write %d: %v", i, err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("settlement racing realized-pnl adjustment deadlocked on one SQLite connection")
+		err := <-done // Settlement and P&L writes finish on one SQLite connection.
+		if err != nil {
+			t.Fatalf("concurrent write %d: %v", i, err)
 		}
 	}
 
@@ -2215,6 +2391,7 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 }
 
 func TestRecordOrderSubmissionAttestationFailureRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	seedSigningKey(t, ctx, rs, "key-1")
 
@@ -2274,6 +2451,7 @@ func TestRecordOrderSubmissionAttestationFailureRollsBack(t *testing.T) {
 }
 
 func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	seedBalance(t, ctx, rs, "acc-1", "USD", "800", "200", "5", "4")
@@ -2334,6 +2512,7 @@ func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
 // supplied remaining open quantity and RecordOrderSettlement rewrites it only
 // when a non-empty Leaves is supplied.
 func TestRecordOrderSettlementLeaves(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	order := sampleOrder()
@@ -2421,6 +2600,7 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 // TestRecordOrderSettlementTerminalEmptyLeavesKeepsQuantity pins that an empty
 // leaves value does not overwrite the recorded quantity at a terminal status.
 func TestRecordOrderSettlementTerminalEmptyLeavesKeepsQuantity(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	order := sampleOrder()
@@ -2458,6 +2638,7 @@ func TestRecordOrderSettlementTerminalEmptyLeavesKeepsQuantity(t *testing.T) {
 }
 
 func TestRecordOrderSettlementAcceptsHighPrecisionBalance(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	created, err := rs.CreateOrder(ctx, sampleOrder())
 	if err != nil {
@@ -2496,6 +2677,7 @@ func TestRecordOrderSettlementAcceptsHighPrecisionBalance(t *testing.T) {
 // write seam. New SDK reject codes must still commit, while engine-composed text
 // is normalized into the bounded printable shape accepted by restore.
 func TestRecordOrderSettlementNormalizesMirroredBlockText(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	created, err := rs.CreateOrder(ctx, sampleOrder())
 	if err != nil {
@@ -2552,6 +2734,7 @@ func TestRecordOrderSettlementNormalizesMirroredBlockText(t *testing.T) {
 }
 
 func TestRecordOrderSettlementMissingOrder(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	ghost := domain.ExternalID("missing-settlement-order")
@@ -2566,6 +2749,7 @@ func TestRecordOrderSettlementMissingOrder(t *testing.T) {
 }
 
 func TestRecordOrderSettlementRejectsMissingOrderHandle(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	seedBalance(t, ctx, rs, "acc-1", "USD", "1000", "0", "0", "0")
@@ -2576,8 +2760,8 @@ func TestRecordOrderSettlementRejectsMissingOrderHandle(t *testing.T) {
 			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "1000", HeldResult: "100"}},
 		},
 	}
-	if _, err := rs.RecordOrderSettlement(ctx, st); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("RecordOrderSettlement(zero order) = %v, want ErrInvalid", err)
+	if _, err := rs.RecordOrderSettlement(ctx, st); !internalFailureAnswer(err) {
+		t.Fatalf("RecordOrderSettlement(zero order) = %v, want internal error", err)
 	}
 	bal, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD")
 	if !ok {
@@ -2589,6 +2773,7 @@ func TestRecordOrderSettlementRejectsMissingOrderHandle(t *testing.T) {
 }
 
 func TestRecordOrderSettlementPrunesEconomicallyEmptyBalance(t *testing.T) {
+	t.Parallel()
 	settle := func(
 		t *testing.T, realizedPnl string, haltReason domain.PnlHaltReason,
 	) (domain.Balance, bool) {
@@ -2662,6 +2847,7 @@ func TestRecordOrderSettlementPrunesEconomicallyEmptyBalance(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			balance, ok := settle(t, test.realized, test.haltReason)
 			if ok != test.wantPresent {
 				t.Fatalf("balance = %+v ok=%v, want present %v", balance, ok, test.wantPresent)
@@ -2727,6 +2913,7 @@ func TestBalanceAmountsEmptyRejectsEveryNonzeroEconomicValue(t *testing.T) {
 }
 
 func TestRecordOrderSettlementAccountPnlHaltLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	createOrder := func() domain.Order {
@@ -2804,6 +2991,7 @@ func TestRecordOrderSettlementAccountPnlHaltLifecycle(t *testing.T) {
 }
 
 func TestRecordOrderSettlementPreservesHaltOnlyAndPrunesZeroBalance(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	if err := rs.UpsertBalance(ctx, domain.Balance{
 		Account: "acc-1", Asset: "USD",
@@ -2863,6 +3051,7 @@ func TestRecordOrderSettlementPreservesHaltOnlyAndPrunesZeroBalance(t *testing.T
 }
 
 func TestDeleteOrderCascadesChildren(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	seedSigningKey(t, ctx, rs, "key-1")
@@ -2923,6 +3112,7 @@ func TestDeleteOrderCascadesChildren(t *testing.T) {
 }
 
 func TestDeleteAccountCascadesOrders(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	if _, err := rs.CreateOrder(ctx, sampleOrder()); err != nil {
@@ -2945,6 +3135,7 @@ func TestDeleteAccountCascadesOrders(t *testing.T) {
 }
 
 func TestOrderUnknownFKCodeIsInvalid(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	// Unknown account code.
@@ -2961,11 +3152,11 @@ func TestOrderUnknownFKCodeIsInvalid(t *testing.T) {
 		t.Fatalf("CreateOrder(unknown base asset) = %v, want ErrInvalid", err)
 	}
 
-	// Unknown principal code.
+	// The principal is stamped by the host, so an unknown one is internal.
 	bad = sampleOrder()
 	bad.Principal = "nobody"
-	if _, err := rs.CreateOrder(ctx, bad); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("CreateOrder(unknown principal) = %v, want ErrInvalid", err)
+	if _, err := rs.CreateOrder(ctx, bad); !internalFailureAnswer(err) {
+		t.Fatalf("CreateOrder(unknown principal) = %v, want internal error", err)
 	}
 
 	// A trade naming an unknown order is ErrNotFound (the order is addressed by
@@ -2994,6 +3185,7 @@ func countRows(t *testing.T, ctx context.Context, r *realmStore, table string) i
 // external id is written verbatim: the returned id equals the supplied one and
 // the row is addressable by it.
 func TestCreateOrderSuppliedExternalIDUsedVerbatim(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	supplied := domain.ExternalID("caller-order-1")
@@ -3029,6 +3221,7 @@ func TestCreateOrderSuppliedExternalIDUsedVerbatim(t *testing.T) {
 // second order with the same supplied external id is rejected with
 // domain.ErrAlreadyExists and that no second row is written.
 func TestCreateOrderDuplicateSuppliedExternalIDConflicts(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 	r := rs.(*realmStore)
 
@@ -3058,6 +3251,7 @@ func TestCreateOrderDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 // TestCreateOrderGeneratesExternalIDWhenAbsent verifies that a zero supplied id
 // is replaced by a freshly generated 22-char external id.
 func TestCreateOrderGeneratesExternalIDWhenAbsent(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedOrderFixtures(t)
 
 	o := sampleOrder()

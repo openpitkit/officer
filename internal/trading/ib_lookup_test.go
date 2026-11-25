@@ -115,20 +115,11 @@ func TestIBLookupOpenRequestNotIssued(t *testing.T) {
 		_, _, err := c.Lookup(ctx, fwtrading.OrderRef{ClientOrderID: "officer-order"})
 		first <- err
 	}()
-	select {
-	case s.lookupToken <- struct{}{}:
-	case <-time.After(time.Second):
-		s.mu.Unlock()
-		t.Fatal("lookup did not acquire token")
-	}
+	s.lookupToken <- struct{}{} // Lookup acquires its token.
 	// Lookup owns the token but cannot register or issue its request yet.
 	cancel()
 	s.mu.Unlock()
-	select {
-	case <-s.lookupToken:
-	case <-time.After(time.Second):
-		t.Fatal("lookup did not return token")
-	}
+	<-s.lookupToken // Lookup returns its token.
 	if err := <-first; !errors.Is(err, errIBRequestNotIssued) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("first lookup error=%v", err)
 	}
@@ -203,13 +194,8 @@ func TestIBLookupAbandonedEndMarkers(t *testing.T) {
 	s.OpenOrder(42, ibapi.NewContract(), ibTestVenueOrder(), &ibapi.OrderState{Status: "Submitted"})
 	s.OpenOrderEnd()
 	s.CompletedOrdersEnd()
-	select {
-	case err := <-result:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("second lookup did not complete on its own markers")
+	if err := <-result; err != nil { // Request completes.
+		t.Fatal(err)
 	}
 }
 

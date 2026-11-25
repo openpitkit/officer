@@ -1,0 +1,103 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://officer.openpit.dev and the OWNERS file for details.
+
+# Check type-switch cases and pairs of errors.As targets in production Go.
+# The switch check compares type spellings within one case. The errors.As
+# check follows addressed local variables with explicit types in one function
+# body. Known misses include type aliases, parenthesised types, the two forms
+# in separate cases of one switch, a switch or type assertion in one form with
+# errors.As in the other, inferred or inline errors.As targets, targets that are
+# parameters, fields or package variables, and a case list whose earlier item
+# contains braces.
+# This rule has no approval marker or baseline.
+rules:
+  - id: error-type-one-form
+    message: Probe an error type in its value or its pointer form only.
+    severity: ERROR
+    languages: [go]
+    patterns:
+      - pattern-either:
+          # The switch patterns establish the Go syntax and the regex checks
+          # the type spelling. In a case list *$T parses as a dereference,
+          # metavariable-pattern cannot bind a type, and metavariable-comparison
+          # cannot concatenate strings.
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      switch $ERR.(type) {
+                      case ...
+                      case ..., $FIRST, ..., $SECOND, ...:
+                        ...
+                      case ...
+                      }
+                  - pattern: |
+                      switch $NAME := $ERR.(type) {
+                      case ...
+                      case ..., $FIRST, ..., $SECOND, ...:
+                        ...
+                      case ...
+                      }
+              - pattern-regex: |-
+                  (?x)
+                  (?(DEFINE)
+                    (?<trivia> (?: \s | /\* .*? \*/ | // [^\r\n]* )* )
+                    (?<brackets> \[ (?: [^\[\]] | (?&brackets) )* \] )
+                    (?<type> [\p{L}_][\p{L}\p{Nd}_]*
+                      (?: \. [\p{L}_][\p{L}\p{Nd}_]* )? (?&brackets)? )
+                    (?<item> (?: (?&brackets) | [^\[\],:{}] )+ , (?&trivia) )
+                  )
+                  \bcase\b (?&trivia) (?&item)*
+                  (?:
+                    (?<value_first>(?&type)) (?&trivia) , (?&trivia)
+                    (?&item)* \* (?&trivia) \k<value_first>
+                  |
+                    \* (?&trivia) (?<pointer_first>(?&type)) (?&trivia) ,
+                    (?&trivia) (?&item)* \k<pointer_first>
+                  )
+                  (?= (?&trivia) [,:] )
+              - focus-metavariable: $FIRST
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      func $FUNC(...) {
+                        $...BODY
+                      }
+                  - pattern-inside: |
+                      func(...) {
+                        $...BODY
+                      }
+              - pattern-either:
+                  - pattern: |
+                      var $VALUE $T
+                      ...
+                      var $POINTER *$T
+                  - pattern: |
+                      var $POINTER *$T
+                      ...
+                      var $VALUE $T
+              - metavariable-pattern:
+                  metavariable: $...BODY
+                  pattern: errors.As($FIRST_ERR, &$VALUE)
+              - metavariable-pattern:
+                  metavariable: $...BODY
+                  pattern: errors.As($SECOND_ERR, &$POINTER)
+    paths:
+      include:
+        - "**/*.go"
+      exclude:
+        - "**/*_test.go"
+        - "/checks/semgrep/testdata/**"

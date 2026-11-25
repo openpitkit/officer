@@ -1935,8 +1935,8 @@ func TestSubmitImmediate_UnpricedVolumeWithoutLockIsInvalid(t *testing.T) {
 	order.Price = ""
 
 	_, err := materializeImmediateResult(e, order)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SubmitImmediate(volume without price) = %v, want ErrInvalid", err)
+	if !internalFailureAnswer(err) {
+		t.Fatalf("SubmitImmediate(volume without price) = %v, want internal error", err)
 	}
 }
 
@@ -1999,8 +1999,8 @@ func TestSubmitImmediate_VolumeUsesEngineDelta(t *testing.T) {
 
 		// The pushed mark gives the reservation a lock price; the fill still
 		// does not settle at it.
-		if _, err := materializeImmediateResult(e, order); !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("SubmitImmediate(volume market) = %v, want ErrInvalid", err)
+		if _, err := materializeImmediateResult(e, order); !internalFailureAnswer(err) {
+			t.Fatalf("SubmitImmediate(volume market) = %v, want internal error", err)
 		}
 	})
 }
@@ -2101,13 +2101,44 @@ func TestSubmitImmediate_DropCopyVolumeUsesEngineDelta(t *testing.T) {
 	}
 }
 
+func TestImmediateStoredOrderFailuresAreInternal(t *testing.T) {
+	for _, defect := range []string{"account", "base asset", "quote asset", "side", "held quantity"} {
+		t.Run(defect, func(t *testing.T) {
+			engine := newTestEngine(t)
+			order := testOrder()
+			held := fwengine.HeldReservation{Lock: storedExecutionReportLock(t), Quantity: "1"}
+			switch defect {
+			case "account":
+				order.Account = "missing"
+			case "base asset":
+				order.BaseAsset = "missing"
+			case "quote asset":
+				order.QuoteAsset = "missing"
+			case "side":
+				order.Side = "unknown"
+			case "held quantity":
+				held.Quantity = "broken"
+			}
+			_, err := engine.PrepareForcedHeldImmediate(order, held)
+			if err == nil {
+				t.Fatal("corrupt stored order was accepted")
+			}
+			for _, sentinel := range []error{domain.ErrInvalid, domain.ErrNotFound, domain.ErrConflict, domain.ErrAlreadyExists, domain.ErrForbidden, domain.ErrLoosening, domain.ErrUpstream} {
+				if errors.Is(err, sentinel) {
+					t.Errorf("stored order error %v matches %v", err, sentinel)
+				}
+			}
+		})
+	}
+}
+
 func TestImmediateTradePrice_UsesRequestPriceOnly(t *testing.T) {
 	limit, err := immediateTradePrice(domain.Order{Price: "99"})
 	if err != nil || limit != "99" {
 		t.Fatalf("limit trade price = (%q, %v), want request price 99", limit, err)
 	}
 
-	if market, err := immediateTradePrice(domain.Order{}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("market trade price = (%q, %v), want ErrInvalid", market, err)
+	if market, err := immediateTradePrice(domain.Order{}); !internalFailureAnswer(err) {
+		t.Fatalf("market trade price = (%q, %v), want internal error", market, err)
 	}
 }

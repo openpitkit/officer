@@ -49,11 +49,7 @@ func handlePutSpotFundsLimitMode(svc backend.ControlPlane) http.HandlerFunc {
 			return
 		}
 		limit := httpx.FromSpotFundsLimitModeLimitDTO(req)
-		if err := svc.PutSpotFundsLimitMode(r.Context(), limit); err != nil {
-			httpx.WriteErr(w, err)
-			return
-		}
-		persisted, err := httpx.PersistedSpotFundsLimitMode(r.Context(), svc)
+		persisted, err := svc.PutSpotFundsLimitMode(r.Context(), limit)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -109,11 +105,7 @@ func handlePutRateLimit(svc backend.ControlPlane, write domain.LimitWrite, statu
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.PutRateLimit(r.Context(), limit, write, missing); err != nil {
-			httpx.WriteErr(w, err)
-			return
-		}
-		persisted, err := httpx.PersistedRateLimit(r.Context(), svc, limit)
+		persisted, err := svc.PutRateLimit(r.Context(), limit, write, missing)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -141,11 +133,7 @@ func handlePutOrderSizeLimit(svc backend.ControlPlane, write domain.LimitWrite, 
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.PutOrderSizeLimit(r.Context(), limit, write, missing); err != nil {
-			httpx.WriteErr(w, err)
-			return
-		}
-		persisted, err := httpx.PersistedOrderSizeLimit(r.Context(), svc, limit)
+		persisted, err := svc.PutOrderSizeLimit(r.Context(), limit, write, missing)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -172,11 +160,7 @@ func handlePutPositionLimit(svc backend.ControlPlane, write domain.LimitWrite, s
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.PutPositionLimit(r.Context(), limit, write, missing); err != nil {
-			httpx.WriteErr(w, err)
-			return
-		}
-		persisted, err := httpx.PersistedPositionLimit(r.Context(), svc, limit)
+		persisted, err := svc.PutPositionLimit(r.Context(), limit, write, missing)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -207,14 +191,8 @@ func handlePutSpotFundsPnlBoundsLimit(
 			httpx.WriteErr(w, err)
 			return
 		}
-		if err := svc.PutSpotFundsPnlBoundsLimit(
+		persisted, err := svc.PutSpotFundsPnlBoundsLimit(
 			r.Context(), limit, write, missing,
-		); err != nil {
-			httpx.WriteErr(w, err)
-			return
-		}
-		persisted, err := httpx.PersistedSpotFundsPnlBoundsLimit(
-			r.Context(), svc, limit,
 		)
 		if err != nil {
 			httpx.WriteErr(w, err)

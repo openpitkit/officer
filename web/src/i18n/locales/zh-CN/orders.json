@@ -146,6 +146,7 @@
   },
 
   "addOrder": {
+    "preTradeRejected": "交易前检查拒绝了订单。",
     "addedAwaitingReview": "订单已添加，等待操作员审核。",
     "addedAwaitingReviewWithWarning": "订单已添加，等待操作员审核。{{warning}}",
     "button": "添加订单",

@@ -32,7 +32,8 @@ import (
 )
 
 // ReviewView presents the recorded review of an order awaiting a decision.
-// Marks are decoded for display only; decision authorization verifies the envelope.
+// Marks are decoded for display only; decision authorization verifies the
+// envelope.
 type ReviewView struct {
 	Held        bool
 	Marks       []domain.ReviewMark
@@ -106,7 +107,8 @@ func OrderReviewView(detail domain.OrderDetail) (*ReviewView, error) {
 // ErrConflict, and missing, unverifiable or inconsistent review approvals with
 // ErrApprovalRequired. Trading orders require a runtime (ErrNotImplemented),
 // their stored binding and venue account (ErrForbidden), and a successful venue
-// pre-check (ErrInvalid for a venue refusal, ErrUpstream for an upstream failure).
+// pre-check (ErrInvalid for a venue refusal, ErrUpstream for an upstream
+// failure).
 // Other domain errors from the venue pre-check, including ErrConflict and
 // ErrNotFound, are returned unchanged.
 // It returns the order as the node recorded the decision and its signed (or
@@ -129,8 +131,8 @@ func (s *Service) ConfirmOrderReview(
 // Other domain errors from the venue pre-check are returned unchanged.
 // The node refuses an account blocked by its own flag or group, a changed hold,
 // or a mode mismatch with ErrConflict inside the account lane before any write;
-// changed chain input returns ErrInvalid. Node errors pass through unchanged
-// and prevent sending. Missing stored settlement data, an unknown mode, an
+// changed chain input returns an internal error. Node errors pass through
+// unchanged and prevent sending. Missing stored settlement data, an unknown mode, an
 // unexpected verdict or a missing decision attestation is an explicit error.
 // It returns the recorded order and its signed (or eSign-off) accept decision.
 // Send carries the trading outcome; "refused" means the order was cancelled.
@@ -288,8 +290,10 @@ func (s *Service) CancelOrderReview(
 			}
 			cancelled := orderForEvent(stored.Order, stored.Order.Account, event, caller)
 			cancelled.Status, cancelled.Leaves = domain.OrderStatusCancelled, "0"
-			payload, err := s.buildLifecyclePayload(cancelled, domain.AttestationRequestReviewCancel, "cancelled", "", review.ApprovalID)
-			payload.Mode = stored.Review.Mode
+			payload, err := s.buildLifecyclePayload(
+				cancelled, stored.Review.Mode, domain.AttestationRequestReviewCancel,
+				"cancelled", "", review.ApprovalID,
+			)
 			return payload, err == nil, err
 		},
 		func(got Attestation, _ domain.ApprovalPayload) { att = got },

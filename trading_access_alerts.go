@@ -45,12 +45,12 @@ func mixedTradingAccessType(visible func(context.Context, domain.AccountID) (boo
 				Title   *string           `json:"title"`
 			}
 			if err := json.Unmarshal(raw, &payload); err != nil {
-				return fmt.Errorf("mixed trading access payload: %w: %w", domain.ErrInvalid, err)
+				return fmt.Errorf("mixed trading access payload: %w", err)
 			}
 			if payload.Account == nil || payload.Title == nil {
-				return fmt.Errorf("mixed trading access requires account and title: %w", domain.ErrInvalid)
+				return fmt.Errorf("mixed trading access requires account and title")
 			}
-			return domain.ValidateAccountID(*payload.Account)
+			return domain.Internal(domain.ValidateAccountID(*payload.Account))
 		},
 		Actions: map[string]alerts.Action{
 			"acknowledge": {
@@ -66,7 +66,7 @@ func mixedTradingAccessType(visible func(context.Context, domain.AccountID) (boo
 func accountAlertVisibility(visible func(context.Context, domain.AccountID) (bool, error), name string) func(context.Context, alerts.Event) (bool, error) {
 	return func(ctx context.Context, event alerts.Event) (bool, error) {
 		if visible == nil {
-			return false, fmt.Errorf("%s account visibility is not bound: %w", name, domain.ErrInvalid)
+			return false, fmt.Errorf("%s account visibility is not bound", name)
 		}
 		var payload struct {
 			Account domain.AccountID `json:"account"`

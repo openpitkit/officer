@@ -147,7 +147,7 @@ func (c *binanceConnector) PreCheck(ctx context.Context,
 	order fwtrading.Order,
 ) error {
 	limit := order.LimitPrice != ""
-	if _, err := parseVenueRoute(order.Route, limit, "Binance"); err != nil {
+	if _, err := parseSpotRoute(order.Route, "Binance", limit); err != nil {
 		return err
 	}
 	if order.AmountKind != domain.OrderAmountKindQuantity {
@@ -170,14 +170,14 @@ func (c *binanceConnector) PreCheck(ctx context.Context,
 		return fmt.Errorf("%w: symbol does not support the order type",
 			fwtrading.ErrRejected)
 	}
-	qty, err := parseVenueDecimal(order.Quantity, true)
+	qty, err := parsePlainDecimal(order.Quantity, true)
 	if err != nil {
 		return fmt.Errorf("%w: quantity must be a positive plain decimal",
 			fwtrading.ErrRejected)
 	}
 	var price decimal.Decimal
 	if limit {
-		price, err = parseVenueDecimal(order.LimitPrice, true)
+		price, err = parsePlainDecimal(order.LimitPrice, true)
 		if err != nil {
 			return fmt.Errorf("%w: price must be a positive plain decimal",
 				fwtrading.ErrRejected)
@@ -205,7 +205,7 @@ func checkBinanceFilter(raw json.RawMessage, limit bool,
 	read := func(name string) (decimal.Decimal, error) {
 		var text string
 		if json.Unmarshal(fields[name], &text) == nil {
-			if value, err := parseVenueDecimal(text, false); err == nil {
+			if value, err := parsePlainDecimal(text, false); err == nil {
 				return value, nil
 			}
 		}
@@ -286,7 +286,7 @@ func (c *binanceConnector) Send(ctx context.Context,
 	order fwtrading.Order,
 ) (fwtrading.Ack, error) {
 	limit := order.LimitPrice != ""
-	tif, err := parseVenueRoute(order.Route, limit, "Binance")
+	tif, err := parseSpotRoute(order.Route, "Binance", limit)
 	if err != nil {
 		return fwtrading.Ack{}, err
 	}
@@ -394,8 +394,8 @@ func (c *binanceConnector) Lookup(ctx context.Context,
 			"binance: unknown venue order status %q: %w",
 			c.redact.Replace(order.Status), domain.ErrUpstream)
 	}
-	qty, qtyErr := parseVenueDecimal(order.Quantity, true)
-	filled, filledErr := parseVenueDecimal(order.Filled, false)
+	qty, qtyErr := parsePlainDecimal(order.Quantity, true)
+	filled, filledErr := parsePlainDecimal(order.Filled, false)
 	if qtyErr != nil || filledErr != nil || filled.GreaterThan(qty) {
 		return fwtrading.Snapshot{}, false, fmt.Errorf(
 			"binance: unreadable lookup quantities: %w", domain.ErrUpstream)
@@ -410,8 +410,8 @@ func (c *binanceConnector) Lookup(ctx context.Context,
 	}
 	cumulative := decimal.Zero
 	for _, trade := range trades {
-		amount, amountErr := parseVenueDecimal(trade.Quantity, true)
-		_, priceErr := parseVenueDecimal(trade.Price, true)
+		amount, amountErr := parsePlainDecimal(trade.Quantity, true)
+		_, priceErr := parsePlainDecimal(trade.Price, true)
 		if amountErr != nil || priceErr != nil || trade.At <= 0 {
 			return fwtrading.Snapshot{}, false, fmt.Errorf(
 				"binance: unreadable trade: %w", domain.ErrUpstream)
@@ -510,12 +510,12 @@ func (c *binanceConnector) trades(ctx context.Context,
 func (c *binanceConnector) commission(ctx context.Context,
 	symbol, amount, asset string,
 ) (*domain.Commission, fwtrading.CommissionLeg, error) {
-	value, err := parseVenueDecimal(amount, false)
-	if err != nil || (asset == "" && !value.IsZero()) {
+	commission, err := spotCommission(amount, asset)
+	if err != nil {
 		return nil, "", fmt.Errorf("binance: unreadable commission: %w",
 			domain.ErrUpstream)
 	}
-	if value.IsZero() {
+	if commission == nil {
 		return nil, "", nil
 	}
 	c.assetsMu.Lock()
@@ -533,14 +533,8 @@ func (c *binanceConnector) commission(ctx context.Context,
 		return nil, "", fmt.Errorf("binance: symbol assets are missing: %w",
 			domain.ErrUpstream)
 	}
-	var leg fwtrading.CommissionLeg
-	switch asset {
-	case assets.base:
-		leg = fwtrading.CommissionLegBase
-	case assets.quote:
-		leg = fwtrading.CommissionLegQuote
-	}
-	return &domain.Commission{Amount: amount, Currency: asset}, leg, nil
+	leg := commissionLeg(asset, assets.base, assets.quote)
+	return commission, leg, nil
 }
 
 func (c *binanceConnector) CheckAccount(

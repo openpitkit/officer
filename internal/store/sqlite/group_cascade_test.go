@@ -29,6 +29,7 @@ import (
 )
 
 func TestDeleteGroupDetachesMembersAndPreservesHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, realm := newTestStore(t)
 	db := realm.(*realmStore).rawDB()
@@ -125,6 +126,7 @@ func TestDeleteGroupDetachesMembersAndPreservesHistory(t *testing.T) {
 }
 
 func TestDeleteGroupRequiresForceForGroupScopedPnlBound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, realm := newTestStore(t)
 	db := realm.(*realmStore).rawDB()

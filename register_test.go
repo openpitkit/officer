@@ -28,7 +28,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +40,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -255,16 +253,23 @@ func TestRegisterTradingComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.Providers) != 7 ||
+	if len(status.Providers) != 9 ||
 		status.Providers[0].Type != domain.TradingProviderAlpaca ||
 		status.Providers[1].Type != domain.TradingProviderBinance ||
-		status.Providers[2].Type != domain.TradingProviderEtoro ||
-		status.Providers[3].Type != domain.TradingProviderIB ||
-		status.Providers[4].Type != domain.TradingProviderOKX ||
-		status.Providers[5].Type != domain.TradingProviderOpenAlgo ||
-		status.Providers[6].Type != "test" ||
+		status.Providers[2].Type != domain.TradingProviderBybit ||
+		status.Providers[3].Type != domain.TradingProviderCoinbase ||
+		status.Providers[4].Type != domain.TradingProviderEtoro ||
+		status.Providers[5].Type != domain.TradingProviderIB ||
+		status.Providers[6].Type != domain.TradingProviderOKX ||
+		status.Providers[7].Type != domain.TradingProviderOpenAlgo ||
+		status.Providers[8].Type != "test" ||
 		len(status.Connections) != 1 || status.Connections[0].State != "unavailable" {
 		t.Fatal("trading runtime was not wired into the control plane before Start")
+	}
+	for _, provider := range status.Providers {
+		if provider.LiveOnly != (provider.Type == domain.TradingProviderCoinbase) {
+			t.Fatalf("provider %q: liveOnly = %t", provider.Type, provider.LiveOnly)
+		}
 	}
 	cancel()
 	if err := app.Close(); err != nil {
@@ -715,7 +720,7 @@ func TestRecordServiceLifecycleRejectsUnresolvedCaller(t *testing.T) {
 		ctx, domain.AuditActionRestartService,
 		domain.NewAuditDetail(domain.AuditDetailRestartService, nil),
 	)
-	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), "no caller in context") {
+	if !internalFailureAnswer(err) || !strings.Contains(err.Error(), "no caller in context") {
 		t.Errorf("RecordServiceLifecycle without a caller = %v, want the missing caller named", err)
 	}
 	after, err := realm.ListAudit(ctx, 1000)
@@ -844,8 +849,7 @@ func TestRegisterSingleAccountRealmPnlScheduleAuthority(t *testing.T) {
 	}
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {
@@ -960,8 +964,7 @@ func TestRegisterMCPServerVersionNonRelease(t *testing.T) {
 		accountmode.Request{Mode: accountmode.ModeSingle, Account: "default"}, false)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {
@@ -985,8 +988,7 @@ func assertOneAccountSubmitSchema(t *testing.T, handler http.Handler) {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test"}, nil)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {
@@ -1239,9 +1241,7 @@ func TestRegisterPreMigrationBackups(t *testing.T) {
 		backupNode = n
 		return n, eng, err
 	})
-	builder.SetSPAFactory(func() (fs.FS, error) {
-		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
-	})
+	builder.SetSPAFactory(gateTestSPA)
 	app, err := builder.Build(ctx, slog.Default(), failOnFatal(t))
 	if err != nil {
 		t.Fatal(err)
@@ -1576,7 +1576,7 @@ func TestReplacedServiceDoesNotAttachResetWorkerOrControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	installs := 0
-	builder.SetSPAFactory(func() (fs.FS, error) { return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil })
+	builder.SetSPAFactory(gateTestSPA)
 	builder.SetNodeBuilder(func(ctx context.Context, st store.Store, fatal frameworkapp.FatalShutdownHook) (node.Node, engine.Engine, error) {
 		n, eng, err := fakeEngineNodeBuilder(ctx, st, fatal)
 		if err != nil {
@@ -1641,9 +1641,7 @@ func TestRegisterAccessWithReplacedStoreFactory(t *testing.T) {
 		}{probe, st.(access.Store), st.(sealReportReader)}, nil
 	})
 	builder.SetNodeBuilder(fakeEngineNodeBuilder)
-	builder.SetSPAFactory(func() (fs.FS, error) {
-		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
-	})
+	builder.SetSPAFactory(gateTestSPA)
 	app, err := builder.Build(context.Background(), slog.Default(), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("Build with a capable replacement store: %v", err)
@@ -2129,9 +2127,7 @@ func serveSeededApp(
 	if err := Register(builder, cfg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	builder.SetSPAFactory(func() (fs.FS, error) {
-		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
-	})
+	builder.SetSPAFactory(gateTestSPA)
 	app, err := builder.Build(ctx, slog.Default(), failOnFatal(t))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -2244,9 +2240,7 @@ func buildTestApp(
 	if serviceFactory != nil {
 		builder.SetServiceFactory(serviceFactory)
 	}
-	builder.SetSPAFactory(func() (fs.FS, error) {
-		return fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, nil
-	})
+	builder.SetSPAFactory(gateTestSPA)
 	for _, configureBuilder := range configure {
 		configureBuilder(builder)
 	}

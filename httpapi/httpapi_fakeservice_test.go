@@ -142,6 +142,11 @@ type fakeService struct {
 	execReportResult      engine.ExecutionReportResult
 	listLimErr            error
 	putLimErr             error
+	rateLimitResult       domain.LimitRate
+	orderSizeLimitResult  domain.LimitOrderSize
+	positionLimitResult   domain.LimitPosition
+	pnlBoundsLimitResult  domain.LimitSpotFundsPnlBounds
+	limitModeResult       domain.LimitSpotFundsLimitMode
 	delLimErr             error
 	auditErr              error
 	groupErr              error
@@ -152,8 +157,7 @@ type fakeService struct {
 	spotFundsLimitModePut      domain.LimitSpotFundsLimitMode
 	spotFundsLimitModePutCalls int
 	putSpotFundsLimitModeErr   error
-	// listLimitsCalls counts ListLimits reads, the route a stored barrier is
-	// read back by.
+	// listLimitsCalls counts reads requested by the handler.
 	listLimitsCalls int
 
 	// Captured account writes, so a test can prove a rejected request changed
@@ -556,27 +560,30 @@ func (f *fakeService) ListPolicyRows(
 	}
 	return store.PolicyListPage{Rows: f.policyRows, Total: len(f.policyRows)}, nil
 }
-func (f *fakeService) PutRateLimit(
-	_ context.Context, l domain.LimitRate, _ domain.LimitWrite, missing domain.MissingAccountPolicy,
-) error {
+func (f *fakeService) PutRateLimit(ctx context.Context, l domain.LimitRate, _ domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitRate, error) {
 	f.rateLimitPut = l
 	f.missingAccount = missing
-	return f.putLimErr
+	if f.putLimErr != nil {
+		return domain.LimitRate{}, f.putLimErr
+	}
+	return f.rateLimitResult, nil
 }
-func (f *fakeService) PutOrderSizeLimit(
-	_ context.Context, l domain.LimitOrderSize, _ domain.LimitWrite, missing domain.MissingAccountPolicy,
-) error {
+func (f *fakeService) PutOrderSizeLimit(ctx context.Context, l domain.LimitOrderSize, _ domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitOrderSize, error) {
 	f.orderSizeLimitPut = l
 	f.missingAccount = missing
-	return f.putLimErr
+	if f.putLimErr != nil {
+		return domain.LimitOrderSize{}, f.putLimErr
+	}
+	return f.orderSizeLimitResult, nil
 }
 
-func (f *fakeService) PutPositionLimit(
-	_ context.Context, l domain.LimitPosition, _ domain.LimitWrite, missing domain.MissingAccountPolicy,
-) error {
+func (f *fakeService) PutPositionLimit(ctx context.Context, l domain.LimitPosition, _ domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitPosition, error) {
 	f.positionLimitPut = l
 	f.missingAccount = missing
-	return f.putLimErr
+	if f.putLimErr != nil {
+		return domain.LimitPosition{}, f.putLimErr
+	}
+	return f.positionLimitResult, nil
 }
 func (f *fakeService) SpotFundsLimitMode(_ context.Context) (domain.SpotFundsLimitModeState, error) {
 	f.spotFundsLimitModeGetCalls++
@@ -585,26 +592,24 @@ func (f *fakeService) SpotFundsLimitMode(_ context.Context) (domain.SpotFundsLim
 
 // PutSpotFundsLimitMode records the put and, unless it is told to fail,
 // stores the row, so a read-back answers it.
-func (f *fakeService) PutSpotFundsLimitMode(_ context.Context, limit domain.LimitSpotFundsLimitMode) error {
+func (f *fakeService) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
 	f.spotFundsLimitModePut = limit
 	f.spotFundsLimitModePutCalls++
 	if f.putSpotFundsLimitModeErr != nil {
-		return f.putSpotFundsLimitModeErr
+		return domain.LimitSpotFundsLimitMode{}, f.putSpotFundsLimitModeErr
 	}
 	f.spotFundsLimitModeState.Mode = limit.Mode
 	f.limits.SpotFundsLimitModes = []domain.LimitSpotFundsLimitMode{limit}
-	return nil
+	return f.limitModeResult, nil
 }
 
-func (f *fakeService) PutSpotFundsPnlBoundsLimit(
-	_ context.Context,
-	l domain.LimitSpotFundsPnlBounds,
-	_ domain.LimitWrite,
-	missing domain.MissingAccountPolicy,
-) error {
+func (f *fakeService) PutSpotFundsPnlBoundsLimit(ctx context.Context, l domain.LimitSpotFundsPnlBounds, _ domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitSpotFundsPnlBounds, error) {
 	f.spotFundsPnlBoundsLimitPut = l
 	f.missingAccount = missing
-	return f.putLimErr
+	if f.putLimErr != nil {
+		return domain.LimitSpotFundsPnlBounds{}, f.putLimErr
+	}
+	return f.pnlBoundsLimitResult, nil
 }
 func (f *fakeService) DeleteLimit(_ context.Context, t node.LimitTarget) error {
 	f.deleteLimitTarget = t

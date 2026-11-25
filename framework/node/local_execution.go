@@ -64,8 +64,7 @@ func (n *localNode) accountChainTerminalError(
 		return stateErr
 	}
 	switch stateErr.(type) {
-	case internalPostCommitNodeMutationFailure,
-		*internalPostCommitNodeMutationFailure:
+	case internalPostCommitNodeMutationFailure:
 		return stateErr
 	}
 	cause := chainRootCause(outcome.Err)
@@ -277,11 +276,14 @@ func (n *localNode) applyExecutionReport(
 	}
 	persist := func(state *executionReportChainState) error {
 		if state.result.Persistence == nil {
-			return fmt.Errorf("apply execution report returned no persistence write set: %w", domain.ErrInvalid)
+			return fmt.Errorf("apply execution report returned no persistence write set")
 		}
 		persistence := stampExecutionReportPersistence(
 			*state.result.Persistence, caller, request,
 		)
+		if persistence.Trade != nil {
+			persistence.Trade.VenueTradeID = state.in.VenueTradeID
+		}
 		reservedQuantity, err := reservationAfterOutcomes(state.order, persistence.Balances)
 		if err != nil {
 			return n.fatalPostEnginePersistence("record execution reservation", account, err)
@@ -462,6 +464,7 @@ type workflowExecutionReportChainState struct {
 	settlement           domain.OrderSettlement
 	err                  error
 	forcedTerminalBypass bool
+	persistenceCompleted bool
 }
 
 func (n *localNode) recordWorkflowExecutionReport(
@@ -558,6 +561,7 @@ func (n *localNode) recordWorkflowExecutionReport(
 			state.err = fmt.Errorf("record workflow execution report: %w", err)
 			return state.err
 		}
+		state.persistenceCompleted = true
 		state.in.ExternalID = reportID
 		return nil
 	}).Then(func(
@@ -584,10 +588,14 @@ func (n *localNode) recordWorkflowExecutionReport(
 		}
 		return nil
 	}).Finally(func(
-		context.Context,
-		*workflowExecutionReportChainState,
-		asyncengine.ChainOutcome,
+		_ context.Context,
+		state *workflowExecutionReportChainState,
+		outcome asyncengine.ChainOutcome,
 	) error {
+		state.err = n.accountChainTerminalError(
+			"workflow execution report", account, state.err,
+			state.persistenceCompleted, state.persistenceCompleted, outcome,
+		)
 		return nil
 	})
 	_, chainErr := runner.Run(

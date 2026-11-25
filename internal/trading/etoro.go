@@ -826,7 +826,7 @@ func (c *etoroConnector) Lookup(ctx context.Context, ref fwtrading.OrderRef) (fw
 	case domain.OrderSideSell:
 		state, err = c.lookupClose(ctx, ref)
 	default:
-		return fwtrading.Snapshot{}, true, fmt.Errorf("etoro: lookup requires the order side, got %q: %w", ref.Side, domain.ErrInvalid)
+		return fwtrading.Snapshot{}, true, fmt.Errorf("etoro: lookup requires the order side, got %q", ref.Side)
 	}
 	if err != nil {
 		return fwtrading.Snapshot{}, true, err

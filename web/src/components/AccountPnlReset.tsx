@@ -31,6 +31,7 @@ import {
 import { usePolling } from "@/api/usePolling";
 import type { Account } from "@/api/types";
 import { errMessage } from "@/components/AccountDialogs";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorBanner } from "@/components/PageStates";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { DateTimeField } from "@/components/data/FilterOperators";
@@ -38,15 +39,6 @@ import { Input } from "@/components/ui/input";
 import { NumberStepper } from "@/components/ui/number-stepper";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogCancel,
-} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -141,35 +133,21 @@ export function ResetAccountPnlConfirm({
     }
   };
   return (
-    <AlertDialog
+    <ConfirmDialog
       open={account !== null}
       onOpenChange={(open) => {
-        if (!open && !busy) {
+        if (!open) {
           setError(null);
           onClose();
         }
       }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {t("pnlReset.confirmTitle", { account: account?.code })}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {t("pnlReset.confirmDescription")}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {error && <ErrorBanner message={error} />}
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>
-            {t("common:actions.cancel")}
-          </AlertDialogCancel>
-          <Button disabled={busy} onClick={() => void reset()}>
-            {t("pnlReset.reset")}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+      title={t("pnlReset.confirmTitle", { account: account?.code })}
+      description={t("pnlReset.confirmDescription")}
+      confirmLabel={t("pnlReset.reset")}
+      busy={busy}
+      error={error}
+      onConfirm={() => void reset()}
+    />
   );
 }
 

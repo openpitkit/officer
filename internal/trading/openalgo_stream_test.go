@@ -27,7 +27,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -48,7 +47,9 @@ func openAlgoReadStreamRequest(t *testing.T, ctx context.Context, conn *websocke
 	}
 	if err != nil || typ != websocket.MessageText ||
 		json.Unmarshal(payload, &request) != nil || request.Action != action {
-		t.Error("invalid fake OpenAlgo stream request")
+		if t.Context().Err() == nil {
+			t.Error("invalid fake OpenAlgo stream request")
+		}
 		return ""
 	}
 	if action == "authenticate" && request.APIKey != openAlgoTestKey {
@@ -65,7 +66,9 @@ func openAlgoReadStreamRequest(t *testing.T, ctx context.Context, conn *websocke
 func openAlgoWriteStream(t *testing.T, ctx context.Context, conn *websocket.Conn, typ websocket.MessageType, payload string) {
 	t.Helper()
 	if err := conn.Write(ctx, typ, []byte(payload)); err != nil {
-		t.Error("write fake OpenAlgo stream frame failed")
+		if t.Context().Err() == nil {
+			t.Error("write fake OpenAlgo stream frame failed")
+		}
 	}
 }
 
@@ -123,13 +126,7 @@ func openAlgoConnectStream(t *testing.T, ctx context.Context, v *openAlgoTestVen
 	if event := nextEvent(t, events); event.Kind != fwtrading.EventConnected {
 		t.Fatal("OpenAlgo stream did not publish connected event")
 	}
-	select {
-	case conn := <-sockets:
-		return openAlgoTestStream{conn, events, diagnostics}
-	case <-ctx.Done():
-		t.Fatal("OpenAlgo stream handshake did not finish")
-		return openAlgoTestStream{}
-	}
+	return openAlgoTestStream{<-sockets, events, diagnostics}
 }
 
 func openAlgoPush(t *testing.T, ctx context.Context, stream openAlgoTestStream, mode, id, status, filled string) {
@@ -165,8 +162,7 @@ func openAlgoStreamBarrier(t *testing.T, ctx context.Context, c *openAlgoConnect
 func TestOpenAlgoStreamCorrelation(t *testing.T) {
 	for _, install := range []string{"send-before", "send-after", "lookup-after", "mode-mismatch-ack"} {
 		t.Run(install, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			overrides := map[string]openAlgoTestReply{"orderstatus": {200, openAlgoTestStatus("123", "open")}}
 			if install == "mode-mismatch-ack" {
 				overrides["placeorder"] = openAlgoTestReply{200, `{"status":"success","orderid":"123"}`}
@@ -237,8 +233,7 @@ func TestOpenAlgoStreamAcknowledgements(t *testing.T) {
 		{"subscribe-binary", "subscribe", `{}`, "expected text subscription reply", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			v := newOpenAlgoTestVenue(t, domain.TradingModePaper, nil)
 			openAlgoStreamServer(t, ctx, v.c, func(conn *websocket.Conn) {
 				openAlgoReadStreamRequest(t, ctx, conn, "authenticate")
@@ -274,8 +269,7 @@ func TestOpenAlgoStreamAcknowledgements(t *testing.T) {
 func TestOpenAlgoStreamFailureStatuses(t *testing.T) {
 	for _, failure := range []string{"auth", "dial"} {
 		t.Run(failure, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			v := newOpenAlgoTestVenue(t, domain.TradingModePaper, nil)
 			if failure == "auth" {
 				openAlgoStreamServer(t, ctx, v.c, func(conn *websocket.Conn) {
@@ -301,16 +295,12 @@ func TestOpenAlgoStreamFailureStatuses(t *testing.T) {
 			})
 			_, err := v.c.Subscribe(ctx)
 			openAlgoAssertError(t, err, nil, "")
-			select {
-			case message := <-statuses:
-				if failure == "dial" && !strings.HasPrefix(message, "openalgo: dial stream: ") {
-					t.Fatal("stream dial status lost its vendor label")
-				}
-				if failure == "auth" && !strings.Contains(message, "authorization refused") {
-					t.Fatal("stream auth status lost its refusal")
-				}
-			case <-ctx.Done():
-				t.Fatal("stream failure did not report status")
+			message := <-statuses
+			if failure == "dial" && !strings.HasPrefix(message, "openalgo: dial stream: ") {
+				t.Fatal("stream dial status lost its vendor label")
+			}
+			if failure == "auth" && !strings.Contains(message, "authorization refused") {
+				t.Fatal("stream auth status lost its refusal")
 			}
 			v.c.Close()
 		})
@@ -318,8 +308,7 @@ func TestOpenAlgoStreamFailureStatuses(t *testing.T) {
 }
 
 func TestOpenAlgoStreamDiagnostics(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	v := newOpenAlgoTestVenue(t, domain.TradingModePaper, nil)
 	stream := openAlgoConnectStream(t, ctx, v)
 	v.c.mapOrder("binary-order", "binary-client")
@@ -331,14 +320,10 @@ func TestOpenAlgoStreamDiagnostics(t *testing.T) {
 	}
 	openAlgoStreamBarrier(t, ctx, v.c, stream)
 	for _, detail := range []string{openAlgoPushUnknown, openAlgoPushUnreadable} {
-		select {
-		case diag := <-stream.diagnostics:
-			if diag.Level != health.DiagWarn || diag.Code != health.CodeUnparsableData ||
-				diag.Detail != detail || diag.Remediation != venueStreamSkipped {
-				t.Fatal("unparsable stream diagnostic changed")
-			}
-		case <-ctx.Done():
-			t.Fatal("missing stream diagnostic")
+		diag := <-stream.diagnostics
+		if diag.Level != health.DiagWarn || diag.Code != health.CodeUnparsableData ||
+			diag.Detail != detail || diag.Remediation != venueStreamSkipped {
+			t.Fatal("unparsable stream diagnostic changed")
 		}
 	}
 	select {
@@ -351,8 +336,7 @@ func TestOpenAlgoStreamDiagnostics(t *testing.T) {
 func TestOpenAlgoStreamModes(t *testing.T) {
 	for _, mode := range []domain.TradingMode{domain.TradingModePaper, domain.TradingModeLive} {
 		t.Run(string(mode), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			v := newOpenAlgoTestVenue(t, mode, nil)
 			stream := openAlgoConnectStream(t, ctx, v)
 			v.c.mapOrder("123", "client")
@@ -380,8 +364,7 @@ func TestOpenAlgoStreamModes(t *testing.T) {
 func TestOpenAlgoStreamClosedQuantityHandoff(t *testing.T) {
 	for _, status := range []string{"cancelled", "rejected", "expired"} {
 		t.Run(status, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			v := newOpenAlgoTestVenue(t, domain.TradingModePaper,
 				map[string]openAlgoTestReply{"orderstatus": {200, openAlgoTestStatus("123", status)}})
 			stream := openAlgoConnectStream(t, ctx, v)
@@ -489,8 +472,7 @@ func TestOpenAlgoClosedQuantityPrefersUnmapped(t *testing.T) {
 }
 
 func TestOpenAlgoStreamClosedBeforeAck(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	v := newOpenAlgoTestVenue(t, domain.TradingModePaper,
 		map[string]openAlgoTestReply{"orderstatus": {200, openAlgoTestStatus("123", "cancelled")}})
 	stream := openAlgoConnectStream(t, ctx, v)
@@ -589,21 +571,15 @@ func FuzzOpenAlgoClosedQuantityFIFO(f *testing.F) {
 }
 
 func TestOpenAlgoStreamHeldBound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	v := newOpenAlgoTestVenue(t, domain.TradingModePaper, nil)
 	stream := openAlgoConnectStream(t, ctx, v)
 	for i := range orderCorrelationLimit + 1 {
 		openAlgoPush(t, ctx, stream, "analyze", fmt.Sprint(i), "open", "")
 	}
 	openAlgoStreamBarrier(t, ctx, v.c, stream)
-	select {
-	case diag := <-stream.diagnostics:
-		if diag.Detail != openAlgoHeldEvicted || diag.Level != health.DiagWarn {
-			t.Fatal("held update eviction lost its venue diagnostic")
-		}
-	case <-ctx.Done():
-		t.Fatal("held update eviction did not report a diagnostic")
+	if diag := <-stream.diagnostics; diag.Detail != openAlgoHeldEvicted || diag.Level != health.DiagWarn {
+		t.Fatal("held update eviction lost its venue diagnostic")
 	}
 	v.c.ordersMu.Lock()
 	defer v.c.ordersMu.Unlock()
@@ -615,8 +591,7 @@ func TestOpenAlgoStreamHeldBound(t *testing.T) {
 func TestOpenAlgoStreamReadFailures(t *testing.T) {
 	for _, failure := range []string{"error-frame", "close"} {
 		t.Run(failure, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
+			ctx := t.Context()
 			v := newOpenAlgoTestVenue(t, domain.TradingModePaper, nil)
 			openAlgoStreamServer(t, ctx, v.c, func(conn *websocket.Conn) {
 				openAlgoStreamHandshake(t, ctx, conn)
@@ -644,20 +619,13 @@ func TestOpenAlgoStreamReadFailures(t *testing.T) {
 }
 
 func TestOpenAlgoStreamClose(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	v := newOpenAlgoTestVenue(t, domain.TradingModePaper, nil)
 	stream := openAlgoConnectStream(t, ctx, v)
 	if _, err := v.c.Subscribe(ctx); err == nil {
 		t.Fatal("OpenAlgo subscribed twice")
 	}
-	closed := make(chan struct{})
-	go func() { v.c.Close(); close(closed) }()
-	select {
-	case <-closed:
-	case <-ctx.Done():
-		t.Fatal("Close did not join the idle stream")
-	}
+	v.c.Close()
 	select {
 	case <-v.c.lifecycle.done:
 	default:

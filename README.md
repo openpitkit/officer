@@ -1,6 +1,6 @@
 # Pit Officer
 
-[![CI](https://github.com/openpitkit/officer/actions/workflows/ci.yml/badge.svg)](https://github.com/openpitkit/officer/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/officer)](https://github.com/openpitkit/officer/releases) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/openpitkit/officer/blob/main/LICENSE)
+[![CI](https://github.com/openpitkit/officer/actions/workflows/ci.yml/badge.svg)](https://github.com/openpitkit/officer/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/officer)](https://github.com/openpitkit/officer/releases) [![openpitkit/officer MCP server](https://glama.ai/mcp/servers/openpitkit/officer/badges/score.svg)](https://glama.ai/mcp/servers/openpitkit/officer) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/openpitkit/officer/blob/main/LICENSE)
 
 Website: [officer.openpit.dev](https://officer.openpit.dev)
 

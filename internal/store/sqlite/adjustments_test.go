@@ -73,6 +73,7 @@ func sampleAdjustment() domain.AccountAdjustmentRecord {
 }
 
 func TestAdjustmentAppendListRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	in := sampleAdjustment()
@@ -137,6 +138,7 @@ func TestAdjustmentAppendListRoundTrip(t *testing.T) {
 }
 
 func TestRecordAccountAdjustmentPersistsEngineBalanceInSameTx(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	stored, err := rs.RecordAccountAdjustment(ctx, fwstore.AccountAdjustmentPersistence{
@@ -195,6 +197,7 @@ func TestRecordAccountAdjustmentPersistsEngineBalanceInSameTx(t *testing.T) {
 }
 
 func TestRecordAccountAdjustmentPreservesUnsetAndZeroRealizedPnl(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		realizedPnl string
@@ -205,6 +208,7 @@ func TestRecordAccountAdjustmentPreservesUnsetAndZeroRealizedPnl(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedAdjustmentFixtures(t)
 			_, err := rs.RecordAccountAdjustment(ctx, fwstore.AccountAdjustmentPersistence{
 				UpsertBalance: &domain.Balance{
@@ -260,6 +264,7 @@ func TestRecordAccountAdjustmentPreservesUnsetAndZeroRealizedPnl(t *testing.T) {
 }
 
 func TestRecordAccountAdjustmentPersistsHaltedRealizedPnlWithoutValue(t *testing.T) {
+	t.Parallel()
 	for _, halt := range []domain.PnlHaltReason{
 		domain.PnlHaltReasonMissingFx,
 		domain.PnlHaltReasonMissingAccountCurrency,
@@ -268,6 +273,7 @@ func TestRecordAccountAdjustmentPersistsHaltedRealizedPnlWithoutValue(t *testing
 		domain.PnlHaltReasonArithmeticOverflow,
 	} {
 		t.Run(string(halt), func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedAdjustmentFixtures(t)
 			_, err := rs.RecordAccountAdjustment(ctx, fwstore.AccountAdjustmentPersistence{
 				UpsertBalance: &domain.Balance{
@@ -323,12 +329,14 @@ func TestRecordAccountAdjustmentPersistsHaltedRealizedPnlWithoutValue(t *testing
 }
 
 func TestRecordAccountAdjustmentDeletesEngineEmptyBalance(t *testing.T) {
+	t.Parallel()
 	for _, realizedPnl := range []string{"", "0"} {
 		name := "unset"
 		if realizedPnl == "0" {
 			name = "exact zero"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedAdjustmentFixtures(t)
 			seedBalance(t, ctx, rs, "acc-1", "AAPL", "1", "0", "0", "0")
 			_, err := rs.RecordAccountAdjustment(ctx, fwstore.AccountAdjustmentPersistence{
@@ -366,6 +374,7 @@ func TestRecordAccountAdjustmentDeletesEngineEmptyBalance(t *testing.T) {
 }
 
 func TestAdjustmentRejectedOutcome(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	in := domain.AccountAdjustmentRecord{
@@ -405,6 +414,7 @@ func TestAdjustmentRejectedOutcome(t *testing.T) {
 }
 
 func TestAdjustmentExternalIDOpacity(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	a, err := rs.AppendAdjustment(ctx, sampleAdjustment())
@@ -429,6 +439,7 @@ func TestAdjustmentExternalIDOpacity(t *testing.T) {
 }
 
 func TestAdjustmentSourceFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	panelRec := sampleAdjustment()
@@ -464,6 +475,7 @@ func TestAdjustmentSourceFilter(t *testing.T) {
 }
 
 func TestAdjustmentNonPositiveLimitReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	if _, err := rs.AppendAdjustment(ctx, sampleAdjustment()); err != nil {
@@ -480,6 +492,7 @@ func TestAdjustmentNonPositiveLimitReturnsEmpty(t *testing.T) {
 }
 
 func TestAdjustmentPrincipalSetNullAfterPrincipalDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	if _, err := rs.AppendAdjustment(ctx, sampleAdjustment()); err != nil {
@@ -504,6 +517,7 @@ func TestAdjustmentPrincipalSetNullAfterPrincipalDelete(t *testing.T) {
 }
 
 func TestAdjustmentCascadeOnAccountDelete(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	if _, err := rs.AppendAdjustment(ctx, sampleAdjustment()); err != nil {
@@ -526,6 +540,7 @@ func TestAdjustmentCascadeOnAccountDelete(t *testing.T) {
 }
 
 func TestAdjustmentBlocksAssetDeleteWithoutForce(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	if _, err := rs.AppendAdjustment(ctx, sampleAdjustment()); err != nil {
@@ -555,6 +570,7 @@ func TestAdjustmentBlocksAssetDeleteWithoutForce(t *testing.T) {
 }
 
 func TestAdjustmentUnknownAccountIsInvalid(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	rec := sampleAdjustment()
@@ -566,6 +582,7 @@ func TestAdjustmentUnknownAccountIsInvalid(t *testing.T) {
 }
 
 func TestAdjustmentUnknownAssetIsInvalid(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	rec := sampleAdjustment()
@@ -577,6 +594,7 @@ func TestAdjustmentUnknownAssetIsInvalid(t *testing.T) {
 }
 
 func TestAdjustmentOrderedNewestFirst(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	// Insert three records; they get strictly increasing timestamps from nowStr().
@@ -603,6 +621,7 @@ func TestAdjustmentOrderedNewestFirst(t *testing.T) {
 }
 
 func TestAdjustmentListRowsAccountFilterPagesFilteredSet(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
 		t.Fatalf("CreateAccount(acc-2): %v", err)
@@ -653,6 +672,7 @@ func TestAdjustmentListRowsAccountFilterPagesFilteredSet(t *testing.T) {
 // supplied external id is written verbatim: the returned id equals the supplied
 // one and the row is addressable by it through a listing.
 func TestAppendAdjustmentSuppliedExternalIDUsedVerbatim(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	supplied := domain.ExternalID("caller-adjustment-1")
@@ -685,6 +705,7 @@ func TestAppendAdjustmentSuppliedExternalIDUsedVerbatim(t *testing.T) {
 // second append with the same supplied external id is rejected with
 // domain.ErrAlreadyExists and that no second row is written.
 func TestAppendAdjustmentDuplicateSuppliedExternalIDConflicts(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 	r := rs.(*realmStore)
 
@@ -720,6 +741,7 @@ func TestAppendAdjustmentDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 // TestAppendAdjustmentGeneratesExternalIDWhenAbsent verifies that a zero
 // supplied id is replaced by a freshly generated 22-char external id.
 func TestAppendAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 
 	rec := sampleAdjustment()
@@ -742,6 +764,7 @@ func TestAppendAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 // request carries no type, or an unknown one, is refused with ErrInvalid
 // blaming the type member and that no row is written.
 func TestAppendAdjustmentRefusesMissingOrUnknownType(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		typ        domain.AdjustmentType
@@ -752,6 +775,7 @@ func TestAppendAdjustmentRefusesMissingOrUnknownType(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, rs := seedAdjustmentFixtures(t)
 			rec := sampleAdjustment()
 			rec.Request.Type = test.typ
@@ -787,6 +811,7 @@ func appendTypedAdjustments(
 }
 
 func TestAdjustmentListRowsTypeFilter(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 	appendTypedAdjustments(t, ctx, rs,
 		domain.AdjustmentTypeDeposit,
@@ -835,6 +860,7 @@ func TestAdjustmentListRowsTypeFilter(t *testing.T) {
 }
 
 func TestAdjustmentListRowsSortByType(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 	appendTypedAdjustments(t, ctx, rs,
 		domain.AdjustmentTypeWithdrawal,
@@ -876,6 +902,7 @@ func TestAdjustmentListRowsSortByType(t *testing.T) {
 // whose type column disagrees with the type inside its request JSON is
 // reported as corrupt rather than resolved in favour of either side.
 func TestAdjustmentReadRefusesTypeColumnDivergingFromRequest(t *testing.T) {
+	t.Parallel()
 	ctx, rs := seedAdjustmentFixtures(t)
 	appendTypedAdjustments(t, ctx, rs, domain.AdjustmentTypeDeposit)
 	if _, err := rs.(*realmStore).rawDB().ExecContext(

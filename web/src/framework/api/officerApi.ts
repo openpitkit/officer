@@ -99,6 +99,7 @@ import type {
   AttestationBlock,
   AttestationResult,
   EventAttestation,
+  SubmitMode,
   EventReproduction,
   EventReproductionESign,
   EventReproductionRequest,
@@ -1042,7 +1043,10 @@ function normalizePolicyKind(v: unknown): Policy["kind"] {
     case "spot_funds_limit_mode":
       return v;
     default:
-      return "rate_limit";
+      throw new ApiError(
+        `Policy kind ${JSON.stringify(v)} in the API response is unknown`,
+        "internal",
+      );
   }
 }
 
@@ -1561,6 +1565,12 @@ function normalizeTradingProvider(v: unknown): TradingProvider {
       "internal",
     );
   }
+  if (typeof o.liveOnly !== "boolean") {
+    throw new ApiError(
+      "Invalid or missing trading provider liveOnly in the API response",
+      "internal",
+    );
+  }
   return {
     executionPolicy: normalizeExecutionPolicySupport(o.executionPolicy),
     type: asString(o.type),
@@ -1569,6 +1579,7 @@ function normalizeTradingProvider(v: unknown): TradingProvider {
     verifiesSymbols: asBool(o.verifiesSymbols),
     searchesSymbols: asBool(o.searchesSymbols),
     unlinkedFees: o.unlinkedFees,
+    liveOnly: o.liveOnly,
   };
 }
 
@@ -4002,7 +4013,13 @@ function normalizeSignedApproval(v: unknown): SignedApproval {
 }
 
 function normalizeSubmitVerdict(v: unknown): SignedApproval["verdict"] {
-  return v === "accept" || v === "reject" || v === "review" ? v : "";
+  if (v === "accept" || v === "reject" || v === "review") {
+    return v;
+  }
+  throw new ApiError(
+    `Submit verdict ${JSON.stringify(v)} in the API response is unknown`,
+    "internal",
+  );
 }
 
 function minimalCreatedOrder(
@@ -4423,6 +4440,13 @@ function normalizeEventReproductionESign(v: unknown): EventReproductionESign {
   };
 }
 
+function normalizeSubmitMode(v: unknown): SubmitMode {
+  if (v === "immediate" || v === "hold") {
+    return v;
+  }
+  throw new ApiError("Invalid submit mode in the API response", "internal");
+}
+
 function normalizeEventAttestation(v: unknown): EventAttestation | null {
   if (!isObject(v)) {
     return null;
@@ -4438,7 +4462,7 @@ function normalizeEventAttestation(v: unknown): EventAttestation | null {
     requestType: asString(
       pick(v, "requestType", "RequestType", "request_type"),
     ),
-    mode: asString(pick(v, "mode", "Mode")),
+    mode: normalizeSubmitMode(pick(v, "mode", "Mode")),
     issuedAt: asString(pick(v, "issuedAt", "IssuedAt", "issued_at")),
     signed: asBool(pick(v, "signed", "Signed")),
   };

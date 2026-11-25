@@ -402,26 +402,26 @@ func (s *setMDErrSource) ApplyAdjustment(ctx context.Context, account domain.Acc
 	return domain.AccountAdjustmentRecord{}, domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *setMDErrSource) PutRateLimit(ctx context.Context, limit domain.LimitRate, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitRate, error) {
+	return domain.LimitRate{}, domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *setMDErrSource) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitOrderSize, error) {
+	return domain.LimitOrderSize{}, domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *setMDErrSource) PutPositionLimit(ctx context.Context, limit domain.LimitPosition, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitPosition, error) {
+	return domain.LimitPosition{}, domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) error {
-	return domain.ErrNotImplemented
+func (s *setMDErrSource) PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds, write domain.LimitWrite, missing domain.MissingAccountPolicy) (domain.LimitSpotFundsPnlBounds, error) {
+	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotImplemented
 }
 
 func (s *setMDErrSource) SpotFundsLimitMode(ctx context.Context) (domain.SpotFundsLimitModeState, error) {
 	return domain.SpotFundsLimitModeState{}, domain.ErrNotImplemented
 }
 
-func (s *setMDErrSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) error {
-	return domain.ErrNotImplemented
+func (s *setMDErrSource) PutSpotFundsLimitMode(ctx context.Context, limit domain.LimitSpotFundsLimitMode) (domain.LimitSpotFundsLimitMode, error) {
+	return domain.LimitSpotFundsLimitMode{}, domain.ErrNotImplemented
 }

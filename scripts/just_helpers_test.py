@@ -21,16 +21,21 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import errno
 import io
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import types
 import unittest
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -535,6 +540,77 @@ class ResetServeTests(unittest.TestCase):
                 self.assertEqual(chosen.read_bytes(), b"chosen data")
                 self.assertEqual(list(directory.glob("*.backup-*")), [])
 
+    def test_explicit_database_query_resets_the_file_and_preserves_launch_path(
+        self,
+    ) -> None:
+        chosen = self.root / "chosen.db"
+        original = f"{chosen}?cache=private"
+        suffixes = ("", "-wal", "-shm", "-journal")
+        backup = Path(f"{chosen}.backup-20261113T141516.123456+0200")
+        for suffix in suffixes:
+            Path(f"{chosen}{suffix}").write_bytes(f"chosen{suffix}".encode())
+
+        def run(command: list[str], **_: object):
+            self.assertEqual(
+                command[1:],
+                ["serve", "-sqlite-path", original, "-init", str(self.config)],
+            )
+            for suffix in suffixes:
+                self.assertFalse(Path(f"{chosen}{suffix}").exists())
+                self.assertEqual(
+                    Path(f"{backup}{suffix}").read_bytes(),
+                    f"chosen{suffix}".encode(),
+                )
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            patch.object(helpers, "datetime") as clock,
+            patch.object(helpers, "run", side_effect=run) as launch,
+        ):
+            clock.now.return_value.astimezone.return_value = self.timestamp
+            self.command(
+                "run-officer",
+                "--reset-init",
+                str(self.config),
+                "serve",
+                "-sqlite-path",
+                original,
+            )
+            launch.assert_called_once()
+        self.assertEqual(self.release.read_bytes(), b"release data")
+
+    def test_explicit_non_file_paths_refuse_before_moving_or_launching(self) -> None:
+        self.database.write_bytes(b"per-commit data")
+        for original in (
+            "",
+            "?cache=private",
+            ":memory:",
+            ":memory:?cache=private",
+            "file:chosen.db",
+            "file:chosen.db?cache=private",
+        ):
+            with self.subTest(path=original), patch.object(helpers, "run") as run:
+                with self.assertRaisesRegex(
+                    SystemExit,
+                    f"database path {re.escape(repr(original))} is not a file path",
+                ):
+                    if original == "":
+                        with patch.object(helpers, "ROOT", self.root):
+                            helpers.reset_serve_database(str(self.config), original)
+                    else:
+                        self.command(
+                            "run-officer",
+                            "--reset-init",
+                            str(self.config),
+                            "serve",
+                            "-sqlite-path",
+                            original,
+                        )
+                run.assert_not_called()
+                self.assertEqual(self.release.read_bytes(), b"release data")
+                self.assertEqual(self.database.read_bytes(), b"per-commit data")
+                self.assertEqual(list(self.root.glob("*.backup-*")), [])
+
     def test_unsupported_serve_arguments_are_refused_before_moving_anything(
         self,
     ) -> None:
@@ -649,6 +725,48 @@ class RecipeTestCase(unittest.TestCase):
             for line in recipe["body"]
         )
 
+    def body_commands(self, recipe: dict[str, object]) -> Iterator[list]:
+        punctuation = ";&|()"
+        for line in recipe["body"]:
+            expressions = {}
+            text = ""
+            for part in line:
+                if isinstance(part, str):
+                    if "\\" in part:
+                        raise ValueError(
+                            f"{recipe['name']}: cannot lex a literal backslash "
+                            "in a recipe body with POSIX shlex"
+                        )
+                    text += part
+                else:
+                    # Keep each Just expression intact while splitting shell words.
+                    token = f"\0{len(expressions)}\0"
+                    (expression,) = part
+                    expressions[token] = expression
+                    text += token
+
+            lexer = shlex.shlex(text, posix=True, punctuation_chars=punctuation)
+            lexer.whitespace_split = True
+            try:
+                words = list(lexer)
+            except ValueError as error:
+                raise ValueError(f"{recipe['name']}: {error}") from error
+            command = []
+            for word in words:
+                if word and not word.strip(punctuation):
+                    if command:
+                        yield command
+                        command = []
+                else:
+                    if not command:
+                        word = word.lstrip("@-")
+                    command.append(expressions.get(word, word))
+            if command:
+                yield command
+
+    def just_call(self, command: list) -> bool:
+        return command[0] in ("just", ["call", "just_executable"])
+
     def variables(self, expression: object) -> set[str]:
         # The JSON dump nests a variable as ["variable", name] inside the
         # fragments of a body line, the arguments of a call and an assignment.
@@ -665,24 +783,165 @@ class RecipeTestCase(unittest.TestCase):
 
 
 class FrontendRecipeTests(RecipeTestCase):
+    def test_parallel_lints_keep_npm_output_out_of_go_package_discovery(self) -> None:
+        recipes = self.recipes()
+        self.assertIn("parallel", recipes["lint-all"]["attributes"])
+        self.assertTrue({"lint-go", "lint-js"} <= self.reachable(recipes, "lint-all"))
+        self.assertIn(
+            "ignore ./web/node_modules",
+            (helpers.ROOT / "go.mod").read_text(encoding="utf-8").splitlines(),
+        )
+
     # A whole word: the helper subcommand ensure-node is not the node binary.
     FRONTEND_TOOLCHAIN = re.compile(r"(?<![\w-])(?:npm|npx|node)(?![\w-])")
     INSTALL_RECIPE = "frontend-ci-install"
-    # The only recipe running the toolchain that installs it instead of using it:
-    # it installs from package.json, and frontend-ci-install from the lockfile.
-    TOOLCHAIN_INSTALLERS = {"frontend-install"}
+    MANUAL_LOCKFILE_REWRITERS = frozenset({"frontend-install"})
+    # npm 11.19.1 docs: configuring-npm/package-lock-json.md and commands/npm-*.md.
+    LOCKFILE_WRITING_SUBCOMMANDS = {
+        "add",
+        "ddp",
+        "dedupe",
+        "i",
+        "in",
+        "ins",
+        "inst",
+        "insta",
+        "instal",
+        "install",
+        "install-test",
+        "isnt",
+        "isnta",
+        "isntal",
+        "isntall",
+        "it",
+        "link",
+        "ln",
+        "prune",
+        "r",
+        "remove",
+        "rm",
+        "shrinkwrap",
+        "u",
+        "udpate",
+        "un",
+        "uninstall",
+        "unlink",
+        "up",
+        "update",
+        "upgrade",
+        "verison",
+        "version",
+    }
+
+    @staticmethod
+    def executable_name(word: str) -> str:
+        return word.replace("\\", "/").rsplit("/", 1)[-1]
+
+    def rewrites_lockfile(self, command: list, recipe_name: str) -> bool:
+        while (
+            command
+            and isinstance(command[0], str)
+            and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", command[0])
+        ):
+            command = command[1:]
+        if not command or not isinstance(command[0], str):
+            return False
+
+        executable = self.executable_name(command[0])
+        command = command[1:]
+        if executable in ("npx", "npx.cmd"):
+            while (
+                command and isinstance(command[0], str) and command[0].startswith("-")
+            ):
+                option = command[0]
+                if option in ("-y", "--yes") or option.startswith("--package="):
+                    command = command[1:]
+                elif option in ("-p", "--package"):
+                    command = command[2:]
+                else:
+                    self.fail(
+                        f"{recipe_name}: unrecognised npx option {option!r}. "
+                        "The parser must learn it."
+                    )
+            if not command or not isinstance(command[0], str):
+                return False
+            executable = self.executable_name(command[0])
+            if re.fullmatch(r"npm@.+", executable):
+                executable = "npm"
+            command = command[1:]
+
+        if executable not in ("npm", "npm.cmd"):
+            return False
+        while command and isinstance(command[0], str) and command[0].startswith("-"):
+            option = command[0]
+            if option == "--":
+                command = command[1:]
+                break
+            if option in ("--prefix", "-C"):
+                command = command[2:]
+            elif option.startswith("--prefix="):
+                command = command[1:]
+            else:
+                self.fail(
+                    f"{recipe_name}: unrecognised npm option {option!r}. "
+                    "The parser must learn it."
+                )
+        return (
+            bool(command)
+            and isinstance(command[0], str)
+            and (
+                command[0] in self.LOCKFILE_WRITING_SUBCOMMANDS
+                or command[:2] == ["audit", "fix"]
+            )
+        )
+
+    def lockfile_rewriters(self, recipes: dict[str, dict[str, object]]) -> set[str]:
+        return {
+            name
+            for name, recipe in recipes.items()
+            for command in self.body_commands(recipe)
+            if self.rewrites_lockfile(command, name)
+        }
+
+    def test_lockfile_rewriting_install_is_only_invoked_by_name(self) -> None:
+        recipes = self.recipes()
+        manual_rewriters = self.MANUAL_LOCKFILE_REWRITERS
+        self.assertSetEqual(
+            self.lockfile_rewriters(recipes),
+            manual_rewriters,
+            "only manual install recipes may rewrite the frontend lockfile",
+        )
+        for name in sorted(recipes.keys() - manual_rewriters):
+            with self.subTest(recipe=name):
+                dependencies = self.reachable(recipes, name) - {name}
+                installers = sorted(dependencies & manual_rewriters)
+                self.assertFalse(
+                    installers,
+                    f"{name} depends on {', '.join(installers)}, "
+                    "which may rewrite the frontend lockfile",
+                )
+                for command in self.body_commands(recipes[name]):
+                    if (
+                        self.just_call(command)
+                        and len(command) > 1
+                        and isinstance(command[1], str)
+                    ):
+                        self.assertNotIn(
+                            command[1],
+                            manual_rewriters,
+                            f"{name} invokes {command[1]}, "
+                            "which may rewrite the frontend lockfile",
+                        )
 
     def test_every_recipe_running_the_frontend_toolchain_installs_its_dependencies(
         self,
     ) -> None:
         recipes = self.recipes()
         self.assertIn(self.INSTALL_RECIPE, recipes)
-        for installer in self.TOOLCHAIN_INSTALLERS:
-            self.assertIn(installer, recipes)
         users = [
             name
             for name, recipe in recipes.items()
-            if name not in self.TOOLCHAIN_INSTALLERS
+            if name not in self.MANUAL_LOCKFILE_REWRITERS
             and self.FRONTEND_TOOLCHAIN.search(self.body_text(recipe))
         ]
         self.assertTrue(users, "no recipe runs the frontend toolchain")
@@ -698,6 +957,67 @@ class FrontendRecipeTests(RecipeTestCase):
 
 class PythonToolRecipeTests(RecipeTestCase):
     INSTALL_RECIPE = "install-python-tools"
+    SHELL_QUOTES = re.compile(r'''\\.|'[^']*'|"(?:[^"\\]|\\.)*"''')
+
+    def uses_path(self, expression: object, paths: set[str]) -> bool:
+        if not isinstance(expression, list):
+            return False
+        if expression[0] == "call" and expression[1] in (
+            "justfile_directory",
+            "justfile_dir",
+        ):
+            return True
+        if expression[0] == "variable":
+            return expression[1] in paths
+        return any(self.uses_path(part, paths) for part in expression[1:])
+
+    def path_variables(self, assignments: dict[str, dict[str, object]]) -> set[str]:
+        paths = {"python"}
+        while True:
+            derived = {
+                name
+                for name, assignment in assignments.items()
+                if self.uses_path(assignment["value"], paths)
+            }
+            if derived <= paths:
+                return paths
+            paths.update(derived)
+
+    def test_recipe_path_interpolations_are_quoted(self) -> None:
+        dump = self.dump()
+        paths = self.path_variables(dump["assignments"])
+        path_count = 0
+        for name, recipe in dump["recipes"].items():
+            # Recipe parameters still use POSIX quote() on Windows.
+            recipe_paths = paths - {
+                parameter["name"] for parameter in recipe["parameters"]
+            }
+            for line_number, line in enumerate(recipe["body"], start=1):
+                # Only literal fragments determine the quote boundaries.
+                text = ""
+                interpolations = []
+                for fragment in line:
+                    if isinstance(fragment, str):
+                        text += fragment
+                    else:
+                        (expression,) = fragment
+                        if self.uses_path(expression, recipe_paths):
+                            interpolations.append((len(text), expression))
+                        text += "x"
+                spans = [
+                    match.span()
+                    for match in self.SHELL_QUOTES.finditer(text)
+                    if match[0].startswith('"')
+                ]
+                for offset, expression in interpolations:
+                    path_count += 1
+                    with self.subTest(recipe=name, line=line_number):
+                        self.assertTrue(
+                            any(start < offset < end for start, end in spans),
+                            f"{name} body line {line_number}: {expression!r} "
+                            "needs double quotes",
+                        )
+        self.assertGreater(path_count, 0, "no recipe path interpolations found")
 
     def venv_variables(self, assignments: dict[str, dict[str, object]]) -> set[str]:
         # The venv exists only once install-python-tools has run, so every
@@ -734,8 +1054,99 @@ class PythonToolRecipeTests(RecipeTestCase):
                 )
 
 
+class LocalPitRecipeTests(RecipeTestCase):
+    def fixed_mode_go_calls(self, recipe: dict[str, object]) -> list[tuple[list, int]]:
+        dispatchers = ("_go-dev-mode", "_go-tool-dev-mode")
+        prior_count = recipe["priors"]
+        calls = [
+            (dependency["arguments"], min(index, prior_count))
+            for index, dependency in enumerate(recipe["dependencies"])
+            if dependency["recipe"] in dispatchers
+        ]
+        for command in self.body_commands(recipe):
+            if (
+                self.just_call(command)
+                and len(command) > 1
+                and command[1] in dispatchers
+            ):
+                calls.append((command[2:], prior_count))
+            elif (
+                len(command) >= 3
+                and command[1]
+                in (["variable", "just_helper"], "scripts/just_helpers.py")
+                and command[2] in ("go-dev", "go-tool-dev")
+            ):
+                calls.append((command[3:], prior_count))
+        return [
+            (arguments, prior_limit)
+            for arguments, prior_limit in calls
+            if arguments and isinstance(arguments[0], str)
+        ]
+
+    def test_go_against_local_pit_builds_the_library_first(self) -> None:
+        recipes = self.recipes()
+        subjects = 0
+        for name, recipe in recipes.items():
+            calls = self.fixed_mode_go_calls(recipe)
+            if not calls:
+                continue
+            subjects += 1
+            for (mode, *arguments), prior_limit in calls:
+                with self.subTest(recipe=name, mode=mode):
+                    if (
+                        prior_limit < recipe["priors"]
+                        and "parallel" in recipe["attributes"]
+                    ):
+                        prior_limit = 0
+                    self.assertTrue(arguments, f"{name} must pass a checkout to Go")
+                    checkout = arguments[0]
+                    if isinstance(checkout, list) and checkout[:2] == ["call", "quote"]:
+                        checkout = checkout[2]
+                    library_recipe = f"dylib-{mode}-dev"
+                    libraries = [
+                        dependency["arguments"]
+                        for dependency in recipe["dependencies"][:prior_limit]
+                        if dependency["recipe"] == library_recipe
+                    ]
+                    self.assertTrue(
+                        libraries,
+                        f"{name} must list {library_recipe} as a direct prior "
+                        "before running Go",
+                    )
+                    self.assertIn(
+                        checkout,
+                        [arguments[0] for arguments in libraries if arguments],
+                        f"{name} must build {library_recipe} with Go checkout "
+                        f"{checkout!r}",
+                    )
+        self.assertGreater(subjects, 0, "no recipe runs Go with a fixed local Pit mode")
+
+
+class CIRecipeTests(RecipeTestCase):
+    def test_ci_invokes_every_aggregate_and_runs_python_tests(self) -> None:
+        recipes = self.recipes()
+        aggregates = {name for name in recipes if name.startswith("ci-")}
+        workflow = (helpers.ROOT / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        invoked = set(
+            re.findall(
+                r"^\s*(?:run:\s+)?just\s+--justfile\s+pipeline\.just\s+(ci-[\w-]+)\b",
+                workflow,
+                re.MULTILINE,
+            )
+        )
+        missing = sorted(aggregates - invoked)
+        self.assertFalse(missing, f"CI does not invoke: {', '.join(missing)}")
+        self.assertTrue(
+            any("test-python" in self.reachable(recipes, name) for name in aggregates),
+            "no CI aggregate depends on test-python",
+        )
+
+
 class FrontendInstallTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.helper_source = Path(helpers.__file__).resolve()
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -768,17 +1179,24 @@ class FrontendInstallTests(unittest.TestCase):
             args.func(args)
         return run
 
-    def npm_ci(self, command: list[str], cwd: Path | None = None) -> None:
+    def npm_ci(
+        self, command: list[str], cwd: Path | None = None, *, pass_fds: tuple = ()
+    ) -> None:
         self.assertEqual(command[1:], ["ci"])
         self.assertTrue(Path(command[0]).samefile(self.npm), command[0])
         (self.web / "node_modules").mkdir(exist_ok=True)
+        (self.web / "node_modules" / ".package-lock.json").write_text(
+            '{"lockfileVersion": 3, "packages": {}}\n', encoding="utf-8"
+        )
 
     def assert_npm_ci_ran(self, run: Mock) -> None:
         run.assert_called_once()
         command, options = run.call_args
         self.assertEqual(command[0][1:], ["ci"])
         self.assertTrue(Path(command[0][0]).samefile(self.npm), command[0][0])
-        self.assertEqual(options, {"cwd": self.web})
+        self.assertEqual(options["cwd"], self.web)
+        self.assertEqual(len(options["pass_fds"]), 0 if helpers.is_windows() else 1)
+        self.assertEqual(set(options), {"cwd", "pass_fds"})
 
     def test_nothing_installed_runs_npm_ci_in_web_then_skips_the_next_call(
         self,
@@ -815,10 +1233,38 @@ class FrontendInstallTests(unittest.TestCase):
 
         self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
 
+    def test_changed_installed_tree_runs_npm_ci_again(self) -> None:
+        self.install(side_effect=self.npm_ci)
+        (self.web / "node_modules" / ".package-lock.json").write_text(
+            '{"lockfileVersion": 3, "packages": {"extra": {}}}\n', encoding="utf-8"
+        )
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_missing_hidden_lockfile_runs_npm_ci_again(self) -> None:
+        self.install(side_effect=self.npm_ci)
+        (self.web / "node_modules" / ".package-lock.json").unlink()
+
+        self.assert_npm_ci_ran(self.install(side_effect=self.npm_ci))
+
+    def test_successful_npm_ci_without_hidden_lockfile_fails_without_a_stamp(
+        self,
+    ) -> None:
+        def missing_lockfile(command: list[str], **options: object) -> None:
+            self.npm_ci(command, **options)
+            (self.web / "node_modules" / ".package-lock.json").unlink()
+
+        hidden_lockfile = self.web / "node_modules" / ".package-lock.json"
+        with self.assertRaisesRegex(SystemExit, re.escape(str(hidden_lockfile))):
+            self.install(side_effect=missing_lockfile)
+        self.assertFalse(
+            (self.web / "node_modules" / helpers.FRONTEND_INSTALL_STAMP).exists()
+        )
+
     def test_failed_npm_ci_propagates_and_records_no_install(self) -> None:
         failure = subprocess.CalledProcessError(1, [str(self.npm), "ci"])
 
-        def fail(command: list[str], cwd: Path | None = None) -> None:
+        def fail(command: list[str], **options: object) -> None:
             (self.web / "node_modules").mkdir(exist_ok=True)
             raise failure
 
@@ -836,6 +1282,204 @@ class FrontendInstallTests(unittest.TestCase):
         ):
             self.install()
         self.assertFalse((self.web / "node_modules").exists())
+
+    def test_windows_lock_errors_propagate(self) -> None:
+        for failures in (
+            [OSError(errno.EBADF, "bad descriptor")],
+            [OSError(errno.EACCES, "busy"), OSError(errno.EINVAL, "invalid lock")],
+        ):
+            with self.subTest(failures=failures):
+                locking = Mock(side_effect=failures)
+                msvcrt = types.SimpleNamespace(
+                    locking=locking, LK_NBLCK=1, LK_LOCK=2, LK_UNLCK=3
+                )
+                with (
+                    patch.object(helpers, "ROOT", self.root),
+                    patch.object(helpers, "is_windows", return_value=True),
+                    patch.object(errno, "EDEADLOCK", 36, create=True),
+                    patch.dict(sys.modules, {"msvcrt": msvcrt}),
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                    self.assertRaises(OSError) as raised,
+                    helpers.frontend_install_lock(),
+                ):
+                    self.fail("invalid lock acquired")
+                self.assertIs(raised.exception, failures[-1])
+                self.assertEqual(locking.call_count, len(failures))
+                if len(failures) == 1:
+                    self.assertEqual(output.getvalue(), "")
+
+    def test_windows_lock_retries_contention(self) -> None:
+        locking = Mock(
+            side_effect=[
+                OSError(errno.EACCES, "busy"),
+                OSError(36, "busy"),
+                None,
+                None,
+            ]
+        )
+        msvcrt = types.SimpleNamespace(
+            locking=locking, LK_NBLCK=1, LK_LOCK=2, LK_UNLCK=3
+        )
+        with (
+            patch.object(helpers, "ROOT", self.root),
+            patch.object(helpers, "is_windows", return_value=True),
+            patch.object(errno, "EDEADLOCK", 36, create=True),
+            patch.dict(sys.modules, {"msvcrt": msvcrt}),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            helpers.frontend_install_lock() as fd,
+        ):
+            self.assertGreaterEqual(fd, 0)
+        self.assertIn("Waiting for another frontend install", output.getvalue())
+        self.assertEqual(
+            [call.args[1] for call in locking.call_args_list], [1, 2, 2, 3]
+        )
+
+    def test_concurrent_processes_install_once_and_stamp_the_complete_tree(
+        self,
+    ) -> None:
+        self.concurrent_install(kill_helper=False)
+
+    @unittest.skipIf(
+        helpers.is_windows(), "Windows byte-range locks do not survive the helper"
+    )
+    def test_orphaned_npm_keeps_lock_until_install_finishes(self) -> None:
+        self.concurrent_install(kill_helper=True)
+
+    @unittest.skipIf(
+        helpers.is_windows(), "Windows byte-range locks do not survive the helper"
+    )
+    def test_npm_grandchild_keeps_lock_after_helper_unwinds(self) -> None:
+        self.concurrent_install(kill_helper=False, orphan_grandchild=True)
+
+    def concurrent_install(
+        self, *, kill_helper: bool, orphan_grandchild: bool = False
+    ) -> None:
+        script = self.root / "scripts" / "just_helpers.py"
+        script.parent.mkdir()
+        shutil.copyfile(self.helper_source, script)
+        fake = self.node_bin_dir / "fake_npm.py"
+        fake.write_text(
+            f"#!{sys.executable}\n"
+            "import os, pathlib, shutil, time\n"
+            "web = pathlib.Path.cwd()\n"
+            "log = web / 'invocations.log'\n"
+            "number = (len(log.read_text().splitlines()) // 2 + 1\n"
+            "          if log.exists() else 1)\n"
+            "with log.open('a') as output:\n"
+            "    output.write(f'start {number}\\n')\n"
+            "print('npm rebuilding', flush=True)\n"
+            f"if {orphan_grandchild!r} and number == 1:\n"
+            "    ready, notify = os.pipe()\n"
+            "    if os.fork():\n"
+            "        os.close(notify)\n"
+            "        os.read(ready, 1)\n"
+            "        os._exit(1)\n"
+            "    os.close(ready)\n"
+            "    os.write(notify, b'1')\n"
+            "    os.close(notify)\n"
+            "while not (web / 'continue-install').exists():\n"
+            "    time.sleep(0.01)\n"
+            "modules = web / 'node_modules'\n"
+            "if modules.exists():\n"
+            "    shutil.rmtree(modules)\n"
+            "modules.mkdir()\n"
+            "for index in range(8):\n"
+            "    (modules / f'part-{index}').write_text(str(index))\n"
+            "(modules / '.package-lock.json').write_text('{}\\n')\n"
+            "with log.open('a') as output:\n"
+            "    output.write(f'end {number}\\n')\n",
+            encoding="utf-8",
+        )
+        if helpers.is_windows():
+            self.npm.write_text(f'@"{sys.executable}" "{fake}" %*\n')
+        else:
+            shutil.copyfile(fake, self.npm)
+            self.npm.chmod(0o755)
+        command = [
+            sys.executable,
+            str(script),
+            "frontend-ci-install",
+            str(self.node_dir),
+        ]
+        processes = []
+        readers = []
+        outputs = []
+        release = self.web / "continue-install"
+        log = self.web / "invocations.log"
+
+        def start() -> queue.Queue[str]:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            processes.append(process)
+            lines = queue.Queue()
+
+            def read() -> None:
+                for line in process.stdout:
+                    outputs.append(line)
+                    lines.put(line)
+
+            reader = threading.Thread(target=read, daemon=True)
+            reader.start()
+            readers.append(reader)
+            return lines
+
+        try:
+            first = start()
+            self.assertEqual(first.get(timeout=30), "npm rebuilding\n")
+            if kill_helper:
+                processes[0].kill()
+                processes[0].wait(timeout=30)
+            elif orphan_grandchild:
+                self.assertNotEqual(processes[0].wait(timeout=30), 0)
+            second = start()
+            self.assertEqual(
+                second.get(timeout=30),
+                "Waiting for another frontend install to finish ...\n",
+            )
+            self.assertEqual(log.read_text().splitlines(), ["start 1"])
+            release.touch()
+            for index, process in enumerate(processes):
+                process.wait(timeout=30)
+                if not ((kill_helper or orphan_grandchild) and index == 0):
+                    self.assertEqual(process.returncode, 0, "".join(outputs))
+        finally:
+            release.touch()
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=30)
+            for reader in readers:
+                reader.join(timeout=30)
+                self.assertFalse(reader.is_alive(), "npm did not finish")
+            for process in processes:
+                process.stdout.close()
+
+        expected_log = ["start 1", "end 1"]
+        if kill_helper or orphan_grandchild:
+            expected_log += ["start 2", "end 2"]
+        self.assertEqual(log.read_text().splitlines(), expected_log)
+        for index in range(8):
+            self.assertEqual(
+                (self.web / "node_modules" / f"part-{index}").read_text(), str(index)
+            )
+        hidden_lockfile = self.web / "node_modules" / ".package-lock.json"
+        stamp = self.web / "node_modules" / helpers.FRONTEND_INSTALL_STAMP
+        expected = "\n".join(
+            [
+                helpers.sha256_file(self.web / "package.json"),
+                helpers.sha256_file(self.lockfile),
+                "22.1.0",
+                f"{sys.platform} {helpers.platform.machine()}",
+                helpers.sha256_file(hidden_lockfile),
+            ]
+        )
+        self.assertEqual(stamp.read_text(), expected)
+        self.assertIn("Waiting for another frontend install", "".join(outputs))
+        self.install(side_effect=self.npm_ci).assert_not_called()
 
 
 if __name__ == "__main__":

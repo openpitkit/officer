@@ -34,10 +34,11 @@ import (
 // missingAccountRoute is one endpoint that names an account in the request and
 // therefore requires the missingAccount query parameter.
 type missingAccountRoute struct {
-	name   string
-	method string
-	path   string
-	body   string
+	name    string
+	method  string
+	path    string
+	body    string
+	pnlAxis domain.SpotFundsPnlAxis
 	// ok is the status the endpoint returns once the parameter is supplied.
 	ok int
 }
@@ -83,18 +84,52 @@ func missingAccountRoutes() []missingAccountRoute {
 			ok:     http.StatusCreated,
 		},
 		{
-			name:   "limits.spot-funds-pnl-bounds",
-			method: http.MethodPut,
-			path:   "/api/v1/limits/spot-funds-pnl-bounds",
-			body:   pnlBoundsBody,
-			ok:     http.StatusOK,
+			name:    "limits.spot-funds-pnl-bounds",
+			method:  http.MethodPut,
+			path:    "/api/v1/limits/spot-funds-pnl-bounds",
+			body:    pnlBoundsBody,
+			pnlAxis: domain.SpotFundsPnlAxisRealized,
+			ok:      http.StatusOK,
 		},
 		{
-			name:   "limits.spot-funds-pnl-bounds.post",
-			method: http.MethodPost,
-			path:   "/api/v1/limits/spot-funds-pnl-bounds",
-			body:   pnlBoundsBody,
-			ok:     http.StatusCreated,
+			name:    "limits.spot-funds-pnl-bounds.post",
+			method:  http.MethodPost,
+			path:    "/api/v1/limits/spot-funds-pnl-bounds",
+			body:    pnlBoundsBody,
+			pnlAxis: domain.SpotFundsPnlAxisRealized,
+			ok:      http.StatusCreated,
+		},
+		{
+			name:    "limits.spot-funds-unrealized-pnl-bounds",
+			method:  http.MethodPut,
+			path:    "/api/v1/limits/spot-funds-unrealized-pnl-bounds",
+			body:    pnlBoundsBody,
+			pnlAxis: domain.SpotFundsPnlAxisUnrealized,
+			ok:      http.StatusOK,
+		},
+		{
+			name:    "limits.spot-funds-unrealized-pnl-bounds.post",
+			method:  http.MethodPost,
+			path:    "/api/v1/limits/spot-funds-unrealized-pnl-bounds",
+			body:    pnlBoundsBody,
+			pnlAxis: domain.SpotFundsPnlAxisUnrealized,
+			ok:      http.StatusCreated,
+		},
+		{
+			name:    "limits.spot-funds-total-pnl-bounds",
+			method:  http.MethodPut,
+			path:    "/api/v1/limits/spot-funds-total-pnl-bounds",
+			body:    pnlBoundsBody,
+			pnlAxis: domain.SpotFundsPnlAxisTotal,
+			ok:      http.StatusOK,
+		},
+		{
+			name:    "limits.spot-funds-total-pnl-bounds.post",
+			method:  http.MethodPost,
+			path:    "/api/v1/limits/spot-funds-total-pnl-bounds",
+			body:    pnlBoundsBody,
+			pnlAxis: domain.SpotFundsPnlAxisTotal,
+			ok:      http.StatusCreated,
 		},
 		{
 			name:   "limits.position",
@@ -168,9 +203,9 @@ func missingAccountRoutes() []missingAccountRoute {
 
 // newMissingAccountService builds a fake service whose canned data satisfies
 // every route in missingAccountRoutes. The limit fixtures mirror the request
-// bodies because each Put* handler answers from a persisted read-back.
+// bodies and prepare the source results returned by the Put* handlers.
 func newMissingAccountService() *fakeService {
-	return &fakeService{
+	svc := &fakeService{
 		accounts:   []domain.Account{{Code: "acc-1"}},
 		adjustment: domain.AccountAdjustmentRecord{Account: "acc-1", Asset: "USD"},
 		limits: node.AccountLimits{
@@ -206,12 +241,20 @@ func newMissingAccountService() *fakeService {
 			}},
 		},
 	}
+	svc.rateLimitResult = svc.limits.RateLimits[0]
+	svc.orderSizeLimitResult = svc.limits.OrderSizeLimits[0]
+	svc.positionLimitResult = svc.limits.PositionLimits[0]
+	svc.pnlBoundsLimitResult = svc.limits.SpotFundsPnlBoundsLimits[0]
+	return svc
 }
 
 func callMissingAccountRoute(
 	t *testing.T, svc *fakeService, route missingAccountRoute, query string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
+	if route.pnlAxis != "" {
+		svc.pnlBoundsLimitResult.Axis = route.pnlAxis
+	}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)

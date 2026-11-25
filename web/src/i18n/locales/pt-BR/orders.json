@@ -146,6 +146,7 @@
   },
 
   "addOrder": {
+    "preTradeRejected": "As verificações pré-negociação rejeitaram a ordem.",
     "addedAwaitingReview": "Ordem adicionada e aguardando revisão do operador.",
     "addedAwaitingReviewWithWarning": "Ordem adicionada e aguardando revisão do operador. {{warning}}",
     "button": "Adicionar ordem",

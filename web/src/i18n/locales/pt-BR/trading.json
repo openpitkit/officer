@@ -75,6 +75,12 @@
       "passphraseStored": "Passphrase: armazenada",
       "passphraseNotSet": "Passphrase: não definida"
     },
+    "coinbase": {
+      "apiKeyIdStored": "API key ID: armazenado",
+      "apiKeyIdNotSet": "API key ID: não definido",
+      "apiKeySecretStored": "Secret: armazenado",
+      "apiKeySecretNotSet": "Secret: não definido"
+    },
     "openalgo": {
       "url": "Endereço REST: {{url}}",
       "wsUrl": "Endereço WebSocket: {{wsUrl}}"
@@ -101,7 +107,7 @@
   },
   "deleteConnection": {
     "title": "Excluir a conexão de negociação?",
-    "description": "{{label}} e sua configuração serão excluídos permanentemente. Desative a conexão primeiro. Conexões com histórico de ordens não podem ser excluídas."
+    "description": "{{label}} e sua configuração serão excluídos permanentemente. Conexões com histórico de ordens não podem ser excluídas."
   },
   "create": {
     "okx": {
@@ -113,6 +119,16 @@
         "createKey": "Crie uma chave de API na sua conta da OKX com a permissão {{tradePermission}}, sem permissão de retirada, e defina uma Passphrase. Copie a API key, o API secret e a Passphrase - a OKX não pode recuperar uma Passphrase perdida.",
         "bindIp": "Vincule à chave o endereço IPv4 público do computador em que o Officer é executado: na OKX, as chaves com permissão de negociação e sem endereço IP vinculado expiram após 14 dias de inatividade."
       }
+    },
+    "keepDialogOpen": "Mantenha este diálogo aberto - os campos abaixo pedem os dois valores.",
+    "coinbase": {
+      "logIn": "Entre no portal {{portal}} e verifique se {{live}} está selecionado no menu com o nome da sua conta, na parte superior do portal: as chaves criadas em {{sandbox}} não funcionam com a API de negociação.",
+      "openPortal": "Abrir o portal de desenvolvedores da Coinbase",
+      "authenticationGuide": "Guia de autenticação com chave de API",
+      "keyTypes": "Sobre os tipos de chave aceitos",
+      "createKey": "Em {{apiKeys}}, selecione {{secretApiKeys}} e clique em {{createApiKey}}. Preencha {{nickname}}. Se desejar, informe em {{ipAllowlist}} o endereço IP público do computador que executa o Officer.",
+      "restrictKey": "Em {{permissions}}, expanda {{advancedTrade}}, selecione o portfólio e marque {{read}} e {{trade}}, sem marcar {{transfer}}. Em {{signatureAlgorithm}}, escolha {{ecdsa}}: a API de negociação da Coinbase não aceita chaves {{ed25519}}. Clique em {{create}} para gerar a chave.",
+      "copyKeys": "Copie {{apiKeyId}} e {{secret}} do diálogo da Coinbase exatamente como são exibidos, ou clique em {{downloadApiKey}} para salvá-los em um arquivo."
     },
     "openalgo": {
       "install": "Instale e inicie o OpenAlgo em uma máquina acessível pelo Officer. No OpenAlgo, abra {{selectBroker}}, salve as chaves API da sua corretora e entre na corretora com {{loginWith}}.",
@@ -176,6 +192,20 @@
         "restrictKey": "Clique em {{editRestrictions}}, selecione {{trustedIPs}} e informe o endereço IPv4 público do computador em que o Officer é executado: sem essa restrição, uma chave gerada pelo sistema permite somente leitura. Depois marque {{spotTrading}} para que o Officer possa enviar ordens e não habilite outras permissões."
       }
     },
+    "bybit": {
+      "openTestnet": "Abra a rede de testes da sua região na Bybit e cadastre-se ou entre em sua conta. As chaves de teste funcionam somente na rede de testes.",
+      "openGlobalTestnet": "Rede de testes da Bybit Global",
+      "openEuTestnet": "Rede de testes da Bybit EU",
+      "generateKeys": "Abra o gerenciamento de chaves de API da sua região na Bybit e selecione Create New Key. Escolha uma chave gerada pelo sistema. O Officer assina as solicitações com HMAC-SHA256. Habilite o acesso de leitura e escrita e a negociação à vista. Depois, copie a API key e o API secret.",
+      "openGlobalApiManagement": "Gerenciamento de chaves de API da Bybit Global",
+      "openEuApiManagement": "Gerenciamento de chaves de API da Bybit EU",
+      "globalApiKeyGuide": "Como criar chaves de API na Bybit Global",
+      "euApiKeyGuide": "Como criar chaves de API na Bybit EU",
+      "keepPageOpen": "Mantenha a página aberta para copiar os dois valores nos campos abaixo. Selecione a rede de testes em que criou a chave.",
+      "liveKeepPageOpen": "As conexões reais usam chaves da Bybit Global. Mantenha a página aberta para copiar os dois valores nos campos abaixo.",
+      "site": "Rede de testes da Bybit",
+      "sitePlaceholder": "Selecione onde criou a chave"
+    },
     "etoro": {
       "logInAccount": "Entre em sua conta eToro.",
       "logIn": "Entrar na eToro",
@@ -183,7 +213,6 @@
       "copyUserKey": "Copie a nova chave da lista Generated Keys para o campo User key.",
       "publicApiKey": "A Public API key identifica o aplicativo. Informe-a no campo Public API key.",
       "authenticationGuide": "Guia de autenticação da eToro",
-      "keepDialogOpen": "Mantenha este diálogo aberto - os campos abaixo pedem os dois valores.",
       "live": {
         "createUserKey": "Crie uma chave de usuário: na eToro, abra Configurações e depois Negociação, role até API Key Management e clique em Create New Key. Selecione o ambiente real - cada chave funciona em apenas um ambiente, e o Officer conecta a conta real no modo real. Selecione a permissão de escrita - a permissão somente de leitura mostra dados da carteira e não permite enviar ordens. Clique em Generate Key e informe o código de verificação que a eToro envia ao seu telefone. O API Key Management só aparece depois que sua conta eToro é verificada."
       }
@@ -209,6 +238,10 @@
         "eea": "Conta do EEE ({{site}})",
         "us": "Conta dos EUA ou da Austrália ({{site}})"
       }
+    },
+    "coinbase": {
+      "apiKeyId": "API key ID",
+      "apiKeySecret": "Secret"
     },
     "openalgo": {
       "url": "Endereço REST",

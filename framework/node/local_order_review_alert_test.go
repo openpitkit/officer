@@ -90,6 +90,27 @@ func submitObservedReviewOrder(
 	return got, result.Reviews, err
 }
 
+func TestPostCommitScopeFailuresAreInternal(t *testing.T) {
+	ctx, finish := PostCommitNotifications(context.Background())
+	if err := finish(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+	}{
+		{"missing", context.Background()},
+		{"finished", ctx},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := requirePostCommitScope(tc.ctx)
+			if err == nil || errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("post-commit scope = %v, want internal error", err)
+			}
+		})
+	}
+}
+
 func TestLocalNode_OrderReviewObserverSubmit(t *testing.T) {
 	for _, mode := range []string{domain.SubmitModeHold, domain.SubmitModeImmediate} {
 		for _, held := range []bool{false, true} {
@@ -207,13 +228,13 @@ func TestLocalNode_OrderReviewObserverDecisions(t *testing.T) {
 func TestLocalNode_OrderReviewObserverInstall(t *testing.T) {
 	n, _, _ := newOrderReviewTestNode(t, domain.SubmitModeHold)
 	var host OrderReviewObserverHost = n
-	if err := host.InstallOrderReviewObserver(nil); !errors.Is(err, domain.ErrInvalid) {
+	if err := host.InstallOrderReviewObserver(nil); err == nil || errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("nil install = %v", err)
 	}
 	if err := host.InstallOrderReviewObserver(&orderReviewObserverFake{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := host.InstallOrderReviewObserver(&orderReviewObserverFake{}); !errors.Is(err, domain.ErrInvalid) {
+	if err := host.InstallOrderReviewObserver(&orderReviewObserverFake{}); err == nil || errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("second install = %v", err)
 	}
 }
@@ -300,8 +321,8 @@ func TestLocalNode_OrderReviewObserverMissingMark(t *testing.T) {
 			}
 			n.finishSubmitReviewNotifications(context.Background(), finish, &order, &reviews, testCaller, &resultErr)
 			if status == domain.OrderStatusAwaitingReview {
-				if !errors.Is(resultErr, domain.ErrInvalid) || !strings.Contains(resultErr.Error(), "no review mark") {
-					t.Fatalf("missing mark = %v; want explicit invalid error", resultErr)
+				if resultErr == nil || errors.Is(resultErr, domain.ErrInvalid) || !strings.Contains(resultErr.Error(), "no review mark") {
+					t.Fatalf("missing mark = %v; want explicit internal error", resultErr)
 				}
 			} else if resultErr != nil {
 				t.Fatalf("non-review order = %v; want no mark validation", resultErr)

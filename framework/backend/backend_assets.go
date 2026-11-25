@@ -88,6 +88,8 @@ func (s *Service) UpdateAsset(
 	if err != nil {
 		return domain.Asset{}, err
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	return s.node.UpdateAsset(ctx, oldCode, asset, caller)
 }
 

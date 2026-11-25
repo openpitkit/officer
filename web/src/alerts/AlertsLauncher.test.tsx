@@ -17,7 +17,7 @@
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SidebarProvider } from "@/components/SidebarContext";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ import { parseAlertList } from "./api";
 import { registerAlertRenderer, type ActionableAlert } from "./registry";
 
 registerAlertRenderer("test-ui", {
-  summary: (alert) => String(alert.payload),
+  summary: (alert, t) => `${t("alerts:title")}: ${String(alert.payload)}`,
   Detail: ({ pending, resolve }) => (
     <>
       <Button disabled={pending} onClick={() => void resolve("fail", {})}>
@@ -68,6 +68,18 @@ function mount(fetcher: typeof fetch) {
     </ApiClientProvider>,
   );
 }
+
+let icon: HTMLLinkElement;
+
+beforeEach(() => {
+  icon = document.createElement("link");
+  icon.rel = "icon";
+  document.head.append(icon);
+});
+
+afterEach(() => {
+  icon.remove();
+});
 
 describe("actionable alerts", () => {
   it("expands without resolving, shares read mutations, retains a failed action, then resolves", async () => {
