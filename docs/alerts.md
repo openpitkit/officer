@@ -182,6 +182,8 @@ Browsers throttle timers in background tabs, so notifications there can take
 up to about a minute to arrive even when the poll interval is shorter.
 
 The drawer shows whether notifications are unavailable, off, on, or blocked.
+They are unavailable if the browser lacks the Notifications API or Web Locks
+API, or cannot create notifications from a page, as in Android Chrome.
 **Allow notifications** stays available while permission is undecided. If
 blocked, allow them in the browser's site settings and reload. A separate
 notice reports browser errors, refusals to display a notification, or failed
@@ -191,10 +193,11 @@ Permission is per origin. The panel stores no notification settings.
 The first successful alerts load establishes the baseline. Each successful
 load adds all its alert IDs to an in-memory set for that tab. Later loads
 notify only for unread IDs that are new to the set, and only with permission.
-Each open tab can notify once per alert. Platforms that replace notifications
-with the same tag may collapse notifications from several tabs. Clicking a
-notification focuses the tab and opens the drawer. If the alert is still in
-the list, it expands and uses the standard mark-read action.
+One tab at a time sends notifications. Other tabs keep their own counts.
+When that tab closes, another open tab takes over. During the switch, one
+notification may appear twice or be missed. Clicking a notification
+focuses the tab and opens the drawer. If the alert is still in the list, it
+expands and uses the standard mark-read action.
 
 The tab title shows the unread count and the favicon shows an unread dot
 regardless of notification permission. Both return to their original values

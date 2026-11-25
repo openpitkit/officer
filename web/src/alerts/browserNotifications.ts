@@ -26,11 +26,18 @@ import unreadIcon from "./favicon-unread.svg?no-inline";
 import { alertSummary } from "./registry";
 
 let seenAlerts: Set<string> | null = null;
+let notifierRequested = false;
+let isNotifier = false;
+let constructorCheck: "pending" | "checked" | "unsupported" = "pending";
 
 function notificationPermission(): NotificationPermission | "unsupported" {
-  return typeof Notification === "undefined"
-    ? "unsupported"
-    : Notification.permission;
+  if (
+    typeof Notification === "undefined" ||
+    typeof navigator.locks === "undefined" ||
+    constructorCheck === "unsupported"
+  )
+    return "unsupported";
+  return Notification.permission;
 }
 
 function failureMessage(failure: unknown): string {
@@ -85,13 +92,54 @@ export function useBrowserNotifications(
   }, [onClick]);
 
   useEffect(() => {
+    if (notifierRequested || notificationPermission() === "unsupported") return;
+    notifierRequested = true;
+    void navigator.locks
+      .request("pit-officer-alert-notifier", () => {
+        isNotifier = true;
+        // The browser releases the lock when this tab goes away.
+        return new Promise<never>(() => {});
+      })
+      .catch((error: unknown) => setFailure(failureMessage(error)));
+  }, []);
+
+  useEffect(() => {
+    // This effect reports each constructor failure once by updating state
+    // synchronously.
+    function reportConstructorError(error: unknown) {
+      if (error instanceof TypeError) {
+        constructorCheck = "unsupported";
+        refreshPermission((version) => version + 1);
+      } else {
+        setFailure(failureMessage(error));
+      }
+    }
+
+    if (
+      constructorCheck === "pending" &&
+      permission !== "unsupported" &&
+      Notification.permission !== "granted"
+    ) {
+      constructorCheck = "checked";
+      try {
+        new Notification("").close();
+      } catch (error) {
+        reportConstructorError(error);
+      }
+    }
+
     if (fresh === null) return;
     const baseline = seenAlerts === null;
     seenAlerts ??= new Set();
     for (const alert of fresh.alerts) {
       if (seenAlerts.has(alert.id)) continue;
       seenAlerts.add(alert.id);
-      if (baseline || alert.read || notificationPermission() !== "granted")
+      if (
+        baseline ||
+        alert.read ||
+        !isNotifier ||
+        notificationPermission() !== "granted"
+      )
         continue;
 
       const title = t("alerts:browserNotifications.notificationTitle");
@@ -100,8 +148,7 @@ export function useBrowserNotifications(
       try {
         notification = new Notification(title, { body, tag: alert.id });
       } catch (error) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- Surface the synchronous constructor failure from this effect.
-        setFailure(failureMessage(error));
+        reportConstructorError(error);
         continue;
       }
       notification.addEventListener("error", (event) => {
@@ -116,7 +163,7 @@ export function useBrowserNotifications(
         latestClick.current?.(alert.id, notification);
       });
     }
-  }, [fresh, t]);
+  }, [fresh, permission, t]);
 
   async function requestPermission() {
     setFailure(null);

@@ -40,16 +40,19 @@ class BrowserNotification extends EventTarget {
   static permission: NotificationPermission;
   static requestPermission = vi.fn<() => Promise<NotificationPermission>>();
   static attempts =
-    vi.fn<(title: string, options: NotificationOptions) => void>();
+    vi.fn<(title: string, options?: NotificationOptions) => void>();
   static shown: BrowserNotification[];
   close = vi.fn();
 
-  constructor(title: string, options: NotificationOptions) {
+  constructor(title: string, options?: NotificationOptions) {
     super();
     BrowserNotification.attempts(title, options);
     BrowserNotification.shown.push(this);
   }
 }
+
+const requestLock =
+  vi.fn<(name: string, grant: () => Promise<never>) => Promise<never>>();
 
 const initial: ActionableAlert = {
   id: "first",
@@ -99,6 +102,11 @@ beforeEach(async () => {
   BrowserNotification.attempts.mockReset();
   BrowserNotification.shown = [];
   vi.stubGlobal("Notification", BrowserNotification);
+  requestLock.mockReset().mockImplementation((_name, grant) => grant());
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: { request: requestLock },
+  });
   document.title = "Pit Officer";
   icon = document.createElement("link");
   icon.rel = "icon";
@@ -110,6 +118,7 @@ afterEach(() => {
   cleanup();
   icon.remove();
   document.title = originalTitle;
+  Reflect.deleteProperty(navigator, "locks");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -140,11 +149,15 @@ it("remembers alerts seen without permission", () => {
   BrowserNotification.permission = "default";
   const { rerender } = render(<Panel load={ready()} />);
   rerender(<Panel load={ready(newAlert)} />);
-  expect(BrowserNotification.attempts).not.toHaveBeenCalled();
+  expect(BrowserNotification.attempts).toHaveBeenCalledExactlyOnceWith(
+    "",
+    undefined,
+  );
+  expect(BrowserNotification.shown[0].close).toHaveBeenCalledTimes(1);
 
   BrowserNotification.permission = "granted";
   rerender(<Panel load={ready(newAlert)} />);
-  expect(BrowserNotification.attempts).not.toHaveBeenCalled();
+  expect(BrowserNotification.attempts).toHaveBeenCalledTimes(1);
 });
 
 it("ignores stale data for both notifications and the tab badge", () => {
@@ -360,6 +373,72 @@ async function mountLauncher() {
 function pollAlerts() {
   return act(() => vi.advanceTimersByTimeAsync(5_000));
 }
+
+it("counts alerts while the lock is pending and notifies only for new alerts after it is granted", async () => {
+  requestLock.mockImplementation(() => new Promise<never>(() => {}));
+  const { state } = await mountLauncher();
+
+  state.alerts = [initial];
+  await pollAlerts();
+  expect(document.title).toBe("(1) Pit Officer");
+  expect(icon.getAttribute("href")).toBe(unreadIcon);
+  expect(BrowserNotification.attempts).not.toHaveBeenCalled();
+
+  const [, grant] = requestLock.mock.calls[0];
+  void grant();
+  await pollAlerts();
+  expect(BrowserNotification.attempts).not.toHaveBeenCalled();
+
+  state.alerts = [initial, newAlert];
+  await pollAlerts();
+  expect(BrowserNotification.attempts).toHaveBeenCalledExactlyOnceWith(
+    "Pit Officer: new alert",
+    { body: "Paper and live access: Desk (desk)", tag: newAlert.id },
+  );
+  expect(requestLock).toHaveBeenCalledTimes(1);
+});
+
+it.each(["no Web Locks", "probe TypeError", "delivery TypeError"])(
+  "shows unavailable notifications in the drawer for %s",
+  async (scenario) => {
+    BrowserNotification.permission =
+      scenario === "delivery TypeError" ? "granted" : "default";
+    if (scenario === "no Web Locks") {
+      Reflect.deleteProperty(navigator, "locks");
+    } else {
+      BrowserNotification.attempts.mockImplementation(() => {
+        throw new TypeError("Illegal constructor");
+      });
+    }
+
+    const { launcher, state } = await mountLauncher();
+    if (scenario === "delivery TypeError") {
+      expect(BrowserNotification.attempts).not.toHaveBeenCalled();
+    }
+    state.alerts = [newAlert];
+    await pollAlerts();
+    await act(async () => {
+      fireEvent.click(launcher);
+    });
+
+    const drawer = within(screen.getByRole("dialog"));
+    expect(
+      drawer.getByText(
+        "Browser notifications are not available in this browser",
+      ),
+    ).toBeVisible();
+    expect(
+      drawer.queryByRole("button", { name: "Allow notifications" }),
+    ).not.toBeInTheDocument();
+    expect(
+      drawer.queryByText("Browser notifications failed"),
+    ).not.toBeInTheDocument();
+    expect(document.title).toBe("(1) Pit Officer");
+    expect(BrowserNotification.attempts).toHaveBeenCalledTimes(
+      scenario === "no Web Locks" ? 0 : 1,
+    );
+  },
+);
 
 function clickNotification(notification: BrowserNotification) {
   return act(async () => {
