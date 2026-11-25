@@ -80,6 +80,36 @@ describe("PolicyPicker", () => {
     expect(screen.getAllByRole("button")).toHaveLength(3);
   });
 
+  it("ends a tile's link row with its policy guide, which does not select it", async () => {
+    const user = userEvent.setup();
+    const onSelect = renderPicker();
+    await user.click(screen.getByRole("button", { name: /^Orders/ }));
+    for (const [policy, name, id] of [
+      [/^Order size limit/, "order size limit", "aXXWLLw3Jm0"],
+      [/^Rate limit/, "order rate limit", "BpQoS5UUEsU"],
+    ] as const) {
+      const tile = screen.getByRole("button", { name: policy }).parentElement;
+      if (!tile) throw new Error("Policy tile missing");
+      const guide = within(tile).getByRole("link", {
+        name: `Video guide on YouTube: ${name}`,
+      });
+      expect(guide).toHaveAttribute(
+        "href",
+        `https://www.youtube.com/watch?v=${id}`,
+      );
+      await user.click(guide);
+    }
+    expect(onSelect).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "All groups" }));
+    await user.click(screen.getByRole("button", { name: /^P&L/ }));
+    expect(
+      screen.getAllByRole("link", {
+        name: "Video guide on YouTube: stopping on P&L",
+      }),
+    ).toHaveLength(3);
+  });
+
   it("groups all P&L policies and excludes the permanent funds mode", async () => {
     const user = userEvent.setup();
     renderPicker();

@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
 import { useAssetCodeSuggestions } from "@/lib/useAssetCodeSuggestions";
 
 /** Returns the text to show for a failed request. */
@@ -146,6 +147,7 @@ export function BlockAccountDialog({
           <ErrorBanner message={error} onDismiss={() => setError(null)} />
         )}
         <DialogFooter>
+          <VideoGuideButton video="stop" className="sm:mr-auto" />
           <Button
             variant="outline"
             size="sm"

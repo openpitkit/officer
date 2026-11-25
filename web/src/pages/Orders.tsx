@@ -144,6 +144,8 @@ import {
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
+import { VideoGuideNotice } from "@/components/video/VideoGuideNotice";
 import {
   CsvTransferMenu,
   PageSizeSelect,
@@ -1765,20 +1767,25 @@ function SubmitOrderDialog({
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={changeTab} activationMode="manual">
-          <TabsList aria-label={t("addOrder.dialog.submitMode")}>
-            <TabsTrigger ref={firstTabRef} value="immediate" disabled={busy}>
-              {t("addOrder.dialog.submitModeImmediate")}
-            </TabsTrigger>
-            <TabsTrigger value="hold" disabled={busy}>
-              {t("addOrder.dialog.submitModeHold")}
-            </TabsTrigger>
-            <TabsTrigger value="venue" disabled={busy}>
-              {t("addOrder.dialog.venue.sendToVenue")}
-            </TabsTrigger>
-            <TabsTrigger value="drop_copy" disabled={busy}>
-              {t("addOrder.dialog.submitModeDropCopy")}
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex items-center justify-between gap-2">
+            <TabsList aria-label={t("addOrder.dialog.submitMode")}>
+              <TabsTrigger ref={firstTabRef} value="immediate" disabled={busy}>
+                {t("addOrder.dialog.submitModeImmediate")}
+              </TabsTrigger>
+              <TabsTrigger value="hold" disabled={busy}>
+                {t("addOrder.dialog.submitModeHold")}
+              </TabsTrigger>
+              <TabsTrigger value="venue" disabled={busy}>
+                {t("addOrder.dialog.venue.sendToVenue")}
+              </TabsTrigger>
+              <TabsTrigger value="drop_copy" disabled={busy}>
+                {t("addOrder.dialog.submitModeDropCopy")}
+              </TabsTrigger>
+            </TabsList>
+            {/* Only the venue mode sends anywhere; the guide is about trying
+                it on a paper account first. */}
+            {tab === "venue" && <VideoGuideButton video="paperTradingFirst" />}
+          </div>
           {tab === "" && (
             <p className="mt-4 text-xs text-muted">
               {t("addOrder.dialog.submitModeRequired")}
@@ -2801,6 +2808,7 @@ function OrderReviewSection({
               : t("detail.dialog.review.force")}
           </Button>
         )}
+        <VideoGuideButton video="orderReview" className="ml-auto" />
       </div>
       {review.held && (
         <ConfirmDialog
@@ -7232,16 +7240,22 @@ export function Orders() {
           )}
           {ordersResult.load.state === "ready" &&
             (ordersResult.load.data.items.length === 0 ? (
-              <EmptyState
-                title={t("empty.orders.title")}
-                hint={t("empty.orders.hint")}
-                action={
-                  <Button size="sm" onClick={openAddOrder}>
-                    <Plus className="h-3.5 w-3.5" />
-                    {t("addOrder.button")}
-                  </Button>
-                }
-              />
+              <>
+                {ordersResult.load.error === null &&
+                  activeFilterChips.length === 0 && (
+                    <VideoGuideNotice videos={["mcp"]} />
+                  )}
+                <EmptyState
+                  title={t("empty.orders.title")}
+                  hint={t("empty.orders.hint")}
+                  action={
+                    <Button size="sm" onClick={openAddOrder}>
+                      <Plus className="h-3.5 w-3.5" />
+                      {t("addOrder.button")}
+                    </Button>
+                  }
+                />
+              </>
             ) : (
               <>
                 {orderPager}

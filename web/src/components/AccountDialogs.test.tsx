@@ -126,6 +126,28 @@ describe("BlockAccountDialog", () => {
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(blockedDesk));
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  it("puts the stop guide in the button row, before Cancel", () => {
+    renderDialog(
+      <BlockAccountDialog
+        account={deskAccount()}
+        open
+        onOpenChange={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+
+    const guide = screen.getByRole("link", {
+      name: "Video guide on YouTube: blocking an account",
+    });
+    expect(guide).toHaveAttribute(
+      "href",
+      "https://www.youtube.com/watch?v=ateQ-i5k-o0",
+    );
+    expect(guide.nextElementSibling).toBe(
+      screen.getByRole("button", { name: "Cancel" }),
+    );
+  });
 });
 
 describe("UnblockAccountConfirm", () => {

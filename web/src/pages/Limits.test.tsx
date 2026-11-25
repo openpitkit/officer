@@ -577,9 +577,9 @@ describe("Limits video guides", () => {
       });
 
       for (const [name, id] of [
-        ["Video: order size limit", "7-SWHs4UcGw"],
-        ["Video: order rate limit", "zvvNHQ7HRYA"],
-        ["Video: stopping on P&L", "IGXd2cSLKwM"],
+        ["Video: order size limit", "aXXWLLw3Jm0"],
+        ["Video: order rate limit", "BpQoS5UUEsU"],
+        ["Video: stopping on P&L", "kkcir-NpZBA"],
       ]) {
         expect(screen.getByRole("link", { name })).toHaveAttribute(
           "href",
@@ -677,6 +677,36 @@ describe("Limits video guides", () => {
       ).not.toBeInTheDocument();
     },
   );
+});
+
+describe("LimitDialog video guides", () => {
+  function guides(): (string | null)[] {
+    return within(screen.getByRole("dialog"))
+      .queryAllByRole("link", { name: /^Video guide on YouTube:/ })
+      .map((link) => link.getAttribute("aria-label"));
+  }
+
+  it("ends the policy row with the policy's guide and the mode row with the review guide", () => {
+    renderLimitDialog(accountRateLimit("acc-1"));
+
+    expect(guides()).toEqual([
+      "Video guide on YouTube: order rate limit",
+      "Video guide on YouTube: reviewing an order",
+    ]);
+    expect(
+      within(screen.getByRole("dialog")).getByRole("link", {
+        name: "Video guide on YouTube: reviewing an order",
+      }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=qE-WXp3Sz78");
+  });
+
+  it("shows the balances guide for the funds limit mode, which has no rule mode", () => {
+    renderLimitDialog(modeLimit("enforce"));
+
+    expect(guides()).toEqual([
+      "Video guide on YouTube: why Officer needs balances",
+    ]);
+  });
 });
 
 describe("Limits currency warning", () => {

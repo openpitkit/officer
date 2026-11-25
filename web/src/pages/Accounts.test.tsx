@@ -607,7 +607,7 @@ describe("Accounts video guides", () => {
     });
     expect(
       screen.getByRole("link", { name: "Video: account groups" }),
-    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=Tv9vqqmw2Kg");
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=_zRQy5L4Luw");
     expect(screen.getByText("Default group")).toBeInTheDocument();
   });
 
@@ -1791,6 +1791,81 @@ describe("DeleteGroupConfirm", () => {
   });
 });
 
+describe("Accounts dialog video guides", () => {
+  const GROUPS_GUIDE = "Video guide on YouTube: account groups";
+  const GROUPS_URL = "https://www.youtube.com/watch?v=_zRQy5L4Luw";
+
+  it("puts the stop guide before Cancel in the block group dialog", async () => {
+    const user = userEvent.setup();
+    renderAccounts("/accounts?tab=groups");
+
+    const row = screen.getByText("equity-desks").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", { name: "Block" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: /block group/i });
+    const guide = within(dialog).getByRole("link", {
+      name: "Video guide on YouTube: blocking an account",
+    });
+    expect(guide).toHaveAttribute(
+      "href",
+      "https://www.youtube.com/watch?v=ateQ-i5k-o0",
+    );
+    expect(guide.nextElementSibling).toBe(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    );
+  });
+
+  it("puts the groups guide before Cancel in the create group dialog", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /new group/i }));
+    const dialog = await screen.findByRole("dialog", {
+      name: /create group/i,
+    });
+    const guide = within(dialog).getByRole("link", { name: GROUPS_GUIDE });
+    expect(guide).toHaveAttribute("href", GROUPS_URL);
+    expect(guide.nextElementSibling).toBe(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    );
+  });
+
+  it("ends the group field of a new account with a field-high groups guide", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: /new account/i }));
+    const guide = within(screen.getByRole("dialog")).getByRole("link", {
+      name: GROUPS_GUIDE,
+    });
+    expect(guide).toHaveAttribute("href", GROUPS_URL);
+    expect(guide).toHaveClass("h-[var(--dens-field-h)]");
+    // The guide shares the row of the group field, right after it.
+    expect(guide.previousElementSibling).toContainElement(
+      screen.getByRole("combobox", { name: /group/i }),
+    );
+  });
+
+  it("ends the group field of the assign group dialog with the groups guide", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    const row = screen.getByText("Desk default").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /edit group assignment/i,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: /assign group/i });
+    expect(
+      within(dialog).getByRole("link", { name: GROUPS_GUIDE }),
+    ).toHaveAttribute("href", GROUPS_URL);
+  });
+});
+
 describe("CreateAccountDialog", () => {
   it("creates an account, closes, and notifies on submit", async () => {
     const user = userEvent.setup();
@@ -1860,7 +1935,10 @@ describe("CreateAccountDialog", () => {
 
     await user.click(screen.getByRole("button", { name: /new account/i }));
     await user.type(screen.getByLabelText(/account code/i), "acc-spx");
-    await user.type(screen.getByLabelText(/group/i), "equity-desks");
+    await user.type(
+      screen.getByRole("combobox", { name: /group/i }),
+      "equity-desks",
+    );
     await user.click(screen.getByRole("button", { name: /^create$/i }));
 
     await waitFor(() => {

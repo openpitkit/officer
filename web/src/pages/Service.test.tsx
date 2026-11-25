@@ -1821,6 +1821,21 @@ describe("BackupCard with accounts hidden", () => {
 });
 
 describe("DatabaseCard", () => {
+  it("ends the path row with the where-your-data-lives guide", () => {
+    renderDatabaseCard();
+
+    const path = screen.getByText("/tmp/officer.db");
+    expect(path).toHaveAttribute("title", "/tmp/officer.db");
+    const guide = screen.getByRole("link", {
+      name: "Video guide on YouTube: where your data lives",
+    });
+    expect(guide).toHaveAttribute(
+      "href",
+      "https://www.youtube.com/watch?v=4q_1yB2SQqA",
+    );
+    expect(guide.previousElementSibling).toBe(path);
+  });
+
   it("requires confirmation before resetting the database", async () => {
     const user = userEvent.setup();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);

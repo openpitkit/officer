@@ -535,6 +535,7 @@ function Wizard({ pass }: { pass: WizardPass }) {
           lead: t("funds.lead"),
           body: (
             <div className="flex flex-col gap-y-4">
+              <VideoLink video="whyBalances" />
               {funds !== null && (
                 <SpotFundsModeCards
                   label={t("funds.title")}

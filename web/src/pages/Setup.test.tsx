@@ -477,7 +477,7 @@ describe("Setup", () => {
       ).toEqual([
         [
           "Video: what Pit Officer is",
-          "https://www.youtube.com/watch?v=v34IdYhH5so",
+          "https://www.youtube.com/watch?v=AILRFZbGxJs",
         ],
         ["Pit Officer website", "https://officer.openpit.dev?officer"],
         [
@@ -669,6 +669,17 @@ describe("Setup", () => {
       await user.click(next());
       await heading(TITLES.funds);
     }
+
+    it("opens the funds check with the why-balances guide card", async () => {
+      const user = userEvent.setup();
+      mockFundsMode("enforce", false);
+      renderSetup({ step: "accounts" });
+
+      await openFunds(user);
+      expect(
+        screen.getByRole("link", { name: "Video: why Officer needs balances" }),
+      ).toHaveAttribute("href", "https://www.youtube.com/watch?v=na6qjWOZodc");
+    });
 
     it("preselects no mode and keeps Continue disabled until one is picked", async () => {
       const user = userEvent.setup();
@@ -1390,7 +1401,7 @@ describe("Setup", () => {
     expect(await heading("Настройка Pit Officer")).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "Видео: что такое Pit Officer" }),
-    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=F1ymuREbu4o");
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=JxCHImpsmc4");
   });
 });
 

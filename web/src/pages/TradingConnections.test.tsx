@@ -992,6 +992,38 @@ describe("Trading connections", () => {
     ).toHaveLength(1);
   });
 
+  it("shows the connection guides while no connection exists", async () => {
+    snapshot.connections = [];
+    renderTrading();
+    await screen.findByText("No trading connections", { exact: true });
+    expect(
+      screen
+        .getAllByRole("link", { name: /^Video:/ })
+        .map((link) => [link.textContent, link.getAttribute("href")]),
+    ).toEqual([
+      [
+        "Video: the test connection",
+        "https://www.youtube.com/watch?v=2ke1H6TuN0E",
+      ],
+      [
+        "Video: a paper account first",
+        "https://www.youtube.com/watch?v=LgDSHpEeHpo",
+      ],
+      [
+        "Video: Bybit, OKX and Coinbase connections",
+        "https://www.youtube.com/watch?v=d4NQ3fGXyww",
+      ],
+    ]);
+  });
+
+  it("hides the connection guides once a connection exists", async () => {
+    renderTrading();
+    await card("Alpaca paper", false);
+    expect(
+      screen.queryByText("Learn how this section works"),
+    ).not.toBeInTheDocument();
+  });
+
   it("orders collapsed connection actions as toggle, settings, delete", async () => {
     renderTrading();
     const scope = await card("Alpaca paper", false);
@@ -5494,7 +5526,70 @@ describe("Add trading connection dialog", () => {
       "aria-pressed",
       "true",
     );
+    // No paper account to try first, so no paper-first guide.
+    expect(
+      dialog.queryByRole("link", {
+        name: "Video guide on YouTube: a paper account first",
+      }),
+    ).not.toBeInTheDocument();
   });
+
+  it("ends the mode row with the paper-first guide for a venue with paper", async () => {
+    const user = userEvent.setup();
+    renderTrading();
+    const dialog = await openCreateConnection(user);
+    const mode = within(dialog.getByRole("group", { name: "Mode" }));
+    expect(
+      mode.getByRole("link", {
+        name: "Video guide on YouTube: a paper account first",
+      }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=LgDSHpEeHpo");
+  });
+
+  it.each([
+    ["test", "Test", "the test connection", "2ke1H6TuN0E"],
+    ["bybit", "Bybit", "Bybit, OKX and Coinbase connections", "d4NQ3fGXyww"],
+    ["okx", "OKX", "Bybit, OKX and Coinbase connections", "d4NQ3fGXyww"],
+    [
+      "coinbase",
+      "Coinbase",
+      "Bybit, OKX and Coinbase connections",
+      "d4NQ3fGXyww",
+    ],
+  ])("shows the %s guide on its venue tile", async (type, title, name, id) => {
+    const user = userEvent.setup();
+    snapshot.providers = [{ ...provider, type, title }];
+    renderTrading();
+    await user.click(
+      await screen.findByRole("button", { name: /^Add trading connection/ }),
+    );
+    const tile = within(
+      screen.getByRole("dialog", { name: "Add trading connection" }),
+    ).getByRole("button", { name: title }).parentElement;
+    if (!tile) throw new Error("Venue tile missing");
+    expect(
+      within(tile).getByRole("link", {
+        name: `Video guide on YouTube: ${name}`,
+      }),
+    ).toHaveAttribute("href", `https://www.youtube.com/watch?v=${id}`);
+  });
+
+  it.each(["ib", "binance", "etoro"])(
+    "shows no guide on the %s venue tile",
+    async (type) => {
+      const user = userEvent.setup();
+      snapshot.providers = [{ ...provider, type, title: type }];
+      renderTrading();
+      await user.click(
+        await screen.findByRole("button", { name: /^Add trading connection/ }),
+      );
+      expect(
+        within(
+          screen.getByRole("dialog", { name: "Add trading connection" }),
+        ).queryByRole("link", { name: /^Video guide on YouTube:/ }),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("submits live mode for a live-only provider", async () => {
     const user = userEvent.setup();
@@ -5567,10 +5662,16 @@ describe("Add trading connection dialog", () => {
             title: "Alpaca",
             siteUrl: "https://alpaca.markets",
             docsUrl: "https://docs.alpaca.markets/us/docs/paper-trading",
+            video: "alpacaMcp",
           },
         ],
       }),
     );
+    expect(
+      picker.getByRole("link", {
+        name: "Video guide on YouTube: Alpaca and Claude through Officer",
+      }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=y6_4DJy2tUo");
     const tile = picker.getByRole("button", { name: "Alpaca" });
     expect(tile.querySelector("svg")).toBeInTheDocument();
     for (const [name, href] of [
@@ -5895,7 +5996,12 @@ describe("Add trading connection dialog", () => {
       dialog.getByRole("heading", { name: "Prepare your Other venue account" }),
     ).toBeInTheDocument();
     expect(dialog.queryByRole("list")).not.toBeInTheDocument();
-    expect(dialog.queryByRole("link")).not.toBeInTheDocument();
+    // The only link is the paper-first guide beside the mode choice.
+    expect(
+      dialog
+        .queryAllByRole("link")
+        .map((link) => link.getAttribute("aria-label")),
+    ).toEqual(["Video guide on YouTube: a paper account first"]);
     expect(dialog.getByLabelText("Label")).toHaveValue("Other venue");
   });
 
@@ -5946,10 +6052,14 @@ describe("Add trading connection dialog", () => {
         "Generate live API keys: in the top left corner of the dashboard, select Live Trading, find the API Keys panel and generate new keys. Copy the API key and the secret - Alpaca shows the secret only once. Live keys differ from paper keys and do not work with the paper account.Open the Alpaca dashboardAbout live credentials",
         "Keep the dashboard open - the fields below ask for both values.",
       ]);
-      // The account links stay; the live docs replace the paper docs.
+      // The account links stay; the live docs replace the paper docs. The
+      // paper-first guide stays beside the mode choice.
       expect(
-        dialog.queryAllByRole("link").map((link) => link.textContent),
+        dialog
+          .queryAllByRole("link")
+          .map((link) => link.getAttribute("aria-label") ?? link.textContent),
       ).toEqual([
+        "Video guide on YouTube: a paper account first",
         ...(warning ? ["How to set a master key"] : []),
         "Sign up at Alpaca",
         "Log in",

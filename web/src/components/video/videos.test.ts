@@ -22,34 +22,88 @@ import { LOCALE_CODES } from "@/i18n/locales";
 
 const WATCH = "https://www.youtube.com/watch?v=";
 
+function captioned(id: string, language: string): string {
+  return `${WATCH}${id}&cc_load_policy=1&cc_lang_pref=${language}`;
+}
+
 describe("videoUrl", () => {
-  it.each<[VideoKey, string, string]>([
-    ["prices", "7nM26GUgtes", "7nM26GUgtes"],
-    ["size", "7-SWHs4UcGw", "pVrBefiSrpI"],
-    ["rate", "zvvNHQ7HRYA", "ZewFwybR79E"],
-    ["pnl", "IGXd2cSLKwM", "LFlWncmjnaM"],
-    ["stop", "ateQ-i5k-o0", "WcZLKGHFFGQ"],
-    ["whyBalances", "na6qjWOZodc", "na6qjWOZodc"],
-    ["balances", "6Dv9wQnFnRM", "BRz6M3O_3sU"],
-    ["groups", "Tv9vqqmw2Kg", "Tv9vqqmw2Kg"],
-  ])("opens the whole %s guide without requesting captions", (key, en, ru) => {
-    expect(LOCALE_CODES.map((code) => videoUrl(key, code))).toEqual([
-      `${WATCH}${en}`,
-      `${WATCH}${ru}`,
-      `${WATCH}${en}`,
-      `${WATCH}${en}`,
-      `${WATCH}${en}`,
-    ]);
+  it.each<[VideoKey, string, string, string]>([
+    ["prices", "7nM26GUgtes", "8iZq4OaV0TY", "ZW2b4hCLiXc"],
+    ["size", "aXXWLLw3Jm0", "HmK7fCvACjE", "D_6FDDzgSK8"],
+    ["rate", "BpQoS5UUEsU", "tILQ7UjSy7Q", "nFaBrgyjenY"],
+    ["pnl", "kkcir-NpZBA", "XVVI18V3dqk", "nBQguXs8lic"],
+    ["stop", "ateQ-i5k-o0", "WcZLKGHFFGQ", "PQrGg_cDYX0"],
+    ["whyBalances", "na6qjWOZodc", "qOPaL-VOyAM", "vYG_beCi1Go"],
+    ["balances", "6Dv9wQnFnRM", "BRz6M3O_3sU", "6NopWBreP7k"],
+    ["groups", "_zRQy5L4Luw", "p885xVaJQkU", "GmLHCaiaKGo"],
+  ])(
+    "opens the %s guide in its en, ru and es cuts, else captioned English",
+    (key, en, ru, es) => {
+      expect(LOCALE_CODES.map((code) => videoUrl(key, code))).toEqual([
+        `${WATCH}${en}`,
+        `${WATCH}${ru}`,
+        captioned(en, "zh-CN"),
+        `${WATCH}${es}`,
+        captioned(en, "pt-BR"),
+      ]);
+    },
+  );
+
+  it.each<[VideoKey, string]>([
+    ["whyPrices", "tsv2ABKFdSk"],
+    ["orderReview", "qE-WXp3Sz78"],
+    ["testConnection", "2ke1H6TuN0E"],
+    ["newTradingConnections", "d4NQ3fGXyww"],
+    ["alpacaMcp", "y6_4DJy2tUo"],
+    ["codexTrading", "pEUH5cbitBo"],
+    ["cursorTrading", "eqd5iH2yaiA"],
+  ])(
+    "opens the English %s guide captioned in every other language",
+    (key, en) => {
+      expect(LOCALE_CODES.map((code) => videoUrl(key, code))).toEqual([
+        `${WATCH}${en}`,
+        captioned(en, "ru"),
+        captioned(en, "zh-CN"),
+        captioned(en, "es"),
+        captioned(en, "pt-BR"),
+      ]);
+    },
+  );
+
+  it.each<[VideoKey, string]>([
+    ["whereDataLives", "4q_1yB2SQqA"],
+    ["canAgentBypass", "jxoP79byyGc"],
+  ])("opens the English %s guide as it is in every language", (key, en) => {
+    expect(LOCALE_CODES.map((code) => videoUrl(key, code))).toEqual(
+      LOCALE_CODES.map(() => `${WATCH}${en}`),
+    );
   });
 
-  it("opens the intro in every panel language's own cut", () => {
-    expect(LOCALE_CODES.map((code) => videoUrl("intro", code))).toEqual([
-      `${WATCH}v34IdYhH5so`,
-      `${WATCH}F1ymuREbu4o`,
-      `${WATCH}JxojlbYnGIE`,
-      `${WATCH}Oq13uf44pEc`,
-      `${WATCH}xgUOyBwjsgg`,
-    ]);
+  it.each<[VideoKey, string[]]>([
+    [
+      "intro",
+      [
+        "AILRFZbGxJs",
+        "JxCHImpsmc4",
+        "zMAwfEEA2oA",
+        "-yPBdRiOjs0",
+        "rQ2xRUP4mtQ",
+      ],
+    ],
+    [
+      "paperTradingFirst",
+      [
+        "LgDSHpEeHpo",
+        "QpGpnPY63jM",
+        "FBkilwQH90w",
+        "u_cZfqSJBqE",
+        "VvRa4EBL7jU",
+      ],
+    ],
+  ])("opens the %s guide in every panel language's own cut", (key, ids) => {
+    expect(LOCALE_CODES.map((code) => videoUrl(key, code))).toEqual(
+      ids.map((id) => `${WATCH}${id}`),
+    );
   });
 
   it("opens the MCP chapter: own cut, else English with captions", () => {
@@ -63,7 +117,7 @@ describe("videoUrl", () => {
   });
 
   it("opens the English cut as it is for a language with neither", () => {
-    expect(videoUrl("intro", "de")).toBe(`${WATCH}v34IdYhH5so`);
+    expect(videoUrl("intro", "de")).toBe(`${WATCH}AILRFZbGxJs`);
     expect(videoUrl("mcp", "de")).toBe(`${WATCH}zq7a9xc0GD0&t=121s`);
   });
 });

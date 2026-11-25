@@ -60,6 +60,9 @@ import { ChoiceCards } from "@/components/ChoiceCards";
 import { Notice } from "@/components/Notice";
 import { AssetCodeField } from "@/components/AssetCodeField";
 import { DeleteConnectionDialog } from "@/components/venues/DeleteConnectionDialog";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
+import { VideoGuideNotice } from "@/components/video/VideoGuideNotice";
+import type { VideoKey } from "@/components/video/videos";
 import { Segmented } from "@/components/data";
 import {
   AccessBlockedHint,
@@ -289,6 +292,19 @@ const OPENALGO_ANALYZER_LINK = {
   labelKey: "create.openalgo.aboutAnalyzer",
   href: "https://docs.openalgo.in/new-features/api-analyzer",
 };
+
+/**
+ * The guide to connecting a venue, shown on its tile in the venue picker; a
+ * venue the channel has no guide for has no entry. A Map, as the provider
+ * type comes from the server as a string.
+ */
+const VENUE_VIDEOS = new Map<string, VideoKey>([
+  ["test", "testConnection"],
+  ["alpaca", "alpacaMcp"],
+  ["bybit", "newTradingConnections"],
+  ["okx", "newTradingConnections"],
+  ["coinbase", "newTradingConnections"],
+]);
 
 /**
  * Venue links and account preparation steps for each supported trading mode.
@@ -1159,18 +1175,24 @@ function AddTradingConnectionDialog({
               <Label asChild>
                 <legend>{t("create.mode")}</legend>
               </Label>
-              <Segmented
-                value={mode}
-                onChange={(value) => changeMode(value as TradingMode)}
-                options={
-                  provider.liveOnly
-                    ? [{ value: "live", label: t("mode.live") }]
-                    : [
-                        { value: "paper", label: t("mode.paper") },
-                        { value: "live", label: t("mode.live") },
-                      ]
-                }
-              />
+              <div className="flex items-center justify-between gap-2">
+                <Segmented
+                  value={mode}
+                  onChange={(value) => changeMode(value as TradingMode)}
+                  options={
+                    provider.liveOnly
+                      ? [{ value: "live", label: t("mode.live") }]
+                      : [
+                          { value: "paper", label: t("mode.paper") },
+                          { value: "live", label: t("mode.live") },
+                        ]
+                  }
+                />
+                {/* A live-only venue has no paper account to try first. */}
+                {!provider.liveOnly && (
+                  <VideoGuideButton video="paperTradingFirst" />
+                )}
+              </div>
             </fieldset>
           )}
           {fields?.length !== 0 && (
@@ -3545,6 +3567,15 @@ export function TradingConnections() {
             providerTypes={load.data.providers.map((provider) => provider.type)}
             onClick={() => setAddOpen(true)}
           />
+          {load.error === null && load.data.connections.length === 0 && (
+            <VideoGuideNotice
+              videos={[
+                "testConnection",
+                "paperTradingFirst",
+                "newTradingConnections",
+              ]}
+            />
+          )}
           {load.data.connections.length === 0 && (
             <EmptyState
               title={tv("emptyConnections")}
@@ -3601,6 +3632,7 @@ export function TradingConnections() {
               TRADING_PROVIDER_GUIDES[provider.type]?.docsUrl?.[
                 draftMode(provider)
               ],
+            video: VENUE_VIDEOS.get(provider.type),
           }))}
           onOpenChange={setAddOpen}
           onSelect={(entry) => {

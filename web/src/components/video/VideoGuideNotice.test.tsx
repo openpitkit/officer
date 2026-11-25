@@ -34,14 +34,29 @@ describe("VideoGuideNotice", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByRole("link")).toHaveLength(3);
     for (const [label, id] of [
-      ["Video: order size limit", "7-SWHs4UcGw"],
-      ["Video: order rate limit", "zvvNHQ7HRYA"],
-      ["Video: stopping on P&L", "IGXd2cSLKwM"],
+      ["Video: order size limit", "aXXWLLw3Jm0"],
+      ["Video: order rate limit", "BpQoS5UUEsU"],
+      ["Video: stopping on P&L", "kkcir-NpZBA"],
     ]) {
       expect(screen.getByRole("link", { name: label })).toHaveAttribute(
         "href",
         `https://www.youtube.com/watch?v=${id}`,
       );
     }
+  });
+
+  it("says under each guide what it shows", () => {
+    render(<VideoGuideNotice videos={["whyBalances", "balances"]} />);
+
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Video: why Officer needs balances");
+    expect(items[0]).toHaveTextContent(
+      "How balances cap the funds an agent can trade with.",
+    );
+    expect(items[1]).toHaveTextContent("Video: balances and cash movements");
+    expect(items[1]).toHaveTextContent(
+      "How to enter balances and record deposits, withdrawals and fees.",
+    );
   });
 });

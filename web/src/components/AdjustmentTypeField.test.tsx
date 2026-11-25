@@ -69,4 +69,15 @@ describe("AdjustmentTypeField", () => {
       expect(option).toBeDisabled();
     }
   });
+
+  it("ends the type row with the balances guide", () => {
+    render(<AdjustmentTypeField value="" onChange={vi.fn()} />);
+
+    const group = screen.getByRole("group", { name: "Type" });
+    expect(
+      within(group).getByRole("link", {
+        name: "Video guide on YouTube: balances and cash movements",
+      }),
+    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=6Dv9wQnFnRM");
+  });
 });

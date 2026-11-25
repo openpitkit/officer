@@ -75,6 +75,7 @@ import {
   TableSkeleton,
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
 import { VideoGuideNotice } from "@/components/video/VideoGuideNotice";
 import { RefreshButton } from "@/components/RefreshButton";
 import { StatusDot } from "@/components/StatusDot";
@@ -1210,16 +1211,21 @@ export function CreateAccountDialog({
             <Label htmlFor="create-account-group">
               {ta("createAccount.groupLabel")}
             </Label>
-            <Autocomplete
-              id="create-account-group"
-              value={group}
-              onChange={setGroup}
-              suggestions={groupSuggestions}
-              placeholder="equity-desks"
-              spellCheck={false}
-              onClear={() => setGroup("")}
-              clearLabel={ta("filters.clearField")}
-            />
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <Autocomplete
+                  id="create-account-group"
+                  value={group}
+                  onChange={setGroup}
+                  suggestions={groupSuggestions}
+                  placeholder="equity-desks"
+                  spellCheck={false}
+                  onClear={() => setGroup("")}
+                  clearLabel={ta("filters.clearField")}
+                />
+              </div>
+              <VideoGuideButton video="groups" size="field" />
+            </div>
             <p className="text-[0.6875rem] text-muted">
               {ta("createAccount.groupHint")}
             </p>
@@ -1420,6 +1426,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
           <ErrorBanner message={error} onDismiss={() => setError(null)} />
         )}
         <DialogFooter>
+          <VideoGuideButton video="groups" className="sm:mr-auto" />
           <Button
             variant="outline"
             size="sm"
@@ -1515,6 +1522,7 @@ function BlockGroupDialog({
           <ErrorBanner message={error} onDismiss={() => setError(null)} />
         )}
         <DialogFooter>
+          <VideoGuideButton video="stop" className="sm:mr-auto" />
           <Button
             variant="outline"
             size="sm"
@@ -2271,18 +2279,23 @@ export function AssignGroupDialog({
         <p className="text-xs text-muted-lt">{t("assignGroup.description")}</p>
         <div className="flex flex-col gap-y-2">
           <Label htmlFor="assign-group">{t("assignGroup.groupLabel")}</Label>
-          <Autocomplete
-            id="assign-group"
-            value={group}
-            onChange={setGroup}
-            suggestions={groupSuggestions}
-            placeholder="equity-desks"
-            autoFocus
-            spellCheck={false}
-            disabled={busy}
-            onClear={() => setGroup("")}
-            clearLabel={t("filters.clearField")}
-          />
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <Autocomplete
+                id="assign-group"
+                value={group}
+                onChange={setGroup}
+                suggestions={groupSuggestions}
+                placeholder="equity-desks"
+                autoFocus
+                spellCheck={false}
+                disabled={busy}
+                onClear={() => setGroup("")}
+                clearLabel={t("filters.clearField")}
+              />
+            </div>
+            <VideoGuideButton video="groups" size="field" />
+          </div>
         </div>
         {error && (
           <ErrorBanner message={error} onDismiss={() => setError(null)} />

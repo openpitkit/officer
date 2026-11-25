@@ -33,7 +33,7 @@ describe("VideoLink", () => {
     expect(link).toHaveAccessibleName("Video: what Pit Officer is");
     expect(link).toHaveAttribute(
       "href",
-      "https://www.youtube.com/watch?v=v34IdYhH5so",
+      "https://www.youtube.com/watch?v=AILRFZbGxJs",
     );
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");

@@ -22,14 +22,22 @@ import { Notice } from "@/components/Notice";
 import { VideoLink } from "@/components/video/VideoLink";
 import type { VideoKey } from "@/components/video/videos";
 
-/** Guides for a section that has no operator-created records yet. */
+/**
+ * Guides for a section that has no operator-created records yet: each guide
+ * with what it shows.
+ */
 export function VideoGuideNotice({ videos }: { videos: VideoKey[] }) {
   const { t } = useTranslation("common");
   return (
     <Notice tone="info" icon={Play} title={t("videoGuide.title")}>
-      {videos.map((video) => (
-        <VideoLink key={video} video={video} />
-      ))}
+      <ul className="flex flex-col gap-y-2">
+        {videos.map((video) => (
+          <li key={video} className="flex flex-col gap-y-1">
+            <VideoLink video={video} />
+            <span>{t(`videoGuide.about.${video}`)}</span>
+          </li>
+        ))}
+      </ul>
     </Notice>
   );
 }

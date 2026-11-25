@@ -60,7 +60,8 @@ import { ErrorBanner } from "@/components/PageStates";
 import { SpotFundsModeCards } from "@/components/SpotFundsModeCards";
 import { PolicyPicker } from "@/components/PolicyPicker";
 import { PolicyWikiLink } from "@/components/PolicyWikiLink";
-import { PolicyVideoLink } from "@/components/PolicyVideoLink";
+import { PolicyVideoButton } from "@/components/PolicyVideoButton";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
 import { accountScope } from "@/lib/accountScope";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
@@ -654,17 +655,19 @@ export function LimitDialog({
                         {catalogEntry && (
                           <PolicyWikiLink entry={catalogEntry} />
                         )}
-                        <PolicyVideoLink policy={form.policy} />
                       </div>
-                      {!isEdit && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setChoosingPolicy(true)}
-                        >
-                          {t("picker.changePolicy")}
-                        </Button>
-                      )}
+                      <div className="flex shrink-0 items-center gap-1">
+                        {!isEdit && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setChoosingPolicy(true)}
+                          >
+                            {t("picker.changePolicy")}
+                          </Button>
+                        )}
+                        <PolicyVideoButton policy={form.policy} />
+                      </div>
                     </div>
                   </div>
 
@@ -771,7 +774,10 @@ export function LimitDialog({
 
                 {limitPolicyHasMode(form.policy) && (
                   <div className="flex flex-col gap-y-1.5">
-                    <Label>{t("ruleMode.label")}</Label>
+                    <div className="flex items-center justify-between gap-2">
+                      <Label>{t("ruleMode.label")}</Label>
+                      <VideoGuideButton video="orderReview" />
+                    </div>
                     <ChoiceCards
                       label={t("ruleMode.label")}
                       options={RULE_MODES.map((mode) => ({

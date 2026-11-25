@@ -22,7 +22,7 @@ import { useTranslation } from "react-i18next";
 import { SelectionTile } from "@/components/SelectionTile";
 import { Button } from "@/components/ui/button";
 import { PolicyWikiLink } from "@/components/PolicyWikiLink";
-import { PolicyVideoLink } from "@/components/PolicyVideoLink";
+import { PolicyVideoButton } from "@/components/PolicyVideoButton";
 import {
   getPolicies,
   getPolicyCatalogEntry,
@@ -90,9 +90,9 @@ export function PolicyPicker({
               description={policyCatalogDescription(t, policy)}
               onSelect={() => onSelect(policy)}
             >
-              <div className="flex flex-col gap-2 border-t border-border px-4 py-2">
+              <div className="flex items-center justify-between gap-2 border-t border-border px-4 py-2">
                 <PolicyWikiLink entry={entry} />
-                <PolicyVideoLink policy={policy} />
+                <PolicyVideoButton policy={policy} size="link" />
               </div>
             </SelectionTile>
           );

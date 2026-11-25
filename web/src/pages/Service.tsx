@@ -74,6 +74,7 @@ import { StorageSection } from "@/components/security/StorageSection";
 import { SensitiveDataBanner } from "@/components/SensitiveDataBanner";
 import { StatRow } from "@/components/StatRow";
 import { StatusDot } from "@/components/StatusDot";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -888,7 +889,17 @@ export function DatabaseCard({
         />
         <StatRow
           label={t("database.path")}
-          value={database.path || tc("value.none")}
+          value={
+            <span className="flex items-center justify-end gap-2">
+              <span
+                className="min-w-0 truncate"
+                title={database.path || undefined}
+              >
+                {database.path || tc("value.none")}
+              </span>
+              <VideoGuideButton video="whereDataLives" />
+            </span>
+          }
           mono={false}
         />
         <div className="mt-4 border-t border-[var(--danger)]/50 pt-3">

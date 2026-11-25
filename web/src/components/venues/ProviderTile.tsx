@@ -19,6 +19,8 @@ import { ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { SelectionTile } from "@/components/SelectionTile";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
+import type { VideoKey } from "@/components/video/videos";
 import { ProviderIcon } from "./ProviderIcon";
 
 /** Caller-resolved provider identity, display text, and reference URLs. */
@@ -30,6 +32,8 @@ export interface VenueProviderOption {
   siteUrl?: string;
   docsUrl?: string;
   symbolsUrl?: string;
+  /** The guide to connecting this provider, shown at the end of its links. */
+  video?: VideoKey;
 }
 
 /** Provider content and selection callback for a picker tile. */
@@ -41,7 +45,7 @@ export interface ProviderTileProps {
 /** Renders a selectable provider with its optional reference links. */
 export function ProviderTile({ provider, onSelect }: ProviderTileProps) {
   const { t } = useTranslation("venues");
-  const { siteUrl, docsUrl, symbolsUrl } = provider;
+  const { siteUrl, docsUrl, symbolsUrl, video } = provider;
 
   return (
     <SelectionTile
@@ -55,8 +59,8 @@ export function ProviderTile({ provider, onSelect }: ProviderTileProps) {
         />
       }
     >
-      {(siteUrl || docsUrl || symbolsUrl) && (
-        <div className="flex flex-wrap gap-3 border-t border-border px-4 py-2">
+      {(siteUrl || docsUrl || symbolsUrl || video !== undefined) && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-border px-4 py-2">
           {siteUrl && (
             <a
               href={siteUrl}
@@ -89,6 +93,9 @@ export function ProviderTile({ provider, onSelect }: ProviderTileProps) {
               <ExternalLink className="h-3 w-3" />
               {t("providers.symbols")}
             </a>
+          )}
+          {video !== undefined && (
+            <VideoGuideButton video={video} size="link" className="ml-auto" />
           )}
         </div>
       )}

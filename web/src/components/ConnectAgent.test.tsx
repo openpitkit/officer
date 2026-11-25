@@ -297,6 +297,43 @@ describe("ConnectAgent", () => {
     expect(snippet(CLI)).toHaveValue(claudeMcpAddCommand(mcpUrl(), null));
   });
 
+  it("ends the client tabs with the chosen client's guide, and none for a client without one", async () => {
+    const user = userEvent.setup();
+    renderBlock("open");
+    const guides = () =>
+      screen
+        .queryAllByRole("link", { name: /^Video guide on YouTube:/ })
+        .map((link) => [
+          link.getAttribute("aria-label"),
+          link.getAttribute("href"),
+        ]);
+
+    expect(guides()).toEqual([
+      [
+        "Video guide on YouTube: Alpaca and Claude through Officer",
+        "https://www.youtube.com/watch?v=y6_4DJy2tUo",
+      ],
+    ]);
+    await user.click(screen.getByRole("button", { name: "Codex" }));
+    expect(guides()).toEqual([
+      [
+        "Video guide on YouTube: a Codex trading bot with limits",
+        "https://www.youtube.com/watch?v=pEUH5cbitBo",
+      ],
+    ]);
+    await user.click(screen.getByRole("button", { name: "Cursor" }));
+    expect(guides()).toEqual([
+      [
+        "Video guide on YouTube: a Cursor trading bot with limits",
+        "https://www.youtube.com/watch?v=eqd5iH2yaiA",
+      ],
+    ]);
+    for (const client of ["ChatGPT", "Prompt"]) {
+      await user.click(screen.getByRole("button", { name: client }));
+      expect(guides()).toEqual([]);
+    }
+  });
+
   it("keeps the agent prompt English under another panel language", async () => {
     const user = userEvent.setup();
     await i18n.changeLanguage("ru");

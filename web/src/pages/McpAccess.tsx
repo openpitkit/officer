@@ -29,6 +29,7 @@ import {
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
 import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
@@ -107,6 +108,7 @@ function ProtectiveEnableDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
+          <VideoGuideButton video="canAgentBypass" className="sm:mr-auto" />
           <AlertDialogCancel>{tc("actions.cancel")}</AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {

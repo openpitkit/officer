@@ -518,6 +518,53 @@ describe("Orders page tabs", () => {
   });
 });
 
+describe("Orders video guide plaque", () => {
+  const PLAQUE = "Learn how this section works";
+
+  it("shows the MCP guide while no order exists at all", () => {
+    renderOrders("/orders");
+
+    const panel = screen.getByRole("tabpanel", { name: /^orders$/i });
+    expect(within(panel).getByText(PLAQUE)).toBeInTheDocument();
+    expect(
+      within(panel).getByRole("link", {
+        name: "Video: connecting an agent over MCP",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "https://www.youtube.com/watch?v=zq7a9xc0GD0&t=121s",
+    );
+  });
+
+  it("hides the plaque when a filter empties the list", () => {
+    renderOrders("/orders?account=desk-alpha");
+
+    expect(screen.queryByText(PLAQUE)).not.toBeInTheDocument();
+  });
+
+  it("hides the plaque once an order exists", () => {
+    useOrdersMock.mockReturnValue(readyPage<Order>([sampleOrder]));
+    renderOrders("/orders");
+
+    expect(screen.queryByText(PLAQUE)).not.toBeInTheDocument();
+  });
+
+  it("hides the plaque while the list is stale", () => {
+    const stale: PollingResult<{ items: Order[]; total: number }> = {
+      load: {
+        state: "ready",
+        data: { items: [], total: 0 },
+        error: "Offline",
+      },
+      reload: vi.fn(),
+    };
+    useOrdersMock.mockReturnValue(stale);
+    renderOrders("/orders");
+
+    expect(screen.queryByText(PLAQUE)).not.toBeInTheDocument();
+  });
+});
+
 describe("Orders account pre-fill", () => {
   it("suggests accounts and assets inside the add order dialog", async () => {
     const user = userEvent.setup();
@@ -1010,6 +1057,31 @@ describe("Orders submit mode", () => {
       expect(within(dialog).getByLabelText("Account")).toHaveFocus();
     },
   );
+
+  it("shows the paper-first guide in the submit mode row only for Send to venue", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user, false);
+    const guide = () =>
+      within(dialog).queryByRole("link", {
+        name: "Video guide on YouTube: a paper account first",
+      });
+
+    for (const label of ["Submit and settle", "Submit and wait", "Drop copy"]) {
+      await user.click(within(dialog).getByRole("tab", { name: label }));
+      expect(guide()).not.toBeInTheDocument();
+    }
+    await user.click(
+      within(dialog).getByRole("tab", { name: "Send to venue" }),
+    );
+    expect(guide()).toHaveAttribute(
+      "href",
+      "https://www.youtube.com/watch?v=LgDSHpEeHpo",
+    );
+    expect(guide()?.previousElementSibling).toBe(
+      within(dialog).getByRole("tablist", { name: "Submit mode" }),
+    );
+  });
 
   it("treats an unknown stored submit tab as no selection", async () => {
     const user = userEvent.setup();
@@ -5614,6 +5686,25 @@ describe("Order review panel", () => {
     keyId: "",
     signed: false,
   };
+
+  it("ends the review decision row with the order review guide", async () => {
+    const user = userEvent.setup();
+    const dialog = await openSampleOrderDetail(user, waiting);
+
+    const section = within(dialog).getByRole("region", {
+      name: "Order review",
+    });
+    const guide = within(section).getByRole("link", {
+      name: "Video guide on YouTube: reviewing an order",
+    });
+    expect(guide).toHaveAttribute(
+      "href",
+      "https://www.youtube.com/watch?v=qE-WXp3Sz78",
+    );
+    expect(guide.parentElement).toContainElement(
+      within(section).getByRole("button", { name: "Confirm" }),
+    );
+  });
 
   it.each(["confirm", "force", "cancel"] as const)(
     "shows alert failures without treating a successful %s as an error",

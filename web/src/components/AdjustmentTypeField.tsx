@@ -21,10 +21,12 @@ import type { AdjustmentType } from "@/api/types";
 import { ADJUSTMENT_TYPES, adjustmentTypeLabel } from "@/api/vocabulary";
 import { Segmented } from "@/components/data";
 import { Label } from "@/components/ui/label";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
 
-/** The labelled choice of an adjustment's type. Nothing is preselected: with
- *  `value` empty no option is active, and the form decides what an empty
- *  choice means on submit. */
+/** The labelled choice of an adjustment's type, with the guide to balances and
+ *  cash movements at the end of its row. Nothing is preselected: with `value`
+ *  empty no option is active, and the form decides what an empty choice means
+ *  on submit. */
 export function AdjustmentTypeField({
   value,
   onChange,
@@ -41,15 +43,18 @@ export function AdjustmentTypeField({
       <Label asChild>
         <legend>{t("dialog.fields.type")}</legend>
       </Label>
-      <Segmented
-        value={value}
-        disabled={disabled}
-        options={ADJUSTMENT_TYPES.map((type) => ({
-          value: type,
-          label: adjustmentTypeLabel(t, type),
-        }))}
-        onChange={(next) => onChange(next as AdjustmentType)}
-      />
+      <div className="flex items-center justify-between gap-2">
+        <Segmented
+          value={value}
+          disabled={disabled}
+          options={ADJUSTMENT_TYPES.map((type) => ({
+            value: type,
+            label: adjustmentTypeLabel(t, type),
+          }))}
+          onChange={(next) => onChange(next as AdjustmentType)}
+        />
+        <VideoGuideButton video="balances" />
+      </div>
     </fieldset>
   );
 }

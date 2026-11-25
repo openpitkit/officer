@@ -29,6 +29,8 @@ import { ErrorBanner, LoadingStatus } from "@/components/PageStates";
 import { RevealButton } from "@/components/RevealButton";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
+import type { VideoKey } from "@/components/video/videos";
 import { useApiClient } from "@/framework";
 import { maskAccessToken } from "@/lib/accessTokenMask";
 import {
@@ -127,6 +129,13 @@ const TABS: readonly TabId[] = [
   "prompt",
 ];
 
+/** The guide to connecting each client the channel has one for. */
+const CLIENT_VIDEOS: Readonly<Partial<Record<TabId, VideoKey>>> = {
+  claude: "alpacaMcp",
+  codex: "codexTrading",
+  cursor: "cursorTrading",
+};
+
 /** One labelled value of the address and token row, with its actions. */
 function RowField({
   label,
@@ -163,6 +172,7 @@ function RowField({
 export function ConnectAgent() {
   const { t } = useTranslation("mcp");
   const [tab, setTab] = useState<TabId>("claude");
+  const clientVideo = CLIENT_VIDEOS[tab];
   const [shown, setShown] = useState(false);
   const withToken = panelSession().accessMode === "token";
   const token = useAgentToken(withToken);
@@ -249,22 +259,25 @@ export function ConnectAgent() {
       {access}
 
       {/* Tab toggle - mirrors the Orders page pattern. */}
-      <div className="flex w-fit flex-wrap gap-1 rounded-card border border-border bg-surface-2 p-1">
-        {TABS.map((tabId) => (
-          <button
-            key={tabId}
-            type="button"
-            onClick={() => setTab(tabId)}
-            className={[
-              "rounded-badge px-3 py-1 text-xs font-medium transition-colors duration-[180ms]",
-              tab === tabId
-                ? "bg-accent-dim text-accent"
-                : "text-muted-lt hover:bg-surface-hover hover:text-text",
-            ].join(" ")}
-          >
-            {t(`connect.tab.${tabId}`)}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex w-fit flex-wrap gap-1 rounded-card border border-border bg-surface-2 p-1">
+          {TABS.map((tabId) => (
+            <button
+              key={tabId}
+              type="button"
+              onClick={() => setTab(tabId)}
+              className={[
+                "rounded-badge px-3 py-1 text-xs font-medium transition-colors duration-[180ms]",
+                tab === tabId
+                  ? "bg-accent-dim text-accent"
+                  : "text-muted-lt hover:bg-surface-hover hover:text-text",
+              ].join(" ")}
+            >
+              {t(`connect.tab.${tabId}`)}
+            </button>
+          ))}
+        </div>
+        {clientVideo !== undefined && <VideoGuideButton video={clientVideo} />}
       </div>
 
       {/* While the token loads or after it failed, the token-carrying

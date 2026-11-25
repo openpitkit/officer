@@ -48,6 +48,7 @@ import { useCredentialStorage } from "@/api/useCredentialStorage";
 import { useMarketData } from "@/api/useMarketData";
 import type { LoadState } from "@/api/usePolling";
 import { Page } from "@/components/Page";
+import { VideoGuideButton } from "@/components/video/VideoGuideButton";
 import { VideoGuideNotice } from "@/components/video/VideoGuideNotice";
 import {
   ErrorBanner,
@@ -2661,6 +2662,13 @@ export function MarketData() {
       setDeleteInstrumentTarget(null);
     });
 
+  // With no source yet the plaque carries the guides; the icon beside Add
+  // source takes over once a source exists.
+  const guidePlaque =
+    load.state === "ready" &&
+    load.error === null &&
+    load.data.instances.length === 0;
+
   return (
     <Page
       title={t("title")}
@@ -2683,11 +2691,16 @@ export function MarketData() {
         </>
       }
     >
-      <AddProviderButton
-        label={t("providers.addSource")}
-        providerTypes={providerOptions.map((provider) => provider.type)}
-        onClick={() => setGuideOpen(true)}
-      />
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <AddProviderButton
+            label={t("providers.addSource")}
+            providerTypes={providerOptions.map((provider) => provider.type)}
+            onClick={() => setGuideOpen(true)}
+          />
+        </div>
+        {!guidePlaque && <VideoGuideButton video="prices" />}
+      </div>
       <ProviderGuideDialog
         open={guideOpen}
         title={t("instances.title")}
@@ -2752,9 +2765,7 @@ export function MarketData() {
       )}
       {load.state === "ready" && (
         <div className="flex flex-col gap-y-4">
-          {load.error === null && load.data.instances.length === 0 && (
-            <VideoGuideNotice videos={["prices"]} />
-          )}
+          {guidePlaque && <VideoGuideNotice videos={["whyPrices", "prices"]} />}
           {load.data.instances.length === 0 && (
             <Card>
               <CardContent className="py-8 text-center text-sm text-muted">

@@ -236,17 +236,29 @@ describe("MarketData video guides", () => {
     await user.click(secondToggle);
     expect(secondToggle).toHaveAttribute("aria-expanded", "false");
   });
-  it("shows the price source guide with no instances", async () => {
+  it("shows why prices matter, then how to connect a source, with no instances", async () => {
     fetchMarketDataMock.mockResolvedValue({
       ...status(ibInstance()),
       instances: [],
     });
     renderMarketDataPage();
+    await screen.findByRole("link", {
+      name: "Video: connecting a price source",
+    });
     expect(
-      await screen.findByRole("link", {
-        name: "Video: connecting a price source",
-      }),
-    ).toHaveAttribute("href", "https://www.youtube.com/watch?v=7nM26GUgtes");
+      screen
+        .getAllByRole("link", { name: /^Video:/ })
+        .map((link) => [link.textContent, link.getAttribute("href")]),
+    ).toEqual([
+      [
+        "Video: why Officer needs prices",
+        "https://www.youtube.com/watch?v=tsv2ABKFdSk",
+      ],
+      [
+        "Video: connecting a price source",
+        "https://www.youtube.com/watch?v=7nM26GUgtes",
+      ],
+    ]);
   });
 
   it("hides the price source guide when an instance exists", async () => {
@@ -254,6 +266,36 @@ describe("MarketData video guides", () => {
     await screen.findByText("IB Gateway");
     expect(
       screen.queryByRole("link", { name: /^Video:/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ends the Add source row with the connecting guide once a source exists", async () => {
+    renderMarketDataPage();
+    const guide = await screen.findByRole("link", {
+      name: "Video guide on YouTube: connecting a price source",
+    });
+    expect(guide).toHaveAttribute(
+      "href",
+      "https://www.youtube.com/watch?v=7nM26GUgtes",
+    );
+    expect(guide.previousElementSibling).toContainElement(
+      screen.getByRole("button", { name: /^Add a market-data source/ }),
+    );
+  });
+
+  it("leaves the guides to the plaque while no source exists", async () => {
+    fetchMarketDataMock.mockResolvedValue({
+      ...status(ibInstance()),
+      instances: [],
+    });
+    renderMarketDataPage();
+    await screen.findByRole("link", {
+      name: "Video: connecting a price source",
+    });
+    expect(
+      screen.queryByRole("link", {
+        name: "Video guide on YouTube: connecting a price source",
+      }),
     ).not.toBeInTheDocument();
   });
 
