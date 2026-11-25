@@ -648,9 +648,9 @@ second account, needs the fee account there and is refused with
 `fee_account_required` without one.
 
 Paper and live sends require `destination.route`, a JSON object. The built-in
-Alpaca, Binance, Coinbase, IB, eToro and OKX providers require
-`amountKind: "quantity"` and support only the `timeInForce` route field. Values
-are case-sensitive and are never normalized:
+Alpaca, Binance, Bybit, Coinbase, IB, eToro and OKX providers require
+`amountKind: "quantity"` and support only the `timeInForce` route field.
+Values are case-sensitive and are never normalized:
 
 - Alpaca requires `day`, `gtc`, `opg`, `cls`, `ioc` or `fok`. Good till cancelled
   is `{"timeInForce":"gtc"}`; uppercase `GTC` is refused locally with the
@@ -659,10 +659,8 @@ are case-sensitive and are never normalized:
   quantity requires a fractionable asset and `day`.
 - Binance requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
   `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
-- Coinbase requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
-  `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
-- OKX requires `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}` or
-  `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
+- Bybit, Coinbase and OKX require `{"timeInForce":"GTC"}`, `{"timeInForce":"IOC"}`
+  or `{"timeInForce":"FOK"}` for a limit order and `{}` for a market order.
 - IB requires `{"timeInForce":"day"}`, `{"timeInForce":"gtc"}` or
   `{"timeInForce":"ioc"}`. Crypto buys require a limit price; crypto market
   buys are unsupported.

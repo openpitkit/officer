@@ -329,7 +329,7 @@ func (c *okxConnector) parseOKXOrder(
 		return []fwtrading.Event{event}, venueStreamUnparsable(health.DiagWarn,
 			okxFillUnreadable, venueStreamReconciled)
 	}
-	size, sizeErr := parseVenueDecimal(amount, false)
+	size, sizeErr := parsePlainDecimal(amount, false)
 	if sizeErr != nil {
 		return []fwtrading.Event{event}, venueStreamUnparsable(health.DiagWarn,
 			okxFillUnreadable, venueStreamReconciled)
@@ -350,9 +350,9 @@ func (c *okxConnector) parseOKXOrder(
 				okxFillUnreadable, venueStreamReconciled)
 		}
 	}
-	qty, qtyErr := parseVenueDecimal(original, true)
-	cum, cumErr := parseVenueDecimal(cumulative, true)
-	_, priceErr := parseVenueDecimal(price, true)
+	qty, qtyErr := parsePlainDecimal(original, true)
+	cum, cumErr := parsePlainDecimal(cumulative, true)
+	_, priceErr := parsePlainDecimal(price, true)
 	at, atErr := okxFillTime(timestamp)
 	_, knownState := okxVenueStatus(state)
 	if qtyErr != nil || cumErr != nil || priceErr != nil || atErr != nil ||

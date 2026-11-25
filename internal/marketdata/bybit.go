@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,11 +33,12 @@ import (
 	"go.openpit.dev/officer/framework/health"
 	fwmarketdata "go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/internal/backoff"
+	"go.openpit.dev/officer/internal/bybit"
 )
 
 const (
 	bybitPublicFeedBaseURL  = "wss://stream.bybit.com/v5/public/"
-	bybitInstrumentsBaseURL = "https://api.bybit.com/v5/market/instruments-info"
+	bybitInstrumentsBaseURL = bybit.LiveRESTURL + bybit.InstrumentsPath
 	defaultBybitCategory    = "spot"
 
 	defaultBybitReconnectMin = 250 * time.Millisecond
@@ -84,11 +84,6 @@ type bybitSubscription struct {
 
 type bybitCredentials struct {
 	Category string `json:"category"`
-}
-
-type bybitOpRequest struct {
-	Op   string   `json:"op"`
-	Args []string `json:"args,omitempty"`
 }
 
 type bybitTickerPatch struct {
@@ -351,7 +346,7 @@ func (c *bybitConnector) stream(
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
 	pingErr := make(chan error, 1)
-	go bybitPingLoop(pingCtx, conn, c.pingInterval, pingErr)
+	go bybit.PingLoop(pingCtx, conn.Write, c.pingInterval, pingErr)
 
 	readCtx, cancelRead := context.WithCancel(ctx)
 	defer cancelRead()
@@ -451,115 +446,27 @@ func normalizeBybitSubscriptions(
 }
 
 func bybitSubscribePayload(subs []bybitSubscription) ([]byte, error) {
-	args := make([]string, 0, len(subs))
+	topics := make([]string, 0, len(subs))
 	for _, sub := range subs {
-		args = append(args, sub.topic)
+		topics = append(topics, sub.topic)
 	}
-	return json.Marshal(bybitOpRequest{Op: "subscribe", Args: args})
-}
-
-func bybitPingLoop(
-	ctx context.Context,
-	conn bybitConn,
-	interval time.Duration,
-	errs chan<- error,
-) {
-	if interval <= 0 {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			payload, err := json.Marshal(bybitOpRequest{Op: "ping"})
-			if err != nil {
-				select {
-				case errs <- err:
-				default:
-				}
-				return
-			}
-			if err := conn.Write(ctx, payload); err != nil {
-				select {
-				case errs <- err:
-				default:
-				}
-				return
-			}
-		}
-	}
-}
-
-type bybitInstrumentsResponse struct {
-	RetCode int    `json:"retCode"`
-	RetMsg  string `json:"retMsg"`
-	Result  struct {
-		List []struct {
-			Symbol    string `json:"symbol"`
-			BaseCoin  string `json:"baseCoin"`
-			QuoteCoin string `json:"quoteCoin"`
-		} `json:"list"`
-		NextPageCursor string `json:"nextPageCursor"`
-	} `json:"result"`
+	return bybit.SubscribeFrame(topics...)
 }
 
 func fetchBybitSymbols(
 	ctx context.Context, category string,
 ) (map[string]symbolAssets, error) {
-	set := make(map[string]symbolAssets)
-	cursor := ""
-	for {
-		reqURL, err := url.Parse(bybitInstrumentsBaseURL)
-		if err != nil {
-			return nil, err
-		}
-		values := reqURL.Query()
-		values.Set("category", category)
-		if cursor != "" {
-			values.Set("cursor", cursor)
-		}
-		reqURL.RawQuery = values.Encode()
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		var payload bybitInstrumentsResponse
-		decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
-		if err := resp.Body.Close(); err != nil {
-			slog.Warn("bybit instruments: close response body", "error", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("bybit instruments: unexpected status %d", resp.StatusCode)
-		}
-		if decodeErr != nil {
-			return nil, fmt.Errorf("bybit instruments: decode: %w", decodeErr)
-		}
-		if payload.RetCode != 0 {
-			msg := strings.TrimSpace(payload.RetMsg)
-			if msg == "" {
-				msg = "request failed"
-			}
-			return nil, fmt.Errorf("bybit instruments: %d: %s", payload.RetCode, msg)
-		}
-		for _, item := range payload.Result.List {
-			if symbol := strings.TrimSpace(item.Symbol); symbol != "" {
-				set[symbol] = newSymbolAssets(item.BaseCoin, item.QuoteCoin)
-			}
-		}
-		cursor = strings.TrimSpace(payload.Result.NextPageCursor)
-		if cursor == "" {
-			return set, nil
+	instruments, err := bybit.FetchInstruments(ctx, http.DefaultClient, bybit.LiveRESTURL, category)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]symbolAssets, len(instruments))
+	for _, item := range instruments {
+		if symbol := strings.TrimSpace(item.Symbol); symbol != "" {
+			set[symbol] = newSymbolAssets(item.BaseCoin, item.QuoteCoin)
 		}
 	}
+	return set, nil
 }
 
 func bybitControlError(payload []byte) (string, bool) {

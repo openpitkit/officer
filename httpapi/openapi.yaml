@@ -10178,7 +10178,8 @@ components:
       additionalProperties: true
       description: >
         Provider credentials, accepted only on input. Never returned.
-        Alpaca uses {apiKey, apiSecret}; Coinbase uses {apiKeyId, apiKeySecret}
+        Alpaca uses {apiKey, apiSecret}; Bybit uses {apiKey, apiSecret}, an HMAC
+        key pair. Coinbase uses {apiKeyId, apiKeySecret}
         (apiKeyId: the CDP API key ID organizations/{org}/apiKeys/{id};
         apiKeySecret: the Secret, an EC P-256 private key as an unencrypted
         SEC1 PEM ('-----BEGIN EC PRIVATE KEY-----'), with line breaks or with
@@ -11418,12 +11419,10 @@ components:
                     Explicit venue route; Alpaca and IB require timeInForce
                     (IB accepts day, gtc or ioc); Binance requires timeInForce
                     GTC, IOC or FOK for a limit order and an empty object for a
-                    market order; Coinbase requires timeInForce GTC, IOC or FOK
-                    for a limit order and an empty object for a market order;
-                    eToro uses {} for market or {"timeInForce":"ioc"}
-                    for an IOC limit buy.
-                    OKX requires timeInForce GTC, IOC or FOK for a limit order
-                    and an empty object for a market order.
+                    market order. Bybit, Coinbase and OKX also require
+                    timeInForce GTC, IOC or FOK for a limit order and an empty
+                    object for a market order. eToro uses {} for market or
+                    {"timeInForce":"ioc"} for an IOC limit buy.
                   additionalProperties: true
               additionalProperties: false
       unevaluatedProperties: false

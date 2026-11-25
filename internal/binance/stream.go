@@ -48,7 +48,7 @@ func WriteSubscribe(ctx context.Context, conn vendorhttp.StreamWriter,
 	}{ID: id, Method: "userDataStream.subscribe.signature"}
 	frame.Params.APIKey = credentials.APIKey
 	frame.Params.Timestamp = timestamp
-	frame.Params.Signature = sign(payload, credentials.APISecret)
+	frame.Params.Signature = vendorhttp.SignHex(payload, credentials.APISecret)
 	encoded, err := json.Marshal(frame)
 	if err != nil {
 		return err

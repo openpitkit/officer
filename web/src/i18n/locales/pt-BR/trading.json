@@ -175,6 +175,20 @@
         "restrictKey": "Clique em {{editRestrictions}}, selecione {{trustedIPs}} e informe o endereço IPv4 público do computador em que o Officer é executado: sem essa restrição, uma chave gerada pelo sistema permite somente leitura. Depois marque {{spotTrading}} para que o Officer possa enviar ordens e não habilite outras permissões."
       }
     },
+    "bybit": {
+      "openTestnet": "Abra a rede de testes da sua região na Bybit e cadastre-se ou entre em sua conta. As chaves de teste funcionam somente na rede de testes.",
+      "openGlobalTestnet": "Rede de testes da Bybit Global",
+      "openEuTestnet": "Rede de testes da Bybit EU",
+      "generateKeys": "Abra o gerenciamento de chaves de API da sua região na Bybit e selecione Create New Key. Escolha uma chave gerada pelo sistema. O Officer assina as solicitações com HMAC-SHA256. Habilite o acesso de leitura e escrita e a negociação à vista. Depois, copie a API key e o API secret.",
+      "openGlobalApiManagement": "Gerenciamento de chaves de API da Bybit Global",
+      "openEuApiManagement": "Gerenciamento de chaves de API da Bybit EU",
+      "globalApiKeyGuide": "Como criar chaves de API na Bybit Global",
+      "euApiKeyGuide": "Como criar chaves de API na Bybit EU",
+      "keepPageOpen": "Mantenha a página aberta para copiar os dois valores nos campos abaixo. Selecione a rede de testes em que criou a chave.",
+      "liveKeepPageOpen": "As conexões reais usam chaves da Bybit Global. Mantenha a página aberta para copiar os dois valores nos campos abaixo.",
+      "site": "Rede de testes da Bybit",
+      "sitePlaceholder": "Selecione onde criou a chave"
+    },
     "etoro": {
       "logInAccount": "Entre em sua conta eToro.",
       "logIn": "Entrar na eToro",

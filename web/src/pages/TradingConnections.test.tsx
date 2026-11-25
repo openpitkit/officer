@@ -841,6 +841,28 @@ describe("Trading connections", () => {
     },
   );
 
+  it("shows Bybit live provider links", async () => {
+    snapshot.providers.push({ ...provider, type: "bybit", title: "Bybit" });
+    snapshot.connections = [
+      connection({
+        id: "bybit-live",
+        provider: "bybit",
+        label: "Bybit live",
+        mode: "live",
+      }),
+    ];
+    renderTrading();
+    const live = await card("Bybit live");
+    expect(live.getByRole("link", { name: "Provider site" })).toHaveAttribute(
+      "href",
+      "https://www.bybit.com",
+    );
+    expect(live.getByRole("link", { name: "Provider docs" })).toHaveAttribute(
+      "href",
+      "https://bybit-exchange.github.io/docs/v5/guide",
+    );
+  });
+
   it("renders independent connections of one provider and only secret presence flags", async () => {
     snapshot.connections = [
       Object.assign(connection(), {
@@ -5281,46 +5303,98 @@ describe("Add trading connection dialog", () => {
     expect(api.createTradingConnection).not.toHaveBeenCalled();
   });
 
-  it("shows the three Binance setup steps and the Spot Testnet link", async () => {
-    const user = userEvent.setup();
-    snapshot.providers.push({ ...provider, type: "binance", title: "Binance" });
-    renderTrading();
-    await user.click(
-      await screen.findByRole("button", { name: /^Add trading connection/ }),
-    );
-    const picker = within(
-      screen.getByRole("dialog", { name: "Add trading connection" }),
-    );
-    const binanceTile = picker.getByRole("button", { name: "Binance" });
-    const tile = within(binanceTile.parentElement!);
-    expect(tile.getByRole("link", { name: "Site" })).toHaveAttribute(
-      "href",
-      "https://www.binance.com",
-    );
-    expect(tile.getByRole("link", { name: "Docs" })).toHaveAttribute(
-      "href",
-      "https://testnet.binance.vision/",
-    );
-    await user.click(binanceTile);
-    const dialog = within(
-      await screen.findByRole("dialog", { name: "Add Binance connection" }),
-    );
-    expect(
-      dialog.getByRole("heading", { name: "Prepare your Binance account" }),
-    ).toBeInTheDocument();
-    expect(dialog.getAllByRole("listitem")).toHaveLength(3);
-    for (const text of [
-      "Open the Binance Spot Testnet and log in with a GitHub account.",
-      "Generate an HMAC-SHA256 API key there and copy the API key and the secret key. Paper connections use the Spot Testnet; testnet keys work only there.",
-      "Keep the page open - the fields below ask for both values.",
-    ]) {
-      expect(dialog.getByText(text, { exact: true })).toBeInTheDocument();
-    }
-    const link = dialog.getByRole("link", { name: "Open Spot Testnet" });
-    expect(link).toHaveAttribute("href", "https://testnet.binance.vision/");
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
-  });
+  it.each([
+    {
+      venue: { ...provider, type: "binance", title: "Binance" },
+      siteUrl: "https://www.binance.com",
+      docsUrl: "https://testnet.binance.vision/",
+      steps: [
+        "Open the Binance Spot Testnet and log in with a GitHub account.",
+        "Generate an HMAC-SHA256 API key there and copy the API key and the secret key. Paper connections use the Spot Testnet; testnet keys work only there.",
+        "Keep the page open - the fields below ask for both values.",
+      ],
+      links: [
+        { name: "Open Spot Testnet", href: "https://testnet.binance.vision/" },
+      ],
+    },
+    {
+      venue: { ...provider, type: "bybit", title: "Bybit" },
+      siteUrl: "https://www.bybit.com",
+      docsUrl: "https://bybit-exchange.github.io/docs/v5/guide",
+      steps: [
+        "Open the testnet for your Bybit region and sign up or log in. Testnet keys work only on the testnet.",
+        "Open API management for your Bybit region and select Create New Key. Choose a system-generated key. Officer signs requests with HMAC-SHA256. Enable read-write access and spot trading, then copy the API key and the API secret.",
+        "Keep the page open to copy both values into the fields below. Select the testnet where you created the key.",
+      ],
+      links: [
+        { name: "Bybit Global testnet", href: "https://testnet.bybit.com/" },
+        { name: "Bybit EU testnet", href: "https://testnet.bybit.eu/en-EU/" },
+        {
+          name: "Bybit Global API management",
+          href: "https://testnet.bybit.com/app/user/api-management",
+        },
+        {
+          name: "Bybit EU API management",
+          href: "https://testnet.bybit.eu/en-EU/app/user/api-management",
+        },
+        {
+          name: "Bybit Global API key guide",
+          href: "https://www.bybit.com/en/help-center/article/How-to-create-your-API-key",
+        },
+        {
+          name: "Bybit EU API key guide",
+          href: "https://www.bybit.eu/en-EU/learn/bybit-guide/what-is-api-trading-and-how-to-set-it-up-on-bybit-eu",
+        },
+      ],
+    },
+  ])(
+    "shows the three $venue.title setup steps and the testnet links",
+    async ({ venue, siteUrl, docsUrl, steps, links }) => {
+      const user = userEvent.setup();
+      snapshot.providers.push(venue);
+      renderTrading();
+      await user.click(
+        await screen.findByRole("button", { name: /^Add trading connection/ }),
+      );
+      const picker = within(
+        screen.getByRole("dialog", { name: "Add trading connection" }),
+      );
+      const venueTile = picker.getByRole("button", { name: venue.title });
+      const tile = within(venueTile.parentElement!);
+      expect(tile.getByRole("link", { name: "Site" })).toHaveAttribute(
+        "href",
+        siteUrl,
+      );
+      expect(tile.getByRole("link", { name: "Docs" })).toHaveAttribute(
+        "href",
+        docsUrl,
+      );
+      await user.click(venueTile);
+      const dialog = within(
+        await screen.findByRole("dialog", {
+          name: `Add ${venue.title} connection`,
+        }),
+      );
+      expect(
+        dialog.getByRole("heading", {
+          name: `Prepare your ${venue.title} account`,
+        }),
+      ).toBeInTheDocument();
+      expect(dialog.getAllByRole("listitem")).toHaveLength(3);
+      for (const text of steps) {
+        expect(dialog.getByText(text, { exact: true })).toBeInTheDocument();
+      }
+      for (const { name, href } of links) {
+        const link = dialog.getByRole("link", { name });
+        expect(link).toHaveAttribute("href", href);
+        expect(link).toHaveAttribute("target", "_blank");
+        expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      }
+      for (const name of ["API key", "API secret"]) {
+        expect(dialog.getByLabelText(name)).toHaveAttribute("type", "password");
+      }
+    },
+  );
 
   it.each([
     {
@@ -5338,10 +5412,12 @@ describe("Add trading connection dialog", () => {
         "Keep IB Gateway running and logged in. Enter its host and port below; the client ID is optional.",
         "After creating the connection, grant access with the account ID of your live IB account as the venue account. Orders reach IB only through a grant bound to that account.",
       ],
-      docs: {
-        name: "TWS API documentation",
-        href: "https://www.interactivebrokers.com/docs/tws-api/doc/",
-      },
+      links: [
+        {
+          name: "TWS API documentation",
+          href: "https://www.interactivebrokers.com/docs/tws-api/doc/",
+        },
+      ],
     },
     {
       venue: { ...provider, type: "binance", title: "Binance" },
@@ -5353,10 +5429,31 @@ describe("Add trading connection dialog", () => {
         "Click Edit restrictions, select Restrict access to trusted IPs only and enter the public IPv4 address of the machine running Officer: without that restriction, a system-generated key can only read. Then check Enable Spot & Margin Trading so Officer can place orders, and enable no other permission.",
         "Keep the page open - the fields below ask for both values.",
       ],
-      docs: {
-        name: "How to create API keys",
-        href: "https://www.binance.com/en/support/faq/how-to-create-api-keys-on-binance-360002502072",
-      },
+      links: [
+        {
+          name: "How to create API keys",
+          href: "https://www.binance.com/en/support/faq/how-to-create-api-keys-on-binance-360002502072",
+        },
+      ],
+    },
+    {
+      venue: { ...provider, type: "bybit", title: "Bybit" },
+      paperFirst:
+        "Open the testnet for your Bybit region and sign up or log in. Testnet keys work only on the testnet.",
+      live: [
+        "Open API management for your Bybit region and select Create New Key. Choose a system-generated key. Officer signs requests with HMAC-SHA256. Enable read-write access and spot trading, then copy the API key and the API secret.",
+        "Live connections use API keys from Bybit Global. Keep the page open to copy both values into the fields below.",
+      ],
+      links: [
+        {
+          name: "Bybit Global API management",
+          href: "https://www.bybit.com/app/user/api-management",
+        },
+        {
+          name: "Bybit Global API key guide",
+          href: "https://www.bybit.com/en/help-center/article/How-to-create-your-API-key",
+        },
+      ],
     },
     {
       venue: { ...provider, type: "etoro", title: "eToro" },
@@ -5368,10 +5465,12 @@ describe("Add trading connection dialog", () => {
         "The Public API key identifies the application. Enter it in the Public API key field.",
         "Keep this dialog open - the fields below ask for both values.",
       ],
-      docs: {
-        name: "eToro authentication guide",
-        href: "https://api-portal.etoro.com/core/getting-started/authentication",
-      },
+      links: [
+        {
+          name: "eToro authentication guide",
+          href: "https://api-portal.etoro.com/core/getting-started/authentication",
+        },
+      ],
     },
     {
       venue: provider,
@@ -5381,14 +5480,16 @@ describe("Add trading connection dialog", () => {
         "Generate live API keys: in the top left corner of the dashboard, select Live Trading, find the API Keys panel and generate new keys. Copy the API key and the secret - Alpaca shows the secret only once. Live keys differ from paper keys and do not work with the paper account.",
         "Keep the dashboard open - the fields below ask for both values.",
       ],
-      docs: {
-        name: "About live credentials",
-        href: "https://docs.alpaca.markets/us/docs/authentication",
-      },
+      links: [
+        {
+          name: "About live credentials",
+          href: "https://docs.alpaca.markets/us/docs/authentication",
+        },
+      ],
     },
   ])(
     "switches $venue.title between the paper and the live account steps",
-    async ({ venue, paperFirst, live, docs }) => {
+    async ({ venue, paperFirst, live, links }) => {
       const user = userEvent.setup();
       snapshot = { providers: [venue], connections: [] };
       renderTrading();
@@ -5421,10 +5522,12 @@ describe("Add trading connection dialog", () => {
           within(steps[index]).getByText(text, { exact: true }),
         ).toBeInTheDocument(),
       );
-      const link = dialog.getByRole("link", { name: docs.name });
-      expect(link).toHaveAttribute("href", docs.href);
-      expect(link).toHaveAttribute("target", "_blank");
-      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      for (const { name, href } of links) {
+        const link = dialog.getByRole("link", { name });
+        expect(link).toHaveAttribute("href", href);
+        expect(link).toHaveAttribute("target", "_blank");
+        expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      }
       await user.click(mode.getByRole("button", { name: "Paper" }));
       expect(
         dialog.getAllByRole("listitem").map((step) => step.textContent),
@@ -5990,7 +6093,7 @@ describe("Trading provider credential fields", () => {
   const unknownCredentials =
     "This panel does not know the credential fields of this provider.";
 
-  async function chooseOKXSite(
+  async function chooseConnectionSite(
     user: ReturnType<typeof userEvent.setup>,
     trigger: HTMLElement,
     name: string,
@@ -6026,6 +6129,34 @@ describe("Trading provider credential fields", () => {
     );
   }
 
+  it("requires the Bybit paper connection to select the key's testnet", async () => {
+    const user = userEvent.setup();
+    snapshot = {
+      providers: [{ ...provider, type: "bybit", title: "Bybit" }],
+      connections: [],
+    };
+    renderTrading();
+    const dialog = await openProviderCreate(user, "Bybit");
+    const create = dialog.getByRole("button", { name: "Create" });
+    await user.type(dialog.getByLabelText("API key"), "fixture-key");
+    await user.type(dialog.getByLabelText("API secret"), "fixture-secret");
+    expect(create).toBeDisabled();
+    const site = dialog.getByRole("combobox", { name: "Bybit testnet" });
+    await chooseConnectionSite(user, site, "Bybit EU testnet");
+    await user.click(create);
+    expect(api.createTradingConnection).toHaveBeenCalledExactlyOnceWith({
+      provider: "bybit",
+      label: "Bybit",
+      mode: "paper",
+      credentials: {
+        apiKey: "fixture-key",
+        apiSecret: "fixture-secret",
+        site: "eu",
+      },
+      enabled: false,
+    });
+  });
+
   it("requires the OKX label, three secrets and an explicitly chosen site", async () => {
     const user = userEvent.setup();
     snapshot = { providers: [okx], connections: [] };
@@ -6046,18 +6177,23 @@ describe("Trading provider credential fields", () => {
       await user.type(input, `  fixture-${name}  `);
       expect(create).toBeDisabled();
     }
-    await chooseOKXSite(user, site, "EEA account (my.okx.com)", (options) => {
-      expect(options.map((option) => option.textContent)).toEqual([
-        "Global account (www.okx.com)",
-        "EEA account (my.okx.com)",
-        "US or Australian account (app.okx.com)",
-      ]);
-      expect(
-        options.every(
-          (option) => option.getAttribute("aria-selected") === "false",
-        ),
-      ).toBe(true);
-    });
+    await chooseConnectionSite(
+      user,
+      site,
+      "EEA account (my.okx.com)",
+      (options) => {
+        expect(options.map((option) => option.textContent)).toEqual([
+          "Global account (www.okx.com)",
+          "EEA account (my.okx.com)",
+          "US or Australian account (app.okx.com)",
+        ]);
+        expect(
+          options.every(
+            (option) => option.getAttribute("aria-selected") === "false",
+          ),
+        ).toBe(true);
+      },
+    );
     expect(create).toBeEnabled();
     for (const name of ["API key", "API secret", "Passphrase"]) {
       const input = dialog.getByLabelText(name, { exact: true });
@@ -6181,15 +6317,15 @@ describe("Trading provider credential fields", () => {
       }
       expect(save).toBeDisabled();
       if (field === "site") {
-        await chooseOKXSite(
+        await chooseConnectionSite(
           user,
           site,
           "US or Australian account (app.okx.com)",
         );
         expect(save).toBeEnabled();
-        await chooseOKXSite(user, site, "EEA account (my.okx.com)");
+        await chooseConnectionSite(user, site, "EEA account (my.okx.com)");
         expect(save).toBeDisabled();
-        await chooseOKXSite(
+        await chooseConnectionSite(
           user,
           site,
           "US or Australian account (app.okx.com)",

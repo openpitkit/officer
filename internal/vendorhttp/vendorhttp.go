@@ -15,12 +15,16 @@
 //
 // Please see https://officer.openpit.dev and the OWNERS file for details.
 
-// Package vendorhttp shares redirect refusal and request errors for vendor
-// clients. Redactors come from secret.CredentialRedactor.
+// Package vendorhttp shares redirect refusal, request errors and hex
+// HMAC-SHA256 signing for vendor clients. Redactors come from
+// secret.CredentialRedactor.
 package vendorhttp
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -45,6 +49,13 @@ func DialStream(ctx context.Context, vendor, url string) (*websocket.Conn, error
 		return nil, fmt.Errorf("%s: dial stream: %w", vendor, err)
 	}
 	return conn, nil
+}
+
+// SignHex returns the lowercase hex HMAC-SHA256 of payload keyed by secret.
+func SignHex(payload, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(payload))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // RefuseRedirect returns the redirect response without following its Location.
