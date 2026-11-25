@@ -17,7 +17,11 @@
 
 package fixture
 
-import "go.openpit.dev/openpit/asyncengine"
+import (
+	"context"
+
+	"go.openpit.dev/openpit/asyncengine"
+)
 
 func assignedWithoutFinally() {
 	builder := asyncengine.Chain(source, begin)
@@ -57,6 +61,7 @@ func aliasedWithoutFinally() {
 }
 
 func inlineAssignedWithFinally() {
+	// ruleid: account-chain-finally-outcome
 	runner := asyncengine.Chain(source, begin).Then(settle).Finally(terminal)
 	// ok: account-chain-finally
 	runner.Run(ctx, engine)
@@ -64,6 +69,7 @@ func inlineAssignedWithFinally() {
 
 func assignedWithFinally() {
 	builder := asyncengine.Chain(source, begin)
+	// ruleid: account-chain-finally-outcome
 	runner := builder.Finally(terminal)
 	// ok: account-chain-finally
 	runner.Run(ctx, engine)
@@ -71,6 +77,7 @@ func assignedWithFinally() {
 
 func assignedWithStepsAndFinally() {
 	builder := asyncengine.Chain(source, begin)
+	// ruleid: account-chain-finally-outcome
 	runner := builder.Then(settle).Then(audit).Finally(terminal)
 	// ok: account-chain-finally
 	runner.Run(ctx, engine)
@@ -79,6 +86,7 @@ func assignedWithStepsAndFinally() {
 func directWithFinally() {
 	builder := asyncengine.Chain(source, begin)
 	// ok: account-chain-finally
+	// ruleid: account-chain-finally-outcome
 	builder.Then(settle).Finally(terminal).Run(ctx, engine)
 }
 
@@ -177,6 +185,7 @@ func parameterWithoutFinally(builder *asyncengine.ChainBuilder[*reviewState]) {
 
 func parameterWithFinally(builder *asyncengine.ChainBuilder[*reviewState]) {
 	// ok: account-chain-finally
+	// ruleid: account-chain-finally-outcome
 	builder.Then(settle).Finally(terminal).Run(ctx, engine)
 }
 
@@ -188,6 +197,7 @@ func (n *reviewNode) parameterWithoutFinally(builder *asyncengine.ChainBuilder[*
 }
 
 func (n *reviewNode) parameterWithFinally(builder *asyncengine.ChainBuilder[*reviewState]) error {
+	// ruleid: account-chain-finally-outcome
 	runner := builder.Then(settle).Finally(terminal)
 	// ok: account-chain-finally
 	runner.Run(ctx, engine).Await(ctx)
@@ -196,8 +206,109 @@ func (n *reviewNode) parameterWithFinally(builder *asyncengine.ChainBuilder[*rev
 
 func unrelatedRun() {
 	builder := asyncengine.Chain(source, begin)
+	// ruleid: account-chain-finally-outcome
 	builder.Finally(terminal).Run(ctx, engine)
 	runner := task.Then(work)
 	// ok: account-chain-finally
 	runner.Run(ctx, engine)
+}
+
+func finallyBlankOutcome() {
+	// ruleid: account-chain-finally-outcome
+	asyncengine.Chain(source, begin).Finally(func(_ context.Context, state *reviewState, _ asyncengine.ChainOutcome) error {
+		return nil
+	}).Run(ctx, engine)
+}
+
+func finallyUnnamedOutcome() {
+	// ruleid: account-chain-finally-outcome
+	asyncengine.Chain(source, begin).Finally(func(context.Context, *reviewState, asyncengine.ChainOutcome) error {
+		return nil
+	}).Run(ctx, engine)
+}
+
+func finallyUnusedOutcome() {
+	// ruleid: account-chain-finally-outcome
+	asyncengine.Chain(source, begin).Finally(func(_ context.Context, state *reviewState, outcome asyncengine.ChainOutcome) error {
+		return nil
+	}).Run(ctx, engine)
+}
+
+func finallyOutcomePassedToHelper() {
+	// ok: account-chain-finally-outcome
+	asyncengine.Chain(source, begin).Finally(func(_ context.Context, state *reviewState, outcome asyncengine.ChainOutcome) error {
+		return terminalOutcome(outcome)
+	}).Run(ctx, engine)
+}
+
+func finallyOutcomeErrorRead() {
+	// ok: account-chain-finally-outcome
+	asyncengine.Chain(source, begin).Finally(func(_ context.Context, state *reviewState, outcome asyncengine.ChainOutcome) error {
+		if outcome.Err != nil {
+			return terminalFailure()
+		}
+		return nil
+	}).Run(ctx, engine)
+}
+
+func finallyOutcomeErrorAssigned() {
+	// ok: account-chain-finally-outcome
+	asyncengine.Chain(source, begin).Finally(func(_ context.Context, state *reviewState, outcome asyncengine.ChainOutcome) error {
+		state.err = outcome.Err
+		return nil
+	}).Run(ctx, engine)
+}
+
+func finallyOutcomePassedToMultilineHelper() {
+	// ok: account-chain-finally-outcome
+	asyncengine.Chain(source, begin).Finally(func(_ context.Context, state *reviewState, outcome asyncengine.ChainOutcome) error {
+		state.engineApplied, state.err = runtimeChainTerminalError(
+			state.err, state.engineApplied, outcome,
+		)
+		return nil
+	}).Run(ctx, engine)
+}
+
+func finallyNamedFunction() {
+	// ruleid: account-chain-finally-outcome
+	builder.Finally(terminal)
+}
+
+func finallyMethodValue(n *reviewNode) {
+	// ruleid: account-chain-finally-outcome
+	builder.Finally(n.finish)
+}
+
+func finallyFunctionVariable() {
+	finally := func(_ context.Context, state *reviewState, _ asyncengine.ChainOutcome) error {
+		return nil
+	}
+	// ruleid: account-chain-finally-outcome
+	builder.Finally(finally)
+}
+
+func finallyOutcomeInNestedBlock() {
+	// ok: account-chain-finally-outcome
+	builder.Finally(func(_ context.Context, state *reviewState, outcome asyncengine.ChainOutcome) error {
+		if state != nil {
+			return terminalOutcome(outcome)
+		}
+		return nil
+	})
+}
+
+func finallyOutcomeReferencedWithoutEscalation() {
+	// ok: account-chain-finally-outcome
+	builder.Finally(func(_ context.Context, state *reviewState, outcome asyncengine.ChainOutcome) error {
+		_ = outcome
+		return nil
+	})
+}
+
+func finallyMethodAlias() {
+	f := builder.Finally
+	// ok: account-chain-finally-outcome
+	f(func(_ context.Context, state *reviewState, _ asyncengine.ChainOutcome) error {
+		return nil
+	})
 }
