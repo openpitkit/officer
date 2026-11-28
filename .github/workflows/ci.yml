@@ -68,7 +68,7 @@ jobs:
           "CXX=g++" >> $env:GITHUB_ENV
 
       - name: Setup just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       - name: Check Go
         run: just --justfile pipeline.just ci-go
@@ -101,7 +101,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Setup just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       - name: Check JS/TypeScript
         run: just --justfile pipeline.just ci-js
@@ -124,7 +124,7 @@ jobs:
           python-version: '3.14'
 
       - name: Setup just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       - name: Test Python
         run: just --justfile pipeline.just ci-python
